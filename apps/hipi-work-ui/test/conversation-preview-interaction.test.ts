@@ -107,3 +107,20 @@ test("hover dismissal never steals focus and navigation yields focus to its dest
 	preview.close();
 	assert.equal(preview.consumeFocusReturn(), true);
 });
+
+test("the more menu cancels a pending hover, and its preview item pins with one focus return", (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const preview = new ConversationPreviewInteraction(() => {});
+	preview.enter();
+	preview.close("navigate");
+	context.mock.timers.tick(1000);
+	assert.equal(preview.mode, "closed");
+	assert.equal(preview.consumeFocusReturn(), false);
+	preview.activate();
+	preview.leave();
+	context.mock.timers.tick(1000);
+	assert.equal(preview.mode, "pinned");
+	preview.close();
+	assert.equal(preview.consumeFocusReturn(), true);
+	assert.equal(preview.consumeFocusReturn(), false);
+});

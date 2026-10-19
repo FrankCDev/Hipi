@@ -13,6 +13,8 @@ import {
 import { type AgentCommand, readCommand, saveCommand } from "../workbench/command-recovery.ts";
 import type { LocalState } from "../workbench/local-state.ts";
 
+export const MAX_UNRESOLVED_OPERATIONS = 64;
+
 export type PermissionState = {
 	contexts: AgentContext[];
 	activeContexts: AgentContext[];
@@ -21,6 +23,9 @@ export type PermissionState = {
 	approvalMode: "pending" | "history";
 	approval: ToolApproval | null;
 	operation: FileOperation | null;
+	unresolvedOperations: FileOperation[];
+	checkedOperation: FileOperation | null;
+	operationLimitReached: boolean;
 	nextCursor: string | null;
 	busy: boolean;
 	failed: boolean;
@@ -49,6 +54,9 @@ export class PermissionSession {
 		approvalMode: "pending",
 		approval: null,
 		operation: null,
+		unresolvedOperations: [],
+		checkedOperation: null,
+		operationLimitReached: false,
 		nextCursor: null,
 		busy: false,
 		failed: false,
@@ -196,6 +204,18 @@ export class PermissionSession {
 		signal.throwIfAborted();
 		const contexts = contextPage?.items ?? activeContexts;
 		if ([...contexts, ...activeContexts].some((item) => !this.inScope(item))) throw new Error("SCOPE_MISMATCH");
+		// Capacity limits discovery, never command reconciliation or consent recovery.
+		if (this.state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS) {
+			this.publish({
+				contexts,
+				activeContexts,
+				contextCursor: contextPage?.nextCursor ?? null,
+				loaded: true,
+				operationLimitReached: true,
+				uncertain: this.unresolved !== null || this.state.incompatible,
+			});
+			return;
+		}
 		const method = this.state.approvalMode === "pending" ? "listPendingToolApprovals" : "listToolApprovals";
 		let page: ToolApprovalPage;
 		try {
@@ -223,6 +243,10 @@ export class PermissionSession {
 			(!this.inScope(operation) ||
 				operation.approvalId !== approval?.approvalId ||
 				operation.operationId !== approval.operationId ||
+				operation.taskId !== approval.taskId ||
+				operation.callId !== approval.callId ||
+				operation.rootId !== approval.rootId ||
+				operation.path !== approval.path ||
 				operation.argumentsDigest !== approval.argumentsDigest ||
 				operation.contentDigest !== approval.contentDigest)
 		)
@@ -233,11 +257,55 @@ export class PermissionSession {
 			contextCursor: contextPage?.nextCursor ?? null,
 			approval,
 			operation,
+			unresolvedOperations: operation ? this.trackOperation(operation) : this.state.unresolvedOperations,
 			nextCursor: page.nextCursor,
 			loaded: true,
 			uncertain: this.unresolved !== null || this.state.incompatible,
 		});
 	}
+	private sameOperation(expected: FileOperation, actual: FileOperation) {
+		return (
+			this.inScope(actual) &&
+			actual.operationId === expected.operationId &&
+			actual.approvalId === expected.approvalId &&
+			actual.taskId === expected.taskId &&
+			actual.callId === expected.callId &&
+			actual.rootId === expected.rootId &&
+			actual.path === expected.path &&
+			actual.argumentsDigest === expected.argumentsDigest &&
+			actual.contentDigest === expected.contentDigest &&
+			actual.revision >= expected.revision &&
+			(actual.revision !== expected.revision || actual.status === expected.status)
+		);
+	}
+	private trackOperation(operation: FileOperation) {
+		const previous = this.state.unresolvedOperations.find((item) => item.operationId === operation.operationId);
+		if (previous && !this.sameOperation(previous, operation)) throw new Error("OPERATION_MISMATCH");
+		const retained = this.state.unresolvedOperations.filter((item) => item.operationId !== operation.operationId);
+		if (operation.status === "unknown" || operation.status === "executing") retained.push(structuredClone(operation));
+		else if (operation.status === "prepared" && previous) retained.push(previous);
+		return retained;
+	}
+	/** An explicit read-only check addresses retained evidence, never the current approval page. */
+	reconcileOperation = (operationId: string) => {
+		const expected = this.state.unresolvedOperations.find((item) => item.operationId === operationId);
+		if (!expected) return Promise.resolve();
+		return this.run(async (signal) => {
+			const result = await this.client.call(
+				"getFileOperation",
+				{ ...this.scope, operationId, reconcile: true },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (!result || !this.sameOperation(expected, result)) throw new Error("OPERATION_MISMATCH");
+			const unresolvedOperations = this.trackOperation(result);
+			this.publish({
+				checkedOperation: result,
+				unresolvedOperations,
+				operationLimitReached: unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS,
+			});
+		});
+	};
 	refresh = (reconcile = false) => this.run((signal) => this.read(signal, reconcile));
 	page = (cursor?: string) => {
 		if (this.state.busy || this.state.uncertain) return Promise.resolve();
@@ -299,7 +367,10 @@ export class PermissionSession {
 			this.state.uncertain ||
 			this.unresolved ||
 			this.state.failed ||
-			!this.state.loaded
+			!this.state.loaded ||
+			(command.method === "decideToolApproval" &&
+				command.params.decision === "approve" &&
+				this.state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS)
 		)
 			return Promise.resolve();
 		const captured = structuredClone(command);

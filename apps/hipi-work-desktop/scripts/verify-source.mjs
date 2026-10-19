@@ -27,6 +27,9 @@ nodeTests.push("apps/hipi-work-desktop/scripts/release-download.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
+nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
@@ -42,6 +45,7 @@ const storageTests = [
 ];
 const uiTests = [
 	"agent-permission-card",
+	"permission-presentation",
 	"retained-context-consent",
 	"file-panel",
 	"file-workbench",

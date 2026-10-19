@@ -1,4 +1,8 @@
 const en = {
+	"permissions.operation.attention": "Observed unresolved file writes",
+	"permissions.operation.limit":
+		"The unresolved write review limit has been reached. Previously observed writes are retained. Check their outcomes before loading more history.",
+	"permissions.operation.review": "Review file write outcomes",
 	"permissions.archived":
 		"This conversation is archived. New live-file and historical-context authorizations and write approvals are disabled. History and read-only checks remain available. Restore does not resume execution or grant permissions.",
 	"permissions.action.original": "Review original request before retrying",
@@ -88,6 +92,9 @@ const en = {
 	"permissions.status.observed_match": "Current content matches",
 } as const;
 const zh: Record<keyof typeof en, string> = {
+	"permissions.operation.attention": "已观察到的结果未明文件写入",
+	"permissions.operation.limit": "已达未明写入核对上限，此前记录全部保留。请先核对已有结果，再读取更多历史。",
+	"permissions.operation.review": "查看文件写入结果",
 	"permissions.archived":
 		"此会话已归档，不能新增文件上下文、历史上下文授权或批准写入。仍可查看历史及进行只读核对。恢复会话不会恢复执行或授予权限。",
 	"permissions.action.original": "重试前查看原始请求",

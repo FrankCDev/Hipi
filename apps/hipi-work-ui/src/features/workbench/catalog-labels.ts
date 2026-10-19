@@ -1,4 +1,8 @@
 const en = {
+	actions: "Conversation actions",
+	preview: "View details",
+	settings: "Workbench settings",
+	searchScopeLabel: "Search scope",
 	first: "First page",
 	next: "Next page",
 	active: "Active conversations",
@@ -30,6 +34,10 @@ const en = {
 	searchScope: "Search matches only the currently displayed pages of expanded projects.",
 } as const;
 const zh: Record<keyof typeof en, string> = {
+	actions: "会话操作",
+	preview: "查看详情",
+	settings: "工作台设置",
+	searchScopeLabel: "搜索范围",
 	first: "第一页",
 	next: "下一页",
 	active: "当前会话",

@@ -45,6 +45,112 @@ async function fill(cdp, selector, value) {
 	await cdp.request("Input.insertText", { text: value });
 	assert.equal(await evaluate(cdp, `document.querySelector(${JSON.stringify(selector)}).value`), value);
 }
+export async function pressKey(cdp, key) {
+	const code = { Escape: 27, Home: 36, Enter: 13 }[key];
+	assert.ok(code, "Unsupported smoke key");
+	for (const type of ["keyDown", "keyUp"])
+		await cdp.request("Input.dispatchKeyEvent", { type, key, code: key, windowsVirtualKeyCode: code });
+}
+async function dismissTo(cdp, selector) {
+	await pressKey(cdp, "Escape");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`!document.querySelector('[role="dialog"], [role="menu"]') && document.activeElement === document.querySelector(${JSON.stringify(selector)})`,
+			),
+		"overlay closed and trigger focus restored",
+	);
+}
+async function selectEnglish(cdp) {
+	await click(cdp, 'button[aria-label="Workbench settings"], button[aria-label="工作台设置"]');
+	await until(
+		() => evaluate(cdp, `!!document.querySelector('.workbench-settings[role="dialog"]')`),
+		"workbench settings",
+	);
+	if (await evaluate(cdp, `!!document.querySelector('.workbench-settings button[aria-label="Switch to English"]')`))
+		await click(cdp, '.workbench-settings button[aria-label="Switch to English"]');
+	await until(
+		() => evaluate(cdp, `!!document.querySelector('.workbench-settings button[aria-label="切换到中文"]')`),
+		"English selected",
+	);
+	await dismissTo(cdp, 'button[aria-label="Workbench settings"]');
+}
+async function inspectControls(cdp) {
+	await click(cdp, 'button[aria-label="Model status"]');
+	await until(
+		() =>
+			evaluate(cdp, `document.querySelector('.model-status-popover[role="dialog"]')?.textContent.includes('faux-1')`),
+		"model status contents",
+	);
+	assert.ok(
+		await evaluate(
+			cdp,
+			`[...document.querySelectorAll('.model-status-popover button')].some(e => e.textContent.trim() === 'Refresh model status')`,
+		),
+	);
+	await dismissTo(cdp, 'button[aria-label="Model status"]');
+	await click(cdp, ".permission-controls button", "Agent file permissions");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`document.querySelector('.permission-detail-dialog')?.textContent.includes('Authorize model context')`,
+			),
+		"permission details contents",
+	);
+	assert.ok(
+		await evaluate(
+			cdp,
+			`[...document.querySelectorAll('.permission-detail-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
+		),
+	);
+	await dismissTo(cdp, ".permission-controls button");
+	const actions = `header button[aria-label="Conversation actions: ${fixture.conversation}"]`;
+	await click(cdp, actions);
+	await pressKey(cdp, "Home");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`document.activeElement?.getAttribute('role') === 'menuitem' && document.activeElement.textContent.trim() === 'Rename conversation'`,
+			),
+		"keyboard rename menu item",
+	);
+	await pressKey(cdp, "Enter");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`document.querySelector('[role="dialog"] input')?.value === ${JSON.stringify(fixture.conversation)}`,
+			),
+		"rename dialog original title",
+	);
+	await dismissTo(cdp, actions);
+	assert.equal(
+		await evaluate(cdp, `document.querySelector('.toolbar-conversation')?.textContent`),
+		fixture.conversation,
+	);
+	const sidebarActions = `.conversation-nav-item button[aria-label="Conversation actions: ${fixture.conversation}"]`;
+	await click(cdp, sidebarActions);
+	await click(cdp, '[role="menuitem"]', "View details");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`document.querySelector('.conversation-preview-card[role="dialog"]')?.textContent.includes(${JSON.stringify(fixture.conversation)})`,
+			),
+		"sidebar conversation preview",
+	);
+	await dismissTo(cdp, sidebarActions);
+	return {
+		modelPopover: true,
+		permissionDialog: true,
+		keyboardRenameCancelled: true,
+		sidebarPreview: true,
+		focusRestored: true,
+	};
+}
 export async function capture(cdp, directory, name) {
 	await evaluate(
 		cdp,
@@ -72,6 +178,62 @@ async function historyEvidence(cdp) {
 	assert.equal(new Set(keys).size, 2);
 	return keys;
 }
+export async function selectReopenedConversation(cdp) {
+	const selected = await evaluate(
+		cdp,
+		`document.querySelector('.toolbar-conversation')?.textContent === ${JSON.stringify(fixture.conversation)}`,
+	);
+	if (selected) return;
+	// The workbench shell can render before its workspace query has returned.
+	// Missing is not collapsed: wait for the actual button before deciding to toggle it.
+	const state = await until(
+		() =>
+			evaluate(
+				cdp,
+				`(() => {
+		const e = document.querySelector('.project-toggle');
+		if (!e || e.disabled || !e.getClientRects().length) return null;
+		const expanded = e.getAttribute('aria-expanded');
+		return expanded === 'true' || expanded === 'false' ? { expanded } : null;
+		})()`,
+			),
+		"reopened workspace toggle",
+	);
+	if (state.expanded === "false") await click(cdp, ".project-toggle");
+	await click(cdp, ".conversation-list button.conversation-link", fixture.conversation);
+}
+export async function activityEvidence(cdp) {
+	return until(async () => {
+		const state = await evaluate(
+			cdp,
+			`(() => {
+		const dialog = document.querySelector('[role="dialog"]');
+		if (dialog?.querySelector('h2')?.textContent !== 'Tool activity') return null;
+		const paragraphs = [...dialog.querySelectorAll('p')].map(e => e.textContent);
+		return {
+			failed: !!dialog.querySelector('[role="alert"]'),
+			loading: [...dialog.querySelectorAll('output')].some(e => e.textContent === 'Reading records…'),
+			section: paragraphs.find(t => t === 'Task-record section' || t === 'Retained-result section'),
+			empty: paragraphs.includes('No activity in this scanned page. More records may be available on the next page.')
+		}; })()`,
+		);
+		if (!state) return;
+		assert.equal(state.failed, false, "Tool activity read failed");
+		if (state.loading || !state.section) return;
+		assert.equal(state.empty, true, "Deterministic no-tool fixture must have a confirmed empty activity page");
+		return { section: state.section, empty: true };
+	}, "successful tool activity page");
+}
+async function inspectActivities(cdp, directory, reopened) {
+	await click(cdp, "button", "View activity");
+	await activityEvidence(cdp);
+	await click(cdp, '[role="dialog"] button', "Refresh this page");
+	const evidence = await activityEvidence(cdp);
+	await capture(cdp, directory, reopened ? "activities-reopened" : "activities");
+	await click(cdp, '[role="dialog"] button', "Close activity");
+	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "activity dialog closed");
+	return evidence;
+}
 export async function exercise(cdp, directory, reopened = false) {
 	await cdp.request("Runtime.enable");
 	await cdp.request("Log.enable");
@@ -87,23 +249,11 @@ export async function exercise(cdp, directory, reopened = false) {
 		),
 		{ bridge: "function", node: "undefined", process: "undefined" },
 	);
-	// Use the app's language control rather than injecting preference state.
-	if (await evaluate(cdp, `!!document.querySelector('button[aria-label="Switch to English"]')`))
-		await click(cdp, 'button[aria-label="Switch to English"]');
+	// Settings is a real popover; absence of its language button is not evidence of English.
+	await selectEnglish(cdp);
 	await until(() => evaluate(cdp, `!!document.querySelector('button[aria-label="New workspace"]')`), "English labels");
 	if (reopened) {
-		const selected = await evaluate(
-			cdp,
-			`document.querySelector('.toolbar-conversation')?.textContent === ${JSON.stringify(fixture.conversation)}`,
-		);
-		if (!selected) {
-			const expanded = await evaluate(
-				cdp,
-				`document.querySelector('.project-toggle')?.getAttribute('aria-expanded') === 'true'`,
-			);
-			if (!expanded) await click(cdp, ".project-toggle");
-			await click(cdp, ".conversation-list button.conversation-link", fixture.conversation);
-		}
+		await selectReopenedConversation(cdp);
 		await until(
 			() =>
 				evaluate(
@@ -118,8 +268,10 @@ export async function exercise(cdp, directory, reopened = false) {
 				`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.text)})`,
 			),
 		);
+		const activities = await inspectActivities(cdp, directory, true);
+		const controls = await inspectControls(cdp);
 		await capture(cdp, directory, "reopened");
-		return { reopened: true, messageKeys: await historyEvidence(cdp) };
+		return { reopened: true, activities, controls, messageKeys: await historyEvidence(cdp) };
 	}
 	await capture(cdp, directory, "initial");
 	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
@@ -175,6 +327,10 @@ export async function exercise(cdp, directory, reopened = false) {
 			`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.text)})`,
 		),
 	);
+	await click(cdp, '[role="dialog"] button', "Close");
+	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "conversation details closed");
+	const activities = await inspectActivities(cdp, directory, false);
+	const controls = await inspectControls(cdp);
 	await capture(cdp, directory, "completed");
-	return { ...observed, messageKeys: await historyEvidence(cdp) };
+	return { ...observed, activities, controls, messageKeys: await historyEvidence(cdp) };
 }

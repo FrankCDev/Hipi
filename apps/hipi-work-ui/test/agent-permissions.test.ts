@@ -3,6 +3,7 @@ import {
 	type AgentContext,
 	type AppClient,
 	AppError,
+	type FileOperation,
 	type Method,
 	type Params,
 	PROTOCOL_VERSION,
@@ -13,7 +14,11 @@ import {
 } from "@hipi/work-runtime/contracts";
 import { test, vi } from "vitest";
 import { permissionLabels } from "../src/features/agent-permissions/labels.ts";
-import { canDecide, PermissionSession } from "../src/features/agent-permissions/permission-session.ts";
+import {
+	canDecide,
+	MAX_UNRESOLVED_OPERATIONS,
+	PermissionSession,
+} from "../src/features/agent-permissions/permission-session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 
 const scope = { workspaceId: "workspace", conversationId: "conversation" };
@@ -425,4 +430,250 @@ test("stale cursor fallback is bounded and does not reinterpret INVALID_REQUEST"
 		assert.ok(f.calls.every((call) => call.method.startsWith("list")));
 		f.session.dispose();
 	}
+});
+
+function operationFor(
+	approval: ToolApproval,
+	status: FileOperation["status"] = "unknown",
+	revision = 1,
+): FileOperation {
+	return {
+		workspaceId: approval.workspaceId,
+		conversationId: approval.conversationId,
+		operationId: approval.operationId ?? "operation",
+		approvalId: approval.approvalId,
+		taskId: approval.taskId,
+		callId: approval.callId,
+		rootId: approval.rootId,
+		path: approval.path,
+		argumentsDigest: approval.argumentsDigest,
+		contentDigest: approval.contentDigest,
+		status,
+		revision,
+	};
+}
+test("observed unknown and executing writes survive closing audit history and empty pending refreshes", async () => {
+	for (const status of ["unknown", "executing"] as const) {
+		const f = fixture();
+		f.approval.operationId = "operation";
+		f.approval.status = "consumed";
+		let operation = operationFor(f.approval, status);
+		f.handle(async (method) => (method === "getFileOperation" ? operation : undefined));
+		await f.session.approvalHistory("history");
+		assert.equal(f.session.getSnapshot().unresolvedOperations.length, 1);
+		f.data.approval = null;
+		await f.session.approvalHistory("pending");
+		await f.session.refresh();
+		assert.equal(f.session.getSnapshot().operation, null);
+		assert.equal(f.session.getSnapshot().unresolvedOperations[0]?.status, status);
+		assert.equal(
+			f.calls.some((call) => call.method === "getFileOperation" && (call.params as { reconcile?: boolean }).reconcile),
+			false,
+		);
+		const before = f.calls.length;
+		operation = { ...operation, status: "observed_match", revision: 2 };
+		await f.session.reconcileOperation("operation");
+		assert.deepEqual(
+			f.calls.slice(before).map((call) => [call.method, call.params]),
+			[["getFileOperation", { ...scope, operationId: "operation", reconcile: true }]],
+		);
+		assert.equal(f.session.getSnapshot().unresolvedOperations.length, 0);
+		assert.equal(f.session.getSnapshot().checkedOperation?.status, "observed_match");
+		assert.equal(
+			f.session.getSnapshot().activeContexts.length,
+			1,
+			"read-only outcome checks leave the existing authority unchanged",
+		);
+		const other = new PermissionSession(f.client, { ...scope, conversationId: "other" });
+		assert.deepEqual(other.getSnapshot().unresolvedOperations, []);
+		other.dispose();
+		f.session.dispose();
+	}
+});
+test("missing, stale, same-revision changed or foreign operation checks retain the warning and report failure", async () => {
+	for (const mismatch of [
+		"missing",
+		"stale",
+		"sameRevision",
+		"scope",
+		"approval",
+		"digest",
+		"path",
+		"throw",
+	] as const) {
+		const f = fixture();
+		f.approval.operationId = "operation";
+		const original = operationFor(f.approval, "unknown", 2);
+		f.handle(async (method) => (method === "getFileOperation" ? original : undefined));
+		await f.session.refresh();
+		f.data.approval = null;
+		await f.session.approvalHistory("pending");
+		f.handle(async () => {
+			if (mismatch === "throw") throw new Error("offline");
+			if (mismatch === "missing") return null;
+			return {
+				...original,
+				status: "confirmed",
+				revision: mismatch === "stale" ? 1 : mismatch === "sameRevision" ? 2 : 3,
+				...(mismatch === "scope" ? { conversationId: "other" } : {}),
+				...(mismatch === "approval" ? { approvalId: "other" } : {}),
+				...(mismatch === "digest" ? { contentDigest: "b".repeat(64) } : {}),
+				...(mismatch === "path" ? { path: "other.txt" } : {}),
+			};
+		});
+		await f.session.reconcileOperation("operation");
+		assert.equal(f.session.getSnapshot().failed, true, mismatch);
+		assert.deepEqual(f.session.getSnapshot().unresolvedOperations, [original], mismatch);
+		assert.equal(f.session.getSnapshot().checkedOperation, null);
+		f.session.dispose();
+	}
+});
+test("observed write attention is bounded without dropping unresolved evidence or scanning additional history", async () => {
+	const f = fixture();
+	let checking = false;
+	f.handle(async (method, params) =>
+		method === "getFileOperation"
+			? {
+					...operationFor(f.approval, checking ? "confirmed" : "unknown", checking ? 2 : 1),
+					operationId: (params as { operationId: string }).operationId,
+				}
+			: undefined,
+	);
+	for (let index = 0; index < MAX_UNRESOLVED_OPERATIONS; index++) {
+		f.approval.operationId = `operation-${index}`;
+		await f.session.refresh();
+	}
+	const before = f.calls.length;
+	await f.session.page("next");
+	assert.deepEqual(
+		f.calls.slice(before).map((call) => call.method),
+		["listActiveAgentContexts"],
+		"capacity stops only discovery, not context recovery reads",
+	);
+	assert.equal(f.session.getSnapshot().operationLimitReached, true);
+	assert.equal(f.session.getSnapshot().unresolvedOperations.length, MAX_UNRESOLVED_OPERATIONS);
+	const blocked = f.calls.length;
+	await f.session.decide(f.approval, "approve");
+	assert.equal(f.calls.length, blocked, "new writes cannot be approved at attention capacity");
+	f.handle(async (method, params) => {
+		if (method === "decideToolApproval") return { ...f.approval, status: "rejected", revision: 2 };
+		if (method === "revokeAgentContext") {
+			f.grant.status = "revoked";
+			f.grant.revision++;
+			return f.grant;
+		}
+		if (method === "getFileOperation")
+			return {
+				...operationFor(f.approval, checking ? "confirmed" : "unknown", checking ? 2 : 1),
+				operationId: (params as { operationId: string }).operationId,
+			};
+	});
+	await f.session.decide(f.approval, "reject");
+	assert.equal(f.calls.filter((call) => call.method === "decideToolApproval").length, 1);
+	await f.session.revoke({ ...f.grant });
+	assert.equal(f.session.getSnapshot().activeContexts.length, 0);
+	assert.equal(f.calls.filter((call) => call.method === "revokeAgentContext").length, 1);
+	checking = true;
+	await f.session.reconcileOperation("operation-0");
+	assert.equal(f.session.getSnapshot().operationLimitReached, false);
+	assert.equal(f.session.getSnapshot().unresolvedOperations.length, MAX_UNRESOLVED_OPERATIONS - 1);
+	f.session.dispose();
+});
+
+test("new authoritative terminal observations clear only their matching retained operation", async () => {
+	for (const status of ["confirmed", "conflict", "observed_match"] as const) {
+		const f = fixture();
+		f.approval.operationId = "operation";
+		let operation = operationFor(f.approval);
+		f.handle(async (method) => (method === "getFileOperation" ? operation : undefined));
+		await f.session.refresh();
+		operation = { ...operation, status, revision: 2 };
+		await f.session.refresh();
+		assert.deepEqual(f.session.getSnapshot().unresolvedOperations, [], status);
+		assert.equal(f.session.getSnapshot().operation?.status, status);
+		f.session.dispose();
+	}
+});
+
+test("capacity preserves expired-context recovery and lost authorization-result checks without auto granting", async () => {
+	const f = fixture();
+	// Stress retained UI observations, not a claim of 64 simultaneously live backend operations.
+	f.handle(async (method, params) => {
+		if (method === "getFileOperation") {
+			const input = params as Params<"getFileOperation">;
+			const operation = { ...operationFor(f.approval), operationId: input.operationId };
+			if (!input.reconcile) return operation;
+			// Match backend live context requirements: root, path coverage, model, current status and expiry.
+			const allowed = f.data.contexts.some(
+				(grant) =>
+					grant.purpose === "live-files" &&
+					grant.status === "active" &&
+					grant.expiresAt > Date.now() &&
+					grant.rootId === operation.rootId &&
+					grant.model.provider === f.approval.model.provider &&
+					grant.model.modelId === f.approval.model.modelId &&
+					grant.pathPrefixes.some(
+						(prefix) => prefix === "" || operation.path === prefix || operation.path.startsWith(`${prefix}/`),
+					),
+			);
+			if (!allowed) throw new AppError("UNAUTHORIZED");
+			return { ...operation, status: "observed_match", revision: 2 };
+		}
+		if (method === "authorizeAgentContext") {
+			const input = params as Params<"authorizeAgentContext">;
+			const renewed: AgentContext = {
+				...input,
+				purpose: "live-files",
+				grantId: "renewed",
+				status: "active",
+				revision: 1,
+			};
+			f.data.contexts = [renewed];
+			f.data.receipt = { method, result: renewed };
+			throw new Error("Lost authorization response");
+		}
+	});
+	for (let index = 0; index < MAX_UNRESOLVED_OPERATIONS; index++) {
+		f.approval.operationId = `operation-${index}`;
+		await f.session.refresh();
+	}
+	f.grant.expiresAt = Date.now() - 1;
+	await f.session.refresh();
+	assert.equal(f.session.getSnapshot().activeContexts.length, 0);
+	await f.session.reconcileOperation("operation-0");
+	assert.equal(f.session.getSnapshot().failed, true);
+	assert.equal(f.session.getSnapshot().unresolvedOperations.length, MAX_UNRESOLVED_OPERATIONS);
+	assert.equal(
+		f.calls.some((call) => call.method === "authorizeAgentContext"),
+		false,
+	);
+	await f.session.refresh();
+	assert.equal(f.session.getSnapshot().failed, false, "explicit refresh can recover consent controls at capacity");
+	const before = f.calls.length;
+	await f.session.authorize({
+		...scope,
+		requestId: "renew-live",
+		rootId: f.approval.rootId,
+		pathPrefixes: [""],
+		model: f.approval.model,
+		expiresAt: Date.now() + 60000,
+		disclosureVersion: 1,
+	});
+	assert.deepEqual(
+		f.calls.slice(before).map((call) => call.method),
+		["authorizeAgentContext", "getAgentCommandResult", "listActiveAgentContexts"],
+	);
+	assert.equal(f.session.getSnapshot().uncertain, false);
+	assert.equal(f.session.getSnapshot().activeContexts[0]?.grantId, "renewed");
+	assert.equal(f.grant.status, "active");
+	assert.ok(f.grant.expiresAt < Date.now(), "expired authority itself is never revived");
+	await f.session.reconcileOperation("operation-0");
+	assert.equal(f.session.getSnapshot().checkedOperation?.status, "observed_match");
+	assert.equal(f.session.getSnapshot().unresolvedOperations.length, MAX_UNRESOLVED_OPERATIONS - 1);
+	assert.equal(f.session.getSnapshot().operationLimitReached, false);
+	assert.equal(
+		f.calls.some((call) => call.method === "continueWorkspace" || call.method === "decideToolApproval"),
+		false,
+	);
+	f.session.dispose();
 });

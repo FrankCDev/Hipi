@@ -35,6 +35,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             arch: x64
+          # Temporary independent sandbox/GUI compatibility experiment, not a replacement
+          # for the blocked Ubuntu 24.04 native gate. This image retires 2027-04-17.
+          - os: ubuntu-22.04
+            arch: x64
           - os: windows-2022
             arch: x64
           - os: macos-14
@@ -57,6 +61,27 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
       - name: Record host filesystem sync diagnostics
         run: node apps/hipi-work-desktop/scripts/probe-filesystem-sync.mjs
+      - name: Record Linux sandbox capabilities without changing host security
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p .artifacts/hipi-work/host-evidence
+          set +e
+          node apps/hipi-work-desktop/scripts/probe-linux-sandbox.mjs > .artifacts/hipi-work/host-evidence/linux-sandbox.json
+          probe_status=$?
+          set -e
+          cat .artifacts/hipi-work/host-evidence/linux-sandbox.json
+          echo "Linux capability probe exit: ${probe_status}; this is not a GUI acceptance result." >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$probe_status" != 0 && "$probe_status" != 1 ]]; then exit "$probe_status"; fi
+          PROBE_EXIT="$probe_status" node --input-type=module -e 'import { readFileSync } from "node:fs"; const r = JSON.parse(readFileSync(".artifacts/hipi-work/host-evidence/linux-sandbox.json", "utf8")); if (r.schemaVersion !== 1 || r.productGuiValidated !== false || r.status !== (process.env.PROBE_EXIT === "0" ? "candidate_requires_packaged_gui_validation" : "blocked")) throw new Error("Invalid sandbox probe evidence");'
+      - name: Retain Linux host capability evidence
+        if: ${{ always() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-host-${{ matrix.os }}-${{ matrix.arch }}
+          path: .artifacts/hipi-work/host-evidence/linux-sandbox.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify explicit deterministic source test lists and boundaries
         run: node apps/hipi-work-desktop/scripts/verify-source.mjs
       - name: Build production bundles without source maps

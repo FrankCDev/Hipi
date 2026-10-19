@@ -1,9 +1,15 @@
 import { Ellipsis } from "lucide-react";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../components/ui/popover.tsx";
 import { ConversationPreviewInteraction, type PreviewMode } from "./conversation-preview-interaction.ts";
+
+export type PreviewActions = (controls: {
+	onPreview: () => void;
+	onMenuOpen: () => void;
+	triggerRef: RefObject<HTMLButtonElement | null>;
+}) => ReactNode;
 
 /** One hover/focus boundary for the label and its independent inline actions. */
 export function SidebarPreviewRow({
@@ -12,12 +18,14 @@ export function SidebarPreviewRow({
 	titleId,
 	children,
 	preview,
+	renderActions,
 }: {
 	className: string;
 	selected: boolean;
 	titleId: string;
 	children: ReactNode;
 	preview: (close: () => void, returnFocus: () => HTMLButtonElement | null) => ReactNode;
+	renderActions?: PreviewActions;
 }) {
 	const { t } = usePreferences();
 	const actionId = useId();
@@ -78,25 +86,36 @@ export function SidebarPreviewRow({
 					}}
 				>
 					{children}
-					<PopoverTrigger asChild>
-						<Button
-							ref={trigger}
-							variant="ghost"
-							size="icon-sm"
-							className="sidebar-preview-trigger"
-							aria-labelledby={`${actionId} ${titleId}`}
-							onClick={(event) => {
-								event.preventDefault();
+					{renderActions ? (
+						renderActions({
+							onPreview: () => {
 								interaction.activate();
 								if (interaction.mode === "pinned") card.current?.focus();
-							}}
-						>
-							<Ellipsis size={16} aria-hidden="true" />
-							<span className="sr-only" id={actionId}>
-								{t("nav.preview")}
-							</span>
-						</Button>
-					</PopoverTrigger>
+							},
+							triggerRef: trigger,
+							onMenuOpen: () => interaction.close("navigate"),
+						})
+					) : (
+						<PopoverTrigger asChild>
+							<Button
+								ref={trigger}
+								variant="ghost"
+								size="icon-sm"
+								className="sidebar-preview-trigger"
+								aria-labelledby={`${actionId} ${titleId}`}
+								onClick={(event) => {
+									event.preventDefault();
+									interaction.activate();
+									if (interaction.mode === "pinned") card.current?.focus();
+								}}
+							>
+								<Ellipsis size={16} aria-hidden="true" />
+								<span className="sr-only" id={actionId}>
+									{t("nav.preview")}
+								</span>
+							</Button>
+						</PopoverTrigger>
+					)}
 				</div>
 			</PopoverAnchor>
 			<PopoverContent

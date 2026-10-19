@@ -4,10 +4,38 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { HostConnection } from "../../../apps/hipi-work-desktop/src/host-connection.ts";
+import { decode, encode } from "../../../apps/hipi-work-desktop/src/protocol.ts";
+import { createRuntimeRouter } from "../../../apps/hipi-work-desktop/src/runtime-router.ts";
+import { createDesktopClient } from "../../../apps/hipi-work-ui/src/app/desktop-client.ts";
 import { ActivitySession } from "../../../apps/hipi-work-ui/src/features/tool-activities/activity-session.ts";
-import { type AppClient, parseResult } from "../src/contracts.ts";
+import { parseRequest, parseResult } from "../src/contracts.ts";
 import { createFileAuthority } from "../src/files/service.ts";
 import { openRuntime } from "../src/node.ts";
+
+function desktopConnection(runtime: Awaited<ReturnType<typeof openRuntime>>) {
+	const tasks = new Set<Promise<void>>();
+	const host = new HostConnection("activity", (raw) => {
+		const task = router.receive(raw);
+		tasks.add(task);
+		void task.finally(() => tasks.delete(task)).catch(() => host.close());
+	});
+	const router = createRuntimeRouter(runtime, "activity", (raw) => host.receive(raw));
+	const client = createDesktopClient({
+		// Match preload: validate before JSON encoding. Serializing params first masks undefined-field bugs.
+		request: (raw) => host.call(decode(encode(parseRequest(raw)))).result,
+		subscribe: () => {
+			throw new Error("This activity regression does not subscribe");
+		},
+	});
+	return {
+		client,
+		async close() {
+			host.close();
+			await Promise.all(tasks);
+		},
+	};
+}
 
 async function until<T>(read: () => Promise<T | undefined>): Promise<T> {
 	const deadline = Date.now() + 10000;
@@ -52,6 +80,31 @@ test("real faux save projects approval and artifact then cold read does not resu
 			title: "Activity",
 		});
 		const scope = { workspaceId: "work", conversationId: conversation.conversationId };
+		const initialConnection = desktopConnection(runtime);
+		const initialSession = new ActivitySession(initialConnection.client, scope);
+		initialSession.activate();
+		try {
+			await initialSession.page();
+			assert.equal(initialSession.snapshot().failed, false);
+			assert.deepEqual(initialSession.snapshot().page, await runtime.call("getToolActivities", scope));
+			assert.deepEqual(initialSession.snapshot().page?.items, []);
+			const nextCursor = initialSession.snapshot().page?.nextCursor;
+			if (nextCursor) {
+				await initialSession.page(nextCursor);
+				assert.equal(initialSession.snapshot().failed, false);
+				assert.deepEqual(
+					initialSession.snapshot().page,
+					await runtime.call("getToolActivities", { ...scope, cursor: nextCursor }),
+				);
+			}
+			await initialSession.page("invalid-cursor");
+			assert.equal(initialSession.snapshot().failed, true);
+			await initialSession.page();
+			assert.equal(initialSession.snapshot().failed, false);
+		} finally {
+			initialSession.dispose();
+			await initialConnection.close();
+		}
 		await runtime.call("authorizeAgentContext", {
 			...scope,
 			requestId: "grant",
@@ -126,22 +179,20 @@ test("real faux save projects approval and artifact then cold read does not resu
 		assert.throws(() => parseResult("getToolActivityText", { ...output, retainedOutputOnly: false }), {
 			code: "INVALID_REQUEST",
 		});
-		// Cross-layer regression: actual persisted, untruncated output must pass the UI read guard.
-		// Mirror the JSON transport boundary, which omits absent optional cursor fields.
-		const client: AppClient = {
-			call: async (method, params, signal) =>
-				parseResult(method, await runtime.call(method, JSON.parse(JSON.stringify(params)), signal)),
-			observe: runtime.observe.bind(runtime),
-		};
-		const session = new ActivitySession(client, scope);
+		// Cross-layer regression: actual persisted output must pass desktop validation before serialization.
+		const connection = desktopConnection(runtime);
+		const session = new ActivitySession(connection.client, scope);
 		session.activate();
 		try {
 			await session.page();
+			assert.equal(session.snapshot().failed, false);
+			assert.equal(session.snapshot().page?.items[0]?.activityId, cold.activityId);
 			await session.text(cold.activityId);
 			assert.equal(session.snapshot().failed, false);
 			assert.deepEqual(session.snapshot().text, output);
 		} finally {
 			session.dispose();
+			await connection.close();
 		}
 		assert.equal(faux.state.callCount, calls);
 	} finally {

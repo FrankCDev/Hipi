@@ -22,7 +22,7 @@ vi.mock("../src/features/workbench/conversation-pane.tsx", () => ({
 	),
 }));
 
-function renderTree(expanded: boolean, count = 1) {
+function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "next-page") {
 	const cache = new QueryClient();
 	cache.setQueryData(["conversations", "workspace-id", "active", undefined], {
 		items: [
@@ -35,7 +35,7 @@ function renderTree(expanded: boolean, count = 1) {
 				archivedAt: null,
 			},
 		],
-		nextCursor: "next-page",
+		nextCursor,
 	});
 	const html = renderToStaticMarkup(
 		<QueryClientProvider client={cache}>
@@ -69,7 +69,13 @@ test("project and conversation share a selected row surface without nested actio
 	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
 	assert.match(html, /aria-label="新建会话"/);
-	assert.equal((html.match(/lucide-ellipsis/g) ?? []).length, 2);
+	assert.match(html, /aria-label="会话操作: My conversation"/);
+	assert.match(html, /aria-haspopup="menu"/);
+	assert.equal(
+		(html.match(/lucide-ellipsis/g) ?? []).length,
+		2,
+		"one preview action per workspace and one menu per conversation",
+	);
 	assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*<button\b/);
 });
 
@@ -88,8 +94,15 @@ test("a catalog page is rendered without the old lifetime slice and pagination r
 	const expanded = renderTree(true);
 	assert.match(expanded, /下一页/);
 	assert.match(expanded, /已归档会话|会话列表/);
-	assert.match(expanded, /重命名会话/);
-	assert.match(expanded, /归档会话/);
+	assert.match(expanded, /会话操作: My conversation/);
+	assert.doesNotMatch(expanded, /重命名会话/);
+	assert.doesNotMatch(expanded, />归档会话</);
+});
+
+test("single-page conversation lists omit inert pagination without hiding their actions", () => {
+	const html = renderTree(true, 1, null);
+	assert.doesNotMatch(html, /第一页|下一页/);
+	assert.match(html, /会话操作: My conversation/);
 });
 
 test("selected conversation remains mounted when it is outside the displayed directory page", () => {
@@ -122,8 +135,15 @@ test("selected conversation remains mounted when it is outside the displayed dir
 			</QueryClientProvider>,
 		);
 	assert.match(render(), /data-selected-conversation="selected-conversation"/);
+	assert.match(render(), /下一页/);
 	cache.setQueryData(["workspaces", undefined], { items: [], nextCursor: null });
-	assert.match(render(), /data-selected-conversation="selected-conversation"/);
+	const empty = render();
+	assert.match(empty, /data-selected-conversation="selected-conversation"/);
+	assert.doesNotMatch(empty, /第一页|下一页/);
+	assert.match(empty, /aria-label="新建工作区"/);
+	assert.match(empty, /aria-label="工作台设置"/);
+	assert.match(empty, /<p class="sr-only"[^>]*>仅搜索已展开项目当前显示的会话页。<\/p>/);
+	assert.match(empty, /aria-label="搜索范围"/);
 	assert.equal(local.read("draft.selected-workspace.selected-conversation"), "keep this draft");
 	cache.clear();
 });

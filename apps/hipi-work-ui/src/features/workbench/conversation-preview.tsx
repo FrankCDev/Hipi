@@ -4,7 +4,7 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
-import { SidebarPreviewRow } from "./sidebar-preview-row.tsx";
+import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 
 export function ConversationPreview({
 	conversation,
@@ -12,12 +12,14 @@ export function ConversationPreview({
 	selected,
 	onSelect,
 	onDetails,
+	renderActions,
 }: {
 	conversation: Conversation;
 	workspaceName: string;
 	selected: boolean;
 	onSelect: () => void;
 	onDetails: (returnFocus: HTMLButtonElement | null) => void;
+	renderActions?: PreviewActions;
 }) {
 	const { t } = usePreferences();
 	const titleId = useId();
@@ -26,6 +28,7 @@ export function ConversationPreview({
 			className="conversation-preview-row"
 			selected={selected}
 			titleId={titleId}
+			renderActions={renderActions}
 			preview={(close, returnFocus) => (
 				<>
 					<PopoverHeader>

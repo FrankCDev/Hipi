@@ -1,9 +1,16 @@
 import { type Conversation, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState, useSyncExternalStore } from "react";
+import { Ellipsis } from "lucide-react";
+import { type RefObject, useId, useRef, useState, useSyncExternalStore } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
@@ -62,10 +69,16 @@ export function ConversationActions({
 	conversation,
 	session,
 	guard,
+	onPreview,
+	onMenuOpen,
+	triggerRef,
 }: {
 	conversation: Conversation;
 	session: CatalogSession;
 	guard: (action: () => void) => void;
+	onPreview?: () => void;
+	onMenuOpen?: () => void;
+	triggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
@@ -74,6 +87,9 @@ export function ConversationActions({
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const titleId = useId();
+	const ownTrigger = useRef<HTMLButtonElement>(null);
+	const trigger = triggerRef ?? ownTrigger;
+	const previewSelected = useRef(false);
 	const disabled = state.busy || !!state.pending || state.incompatible;
 	return (
 		<Dialog
@@ -82,32 +98,65 @@ export function ConversationActions({
 				if (!open && !state.busy) setAction(null);
 			}}
 		>
-			<div className="flex flex-wrap gap-1">
-				<DialogTrigger asChild>
+			<DropdownMenu
+				onOpenChange={(open) => {
+					if (open) onMenuOpen?.();
+				}}
+			>
+				<DropdownMenuTrigger asChild>
 					<Button
-						size="sm"
+						ref={trigger}
+						className="conversation-actions-trigger"
+						size="icon-sm"
 						variant="ghost"
+						disabled={disabled && !onPreview}
+						aria-label={`${l.actions}: ${conversation.title}`}
+					>
+						<Ellipsis size={16} aria-hidden="true" />
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent
+					align="end"
+					onCloseAutoFocus={(event) => {
+						if (action || previewSelected.current) event.preventDefault();
+						previewSelected.current = false;
+					}}
+				>
+					{onPreview && (
+						<DropdownMenuItem
+							onSelect={() => {
+								previewSelected.current = true;
+								onPreview();
+							}}
+						>
+							{l.preview}
+						</DropdownMenuItem>
+					)}
+					<DropdownMenuItem
 						disabled={disabled}
-						onClick={() => {
+						onSelect={() => {
 							setTitle(conversation.title);
 							setAction("rename");
 						}}
 					>
 						{l.rename}
-					</Button>
-				</DialogTrigger>
-				<DialogTrigger asChild>
-					<Button
-						size="sm"
-						variant="ghost"
+					</DropdownMenuItem>
+					<DropdownMenuItem
 						disabled={disabled}
-						onClick={() => setAction(conversation.archivedAt === null ? "archive" : "restore")}
+						onSelect={() => setAction(conversation.archivedAt === null ? "archive" : "restore")}
 					>
 						{l[conversation.archivedAt === null ? "archive" : "restore"]}
-					</Button>
-				</DialogTrigger>
-			</div>
-			<DialogContent closeLabel={l.close} closeDisabled={state.busy}>
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<DialogContent
+				closeLabel={l.close}
+				closeDisabled={state.busy}
+				onCloseAutoFocus={(event) => {
+					event.preventDefault();
+					trigger.current?.focus();
+				}}
+			>
 				<DialogTitle>{l[action ?? "rename"]}</DialogTitle>
 				<DialogDescription>
 					{l[action === "archive" ? "archiveNote" : action === "restore" ? "restoreNote" : "renameNote"]}

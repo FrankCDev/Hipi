@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { Conversation } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
@@ -9,6 +10,14 @@ import { ConversationComposer } from "../src/features/workbench/conversation-com
 import { LocalState } from "../src/features/workbench/local-state.ts";
 import { type ConversationController, useConversation } from "../src/features/workbench/use-conversation.ts";
 
+// Inspect safety controls inside portalled content; actual open/focus behavior is covered by native GUI acceptance.
+vi.mock("../src/components/ui/dialog.tsx", () => ({
+	Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
+	DialogTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+	DialogContent: ({ children }: { children: ReactNode }) => <section>{children}</section>,
+	DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
+	DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+}));
 const local = new LocalState();
 const call = vi.fn();
 const scope = { workspaceId: "workspace", conversationId: "conversation" };
@@ -22,8 +31,11 @@ vi.mock("../src/features/workbench/use-observation.ts", () => ({
 	useObservation: () => ({ connection: "connected", snapshot: null, error: null, pause: vi.fn(), reconnect: vi.fn() }),
 }));
 vi.mock("../src/features/agent-permissions/permission-session.ts", () => ({
+	MAX_UNRESOLVED_OPERATIONS: 64,
 	PermissionSession: class {
 		state = {
+			unresolvedOperations: [],
+			checkedOperation: null,
 			contexts: [
 				{
 					...scope,

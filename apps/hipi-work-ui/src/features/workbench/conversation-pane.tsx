@@ -1,7 +1,7 @@
 import type { Conversation } from "@hipi/work-runtime/contracts";
-import { useEffect, useId, useRef } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Dialog, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { AgentPermissions } from "../agent-permissions/agent-permissions.tsx";
 import { ToolActivities, type ToolActivityArtifact } from "../tool-activities/tool-activities.tsx";
@@ -26,12 +26,6 @@ export function ConversationPane({
 	const { t, locale } = usePreferences();
 	const controller = useConversation(conversation);
 	const { observation } = controller;
-	const detailsTitle = useRef<HTMLHeadingElement>(null);
-	const detailsId = useId();
-	const detailsTitleId = useId();
-	useEffect(() => {
-		if (detailsOpen) detailsTitle.current?.focus();
-	}, [detailsOpen]);
 	return (
 		<section className="conversation-panel" aria-label={conversation.title}>
 			<h1 className="sr-only">{conversation.title}</h1>
@@ -50,32 +44,40 @@ export function ConversationPane({
 					)}
 				</div>
 			)}
-			<div className="diagnostics-panel" id={detailsId} hidden={!detailsOpen}>
-				<section aria-labelledby={detailsTitleId}>
-					<div className="diagnostics-heading">
-						<h2 id={detailsTitleId} ref={detailsTitle} tabIndex={-1}>
-							{t("receipt.details")}
-						</h2>
-						<span className="status-pill">
-							{observation.connection === "connected" && observation.snapshot
-								? t(observation.snapshot.running ? "work.running" : "work.idle")
-								: t("receipt.unconfirmed")}
-						</span>
-						<Button variant="ghost" size="sm" onClick={onDetailsClose}>
-							{t("common.close")}
-						</Button>
-					</div>
+			<Dialog
+				open={detailsOpen}
+				onOpenChange={(open) => {
+					if (!open) onDetailsClose();
+				}}
+			>
+				<DialogContent
+					className="workbench-detail-dialog"
+					closeLabel={t("common.close")}
+					aria-describedby={undefined}
+					onCloseAutoFocus={(event) => {
+						event.preventDefault();
+						onDetailsClose();
+					}}
+				>
+					<DialogTitle>{t("receipt.details")}</DialogTitle>
+					<span className="status-pill">
+						{observation.connection === "connected" && observation.snapshot
+							? t(observation.snapshot.running ? "work.running" : "work.idle")
+							: t("receipt.unconfirmed")}
+					</span>
 					<ConversationReceipt conversation={conversation} controller={controller} />
-				</section>
+				</DialogContent>
+			</Dialog>
+			<div className="conversation-tools">
+				<ConversationModelControls controller={controller} />
+				<AgentPermissions
+					key={`${conversation.workspaceId}/${conversation.conversationId}`}
+					scope={conversation}
+					archived={conversation.archivedAt !== null}
+					model={controller.model.data?.model}
+					connected={observation.connection === "connected"}
+				/>
 			</div>
-			<ConversationModelControls controller={controller} />
-			<AgentPermissions
-				key={`${conversation.workspaceId}/${conversation.conversationId}`}
-				scope={conversation}
-				archived={conversation.archivedAt !== null}
-				model={controller.model.data?.model}
-				connected={observation.connection === "connected"}
-			/>
 			<ToolActivities
 				scope={conversation}
 				connected={observation.connection === "connected"}

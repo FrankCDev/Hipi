@@ -11,6 +11,7 @@ export function ApprovalCard({
 	now,
 	locale,
 	disabled,
+	approveDisabled = false,
 	reconcileDisabled,
 	onDecide,
 	onReconcile,
@@ -21,6 +22,7 @@ export function ApprovalCard({
 	now: number;
 	locale: string;
 	disabled: boolean;
+	approveDisabled?: boolean;
 	reconcileDisabled: boolean;
 	onDecide: (decision: "approve" | "reject") => void;
 	onReconcile: () => void;
@@ -75,7 +77,7 @@ export function ApprovalCard({
 					<Button
 						key={decision}
 						variant={decision === "approve" ? "default" : "outline"}
-						disabled={disabled || !canDecide(approval, contexts, now)}
+						disabled={disabled || (decision === "approve" && approveDisabled) || !canDecide(approval, contexts, now)}
 						onClick={() => onDecide(decision)}
 					>
 						{l[`permissions.approval.${decision}`]}

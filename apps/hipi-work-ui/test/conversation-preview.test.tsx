@@ -10,6 +10,8 @@ import type { ConnectionState } from "../src/features/workbench/use-observation.
 
 const fixture = vi.hoisted(() => ({
 	connection: "connected" as ConnectionState,
+	modelError: false,
+	executionError: false,
 	executionState: "ready" as ConversationModel["executionState"],
 }));
 // Layout contract only: runtime and nested content keep their own behavioral suites.
@@ -24,12 +26,12 @@ vi.mock("../src/features/workbench/use-conversation.ts", () => ({
 				credentialState: "configured",
 				executionState: fixture.executionState,
 			},
-			isError: false,
+			isError: fixture.modelError,
 			isPending: false,
 			isFetching: false,
 			refetch: () => {},
 		},
-		execution: { isError: false, isPending: false, mutate: () => {} },
+		execution: { isError: fixture.executionError, isPending: false, mutate: () => {} },
 	}),
 }));
 vi.mock("../src/features/workbench/conversation-history.tsx", () => ({ ConversationHistory: () => null }));
@@ -70,7 +72,8 @@ test("connected conversation has an accessible heading but no repeated visible h
 	const html = renderPane("connected");
 	assert.match(html, /<h1 class="sr-only">Conversation title<\/h1>/);
 	assert.doesNotMatch(html, /conversation-header|connection-bar/);
-	assert.match(html, /class="diagnostics-panel"[^>]*hidden=""/);
+	assert.doesNotMatch(html, /diagnostics-panel|diagnostics-grid/);
+	assert.match(html, /aria-label="模型状态"/);
 });
 
 test("stale and paused connections retain explanation and reconnect without claiming current idle", () => {
@@ -78,7 +81,6 @@ test("stale and paused connections retain explanation and reconnect without clai
 		const html = renderPane(connection, true);
 		assert.match(html, /connection-bar/);
 		assert.match(html, /重新连接并核对/);
-		assert.match(html, /尚未确认/);
 		assert.doesNotMatch(html, /当前无执行/);
 		assert.doesNotMatch(html, /class="diagnostics-panel"[^>]*hidden/);
 	}
@@ -123,7 +125,8 @@ test("paused workspace offers explicit resume and a cancellation request that do
 		assert.match(html, />取消执行<\/button>/);
 		assert.match(html, /暂停时仅保存取消请求，不启动运行时/);
 		assert.match(html, /gpt\/test.v1/);
-		assert.match(html, /未验证服务/);
+		// Credential detail is available in the model popover, not a permanent row.
+		assert.match(html, /aria-haspopup="dialog"/);
 	} finally {
 		fixture.executionState = "ready";
 	}
@@ -149,5 +152,18 @@ test("running model exposes execution cancellation separately from observation",
 		assert.doesNotMatch(html, /恢复整个工作区/);
 	} finally {
 		fixture.executionState = "ready";
+	}
+});
+
+test("collapsed model details do not hide read or execution failures", () => {
+	fixture.modelError = true;
+	fixture.executionError = true;
+	try {
+		const html = renderPane("connected");
+		assert.match(html, /role="alert">模型状态读取失败/);
+		assert.match(html, /role="alert">操作结果未确认/);
+	} finally {
+		fixture.modelError = false;
+		fixture.executionError = false;
 	}
 });

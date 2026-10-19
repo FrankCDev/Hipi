@@ -37,8 +37,13 @@ test("workbench search groups the icon and input inside one border with a real t
 	assert.ok(group.includes(`aria-describedby="${label[1]}-scope"`));
 	assert.match(group, /<input data-slot="input-group-control"/);
 	assert.match(group, /data-slot="input-group-addon"[^>]*data-align="inline-start"[\s\S]*<svg aria-hidden="true"/);
-	assert.match(group, /focus-visible:ring-0/);
-	assert.doesNotMatch(group, /focus-visible:ring-\[3px\](?: |&quot;)/);
+	const input = group.match(/<input\b[^>]*>/)?.[0];
+	assert.ok(input);
+	assert.match(input, /focus-visible:ring-0/);
+	assert.doesNotMatch(input, /focus-visible:ring-\[3px\](?: |")/);
+	const scopeButton = group.match(/<button\b[^>]*aria-label="搜索范围"[^>]*>/)?.[0];
+	assert.ok(scopeButton);
+	assert.match(scopeButton, /focus-visible:ring-\[3px\]/);
 });
 
 test("compact create actions retain one named button with the official size and dialog trigger", () => {

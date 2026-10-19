@@ -57,7 +57,7 @@ const operation = parseFileOperation({
 	status: "observed_match",
 	revision: 1,
 });
-function render(status: typeof approval.status = "pending", locale = "en", revoked = false) {
+function render(status: typeof approval.status = "pending", locale = "en", revoked = false, atCapacity = false) {
 	return renderToStaticMarkup(
 		<ApprovalCard
 			approval={{ ...approval, status }}
@@ -66,6 +66,7 @@ function render(status: typeof approval.status = "pending", locale = "en", revok
 			now={2}
 			locale={locale}
 			disabled={false}
+			approveDisabled={atCapacity}
 			reconcileDisabled={false}
 			onDecide={() => {}}
 			onReconcile={() => {}}
@@ -93,4 +94,11 @@ test("all nonpending or revoked approvals render disabled decision buttons, with
 	assert.equal((render("pending", "en", true).match(/disabled=""/g) ?? []).length, 2);
 	assert.match(render("pending", "zh-CN"), /这不是完整 Diff/);
 	assert.match(render("pending", "zh-CN"), /不能据此证明由谁写入/);
+});
+
+test("attention capacity blocks approval while leaving explicit rejection available", () => {
+	const html = render("pending", "en", false, true);
+	const buttons = [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(([value]) => value);
+	assert.match(buttons.find((value) => value.includes("Approve this write")) ?? "", /disabled=""/);
+	assert.doesNotMatch(buttons.find((value) => value.includes("Reject this write")) ?? "", /disabled=""/);
 });

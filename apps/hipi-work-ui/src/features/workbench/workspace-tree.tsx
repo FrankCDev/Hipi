@@ -161,7 +161,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				{expanded && (
 					<ul className="conversation-list">
 						{visible.map((conversation) => (
-							<li key={conversation.conversationId}>
+							<li key={conversation.conversationId} className="conversation-nav-item">
 								<ConversationPreview
 									conversation={conversation}
 									workspaceName={workspace.name}
@@ -171,8 +171,15 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 									}
 									onSelect={() => props.onSelect(conversation)}
 									onDetails={(returnFocus) => props.onDetails(conversation, returnFocus)}
+									renderActions={(controls) => (
+										<ConversationActions
+											conversation={conversation}
+											session={props.catalog}
+											guard={props.guard}
+											{...controls}
+										/>
+									)}
 								/>
-								<ConversationActions conversation={conversation} session={props.catalog} guard={props.guard} />
 							</li>
 						))}
 					</ul>
@@ -180,7 +187,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				{expanded && conversations.isSuccess && visible.length === 0 && (
 					<p className="nav-feedback">{t(props.search.trim() ? "nav.noResults" : "nav.empty")}</p>
 				)}
-				{expanded && (
+				{expanded && !!(cursor || conversations.data?.nextCursor) && (
 					<div className="flex gap-1">
 						<Button
 							variant="ghost"

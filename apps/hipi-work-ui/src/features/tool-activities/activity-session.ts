@@ -90,9 +90,11 @@ export class ActivitySession {
 			controller.signal.addEventListener("abort", rejectAbort, { once: true });
 		});
 		try {
+			// Desktop validates before serialization; absent optional fields must not be own undefined keys.
+			const cursor = read.cursor === undefined ? {} : { cursor: read.cursor };
 			if (read.kind === "page") {
 				const page = await Promise.race([
-					this.client.call("getToolActivities", { ...this.scope, cursor: read.cursor }, controller.signal),
+					this.client.call("getToolActivities", { ...this.scope, ...cursor }, controller.signal),
 					aborted,
 				]);
 				if (!this.active || generation !== this.generation) return;
@@ -102,7 +104,7 @@ export class ActivitySession {
 				const text = await Promise.race([
 					this.client.call(
 						"getToolActivityText",
-						{ ...this.scope, activityId: read.activityId, cursor: read.cursor },
+						{ ...this.scope, activityId: read.activityId, ...cursor },
 						controller.signal,
 					),
 					aborted,

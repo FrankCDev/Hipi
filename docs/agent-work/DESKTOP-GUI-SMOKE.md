@@ -30,10 +30,15 @@ The runner uses Chromium input events and visible DOM controls to select English
 
 The catalog, store owner, workspace owner, workspace database, and `DevToolsActivePort` must exist in the runner-owned canonical paths. Renderer exceptions, console errors, error-level log entries, crashes, ambiguous targets, timeouts, unclean exits, and remaining packaged helpers all fail the run.
 
+On both launches, the runner opens Tool activity through its visible control and requires a successfully loaded task-record or retained-result section and an explicit empty page for this no-tool fixture. It also refreshes the page and checks again. An application-level read error fails even when the browser console is quiet. Details and activity dialogs are closed before the final conversation screenshots.
+
+Settings language selection is exercised inside the real settings popover. Model status and file-permission overlays must display their controls and restore trigger focus on Escape. The conversation actions menu is navigated with keyboard events to open Rename and cancel without changing the title. The sidebar View details preview must likewise close and return focus. These focused interaction checks do not constitute a complete keyboard or accessibility audit.
+
 Evidence is written to `.artifacts/hipi-work/packages/gui-smoke/`:
 
 - `packaged-gui-smoke.json`: outcome, OS/architecture, host Node and Electron versions, source/provenance/harness/binary/ASAR hashes, checks, errors, cleanup state, and artifact hashes.
 - `initial.png`, `streaming.png`, `completed.png`, `reopened.png`: actual renderer captures at the observed stages. A fast stream can finish before the streaming screenshot is captured; incremental updates are established by DOM observation, not the screenshot filename.
+- `activities.png`, `activities-reopened.png`: successfully loaded activity dialogs on the first launch and restart.
 - Redacted native launch logs; failures include available process output.
 
 Screenshots require visual inspection. Automation does not certify typography, layout quality, physical Chinese IME input, accessibility, installation, OS trust/signing/notarization, production credentials/keychain, paid models, updates, sleep/resume, or power-loss recovery. The JSON explicitly records these limits. A screenshot's existence is not visual acceptance.
@@ -42,4 +47,4 @@ Screenshots require visual inspection. Automation does not certify typography, l
 
 CDP requests, discovery bodies, process output, and waits are bounded. Early discovery rejection cancels the response body. Timeout cleanup waits for actual process close. An already exited process never authorizes signaling its old PID or process group. Remaining package processes cause a failed result and retained temporary directories rather than broader process killing. Temporary roots are removed only after owned process termination and absence of packaged helpers are confirmed.
 
-Focused source tests are `test/smoke-profile.test.ts`, `scripts/cdp.test.mjs`, and `scripts/gui-process.test.mjs` under `apps/hipi-work-desktop`. They cover main-entry wiring, profile validation, endpoint restrictions, request/transport lifetime, response cancellation, and exit-before-close cleanup. They cannot substitute for running the packaged GUI on each required target platform.
+Focused source tests are `test/smoke-profile.test.ts`, `scripts/cdp.test.mjs`, `scripts/gui-process.test.mjs`, and `scripts/gui-flow.test.mjs` under `apps/hipi-work-desktop`. They cover main-entry wiring, profile validation, endpoint restrictions, request/transport lifetime, response cancellation, exit-before-close cleanup, delayed workspace rendering, and explicit activity read success. They cannot substitute for running the packaged GUI on each required target platform. Exit-before-close is tested with controlled events on both OS branches; actual child-process tests do not assume POSIX pipe inheritance timing on Windows.

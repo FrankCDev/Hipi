@@ -1,5 +1,6 @@
 import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Settings } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -8,6 +9,8 @@ import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../../components/ui/input-group.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover.tsx";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { EditorSession } from "../files/editor-session.ts";
 import { fileLabels } from "../files/file-labels.ts";
 import { AppearanceSettings } from "../settings/index.ts";
@@ -17,6 +20,7 @@ import { CatalogRecovery, ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogSession } from "./catalog-session.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
+import { navigateConversation } from "./conversation-navigation.ts";
 import { ConversationPane } from "./conversation-pane.tsx";
 import { CreateDialog } from "./create-dialog.tsx";
 import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
@@ -143,7 +147,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			local.write("workspace", id);
 			local.write("conversation", "");
 		});
-	const selectConversation = (item: Conversation) => {
+	const selectConversation = (item: Conversation, onSelected?: () => void) => {
 		const select = () => {
 			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
 			if (item.workspaceId !== selectedWorkspace) session?.clear();
@@ -155,8 +159,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			local.write("conversation", item.conversationId);
 			setNavigationOpen(false);
 		};
-		if (item.workspaceId !== selectedWorkspace) guard(select);
-		else select();
+		navigateConversation({ changesWorkspace: item.workspaceId !== selectedWorkspace, guard, select, onSelected });
 	};
 	const applyCatalogResult = () => {
 		const result = catalog.getSnapshot().result;
@@ -222,9 +225,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					</Button>
 				</div>
 				<section className="conversation-nav">
-					<div className="section-label">
-						<span className="eyebrow">{t("nav.workspaces")}</span>
-						<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
+					<div className="workspace-create">
+						<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
 					</div>
 					<label className="sr-only" htmlFor={searchInputId}>
 						{t("nav.search")}
@@ -240,8 +242,27 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						<InputGroupAddon>
 							<Icon name="search" />
 						</InputGroupAddon>
+						<InputGroupAddon align="inline-end">
+							<TooltipProvider>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											variant="ghost"
+											size="icon-sm"
+											aria-label={cl.searchScopeLabel}
+											aria-describedby={`${searchInputId}-scope`}
+										>
+											<Icon name="info" size={14} />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent side="right" className="max-w-64">
+										{cl.searchScope}
+									</TooltipContent>
+								</Tooltip>
+							</TooltipProvider>
+						</InputGroupAddon>
 					</InputGroup>
-					<p className="search-scope" id={`${searchInputId}-scope`}>
+					<p className="sr-only" id={`${searchInputId}-scope`}>
 						{cl.searchScope}
 					</p>
 					{workspaces.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
@@ -278,31 +299,34 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						onSelect={selectConversation}
 						onCreate={createConversation}
 						onDetails={(item, returnFocus) => {
-							selectConversation(item);
-							detailsReturn.current = returnFocus;
-							setDetailsOpen(true);
+							selectConversation(item, () => {
+								detailsReturn.current = returnFocus;
+								setDetailsOpen(true);
+							});
 						}}
 					/>
-					<div className="flex gap-1">
-						<Button
-							size="sm"
-							variant="ghost"
-							disabled={workspaces.isFetching || !workspaceCursor}
-							onClick={() => setWorkspaceCursor(undefined)}
-						>
-							{cl.first}
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							disabled={workspaces.isFetching || !workspaces.data?.nextCursor}
-							onClick={() => {
-								if (workspaces.data?.nextCursor) setWorkspaceCursor(workspaces.data.nextCursor);
-							}}
-						>
-							{cl.next}
-						</Button>
-					</div>
+					{!!(workspaceCursor || workspaces.data?.nextCursor) && (
+						<div className="flex gap-1">
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={workspaces.isFetching || !workspaceCursor}
+								onClick={() => setWorkspaceCursor(undefined)}
+							>
+								{cl.first}
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={workspaces.isFetching || !workspaces.data?.nextCursor}
+								onClick={() => {
+									if (workspaces.data?.nextCursor) setWorkspaceCursor(workspaces.data.nextCursor);
+								}}
+							>
+								{cl.next}
+							</Button>
+						</div>
+					)}
 					<CatalogRecovery session={catalog} onResolved={applyCatalogResult} />
 				</section>
 				<div className="sidebar-footer">
@@ -355,19 +379,6 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<Icon name="folder" size={15} />
 							{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
 						</Button>
-						{workspace && (
-							<ToolPacksDialog
-								key={
-									selected
-										? `${workspace.workspaceId}.conversation.${selected.conversationId}`
-										: `${workspace.workspaceId}.workspace`
-								}
-								workspaceId={workspace.workspaceId}
-								conversation={selected}
-							/>
-						)}
-						<AppearanceSettings />
-						<ModelSettings />
 						{selected && <ConversationActions conversation={selected} session={catalog} guard={guard} />}
 						{selected && (
 							<Button
@@ -384,12 +395,42 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 								<Icon name="info" />
 							</Button>
 						)}
-						<Button variant="ghost" size="sm" onClick={toggleLocale} aria-label={t("settings.language")}>
-							中 / EN
-						</Button>
-						<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={t("settings.theme")}>
-							<Icon name="sun" />
-						</Button>
+						<Popover>
+							<PopoverTrigger asChild>
+								<Button variant="ghost" size="icon" aria-label={cl.settings}>
+									<Settings size={18} aria-hidden="true" />
+								</Button>
+							</PopoverTrigger>
+							<PopoverContent
+								align="end"
+								className="workbench-settings"
+								aria-label={cl.settings}
+								onInteractOutside={(event) => {
+									// Dialogs and their portalled selects must not unmount with their settings entry.
+									if (document.querySelector('[data-slot="dialog-content"]')) event.preventDefault();
+								}}
+							>
+								{workspace && (
+									<ToolPacksDialog
+										key={
+											selected
+												? `${workspace.workspaceId}.conversation.${selected.conversationId}`
+												: `${workspace.workspaceId}.workspace`
+										}
+										workspaceId={workspace.workspaceId}
+										conversation={selected}
+									/>
+								)}
+								<AppearanceSettings />
+								<ModelSettings />
+								<Button variant="ghost" size="sm" onClick={toggleLocale} aria-label={t("settings.language")}>
+									中 / EN
+								</Button>
+								<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={t("settings.theme")}>
+									<Icon name="sun" />
+								</Button>
+							</PopoverContent>
+						</Popover>
 					</div>
 				</header>
 				{panelState.storageFailed && (
