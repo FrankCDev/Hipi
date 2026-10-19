@@ -14,6 +14,7 @@ import { type ConversationController, useConversation } from "../src/features/wo
 vi.mock("../src/components/ui/dialog.tsx", () => ({
 	Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
 	DialogTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+	DialogBody: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 	DialogContent: ({ children }: { children: ReactNode }) => <section>{children}</section>,
 	DialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 	DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,

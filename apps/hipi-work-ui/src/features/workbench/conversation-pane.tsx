@@ -1,7 +1,7 @@
 import type { Conversation } from "@hipi/work-runtime/contracts";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
+import { Dialog, DialogBody, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { AgentPermissions } from "../agent-permissions/agent-permissions.tsx";
 import { ToolActivities, type ToolActivityArtifact } from "../tool-activities/tool-activities.tsx";
@@ -51,6 +51,7 @@ export function ConversationPane({
 				}}
 			>
 				<DialogContent
+					placement="right"
 					className="workbench-detail-dialog"
 					closeLabel={t("common.close")}
 					aria-describedby={undefined}
@@ -60,12 +61,14 @@ export function ConversationPane({
 					}}
 				>
 					<DialogTitle>{t("receipt.details")}</DialogTitle>
-					<span className="status-pill">
-						{observation.connection === "connected" && observation.snapshot
-							? t(observation.snapshot.running ? "work.running" : "work.idle")
-							: t("receipt.unconfirmed")}
-					</span>
-					<ConversationReceipt conversation={conversation} controller={controller} />
+					<DialogBody>
+						<span className="status-pill">
+							{observation.connection === "connected" && observation.snapshot
+								? t(observation.snapshot.running ? "work.running" : "work.idle")
+								: t("receipt.unconfirmed")}
+						</span>
+						<ConversationReceipt conversation={conversation} controller={controller} />
+					</DialogBody>
 				</DialogContent>
 			</Dialog>
 			<div className="conversation-tools">

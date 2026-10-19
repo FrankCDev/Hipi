@@ -4,7 +4,7 @@ import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, statfs, wri
 import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { brandIconSha256, inventory, sha256 } from "./release-policy.mjs";
+import { assertSourceSnapshot, brandIconSha256, inventory, sha256 } from "./release-policy.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const root = await realpath(resolve(scripts, "../../.."));
@@ -25,12 +25,7 @@ const provenance = JSON.parse(provenanceBytes.toString("utf8"));
 assert.equal(provenance.platform, process.platform);
 assert.equal(provenance.architecture, process.arch);
 assert.equal(sha256(JSON.stringify(provenance.sourceSnapshot)), provenance.sourceSnapshotSha256);
-// Source fixture must use the same source modules and lock as the packaged build.
-for (const entry of provenance.sourceSnapshot) {
-	if (entry.file.startsWith("packages/") || entry.file === "package-lock.json") {
-		assert.equal(sha256(await readFile(join(root, entry.file))), entry.sha256, `Stale fixture source: ${entry.file}`);
-	}
-}
+await assertSourceSnapshot(root, provenance.sourceSnapshot);
 
 async function treeBytes(directory) {
 	let bytes = 0;
@@ -196,6 +191,7 @@ try {
 		"unchanged archive hashes",
 	);
 	evidence.exportSha256 = sha256(exportBytes);
+	await assertSourceSnapshot(root, provenance.sourceSnapshot);
 	evidence.status = "passed";
 } catch (error) {
 	evidence.status = "failed";

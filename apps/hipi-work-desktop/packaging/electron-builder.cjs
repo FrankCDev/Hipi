@@ -20,7 +20,8 @@ module.exports = {
 	nodeGypRebuild: false,
 	buildDependenciesFromSource: false,
 	publish: null,
-	afterPack: path.join(__dirname, "verify-pack.cjs"),
+	afterPack: path.join(__dirname, "after-pack.cjs"),
+	appImage: { executableArgs: [] },
 	mac: {
 		icon: path.join(desktop, "branding/icon.icns"),
 		target: ["dmg", "zip"], category: "public.app-category.productivity",

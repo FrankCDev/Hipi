@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { profileEvidence } from "./gui-profile-evidence.mjs";
+import { profileEvidence, profileRootEvidence } from "./gui-profile-evidence.mjs";
 
 test("profile diagnostics report only fixed metadata, never port contents or unknown files", async () => {
 	const root = await mkdtemp(join(tmpdir(), "hipi-gui-profile-evidence-"));
 	try {
+		assert.deepEqual(await profileRootEvidence(await realpath(root)), {
+			canonicalEqual: true,
+			resolvedEqual: true,
+			parentMatchesTemporary: true,
+		});
 		await mkdir(join(root, "session"));
 		await writeFile(join(root, "session/DevToolsActivePort"), "secret-port-content");
 		await writeFile(join(root, "unrelated-secret"), "private");

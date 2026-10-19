@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -13,10 +13,12 @@ import {
 	assertBrandIcon,
 	assertPackagingInputs,
 	assertPublicText,
+	assertSourceSnapshot,
 	filesUnder,
 	inventory,
 	requiredFiles,
 	requireFiles,
+	sourceSnapshot,
 } from "./release-policy.mjs";
 
 test("allowlist includes parser and PDF notices, excludes all unreviewed payloads", () => {
@@ -138,6 +140,69 @@ test("packaging rejects changed, added, missing or legacy external brand/config 
 		await assert.rejects(assertPackagingInputs(root, []), /input set changed/);
 		await rm(icon);
 		await assert.rejects(assertPackagingInputs(root, snapshot), /input set changed/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("complete source snapshot rejects stale UI, configuration, scripts and incomplete provenance", async () => {
+	const root = await mkdtemp(join(tmpdir(), "hipi-source-snapshot-"));
+	const files = [
+		"package.json",
+		"package-lock.json",
+		"nix/model-catalog.json",
+		"tsconfig.base.json",
+		"tsconfig.json",
+		"apps/hipi-work-ui/index.html",
+		"apps/hipi-work-ui/THIRD_PARTY_NOTICES.md",
+		"LICENSE",
+		"apps/hipi-work-ui/src/screen.tsx",
+		"apps/hipi-work-ui/vite.config.ts",
+		"apps/hipi-work-ui/vendor/component.tsx",
+		"apps/hipi-work-ui/public/icon.png",
+		"apps/hipi-work-desktop/package.json",
+		"apps/hipi-work-desktop/src/main.ts",
+		"apps/hipi-work-desktop/scripts/smoke.mjs",
+		"apps/hipi-work-desktop/packaging/config.cjs",
+		"apps/hipi-work-desktop/branding/icon.png",
+		"packages/runtime/src/runtime.ts",
+	];
+	try {
+		for (const file of files) {
+			await mkdir(dirname(join(root, file)), { recursive: true });
+			await writeFile(join(root, file), file);
+		}
+		const snapshot = await sourceSnapshot(root);
+		assert.deepEqual(
+			snapshot.map((entry) => entry.file),
+			[...files].sort(),
+		);
+		await assertSourceSnapshot(root, snapshot);
+		for (const file of [
+			"apps/hipi-work-ui/src/screen.tsx",
+			"apps/hipi-work-ui/vite.config.ts",
+			"apps/hipi-work-desktop/scripts/smoke.mjs",
+		]) {
+			await writeFile(join(root, file), "changed after build");
+			await assert.rejects(assertSourceSnapshot(root, snapshot), /Source input set or digest changed/);
+			await writeFile(join(root, file), file);
+		}
+		const added = join(root, "apps/hipi-work-ui/src/new-screen.tsx");
+		await writeFile(added, "new UI");
+		await assert.rejects(assertSourceSnapshot(root, snapshot), /Source input set or digest changed/);
+		await rm(added);
+		const removed = "apps/hipi-work-ui/src/screen.tsx";
+		await rm(join(root, removed));
+		await assert.rejects(assertSourceSnapshot(root, snapshot), /Source input set or digest changed/);
+		await writeFile(join(root, removed), removed);
+		for (const incomplete of [
+			[],
+			snapshot.slice(1),
+			[...snapshot, snapshot[0]],
+			[snapshot[0], ...snapshot.slice(0, -1)],
+		])
+			await assert.rejects(assertSourceSnapshot(root, incomplete), /Source input set or digest changed/);
+		await assertSourceSnapshot(root, snapshot);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

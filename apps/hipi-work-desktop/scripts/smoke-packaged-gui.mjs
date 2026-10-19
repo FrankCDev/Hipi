@@ -6,8 +6,16 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
+import {
+	readNativeLog,
+	recordGuiFailure,
+	recordRendererError,
+	redactNativeLog,
+	withNativeLogBudget,
+} from "./gui-native-log.mjs";
 import { assertNoPackageProcesses, debuggerClosed, startProcess } from "./gui-process.mjs";
-import { profileEvidence } from "./gui-profile-evidence.mjs";
+import { profileEvidence, profileRootEvidence } from "./gui-profile-evidence.mjs";
+import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 assert.equal(process.argv.length, 2, "Usage: node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs");
@@ -18,6 +26,7 @@ const provenance = JSON.parse(provenanceBytes.toString("utf8"));
 assert.equal(provenance.platform, process.platform);
 assert.equal(provenance.architecture, process.arch);
 assert.equal(hash(JSON.stringify(provenance.sourceSnapshot)), provenance.sourceSnapshotSha256);
+await assertSourceSnapshot(root, provenance.sourceSnapshot);
 // Do not run against a pre-isolation package, which would silently ignore the testing flag.
 for (const name of ["smoke-profile.ts", "main.ts", "provider-mode.ts"]) {
 	const file = `apps/hipi-work-desktop/src/${name}`;
@@ -60,6 +69,7 @@ const owned = await realpath(await mkdtemp(join(temporaryParent, "Hipi GUI 中�
 const profile = await realpath(await mkdtemp(join(temporaryParent, "Hipi GUI profile-")));
 const appDirectory = join(owned, key === "mac" ? "真实 应用.app" : "真实 应用");
 const artifacts = join(owned, "evidence");
+const nativeLogs = join(owned, "native-diagnostics");
 const evidence = {
 	schemaVersion: 1,
 	status: "running",
@@ -95,6 +105,7 @@ let safeCleanup = false;
 let messageKeys;
 try {
 	await mkdir(artifacts);
+	await mkdir(nativeLogs);
 	await cp(sourceApp, appDirectory, { recursive: true, verbatimSymlinks: true });
 	const binary = join(
 		appDirectory,
@@ -140,11 +151,18 @@ try {
 				`--smoke-data-root=${profile}`,
 				`--user-data-dir=${join(profile, "profile")}`,
 				"--remote-debugging-port=0",
+				"--enable-logging=file",
+				`--log-file=${join(nativeLogs, `chromium-${iteration}.log`)}`,
 			],
 			{ cwd: owned, env },
 		);
 		const connection = await until(
 			async () => {
+				assert.equal(
+					(await readNativeLog(nativeLogs, iteration, [owned, profile])).overflow,
+					false,
+					"Native file logging exceeded 1 MiB",
+				);
 				assert.ok(!native.closed, "Application exited before renderer readiness");
 				assert.ok(!native.overflow, "Application logging overflow");
 				let value;
@@ -181,11 +199,13 @@ try {
 				(method === "Runtime.consoleAPICalled" && params.type === "error") ||
 				(method === "Log.entryAdded" && params.entry.level === "error")
 			) {
-				if (evidence.errors.length >= 50) throw new Error("Renderer error log overflow");
-				evidence.errors.push({ iteration, method, detail: JSON.stringify(params).slice(0, 2000) });
+				recordRendererError(evidence, iteration, method, params, [owned, profile]);
 			}
 		});
-		const flow = await exercise(page, artifacts, iteration === 1);
+		const flow = await withNativeLogBudget(
+			() => exercise(page, artifacts, iteration === 1),
+			() => readNativeLog(nativeLogs, iteration, [owned, profile]),
+		);
 		if (iteration === 0) messageKeys = flow.messageKeys;
 		else assert.deepEqual(flow.messageKeys, messageKeys, "Restart duplicated or replaced persisted messages");
 		const storeRoot = join(profile, "profile/deterministic-store");
@@ -209,24 +229,20 @@ try {
 		page = undefined;
 		browser = undefined;
 		await assertNoPackageProcesses(appDirectory);
-		await writeFile(
-			join(artifacts, `native-${iteration}.log`),
-			native.output
-				.replaceAll(owned, "<temporary>")
-				.replaceAll(profile, "<profile>")
-				.replace(/ws:\/\/127\.0\.0\.1:\d+\/devtools\/[^\s]+/g, "<private-debugger>"),
-		);
+		await writeFile(join(artifacts, `native-${iteration}.log`), redactNativeLog(native.output, [owned, profile]));
 		evidence.checks.push({ iteration, cleanExit: true });
 		native = undefined;
 	}
 	await xvfb?.terminate();
 	xvfb = undefined;
 	safeCleanup = true;
+	await assertSourceSnapshot(root, provenance.sourceSnapshot);
 	evidence.status = "passed";
 } catch (error) {
 	evidence.status = "failed";
-	evidence.failure = error.message;
+	recordGuiFailure(evidence, "failure", error, [owned, profile]);
 	evidence.profileMetadata = await profileEvidence(profile);
+	evidence.profileRootMetadata = await profileRootEvidence(profile);
 	if (page) evidence.failureCapture = await captureFailure(page, artifacts);
 	page?.close();
 	browser?.close();
@@ -239,18 +255,29 @@ try {
 		await assertNoPackageProcesses(appDirectory);
 		safeCleanup = true;
 	} catch (cleanupError) {
-		evidence.cleanupFailure = cleanupError.message;
+		recordGuiFailure(evidence, "cleanupFailure", cleanupError, [owned, profile]);
 	}
-	if (native)
-		await writeFile(
-			join(artifacts, "failure-native.log"),
-			native.output
-				.replaceAll(owned, "<temporary>")
-				.replaceAll(profile, "<profile>")
-				.replace(/ws:\/\/127\.0\.0\.1:\d+\/devtools\/[^\s]+/g, "<private-debugger>"),
-		);
+	if (native) await writeFile(join(artifacts, "failure-native.log"), redactNativeLog(native.output, [owned, profile]));
 	process.exitCode = 1;
 } finally {
+	evidence.nativeFileLogs = [];
+	for (const iteration of [0, 1]) {
+		try {
+			const log = await readNativeLog(nativeLogs, iteration, [owned, profile]);
+			evidence.nativeFileLogs.push({ iteration, exists: log.exists, overflow: log.overflow });
+			if (log.exists) await writeFile(join(artifacts, `chromium-${iteration}.log`), log.text);
+			if (log.overflow) {
+				evidence.status = "failed";
+				evidence.failure ??= "Native file logging exceeded 1 MiB";
+				process.exitCode = 1;
+			}
+		} catch {
+			evidence.nativeFileLogs.push({ iteration, unavailable: true });
+			evidence.status = "failed";
+			evidence.failure ??= "Native file log collection failed";
+			process.exitCode = 1;
+		}
+	}
 	evidence.finishedAt = new Date().toISOString();
 	evidence.cleanup = safeCleanup
 		? "confirmed processes stopped"

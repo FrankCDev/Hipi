@@ -2,8 +2,12 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import sevenZip from "app-builder-lib/out/toolsets/7zip.js";
+import appImageVerification from "../packaging/verify-appimage.cjs";
 import { assertPackagingInputs, sha256 } from "./release-policy.mjs";
 
+// Reject reader substitution before any packager, output or staging work occurs.
+appImageVerification.assertToolEnvironment(process.env);
 const desktop = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(desktop, "../..");
 const args = process.argv.slice(2);
@@ -58,6 +62,11 @@ await assertPackagingInputs(root, provenance.sourceSnapshot);
 const artifacts = [];
 for (const item of await readdir(output, { withFileTypes: true })) {
 	if (!item.isFile() || !/\.(?:dmg|zip|exe|AppImage|tar\.gz)$/.test(item.name)) continue;
+	if (item.name.endsWith(".AppImage")) {
+		process.env.ELECTRON_BUILDER_CACHE = env.ELECTRON_BUILDER_CACHE;
+		const stagedManifest = JSON.parse(await readFile(join(root, ".artifacts/hipi-work/app/package.json"), "utf8"));
+		appImageVerification.verifyAppImage(join(output, item.name), stagedManifest.version, await sevenZip.getPath7za());
+	}
 	const bytes = await readFile(join(output, item.name));
 	artifacts.push({ file: item.name, bytes: bytes.length, sha256: sha256(bytes) });
 }

@@ -40,19 +40,25 @@ function DialogContent({
 	showCloseButton = true,
 	closeLabel,
 	closeDisabled = false,
+	placement = "center",
 	...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
 	showCloseButton?: boolean;
 	closeLabel: string;
 	closeDisabled?: boolean;
+	placement?: "center" | "right";
 }) {
 	return (
 		<DialogPortal data-slot="dialog-portal">
 			<DialogOverlay />
 			<DialogPrimitive.Content
 				data-slot="dialog-content"
+				data-placement={placement}
 				className={cn(
-					"fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border border-border bg-background text-foreground p-6 shadow-lg duration-200 outline-none sm:max-w-md",
+					"fixed z-50 gap-4 rounded-lg border border-border bg-background text-foreground p-6 shadow-lg duration-200 outline-none",
+					placement === "right"
+						? "inset-y-3 right-3 flex w-[calc(100vw-1.5rem)] max-w-[560px] flex-col overflow-hidden"
+						: "top-[50%] left-[50%] grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] sm:max-w-md",
 					className,
 				)}
 				{...props}
@@ -71,6 +77,17 @@ function DialogContent({
 				)}
 			</DialogPrimitive.Content>
 		</DialogPortal>
+	);
+}
+
+/** Keep a right-placed dialog's heading and close control outside the scrolling body. */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+	return (
+		<div
+			data-slot="dialog-body"
+			className={cn("grid min-h-0 min-w-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain", className)}
+			{...props}
+		/>
 	);
 }
 
@@ -132,6 +149,7 @@ function DialogDescription({ className, ...props }: React.ComponentProps<typeof 
 
 export {
 	Dialog,
+	DialogBody,
 	DialogClose,
 	DialogContent,
 	DialogDescription,

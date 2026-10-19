@@ -29,6 +29,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
@@ -45,6 +47,7 @@ const storageTests = [
 	"packages/durable/test/sqlite-migrations.test.ts",
 ];
 const uiTests = [
+	"dialog-placement",
 	"agent-permission-card",
 	"permission-presentation",
 	"retained-context-consent",

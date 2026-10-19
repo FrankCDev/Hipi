@@ -1,5 +1,6 @@
-import { lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 const candidates = [
 	"profile",
@@ -41,6 +42,9 @@ export async function profileEvidence(root) {
 									: "other",
 						bytes: stat.size,
 						modifiedAt: stat.mtime.toISOString(),
+						canonicalEqual: stat.isSymbolicLink()
+							? false
+							: (await realpath(join(root, ...parts))) === join(root, ...parts),
 					};
 			}
 		} catch (error) {
@@ -50,4 +54,16 @@ export async function profileEvidence(root) {
 		evidence.push(entry);
 	}
 	return evidence;
+}
+
+export async function profileRootEvidence(root) {
+	try {
+		return {
+			canonicalEqual: (await realpath(root)) === root,
+			resolvedEqual: resolve(root) === root,
+			parentMatchesTemporary: dirname(root) === (await realpath(tmpdir())),
+		};
+	} catch {
+		return { unavailable: true };
+	}
 }

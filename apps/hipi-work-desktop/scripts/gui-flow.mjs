@@ -39,11 +39,11 @@ export async function click(cdp, selector, text, milliseconds = 30000) {
 				lastState = state;
 				return state.hit ? state.point : null;
 			}),
-		`click ${selector}${text === undefined ? "" : ` text=${JSON.stringify(text)}`}`,
+		`click ${selector.replaceAll("=", ":")}${text === undefined ? "" : ` label ${JSON.stringify(text)}`}`,
 		milliseconds,
 	).catch((error) => {
 		throw new Error(
-			`${error.message}; candidates=${lastState?.count ?? "unavailable"}, centerHit=${lastState?.hit ?? "unavailable"}`,
+			`${error.message}; candidates ${lastState?.count ?? "unavailable"}, centerHit ${lastState?.hit ?? "unavailable"}`,
 		);
 	});
 	await cdp.request("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
@@ -180,6 +180,51 @@ async function inspectTheme(cdp, directory, reopened) {
 		nestedEscapeFocus: true,
 	};
 }
+export async function modalBounds(cdp, selector, milliseconds = 30000) {
+	return until(
+		async () => {
+			const state = await evaluate(
+				cdp,
+				`(() => {
+		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
+		const dialog = document.querySelector(${JSON.stringify(selector)});
+		if (!dialog) return null;
+		const closes = [...dialog.querySelectorAll('button')].filter(e => e.textContent.trim() === 'Close');
+		const body = dialog.querySelector('[data-slot="dialog-body"]');
+		if (closes.length !== 1 || !body) return null;
+		const close = closes[0];
+		const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; };
+		const inside = r => r.width>0 && r.height>0 && r.x>=0 && r.y>=0 && r.x+r.width<=innerWidth+1 && r.y+r.height<=innerHeight+1;
+		const d=rect(dialog), c=rect(close), b=rect(body);
+		return { ready: dialog.dataset.placement === 'right' && inside(d) && inside(c) && !close.disabled && close.contains(document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)),
+			dialog:d,close:c,body:b,scrollTop:body.scrollTop,clientHeight:body.clientHeight,scrollHeight:body.scrollHeight };
+	})()`,
+			);
+			return state?.ready ? state : null;
+		},
+		`modal viewport and reachable Close: ${selector}`,
+		milliseconds,
+	);
+}
+export async function inspectModal(cdp, selector) {
+	const before = await modalBounds(cdp, selector);
+	const overflow = before.scrollHeight > before.clientHeight + 1;
+	if (overflow) {
+		await cdp.request("Input.dispatchMouseEvent", {
+			type: "mouseWheel",
+			x: before.body.x + before.body.width / 2,
+			y: before.body.y + before.body.height / 2,
+			deltaX: 0,
+			deltaY: before.scrollHeight,
+		});
+		await until(async () => {
+			const after = await modalBounds(cdp, selector);
+			return after.scrollTop + after.clientHeight >= after.scrollHeight - 2 ? after : null;
+		}, "modal body scrolled to bottom with Close still reachable");
+	}
+	await modalBounds(cdp, selector);
+	return { viewportContained: true, closeReachable: true, overflowingBody: overflow, scrolledToBottom: overflow };
+}
 async function inspectControls(cdp) {
 	await click(cdp, 'button[aria-label="Model status"]');
 	await until(
@@ -211,6 +256,10 @@ async function inspectControls(cdp) {
 		),
 	);
 	await assertNoAlerts(cdp);
+	const permissionGeometry = await inspectModal(cdp, ".permission-detail-dialog");
+	await click(cdp, ".permission-detail-dialog button", "Close");
+	await until(() => evaluate(cdp, `!document.querySelector('.permission-detail-dialog')`), "permission mouse Close");
+	await click(cdp, ".permission-controls button", "Agent file permissions");
 	await dismissTo(cdp, ".permission-controls button");
 	const actions = `header button[aria-label="Conversation actions: ${fixture.conversation}"]`;
 	await click(cdp, actions);
@@ -252,6 +301,7 @@ async function inspectControls(cdp) {
 	return {
 		modelPopover: true,
 		permissionDialog: true,
+		permissionGeometry,
 		keyboardRenameCancelled: true,
 		sidebarPreview: true,
 		focusRestored: true,
@@ -475,6 +525,7 @@ export async function exercise(cdp, directory, reopened = false) {
 			`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.text)})`,
 		),
 	);
+	const detailsGeometry = await inspectModal(cdp, ".workbench-detail-dialog");
 	await click(cdp, '[role="dialog"] button', "Close");
 	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "conversation details closed");
 	const activities = await inspectActivities(cdp, directory, false);
@@ -484,6 +535,7 @@ export async function exercise(cdp, directory, reopened = false) {
 	await capture(cdp, directory, "completed");
 	return {
 		...observed,
+		detailsGeometry,
 		activities,
 		controls,
 		theme,

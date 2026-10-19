@@ -88,3 +88,51 @@ export async function assertPackagingInputs(root, sourceSnapshot) {
 			throw new Error("Packaging input digest changed since staging; rebuild and stage first");
 	}
 }
+
+export async function sourceSnapshot(root) {
+	const files = [
+		"package.json",
+		"package-lock.json",
+		"nix/model-catalog.json",
+		"tsconfig.base.json",
+		"tsconfig.json",
+		"apps/hipi-work-ui/index.html",
+		"apps/hipi-work-ui/THIRD_PARTY_NOTICES.md",
+		"LICENSE",
+	];
+	for (const directory of ["packages", "apps"]) {
+		for (const entry of await readdir(join(root, directory), { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const base = `${directory}/${entry.name}`;
+			for (const file of await readdir(join(root, base))) {
+				if (/^(?:package\.json|tsconfig.*\.json|vite\.config\.ts)$/.test(file)) files.push(`${base}/${file}`);
+			}
+			try {
+				for (const file of await filesUnder(join(root, base, "src"))) files.push(`${base}/src/${file}`);
+			} catch (error) {
+				if (error.code !== "ENOENT") throw error;
+			}
+		}
+	}
+	for (const directory of [
+		"apps/hipi-work-desktop/scripts",
+		"apps/hipi-work-desktop/packaging",
+		"apps/hipi-work-desktop/branding",
+		"apps/hipi-work-ui/vendor",
+	]) {
+		for (const file of await filesUnder(join(root, directory))) files.push(`${directory}/${file}`);
+	}
+	try {
+		for (const file of await filesUnder(join(root, "apps/hipi-work-ui/public")))
+			files.push(`apps/hipi-work-ui/public/${file}`);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	return Promise.all(files.sort().map(async (file) => ({ file, sha256: sha256(await readFile(join(root, file))) })));
+}
+
+export async function assertSourceSnapshot(root, expected) {
+	const current = await sourceSnapshot(root);
+	if (JSON.stringify(current) !== JSON.stringify(expected))
+		throw new Error("Source input set or digest changed since build; rebuild and package first");
+}

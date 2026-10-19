@@ -739,21 +739,9 @@
 	font-size: 11px;
 }
 /* Details use the existing modal primitive, outside the chat flex layout. */
-.workbench-detail-dialog {
-	inset: 12px 12px 12px auto;
-	width: min(560px, calc(100vw - 24px));
-	max-width: 560px;
-	max-height: calc(100dvh - 24px);
-	transform: none;
-	translate: none;
-	align-content: start;
-	overflow-y: auto;
-	overscroll-behavior: contain;
-	padding: 24px;
-	border-radius: 14px;
-}
 .workbench-detail-dialog > [data-slot="dialog-title"] {
 	padding-right: 28px;
+	flex-shrink: 0;
 }
 .permission-detail-dialog {
 	font-size: 13px;

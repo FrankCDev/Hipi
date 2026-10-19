@@ -11,10 +11,76 @@ import {
 	captureFailure,
 	click,
 	fixture,
+	inspectModal,
+	modalBounds,
 	pressKey,
 	resolvedTheme,
 	selectReopenedConversation,
 } from "./gui-flow.mjs";
+
+test("modal bounds rejects an offscreen or covered Close without sending input", async () => {
+	for (const reason of ["offscreen", "covered", "valid"]) {
+		const rect = { x: 500, y: 10, width: 400, height: 600 };
+		const close = {
+			textContent: "Close",
+			getBoundingClientRect: () => ({ x: 850, y: reason === "offscreen" ? -100 : 20, width: 30, height: 30 }),
+			contains: () => reason !== "covered",
+		};
+		const body = { getBoundingClientRect: () => rect, scrollTop: 0, clientHeight: 500, scrollHeight: 500 };
+		const dialog = {
+			dataset: { placement: "right" },
+			getBoundingClientRect: () => rect,
+			querySelectorAll: () => [close],
+			querySelector: () => body,
+		};
+		const cdp = {
+			async request(method, params) {
+				assert.equal(method, "Runtime.evaluate");
+				return {
+					result: {
+						value: runInNewContext(params.expression, {
+							location: { href: "hipi-work://app/index.html" },
+							innerWidth: 1000,
+							innerHeight: 800,
+							document: { querySelector: () => dialog, elementFromPoint: () => close },
+						}),
+					},
+				};
+			},
+		};
+		if (reason === "valid") assert.equal((await modalBounds(cdp, ".dialog", 1)).ready, true);
+		else await assert.rejects(modalBounds(cdp, ".dialog", 1), /modal viewport and reachable Close/);
+	}
+});
+
+test("overflowing modal scrolls through real wheel input and rechecks Close reachability", async () => {
+	let scrolled = false;
+	let reads = 0;
+	const cdp = {
+		async request(method, params) {
+			if (method === "Input.dispatchMouseEvent") {
+				assert.equal(params.type, "mouseWheel");
+				assert.equal(params.deltaY, 1200);
+				scrolled = true;
+				return {};
+			}
+			reads++;
+			return {
+				result: {
+					value: {
+						ready: true,
+						body: { x: 100, y: 100, width: 300, height: 400 },
+						scrollTop: scrolled ? 800 : 0,
+						clientHeight: 400,
+						scrollHeight: 1200,
+					},
+				},
+			};
+		},
+	};
+	assert.equal((await inspectModal(cdp, ".dialog")).scrolledToBottom, true);
+	assert.ok(reads >= 3);
+});
 
 test("click failure identifies requested text and refuses covered or ambiguous controls", async () => {
 	for (const state of [
@@ -29,7 +95,7 @@ test("click failure identifies requested text and refuses covered or ambiguous c
 		};
 		await assert.rejects(
 			click(cdp, '[role="dialog"] button', "Close", 1),
-			/text="Close"; candidates=[12], centerHit=false/,
+			/label "Close"; candidates [12], centerHit false/,
 		);
 	}
 });
