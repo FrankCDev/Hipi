@@ -3,6 +3,7 @@ const { createHash } = require("node:crypto");
 const { readFile, readdir } = require("node:fs/promises");
 const { createRequire } = require("node:module");
 const path = require("node:path");
+const asarLookupPath = require("./asar-path.cjs");
 // Use the packager's own exact ASAR reader, not an independently versioned toolchain.
 const builderRequire = createRequire(require.resolve("app-builder-lib/package.json"));
 const { extractFile, listPackage, statFile } = builderRequire("@electron/asar");
@@ -15,10 +16,10 @@ module.exports = async function verifyPack(context) {
 	const provenance = JSON.parse(extractFile(archive, "build-provenance.json").toString("utf8"));
 	const expected = new Set([...provenance.payload.map((item) => item.file), "build-provenance.json"]);
 	const files = listPackage(archive).map((file) => file.replaceAll("\\", "/").replace(/^\//, ""))
-		.filter((file) => !statFile(archive, file).files);
+		.filter((file) => !statFile(archive, asarLookupPath(file)).files);
 	assert.deepEqual(new Set(files), expected, "ASAR contains missing/unexpected files");
 	for (const item of provenance.payload) {
-		const bytes = extractFile(archive, item.file);
+		const bytes = extractFile(archive, asarLookupPath(item.file));
 		assert.equal(createHash("sha256").update(bytes).digest("hex"), item.sha256, `Packaged digest: ${item.file}`);
 	}
 	for (const file of ["runtime.mjs", "preview-parser.mjs", "maintenance.mjs"]) {

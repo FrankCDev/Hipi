@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
+import asarLookupPath from "../packaging/asar-path.cjs";
 import verifyPack from "../packaging/verify-pack.cjs";
 import { inventory } from "./release-policy.mjs";
 
@@ -18,6 +20,10 @@ async function fixture(change, check) {
 		const out = join(root, "out");
 		await mkdir(join(app, "dist"), { recursive: true });
 		await mkdir(join(out, "resources"), { recursive: true });
+		await mkdir(join(app, "dist/branding"), { recursive: true });
+		await writeFile(join(app, "dist/branding/icon.png"), Buffer.from([137, 80, 78, 71]));
+		await mkdir(join(app, "licenses/作者 名"), { recursive: true });
+		await writeFile(join(app, "licenses/作者 名/LICENSE"), "Fixture license");
 		for (const file of ["runtime.mjs", "preview-parser.mjs", "maintenance.mjs", "main.mjs"])
 			await writeFile(join(app, "dist", file), "export {};\n");
 		await writeFile(join(app, "build-provenance.json"), JSON.stringify({ payload: await inventory(app) }));
@@ -33,6 +39,41 @@ async function fixture(change, check) {
 
 test("post-pack verifier accepts exact ASAR inventory and unpacked entries", async () => {
 	await fixture(async () => {}, verifyPack);
+});
+
+test("installed ASAR traversal requires native lookup separators for nested POSIX inventory paths", async () => {
+	const implementation = join(dirname(builderRequire.resolve("@electron/asar")), "filesystem.js");
+	const source = await readFile(implementation, "utf8");
+	const localRequire = createRequire(implementation);
+	for (const pathApi of [posix, win32]) {
+		const module = { exports: {} };
+		// Execute the pinned upstream implementation with only its path dependency
+		// switched, rather than approximating Windows traversal in our own mock.
+		runInNewContext(source, {
+			module,
+			exports: module.exports,
+			require: (name) => (name === "path" ? pathApi : localRequire(name)),
+			process,
+		});
+		const filesystem = new module.exports.Filesystem(pathApi.resolve("fixture"));
+		const icon = { size: 4, offset: "0" };
+		const license = { size: 15, offset: "4" };
+		filesystem.setHeader(
+			{
+				files: {
+					dist: { files: { branding: { files: { "icon.png": icon } } } },
+					licenses: { files: { "作者 名": { files: { LICENSE: license } } } },
+				},
+			},
+			0,
+		);
+		if (pathApi === win32) assert.throws(() => filesystem.getFile("dist/branding/icon.png"), /not found/);
+		assert.equal(filesystem.getFile(asarLookupPath("dist/branding/icon.png", pathApi)), icon);
+		assert.equal(filesystem.getFile(asarLookupPath("licenses/作者 名/LICENSE", pathApi)), license);
+		const listed = filesystem.listFiles().map((file) => file.replaceAll("\\", "/").replace(/^\//, ""));
+		const files = listed.filter((file) => !filesystem.getFile(asarLookupPath(file, pathApi)).files);
+		assert.deepEqual([...files], ["dist/branding/icon.png", "licenses/作者 名/LICENSE"]);
+	}
 });
 
 test("post-pack verifier rejects extra source maps even if builder includes them", async () => {

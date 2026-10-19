@@ -24,6 +24,9 @@ const nodeTests = groups.flatMap(([directory, names]) =>
 nodeTests.push("apps/hipi-work-desktop/scripts/release-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/verify-pack.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-download.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
+nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");

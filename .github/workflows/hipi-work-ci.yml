@@ -67,6 +67,20 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/package-release.mjs --${{ matrix.arch }}
       - name: Smoke relocated packaged Electron and offline maintenance
         run: node apps/hipi-work-desktop/scripts/smoke-packaged.mjs
+      - name: Verify real packaged desktop deterministic UI and restart
+        id: gui_smoke
+        run: node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs
+      - name: Retain deterministic GUI evidence even when validation fails
+        if: ${{ always() && steps.gui_smoke.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-gui-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-smoke/*.json
+            .artifacts/hipi-work/packages/gui-smoke/*.png
+            .artifacts/hipi-work/packages/gui-smoke/*.log
+          if-no-files-found: error
+          retention-days: 7
       # This retains build evidence only. It does not create a release or publish updates.
       - name: Retain unsigned packages and integrity evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
@@ -87,5 +101,5 @@ jobs:
       - name: Record remaining native acceptance gates
         shell: bash
         run: |
-          echo 'Unsigned package, payload and relocated Electron Node-mode maintenance smoke passed.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Pending: signing/notarization, installation, GUI/IME/accessibility, utility/worker lifecycle, keychain, updates/migration recovery.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Unsigned package, Node-mode maintenance and deterministic real-window UI/restart checks passed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Pending: screenshot review, signing/notarization, installation, physical IME/accessibility, fault lifecycle, keychain, updates/migration recovery.' >> "$GITHUB_STEP_SUMMARY"

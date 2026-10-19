@@ -1,0 +1,45 @@
+# Packaged desktop GUI smoke
+
+This deterministic acceptance probe starts the packaged application's real main entrypoint, sandboxed renderer, preload, and utility process. It supplements the [packaging gates](DESKTOP-RELEASE.md); it does not approve a release or close all [RC gates](RC-TRACKER.md).
+
+## Run and prerequisites
+
+After building and packaging the current source on the target OS/architecture, run from the checkout with Node 24.19.0:
+
+```sh
+node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs
+```
+
+The runner accepts no directory overrides. It locates the host-native unpacked package and requires release provenance matching the current main, provider selection, and smoke profile implementation. An older package containing an unused helper is rejected before launch. Rebuild after changing these inputs.
+
+Linux requires an existing `Xvfb` executable, a non-root account, and working Chromium sandbox support. The runner allocates its own display with `-displayfd` and disables X11 TCP listening. It does not install packages, change system permissions, use `--no-sandbox`, or disable web security. Missing display/sandbox capability is a failure, not a skipped success. macOS and Windows require a usable native GUI session; packaging on a headless runner alone does not satisfy that condition. Their real launch failures must be reported as failures and resolved on a suitable runner or test machine.
+
+No installed application or user directory is required. The runner checks free disk space before copying the complete unpacked application into a fresh canonical temporary directory with spaces and Chinese characters. A separate private `mkdtemp` directory owns the profile. Only explicitly allowed environment variables are inherited; home/configuration directories are isolated and provider credentials are not passed through.
+
+## Main-process isolation boundary
+
+`--smoke-data-root=<path>` is accepted only with `--provider=deterministic`. The main process validates a canonical, dedicated direct child of the OS temporary directory, rejects symlinks/junctions and unexpected root contents, and verifies private ownership on POSIX. It creates and verifies the profile/session/log/crash directories, calls `app.setPath`, and checks `app.getPath` before requesting the single-instance lock. Production launches without this flag retain their normal paths. Invalid arguments show the localized startup error and exit nonzero before lock, session, or runtime initialization.
+
+`--user-data-dir` is also passed as an early native-stage hint. The isolation guarantee is the explicit main-process path boundary and runtime checks, not an assumption that this Chromium switch alone configures Electron's entire profile. The application never deletes the supplied directory. Only the runner that called `mkdtemp` may clean up its own roots.
+
+## Observed behavior and evidence
+
+The real executable starts normally, without `ELECTRON_RUN_AS_NODE` or a substituted application entrypoint. A temporary port-zero CDP listener is used only for this process lifetime. Discovery and WebSocket endpoints must use literal `127.0.0.1` and the observed port; the only accepted renderer URL is `hipi-work://app/index.html`. Renderer Node access must remain unavailable and the actual preload bridge must exist.
+
+The runner uses Chromium input events and visible DOM controls to select English labels, create a Chinese-named workspace and conversation, choose the deterministic model, and send Chinese text. It observes incremental assistant DOM updates and the confirmed execution result. It then requests normal application quit, verifies successful native process exit and listener closure, and reopens the same profile. The same two persisted message identities and contents must return without duplication. No application RPC is invoked directly to create or complete this scenario.
+
+The catalog, store owner, workspace owner, workspace database, and `DevToolsActivePort` must exist in the runner-owned canonical paths. Renderer exceptions, console errors, error-level log entries, crashes, ambiguous targets, timeouts, unclean exits, and remaining packaged helpers all fail the run.
+
+Evidence is written to `.artifacts/hipi-work/packages/gui-smoke/`:
+
+- `packaged-gui-smoke.json`: outcome, OS/architecture, host Node and Electron versions, source/provenance/harness/binary/ASAR hashes, checks, errors, cleanup state, and artifact hashes.
+- `initial.png`, `streaming.png`, `completed.png`, `reopened.png`: actual renderer captures at the observed stages. A fast stream can finish before the streaming screenshot is captured; incremental updates are established by DOM observation, not the screenshot filename.
+- Redacted native launch logs; failures include available process output.
+
+Screenshots require visual inspection. Automation does not certify typography, layout quality, physical Chinese IME input, accessibility, installation, OS trust/signing/notarization, production credentials/keychain, paid models, updates, sleep/resume, or power-loss recovery. The JSON explicitly records these limits. A screenshot's existence is not visual acceptance.
+
+## Failure and cleanup
+
+CDP requests, discovery bodies, process output, and waits are bounded. Early discovery rejection cancels the response body. Timeout cleanup waits for actual process close. An already exited process never authorizes signaling its old PID or process group. Remaining package processes cause a failed result and retained temporary directories rather than broader process killing. Temporary roots are removed only after owned process termination and absence of packaged helpers are confirmed.
+
+Focused source tests are `test/smoke-profile.test.ts`, `scripts/cdp.test.mjs`, and `scripts/gui-process.test.mjs` under `apps/hipi-work-desktop`. They cover main-entry wiring, profile validation, endpoint restrictions, request/transport lifetime, response cancellation, and exit-before-close cleanup. They cannot substitute for running the packaged GUI on each required target platform.

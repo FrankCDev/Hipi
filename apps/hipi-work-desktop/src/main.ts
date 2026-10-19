@@ -29,10 +29,10 @@ import type { HostConnection } from "./host-connection.ts";
 import { hostMessages } from "./host-messages.ts";
 import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL, previewInvocation } from "./preview-protocol.ts";
 import { CHANNEL, decode, encode, exact, identifier, MAX_ACTIVE, observation } from "./protocol.ts";
-import { providerMode } from "./provider-mode.ts";
 import { createRendererAssetHandler } from "./renderer-assets.ts";
 import { runtimeResource } from "./runtime-resource.ts";
 import { trustedSender } from "./sender.ts";
+import { prepareDesktopLaunch } from "./smoke-profile.ts";
 import { RuntimeSupervisor } from "./supervisor.ts";
 import { WindowLifecycle } from "./window-lifecycle.ts";
 
@@ -117,9 +117,19 @@ const exportDiagnostics = async (window?: BrowserWindow) => {
 	}
 };
 
-if (!app.requestSingleInstanceLock()) app.exit(0);
-else
-	void start().catch(async () => {
+let launch: ReturnType<typeof prepareDesktopLaunch> | undefined;
+try {
+	launch = prepareDesktopLaunch(app, process.argv);
+} catch {
+	// Invalid launch arguments must not acquire a lock or initialize a default session.
+	diagnostics.record("HOST_STARTUP_FAILED");
+	exporter.close();
+	dialog.showErrorBox("Hipi Work", hostMessages(Intl.DateTimeFormat().resolvedOptions().locale)["host.startup.failed"]);
+	app.exit(1);
+}
+if (launch && !launch.hasLock) app.exit(0);
+else if (launch)
+	void start(launch.mode).catch(async () => {
 		diagnostics.record("HOST_STARTUP_FAILED");
 		recoveringStartup = true;
 		// The native recovery UI stays alive until actual utility exit; a failed close is not clean shutdown.
@@ -159,8 +169,7 @@ else
 		});
 	});
 
-async function start() {
-	const mode = providerMode(process.argv);
+async function start(mode: "production" | "deterministic") {
 	await app.whenReady();
 	const text = hostMessages(app.getLocale());
 	diagnosticText = diagnosticMessages(app.getLocale());
