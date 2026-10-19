@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createRendererAssetHandler } from "../src/renderer-assets.ts";
+import { assertFontAsset, fontAssets } from "./font-assets.mjs";
 
 const root = new URL("../dist/renderer/", import.meta.url);
 const names = await readdir(new URL("assets/", root));
@@ -33,3 +34,19 @@ process.stdout.write(
 	`PDF worker ${name}: emitted renderer reference, local path, JavaScript MIME, self-only workers, and no network connect passed.\n`,
 );
 process.stdout.write("Native Electron custom-scheme worker execution remains unqualified until GUI acceptance.\n");
+
+// Check the actual emitted font and CSS URL, not merely a source fixture.
+const font = fontAssets[0];
+const fontName = font.payload.split("/").at(-1);
+assert.ok(names.includes(fontName), "Reviewed local font missing from renderer build");
+const cssFiles = names.filter((file) => file.endsWith(".css"));
+const css = (await Promise.all(cssFiles.map((file) => readFile(new URL(`assets/${file}`, root), "utf8")))).join("\n");
+assert.ok(css.includes(fontName), "Renderer CSS must reference the reviewed font");
+assert.ok(!/url\([^)]*(?:https?:|data:)[^)]*\.woff2/.test(css), "Font URLs must remain local");
+const fontResponse = await serve({ url: `hipi-work://app/assets/${fontName}`, method: "GET" });
+assert.equal(fontResponse.status, 200);
+assert.equal(fontResponse.headers.get("Content-Type"), "font/woff2");
+assertFontAsset(font.payload, Buffer.from(await fontResponse.arrayBuffer()));
+process.stdout.write(
+	"Bundled CJK font: emitted CSS reference, exact bytes, local MIME and self-only policy passed. Native glyph rendering still requires GUI acceptance.\n",
+);

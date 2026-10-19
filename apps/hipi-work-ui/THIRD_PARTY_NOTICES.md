@@ -52,3 +52,7 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Offline Chinese font fallback
+
+Noto Sans SC, upstream Google Fonts commit a85815a42757630ce188fdad368c2dfc444d4773, is bundled as a complete (not glyph-subsetted) variable WOFF2 under SIL Open Font License 1.1. Copyright 2014–2021 Adobe; Reserved Font Name: Source. Its original OFL notice and source/conversion/hash/coverage manifest are shipped in `dist/third-party/fonts/`. Conversion preserves all 30,890 upstream cmap codepoints; this is not coverage of all Unicode. The CSS fallback only matches CJK/punctuation and preserves the selected Latin font. DOM previews inherit it; PDF canvas font coverage depends on the document and PDF renderer. No font CDN or remote font request is used.

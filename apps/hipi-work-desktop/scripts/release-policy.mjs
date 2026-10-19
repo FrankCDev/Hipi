@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fontAssets } from "./font-assets.mjs";
 
 export const requiredFiles = [
+	...fontAssets.map((asset) => asset.payload),
 	"dist/main.mjs",
 	"dist/preload.cjs",
 	"dist/runtime.mjs",

@@ -86,6 +86,8 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/verify-source.mjs
       - name: Build production bundles without source maps
         run: node apps/hipi-work-desktop/scripts/build-release.mjs
+      - name: Verify emitted offline font and PDF assets through the production handler
+        run: node --conditions=source apps/hipi-work-desktop/scripts/check-renderer-assets.mjs
       - name: Stage allowlisted runtime and public licenses
         run: node apps/hipi-work-desktop/scripts/stage-release.mjs
       - name: Package unsigned native-host artifacts without publishing

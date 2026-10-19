@@ -1,9 +1,10 @@
 export const regions = ["sidebar", "messages", "editor"] as const;
 export type Region = (typeof regions)[number];
 export const fonts = {
-	system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif',
-	serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, serif',
-	mono: '"SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", monospace',
+	system:
+		'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", "Hipi Noto Sans SC", sans-serif',
+	serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, "Hipi Noto Sans SC", serif',
+	mono: '"SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", "Hipi Noto Sans SC", monospace',
 } as const;
 export type Font = keyof typeof fonts;
 export type RegionConfig = { font?: Font; foreground?: string; background?: string };

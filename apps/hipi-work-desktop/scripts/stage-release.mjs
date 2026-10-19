@@ -1,6 +1,7 @@
 import { cp, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertFontAsset, fontAssets } from "./font-assets.mjs";
 import {
 	allowedPayload,
 	assertBrandIcon,
@@ -41,7 +42,8 @@ for (const file of payload) {
 	if (file.endsWith(".map") || file.endsWith(".meta.json")) continue;
 	if (file === "dist/third-party/pdfjs/README.md") continue;
 	if (!allowedPayload(file)) throw new Error(`Unexpected build payload: ${file}`);
-	if (file === "dist/branding/icon.png") assertBrandIcon(await readFile(join(desktop, file)));
+	if (fontAssets.some((asset) => asset.payload === file)) assertFontAsset(file, await readFile(join(desktop, file)));
+	else if (file === "dist/branding/icon.png") assertBrandIcon(await readFile(join(desktop, file)));
 	else assertPublicText(await readFile(join(desktop, file), "utf8"), root);
 }
 await rm(stage, { recursive: true, force: true });

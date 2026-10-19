@@ -15,6 +15,7 @@ import {
 } from "./gui-native-log.mjs";
 import { assertNoPackageProcesses, debuggerClosed, startProcess } from "./gui-process.mjs";
 import { profileEvidence, profileRootEvidence } from "./gui-profile-evidence.mjs";
+import { captureWindowsIdentity, readWindowsDialogs } from "./gui-windows-dialogs.mjs";
 import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -98,11 +99,13 @@ const evidence = {
 	],
 };
 let native;
+let windowsIdentity;
 let xvfb;
 let page;
 let browser;
 let safeCleanup = false;
 let messageKeys;
+let toolPackScope;
 try {
 	await mkdir(artifacts);
 	await mkdir(nativeLogs);
@@ -144,6 +147,7 @@ try {
 		const portFile = join(profile, "session/DevToolsActivePort");
 		// This exact generated file is inside the harness-owned profile, after previous clean exit.
 		await rm(portFile, { force: true });
+		const spawnedAt = Date.now();
 		native = startProcess(
 			binary,
 			[
@@ -156,6 +160,7 @@ try {
 			],
 			{ cwd: owned, env },
 		);
+		windowsIdentity = await captureWindowsIdentity({ pid: native.child.pid, binary, spawnedAt });
 		const connection = await until(
 			async () => {
 				assert.equal(
@@ -206,8 +211,13 @@ try {
 			() => exercise(page, artifacts, iteration === 1),
 			() => readNativeLog(nativeLogs, iteration, [owned, profile]),
 		);
-		if (iteration === 0) messageKeys = flow.messageKeys;
-		else assert.deepEqual(flow.messageKeys, messageKeys, "Restart duplicated or replaced persisted messages");
+		if (iteration === 0) {
+			messageKeys = flow.messageKeys;
+			toolPackScope = flow.toolPacks.scope;
+		} else {
+			assert.deepEqual(flow.messageKeys, messageKeys, "Restart duplicated or replaced persisted messages");
+			assert.deepEqual(flow.toolPacks.scope, toolPackScope, "Restart changed tool-pack scope");
+		}
 		const storeRoot = join(profile, "profile/deterministic-store");
 		const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
 		assert.equal(workspaces.length, 1, "Expected exactly one UI-created workspace");
@@ -232,6 +242,7 @@ try {
 		await writeFile(join(artifacts, `native-${iteration}.log`), redactNativeLog(native.output, [owned, profile]));
 		evidence.checks.push({ iteration, cleanExit: true });
 		native = undefined;
+		windowsIdentity = undefined;
 	}
 	await xvfb?.terminate();
 	xvfb = undefined;
@@ -241,6 +252,9 @@ try {
 } catch (error) {
 	evidence.status = "failed";
 	recordGuiFailure(evidence, "failure", error, [owned, profile]);
+	if (native && !native.closed && native.child.exitCode === null && native.child.signalCode === null) {
+		evidence.windowsDialogs = await readWindowsDialogs(windowsIdentity);
+	}
 	evidence.profileMetadata = await profileEvidence(profile);
 	evidence.profileRootMetadata = await profileRootEvidence(profile);
 	if (page) evidence.failureCapture = await captureFailure(page, artifacts);

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { renderedFonts } from "./gui-fonts.mjs";
+import { exerciseToolPacks } from "./gui-tool-packs.mjs";
 
 export const fixture = {
 	workspace: "GUI 工作区",
@@ -8,6 +10,38 @@ export const fixture = {
 	text: "真实桌面 中文流式验证",
 	answer: "Hipi Work deterministic test answer. No model API or external tool was called.",
 };
+const diagnosticLabels = [
+	"Close",
+	"Close activity",
+	"Refresh this page",
+	"View activity",
+	"Conversation details",
+	"Model status",
+	"Refresh model status",
+	"Agent file permissions",
+	"Refresh permissions",
+	"Authorize model context",
+	"Rename conversation",
+	"View details",
+	"Workbench settings",
+	"Appearance and language",
+	"Save",
+	"Cancel",
+	"New workspace",
+	"New conversation",
+	"Switch to English",
+	"切换到中文",
+	"Toggle light / dark theme",
+	"Conversation actions",
+];
+export function diagnosticTarget(selector, text) {
+	if (diagnosticLabels.includes(text)) return text;
+	const label = selector.match(/\[aria-label="([^"]+)"\]/)?.[1];
+	if (diagnosticLabels.includes(label)) return label;
+	if (label?.startsWith("Conversation actions: ")) return "Conversation actions";
+	if (selector === ".permission-controls button") return "Agent file permissions";
+	return "unrecognized target";
+}
 export async function evaluate(cdp, expression) {
 	const result = await cdp.request("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
 	if (result.exceptionDetails) throw new Error("Renderer evaluation failed");
@@ -52,7 +86,11 @@ export async function click(cdp, selector, text, milliseconds = 30000) {
 async function fill(cdp, selector, value) {
 	await click(cdp, selector);
 	await cdp.request("Input.insertText", { text: value });
-	assert.equal(await evaluate(cdp, `document.querySelector(${JSON.stringify(selector)}).value`), value);
+	assert.equal(
+		await evaluate(cdp, `document.querySelector(${JSON.stringify(selector)}).value`),
+		value,
+		"Native text input must match fixture text",
+	);
 }
 export async function pressKey(cdp, key) {
 	const code = { Escape: 27, Home: 36, Enter: 13 }[key];
@@ -62,13 +100,27 @@ export async function pressKey(cdp, key) {
 }
 async function dismissTo(cdp, selector) {
 	await pressKey(cdp, "Escape");
+	await waitForOverlayClosed(cdp, selector);
+}
+export async function waitForOverlayClosed(cdp, selector, text, milliseconds = 30000) {
 	await until(
 		() =>
 			evaluate(
 				cdp,
-				`!document.querySelector('[role="dialog"], [role="menu"]') && document.activeElement === document.querySelector(${JSON.stringify(selector)})`,
+				`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(!document.querySelector('[role="dialog"], [role="menu"]') && [...document.querySelectorAll(${JSON.stringify(selector)})].some(e => e === document.activeElement && (!${JSON.stringify(text ?? "")} || e.textContent.trim() === ${JSON.stringify(text ?? "")}))))))`,
 			),
-		"overlay closed and trigger focus restored",
+		`overlay closed and trigger focus restored: ${diagnosticTarget(selector, text)}`,
+		milliseconds,
+	);
+}
+async function waitForSelectClosed(cdp, selector) {
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(!document.querySelector('[role="option"]') && document.activeElement === document.querySelector(${JSON.stringify(selector)})))))`,
+			),
+		"select closed and original combobox focus restored",
 	);
 }
 async function selectEnglish(cdp) {
@@ -116,6 +168,9 @@ export async function appearanceChoice(cdp) {
 }
 async function closeAppearance(cdp) {
 	await pressKey(cdp, "Escape");
+	await waitAppearanceClosed(cdp);
+}
+async function waitAppearanceClosed(cdp) {
 	await until(
 		() =>
 			evaluate(
@@ -129,7 +184,7 @@ async function inspectTheme(cdp, directory, reopened) {
 	const settings = 'button[aria-label="Workbench settings"]';
 	const toggle = '.workbench-settings button[aria-label="Toggle light / dark theme"]';
 	const originalResolved = await evaluate(cdp, "document.documentElement.dataset.theme");
-	assert.ok(["light", "dark"].includes(originalResolved));
+	assert.ok(["light", "dark"].includes(originalResolved), "Appearance resolved theme must be light or dark");
 	await click(cdp, settings);
 	await click(cdp, ".workbench-settings button", "Appearance and language");
 	const original = await appearanceChoice(cdp);
@@ -154,12 +209,9 @@ async function inspectTheme(cdp, directory, reopened) {
 	const current = await appearanceChoice(cdp);
 	await click(cdp, current.selector);
 	await click(cdp, '[role="option"]', original.mode);
+	await waitForSelectClosed(cdp, current.selector);
 	await click(cdp, ".settings-dialog button", "Save");
-	await until(
-		() =>
-			evaluate(cdp, `!document.querySelector('.settings-dialog') && !!document.querySelector('.workbench-settings')`),
-		"appearance saved without closing parent",
-	);
+	await waitAppearanceClosed(cdp);
 	await click(cdp, ".workbench-settings button", "Appearance and language");
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
 	await closeAppearance(cdp);
@@ -229,14 +281,11 @@ async function inspectControls(cdp) {
 	await click(cdp, 'button[aria-label="Model status"]');
 	await until(
 		() =>
-			evaluate(cdp, `document.querySelector('.model-status-popover[role="dialog"]')?.textContent.includes('faux-1')`),
-		"model status contents",
-	);
-	assert.ok(
-		await evaluate(
-			cdp,
-			`[...document.querySelectorAll('.model-status-popover button')].some(e => e.textContent.trim() === 'Refresh model status')`,
-		),
+			evaluate(
+				cdp,
+				`(() => { const dialog = document.querySelector('.model-status-popover[role="dialog"]'); return !!dialog?.textContent.includes('faux-1') && [...dialog.querySelectorAll('button')].some(e => e.textContent.trim() === 'Refresh model status'); })()`,
+			),
+		"model status model and refresh control ready",
 	);
 	await assertNoAlerts(cdp);
 	await dismissTo(cdp, 'button[aria-label="Model status"]');
@@ -254,11 +303,12 @@ async function inspectControls(cdp) {
 			cdp,
 			`[...document.querySelectorAll('.permission-detail-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
 		),
+		"Permission dialog must contain Refresh permissions",
 	);
 	await assertNoAlerts(cdp);
 	const permissionGeometry = await inspectModal(cdp, ".permission-detail-dialog");
 	await click(cdp, ".permission-detail-dialog button", "Close");
-	await until(() => evaluate(cdp, `!document.querySelector('.permission-detail-dialog')`), "permission mouse Close");
+	await waitForOverlayClosed(cdp, ".permission-controls button", "Agent file permissions");
 	await click(cdp, ".permission-controls button", "Agent file permissions");
 	await dismissTo(cdp, ".permission-controls button");
 	const actions = `header button[aria-label="Conversation actions: ${fixture.conversation}"]`;
@@ -285,6 +335,7 @@ async function inspectControls(cdp) {
 	assert.equal(
 		await evaluate(cdp, `document.querySelector('.toolbar-conversation')?.textContent`),
 		fixture.conversation,
+		"Cancelled rename must preserve conversation title",
 	);
 	const sidebarActions = `.conversation-nav-item button[aria-label="Conversation actions: ${fixture.conversation}"]`;
 	await click(cdp, sidebarActions);
@@ -314,7 +365,7 @@ export async function capture(cdp, directory, name) {
 	);
 	const image = await cdp.request("Page.captureScreenshot", { format: "png", fromSurface: true });
 	const bytes = Buffer.from(image.data, "base64");
-	assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+	assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", "Renderer screenshot must be PNG");
 	assert.ok(bytes.length > 1000, "Empty screenshot");
 	await writeFile(join(directory, `${name}.png`), bytes);
 }
@@ -325,14 +376,14 @@ export async function captureFailure(cdp, directory) {
 			cdp,
 			`(() => {
 		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
-		const allowed = new Set(['Close','Close activity','Refresh this page','View activity','Conversation details','Model status','Refresh model status','Agent file permissions','Refresh permissions','Authorize model context','Rename conversation','View details','Workbench settings','Appearance and language','Save','Cancel','New workspace','New conversation','Switch to English','切换到中文','Toggle light / dark theme']);
+		const allowed = new Set(${JSON.stringify(diagnosticLabels)});
 		const nodes = [...document.querySelectorAll('button,[role="button"],[role="menuitem"]')];
 		return { total: nodes.length, truncated: nodes.length > 100, controls: nodes.slice(0,100).map(e => {
 			const raw = (e.getAttribute('aria-label') || e.textContent || '').trim();
 			const r = e.getBoundingClientRect();
 			return { role: e.getAttribute('role') === 'menuitem' ? 'menuitem' : 'button',
 				label: allowed.has(raw) ? raw : '<unrecognized>', visible: !!e.getClientRects().length,
-				disabled: !!e.disabled, inDialog: !!e.closest('[role="dialog"]'),
+				disabled: !!e.disabled, inDialog: !!e.closest('[role="dialog"]'), focused: e === document.activeElement,
 				centerHit: e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)) };
 		}) };
 	})()`,
@@ -343,7 +394,11 @@ export async function captureFailure(cdp, directory) {
 		/* Diagnostic failure must not replace the original smoke failure. */
 	}
 	try {
-		assert.equal(await evaluate(cdp, "location.href"), "hipi-work://app/index.html");
+		assert.equal(
+			await evaluate(cdp, "location.href"),
+			"hipi-work://app/index.html",
+			"Failure capture requires the owned app page",
+		);
 		await capture(cdp, directory, "failure");
 		result.screenshot = "saved";
 	} catch {
@@ -364,7 +419,7 @@ async function historyEvidence(cdp) {
 			: undefined;
 	}, "two persisted history rows");
 	const keys = rows.map((row) => row.key);
-	assert.equal(new Set(keys).size, 2);
+	assert.equal(new Set(keys).size, 2, "Persisted history message identities must be unique");
 	return keys;
 }
 export async function selectReopenedConversation(cdp) {
@@ -420,7 +475,7 @@ async function inspectActivities(cdp, directory, reopened) {
 	const evidence = await activityEvidence(cdp);
 	await capture(cdp, directory, reopened ? "activities-reopened" : "activities");
 	await click(cdp, '[role="dialog"] button', "Close activity");
-	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "activity dialog closed");
+	await waitForOverlayClosed(cdp, "button", "View activity");
 	return evidence;
 }
 export async function exercise(cdp, directory, reopened = false) {
@@ -437,6 +492,7 @@ export async function exercise(cdp, directory, reopened = false) {
 			"({bridge:typeof window.hipiWorkDesktop?.request,node:typeof window.require,process:typeof window.process})",
 		),
 		{ bridge: "function", node: "undefined", process: "undefined" },
+		"Renderer must use preload bridge without Node globals",
 	);
 	// Settings is a real popover; absence of its language button is not evidence of English.
 	await selectEnglish(cdp);
@@ -456,17 +512,32 @@ export async function exercise(cdp, directory, reopened = false) {
 				cdp,
 				`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.text)})`,
 			),
+			"Reopened conversation must retain user text",
 		);
+		await click(cdp, 'button[aria-label="Conversation details"]');
+		const scope = await receiptScope(cdp);
+		await inspectModal(cdp, ".workbench-detail-dialog");
+		await click(cdp, ".workbench-detail-dialog button", "Close");
+		await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
 		const activities = await inspectActivities(cdp, directory, true);
 		const controls = await inspectControls(cdp);
 		const theme = await inspectTheme(cdp, directory, true);
 		await assertNoAlerts(cdp);
+		const fonts = await renderedFonts(cdp, fixture);
 		await capture(cdp, directory, "reopened");
+		const toolPacks = await exerciseToolPacks(
+			cdp,
+			{ click, evaluate, until, pressKey, assertNoAlerts, capture },
+			directory,
+			{ reopened: true, expectedScope: scope },
+		);
 		return {
 			reopened: true,
+			fonts,
 			activities,
 			controls,
 			theme,
+			toolPacks,
 			noUnexpectedAlerts: true,
 			messageKeys: await historyEvidence(cdp),
 		};
@@ -480,6 +551,7 @@ export async function exercise(cdp, directory, reopened = false) {
 			evaluate(cdp, `document.querySelector('.project-name')?.textContent === ${JSON.stringify(fixture.workspace)}`),
 		"workspace persisted",
 	);
+	await waitForOverlayClosed(cdp, '.conversation-nav button[aria-label="New workspace"]');
 	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
 	await fill(cdp, '[role="dialog"] input', fixture.conversation);
 	await click(cdp, '[role="dialog"] [role="combobox"]');
@@ -488,8 +560,10 @@ export async function exercise(cdp, directory, reopened = false) {
 		"deterministic model catalog",
 	);
 	await click(cdp, '[role="option"]');
+	await waitForSelectClosed(cdp, '[role="dialog"] [role="combobox"]');
 	await click(cdp, '[role="dialog"] button[type="submit"]');
 	await until(() => evaluate(cdp, "!!document.querySelector('.composer textarea')"), "conversation composer");
+	await waitForOverlayClosed(cdp, '.workspace-branch button[aria-label="New conversation"]');
 	await evaluate(
 		cdp,
 		`(() => { window.__hipiGuiSmoke = { samples: [], running: false };
@@ -518,28 +592,59 @@ export async function exercise(cdp, directory, reopened = false) {
 			cdp,
 			`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.answer)})`,
 		),
+		"Completed conversation must display deterministic answer",
 	);
 	assert.ok(
 		await evaluate(
 			cdp,
 			`document.querySelector('.conversation-panel')?.textContent.includes(${JSON.stringify(fixture.text)})`,
 		),
+		"Completed conversation must display user text",
 	);
 	const detailsGeometry = await inspectModal(cdp, ".workbench-detail-dialog");
+	const scope = await receiptScope(cdp);
 	await click(cdp, '[role="dialog"] button', "Close");
-	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "conversation details closed");
+	await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
 	const activities = await inspectActivities(cdp, directory, false);
 	const controls = await inspectControls(cdp);
 	const theme = await inspectTheme(cdp, directory, false);
 	await assertNoAlerts(cdp);
+	const fonts = await renderedFonts(cdp, fixture);
 	await capture(cdp, directory, "completed");
+	const toolPacks = await exerciseToolPacks(
+		cdp,
+		{ click, evaluate, until, pressKey, assertNoAlerts, capture },
+		directory,
+		{ expectedScope: scope },
+	);
 	return {
 		...observed,
+		fonts,
 		detailsGeometry,
 		activities,
 		controls,
 		theme,
+		toolPacks,
 		noUnexpectedAlerts: true,
 		messageKeys: await historyEvidence(cdp),
 	};
+}
+
+export async function receiptScope(cdp) {
+	const scope = await until(
+		() =>
+			evaluate(
+				cdp,
+				`(() => {
+		const root=document.querySelector('.workbench-detail-dialog');
+		const workspaceId=root?.querySelector('[data-testid="workspace-id"]')?.textContent.trim();
+		const conversationId=root?.querySelector('[data-testid="conversation-id"]')?.textContent.trim();
+		return workspaceId && conversationId ? {workspaceId,conversationId} : null;
+	})()`,
+			),
+		"receipt scope identifiers",
+	);
+	for (const value of Object.values(scope))
+		assert.match(value, /^[A-Za-z0-9_-]{1,128}$/, "Receipt scope must contain valid identifiers");
+	return scope;
 }

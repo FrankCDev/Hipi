@@ -10,13 +10,88 @@ import {
 	assertNoAlerts,
 	captureFailure,
 	click,
+	diagnosticTarget,
 	fixture,
 	inspectModal,
 	modalBounds,
 	pressKey,
+	receiptScope,
 	resolvedTheme,
 	selectReopenedConversation,
+	waitForOverlayClosed,
 } from "./gui-flow.mjs";
+
+test("focus timeout identifies only allowlisted targets, never dynamic titles or input values", async () => {
+	assert.equal(diagnosticTarget('button[aria-label="Model status"]'), "Model status");
+	assert.equal(
+		diagnosticTarget('header button[aria-label="Conversation actions: private title"]'),
+		"Conversation actions",
+	);
+	assert.equal(diagnosticTarget('input[value="secret"]', "private text"), "unrecognized target");
+	await assert.rejects(
+		waitForOverlayClosed(
+			{ request: async () => ({ result: { value: false } }) },
+			'button[aria-label="Model status"]',
+			undefined,
+			1,
+		),
+		/trigger focus restored: Model status/,
+	);
+});
+
+test("overlay closure waits beyond DOM removal for the original trigger focus before further input", async () => {
+	let reads = 0;
+	const trigger = { textContent: "View activity" };
+	const document = {
+		activeElement: null,
+		querySelector: () => (reads === 1 ? {} : null),
+		querySelectorAll: () => [trigger],
+	};
+	const cdp = {
+		async request(method, params) {
+			assert.equal(method, "Runtime.evaluate", "No next input before autofocus is complete");
+			reads++;
+			if (reads === 3) document.activeElement = trigger;
+			return {
+				result: {
+					value: await runInNewContext(params.expression, {
+						document,
+						requestAnimationFrame: (callback) => callback(),
+					}),
+				},
+			};
+		},
+	};
+	await waitForOverlayClosed(cdp, "button", "View activity");
+	assert.equal(reads, 3, "Absent DOM alone cannot complete the lifecycle boundary");
+});
+
+test("receipt scope comes from exact visible receipt identifiers and rejects malformed IDs", async () => {
+	let workspaceId = "work_123";
+	const cdp = {
+		async request(method, params) {
+			assert.equal(method, "Runtime.evaluate");
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						document: {
+							querySelector: () => ({
+								querySelector: (selector) => ({
+									textContent: selector.includes("workspace-id") ? workspaceId : "conversation_456",
+								}),
+							}),
+						},
+					}),
+				},
+			};
+		},
+	};
+	const scope = await receiptScope(cdp);
+	assert.equal(scope.workspaceId, "work_123");
+	assert.equal(scope.conversationId, "conversation_456");
+	workspaceId = "wrong/path";
+	await assert.rejects(receiptScope(cdp));
+});
 
 test("modal bounds rejects an offscreen or covered Close without sending input", async () => {
 	for (const reason of ["offscreen", "covered", "valid"]) {
@@ -124,7 +199,11 @@ test("failure capture is bounded and redacts unknown button text; renderer loss 
 				result: {
 					value: runInNewContext(params.expression, {
 						location: { href: "hipi-work://app/index.html" },
-						document: { querySelectorAll: () => Array.from({ length: 105 }, () => node), elementFromPoint: () => null },
+						document: {
+							activeElement: node,
+							querySelectorAll: () => Array.from({ length: 105 }, () => node),
+							elementFromPoint: () => null,
+						},
 					}),
 				},
 			};
@@ -139,6 +218,7 @@ test("failure capture is bounded and redacts unknown button text; renderer loss 
 		assert.equal(value.controls.length, 100);
 		assert.equal(value.truncated, true);
 		assert.equal(value.controls[0].label, "<unrecognized>");
+		assert.equal(value.controls[0].focused, true);
 		assert.deepEqual(
 			await captureFailure(
 				{

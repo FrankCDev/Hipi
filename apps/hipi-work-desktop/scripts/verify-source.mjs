@@ -30,6 +30,10 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-fonts.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-windows-dialogs.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/font-assets.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
@@ -64,6 +68,7 @@ const uiTests = [
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
 uiTests.push("apps/hipi-work-ui/test/agent-permissions.test.ts");
+uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
