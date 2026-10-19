@@ -1,8 +1,10 @@
 export const regions = ["sidebar", "messages", "editor"] as const;
 export type Region = (typeof regions)[number];
+// The system preset keeps system-ui first for Latin, with a CJK-only face before it.
+// Named serif/mono choices keep their existing precedence over the bundled fallback.
 export const fonts = {
 	system:
-		'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", "Hipi Noto Sans SC", sans-serif',
+		'"Hipi Noto Sans SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif',
 	serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, "Hipi Noto Sans SC", serif',
 	mono: '"SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", "Hipi Noto Sans SC", monospace',
 } as const;

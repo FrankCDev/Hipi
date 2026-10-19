@@ -499,28 +499,37 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		return result;
 	}
 	#armExpiry(id: ConversationId, grant: AgentContext): void {
-		if (grant.status !== "active" || this.#expiry.has(grant.grantId)) return;
+		if (this.#closed.signal.aborted || grant.status !== "active" || this.#expiry.has(grant.grantId)) return;
 		const timer = setTimeout(
 			() => {
 				this.#expiry.delete(grant.grantId);
 				void this.locked(id, async () => {
-					await this.activeContexts(id);
-					const active = this.#inflight.get(id);
-					// Every in-flight request keeps its actual dispatch model, never a later configuration.
-					const models = active?.size
-						? [...active.values()]
-						: [await this.harness.commit((tx) => this.#model(tx, id), background)];
 					let blocked = false;
-					for (const model of models) {
-						try {
-							const authority = await this.#dispatchAllowed(id, model);
-							if (authority.expiresAt <= Date.now()) throw new AppError("UNAUTHORIZED");
-							for (const rootId of authority.roots) this.files().assertRoot(this.#workspaceId, rootId);
-						} catch {
-							blocked = true;
-							for (const [controller, dispatchedModel] of active ?? [])
-								if (sameModel(dispatchedModel, model)) controller.abort(new AppError("UNAUTHORIZED"));
+					try {
+						const grants = await this.activeContexts(id);
+						// Timers and persisted wall-clock deadlines can diverge. Keep watching a still-active grant.
+						const pending = grants.find((value) => value.grantId === grant.grantId);
+						if (pending) this.#armExpiry(id, pending);
+						const active = this.#inflight.get(id);
+						// Every in-flight request keeps its actual dispatch model, never a later configuration.
+						const models = active?.size
+							? [...active.values()]
+							: [await this.harness.commit((tx) => this.#model(tx, id), background)];
+						for (const model of models) {
+							try {
+								const authority = await this.#dispatchAllowed(id, model);
+								if (authority.expiresAt <= Date.now()) throw new AppError("UNAUTHORIZED");
+								for (const rootId of authority.roots) this.files().assertRoot(this.#workspaceId, rootId);
+							} catch {
+								blocked = true;
+								for (const [controller, dispatchedModel] of active ?? [])
+									if (sameModel(dispatchedModel, model)) controller.abort(new AppError("UNAUTHORIZED"));
+							}
 						}
+					} catch {
+						// Storage failures cannot leave a stream authorized after its only expiry wake was consumed.
+						this.interruptLocked(id);
+						blocked = true;
 					}
 					if (blocked) await this.#abortConversation(id);
 				}).catch(() => undefined);

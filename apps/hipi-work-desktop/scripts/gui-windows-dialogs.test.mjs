@@ -38,7 +38,7 @@ test("identity failures preserve only fixed diagnostic phases without weakening 
 			throw Object.assign(Error("private command"), { killed: true });
 		},
 	});
-	assert.deepEqual(timedOut, { status: "unknown", reason: "helper-timeout" });
+	assert.deepEqual(timedOut, { status: "unknown", reason: "helper-timeout", lastPhase: "helper-start" });
 	const overflow = await captureWindowsIdentity(input, {
 		platform: "win32",
 		run: async () => {
@@ -53,6 +53,43 @@ test("identity failures preserve only fixed diagnostic phases without weakening 
 		},
 	});
 	assert.deepEqual(policyDenied, { status: "unknown", reason: "helper-policy-denied" });
+});
+
+test("bounded JSONL progress survives timeout without leaking output or proving identity", async () => {
+	for (const [stdout, lastPhase] of [
+		['{"phase":"request"}\n{"phase":"process-image"}\n', "process-image"],
+		['{"phase":"process-handle"}\n{"phase":"private-path"}\nsecret\n{"phase":"process-image"}', "process-handle"],
+		['{"phase":"process-image","secret":"private"}\n', "helper-start"],
+		["x".repeat(17000), "helper-start"],
+	]) {
+		const identity = await captureWindowsIdentity(input, {
+			platform: "win32",
+			run: async () => {
+				throw Object.assign(Error("secret"), { killed: true, stdout });
+			},
+		});
+		assert.deepEqual(identity, { status: "unknown", reason: "helper-timeout", lastPhase });
+		assert.deepEqual(
+			await readWindowsDialogs(identity, {
+				platform: "win32",
+				run: () => {
+					throw Error("must not retry");
+				},
+			}),
+			identity,
+		);
+	}
+	const identity = await captureWindowsIdentity(input, {
+		platform: "win32",
+		run: async () => ({ stdout: `{"phase":"request"}\n{"phase":"spawn-window"}\n${JSON.stringify(confirmed)}\n` }),
+	});
+	assert.deepEqual(identity, { ...confirmed, binary: input.binary });
+	for (const stdout of ['{"phase":"spawn-window"}\n', `{"phase":"private"}\n${JSON.stringify(confirmed)}`]) {
+		assert.equal(
+			(await captureWindowsIdentity(input, { platform: "win32", run: async () => ({ stdout }) })).status,
+			"unknown",
+		);
+	}
 });
 
 test("owned-window query binds PID and fixed script, strips raw fields, and never falls back after refusal", async () => {
@@ -187,8 +224,8 @@ test(
 		const primary = fixture();
 		let decoy;
 		try {
-			// Identity has no C# compilation. Do not cold-start the unrelated decoy
-			// compiler until this earliest boundary is confirmed.
+			// The real modal loop must be ready before inspecting its process image.
+			await primary.ready;
 			const identity = await captureWindowsIdentity(
 				{ pid: primary.child.pid, binary, spawnedAt: primary.spawnedAt },
 				{ run },

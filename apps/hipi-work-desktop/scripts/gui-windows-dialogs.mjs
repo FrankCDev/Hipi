@@ -45,10 +45,45 @@ const reasons = new Set([
 	"helper-output",
 	"owned-window-query-unavailable",
 ]);
-const unknown = (reason) => ({
+const phases = new Set(
+	[...reasons].filter((value) => !value.startsWith("helper-") && value !== "owned-window-query-unavailable"),
+);
+const unknown = (reason, lastPhase) => ({
 	status: "unknown",
 	reason: reasons.has(reason) ? reason : "owned-window-query-unavailable",
+	...(phases.has(lastPhase) || lastPhase === "helper-start" ? { lastPhase } : {}),
 });
+
+// Progress is diagnostic only, never proof of identity. Ignore an incomplete final line.
+function progress(stdout) {
+	if (typeof stdout !== "string" || stdout.length > 16 * 1024) return "helper-start";
+	let lastPhase = "helper-start";
+	for (const line of stdout
+		.replace(/^\uFEFF/, "")
+		.split(/\r?\n/)
+		.slice(0, -1)) {
+		try {
+			const item = JSON.parse(line);
+			if (item && Object.keys(item).length === 1 && phases.has(item.phase)) lastPhase = item.phase;
+		} catch {
+			/* Never expose non-protocol output. */
+		}
+	}
+	return lastPhase;
+}
+
+function finalResult(stdout) {
+	const lines = stdout
+		.replace(/^\uFEFF/, "")
+		.trim()
+		.split(/\r?\n/);
+	const result = JSON.parse(lines.pop());
+	for (const line of lines) {
+		const item = JSON.parse(line);
+		if (!item || Object.keys(item).length !== 1 || !phases.has(item.phase)) throw Error("Invalid progress");
+	}
+	return result;
+}
 
 async function query(request, run) {
 	try {
@@ -65,7 +100,7 @@ async function query(request, run) {
 		});
 		if (typeof stdout !== "string" || stdout.length > 16 * 1024) return unknown("helper-output");
 		try {
-			return JSON.parse(stdout.replace(/^\uFEFF/, ""));
+			return finalResult(stdout);
 		} catch {
 			return unknown("helper-output");
 		}
@@ -74,11 +109,11 @@ async function query(request, run) {
 		// Classify only a fixed PowerShell security marker; never expose its text/path.
 		if (typeof error?.stderr === "string" && /\bPSSecurityException\b/.test(error.stderr))
 			return unknown("helper-policy-denied");
-		return unknown(error?.killed ? "helper-timeout" : "helper-exit");
+		return unknown(error?.killed ? "helper-timeout" : "helper-exit", progress(error?.stdout));
 	}
 }
 
-/** Capture immediately after spawn. Identity is private harness state, not evidence output. */
+/** Bind to the original spawn timestamp. Identity is private harness state, not evidence output. */
 export async function captureWindowsIdentity(input, { platform = process.platform, run = execute } = {}) {
 	if (platform !== "win32") return { status: "not-applicable" };
 	if (
@@ -89,7 +124,7 @@ export async function captureWindowsIdentity(input, { platform = process.platfor
 	)
 		return unknown();
 	const result = await query({ mode: "identity", ...input }, run);
-	if (result?.status === "unknown") return unknown(result.reason);
+	if (result?.status === "unknown") return unknown(result.reason, result.lastPhase);
 	if (
 		result?.status !== "confirmed" ||
 		result.pid !== input.pid ||
@@ -110,7 +145,7 @@ export async function captureWindowsIdentity(input, { platform = process.platfor
 /** Read only the verified main process's error dialogs, before existing termination logic. */
 export async function readWindowsDialogs(identity, { platform = process.platform, run = execute } = {}) {
 	if (platform !== "win32") return { status: "not-applicable" };
-	if (identity?.status !== "confirmed") return unknown(identity?.reason);
+	if (identity?.status !== "confirmed") return unknown(identity?.reason, identity?.lastPhase);
 	const result = await query(
 		{
 			mode: "capture",
@@ -121,7 +156,7 @@ export async function readWindowsDialogs(identity, { platform = process.platform
 		},
 		run,
 	);
-	if (result?.status === "unknown") return unknown(result.reason);
+	if (result?.status === "unknown") return unknown(result.reason, result.lastPhase);
 	if (
 		result?.status !== "observed" ||
 		!Array.isArray(result.codes) ||

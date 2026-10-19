@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { Harness, MemoryStorage, ProviderDoc } from "@earendil-works/pi-durable";
+import { type ConversationId, Harness, MemoryStorage, ProviderDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { createWorkspaceModels, type ModelDispatchAuthorization } from "../src/agent-tools/model-gate.ts";
 import { AgentToolBroker, agentRegistry } from "../src/agent-tools.ts";
@@ -342,7 +343,7 @@ test("provider replacement during authentication cannot dispatch the previously 
 test(
 	"real Durable compaction retains file dependencies across summaries and blocks revoked scopes and retries",
 	{ timeout: 15000 },
-	async () => {
+	async (t) => {
 		const directory = await mkdtemp(join(tmpdir(), "hipi-compaction-gate-"));
 		await writeFile(join(directory, "note.txt"), "private file content");
 		const files = createFileAuthority({
@@ -503,7 +504,8 @@ test(
 				assert.equal(after.state.outcome.status, "failed");
 				assert.equal(summaries, 2, "revoked source and derived summary must not reach the summarization provider");
 			}
-			await broker.authorizeRetained(conversation.id, {
+			t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+			const shortRetained = await broker.authorizeRetained(conversation.id, {
 				...scope,
 				requestId: "short-retained",
 				sourceGrantId: grant.grantId,
@@ -517,12 +519,33 @@ test(
 			assert.ok(model);
 			await assert.rejects(broker.check(provider.sessionId, { ...model, id: "other" }), { code: "UNAUTHORIZED" });
 			await assert.rejects(broker.check("forged-session", model), { code: "UNAUTHORIZED" });
+			const expiryEntered = Promise.withResolvers<void>();
+			const finishExpiry = Promise.withResolvers<void>();
+			const activeContexts = broker.activeContexts.bind(broker);
+			const expiryCheck = t.mock.method(broker, "activeContexts", async (id: ConversationId) => {
+				expiryEntered.resolve();
+				await finishExpiry.promise;
+				return activeContexts(id);
+			});
 			const controller = new AbortController();
+			const aborted = once(controller.signal, "abort", { signal: t.signal });
 			const dispatch = await broker.start(provider.sessionId, model, controller, async () => new Response("fake"));
-			await new Promise((resolve) => setTimeout(resolve, 200));
+			try {
+				t.mock.timers.tick(150);
+				await expiryEntered.promise;
+				assert.equal(controller.signal.aborted, false, "expiry is still waiting for its storage check");
+				finishExpiry.resolve();
+				// Expiry performs asynchronous storage checks; a timer delay is not their completion signal.
+				await aborted;
+			} finally {
+				finishExpiry.resolve();
+				expiryCheck.mock.restore();
+				dispatch.release();
+			}
 			assert.equal(controller.signal.aborted, true);
-			dispatch.release();
+			assert.ok(Date.now() >= shortRetained.expiresAt);
 			await assert.rejects(broker.check(provider.sessionId, model), { code: "UNAUTHORIZED" });
+			t.mock.timers.reset();
 			const expired = await harness.waitForTask(await conversation.compact(undefined, background), background);
 			assert.equal(expired.state.outcome.status, "failed");
 			assert.equal(summaries, 2);
@@ -535,7 +558,7 @@ test(
 	},
 );
 
-test("expiry rechecks actual stream dependencies: renewal and unrelated grants do not abort, lost coverage does", async () => {
+test("expiry rechecks actual stream dependencies: renewal and unrelated grants do not abort, lost coverage does", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-expiry-renewal-"));
 	const files = createFileAuthority({
 		securityMode: "cooperative-local-files",
@@ -587,6 +610,9 @@ test("expiry rechecks actual stream dependencies: renewal and unrelated grants d
 			model: modelReference,
 			disclosureVersion: 1 as const,
 		};
+		let now = Date.now();
+		t.mock.method(Date, "now", () => now);
+		t.mock.timers.enable({ apis: ["setTimeout"] });
 		const first = await broker.authorize(conversation.id, {
 			...base,
 			requestId: "first",
@@ -614,7 +640,10 @@ test("expiry rechecks actual stream dependencies: renewal and unrelated grants d
 			requestId: "unrelated",
 			expiresAt: Date.now() + 150,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 400));
+		now += 400;
+		t.mock.timers.tick(400);
+		// Join the expiry callbacks through their conversation lock, including all storage work.
+		await broker.locked(conversation.id, async () => {});
 		const states = (await broker.contexts(conversation.id)).items;
 		assert.equal(states.find((item) => item.grantId === first.grantId)?.status, "expired");
 		assert.equal(states.find((item) => item.grantId === unrelated.grantId)?.status, "expired");
@@ -625,10 +654,43 @@ test("expiry rechecks actual stream dependencies: renewal and unrelated grants d
 			"renewal covers the actual dependency; unrelated expiry is harmless",
 		);
 		await broker.check(provider.sessionId, model);
-		await new Promise((resolve) => setTimeout(resolve, 600));
+		// The timer clock can reach its deadline before the wall clock used by persisted grants.
+		now += 499;
+		t.mock.timers.tick(500);
+		await broker.locked(conversation.id, async () => {});
+		assert.equal(controller.signal.aborted, false, "coverage has not reached its wall-clock expiry");
+		now += 1;
+		t.mock.timers.tick(1);
+		await broker.locked(conversation.id, async () => {});
 		assert.equal(controller.signal.aborted, true, "the final covering grant expired");
 		await assert.rejects(broker.check(provider.sessionId, model), { code: "UNAUTHORIZED" });
 		dispatch.release();
+
+		await broker.authorize(conversation.id, {
+			...base,
+			requestId: "storage-failure",
+			expiresAt: now + 300,
+		});
+		const failureController = new AbortController();
+		const failureDispatch = await broker.start(
+			provider.sessionId,
+			model,
+			failureController,
+			async () => new Response("held stream during storage failure"),
+		);
+		const failedCheck = t.mock.method(broker, "activeContexts", async () => {
+			throw new Error("simulated expiry storage failure");
+		});
+		try {
+			now += 300;
+			t.mock.timers.tick(300);
+			await broker.locked(conversation.id, async () => {});
+			assert.equal(failureController.signal.aborted, true, "unverifiable expiry must fail closed");
+		} finally {
+			failedCheck.mock.restore();
+			failureDispatch.release();
+		}
+		await assert.rejects(broker.check(provider.sessionId, model), { code: "UNAUTHORIZED" });
 	} finally {
 		broker.close();
 		await harness.close(background);

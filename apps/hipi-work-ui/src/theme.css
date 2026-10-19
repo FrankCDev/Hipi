@@ -57,6 +57,7 @@
 	--focus: #5a73db;
 	--scrim: #11182755;
 	--shadow: #17223a0c;
+	/* Pre-theme named preferences; the CJK-only face still precedes the first generic. */
 	--font-ui:
 		Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", "Hipi Noto Sans SC",
 		sans-serif;

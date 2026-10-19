@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 
 function deadline<T>(pending: Promise<T>, milliseconds: number, message: string): Promise<T> {
@@ -85,13 +86,34 @@ export async function startDevHost(input: {
 					if (child.connected)
 						await new Promise<void>((resolve, reject) =>
 							child.send({ type: "hipi.dev-host.shutdown" }, (error) => {
-								if (error && (!("code" in error) || error.code !== "ERR_IPC_CHANNEL_CLOSED")) reject(error);
+								// The peer can close its pipe before this process observes disconnect/exit.
+								// Only the exit and port checks below can establish successful shutdown.
+								if (
+									error &&
+									(!("code" in error) || (error.code !== "ERR_IPC_CHANNEL_CLOSED" && error.code !== "EPIPE"))
+								)
+									reject(error);
 								else resolve();
 							}),
 						);
 					const result = await deadline(exited, 5000, "Acceptance host did not shut down gracefully");
 					assert.equal(result.signal, null, "Graceful shutdown must not require a termination signal");
 					assert.equal(result.code, 0, "Graceful shutdown must complete every owned resource close");
+					await new Promise<void>((resolve, reject) => {
+						const address = new URL(connection.url);
+						const socket = createConnection({ host: address.hostname, port: Number(address.port) });
+						socket.setTimeout(1000, () =>
+							socket.destroy(new Error("Acceptance host port closure check timed out")),
+						);
+						socket.once("connect", () => {
+							socket.destroy();
+							reject(new Error("Acceptance host port remained open after exit"));
+						});
+						socket.once("error", (error: NodeJS.ErrnoException) => {
+							if (error.code === "ECONNREFUSED") resolve();
+							else reject(error);
+						});
+					});
 				} catch (error) {
 					await forceCleanup();
 					throw error;

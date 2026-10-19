@@ -4,11 +4,22 @@ import { test } from "vitest";
 import { themeVariables } from "../src/app/theme/application.ts";
 import { defaultConfig, fonts } from "../src/app/theme/config.ts";
 
-test("theme and regional choices precede one CJK fallback", () => {
-	for (const stack of Object.values(fonts)) {
+test("CJK fallback precedes generics without changing Latin preference order", () => {
+	const originalLatin = {
+		system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif',
+		serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, serif',
+		mono: '"SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", monospace',
+	};
+	for (const name of ["system", "serif", "mono"] as const) {
+		const stack = fonts[name];
 		assert.equal(stack.split('"Hipi Noto Sans SC"').length, 2);
-		assert.match(stack, /"Hipi Noto Sans SC", (sans-serif|serif|monospace)$/);
-		assert.ok(stack.indexOf('"Hipi Noto Sans SC"') > 0);
+		assert.equal(stack.replace('"Hipi Noto Sans SC", ', ""), originalLatin[name]);
+		const families = stack.split(",").map((family) => family.trim());
+		const fallback = families.indexOf('"Hipi Noto Sans SC"');
+		const generic =
+			/^(system-ui|ui-sans-serif|ui-serif|ui-monospace|ui-rounded|sans-serif|serif|monospace|cursive|fantasy|math)$/;
+		assert.ok(fallback < families.findIndex((family) => generic.test(family)));
+		assert.equal(fallback === 0, name === "system");
 	}
 	const variables = themeVariables({
 		...defaultConfig(),
@@ -40,5 +51,8 @@ test("local-only face matches CJK and punctuation, keeping Latin mono and serif 
 	const matches = (point: number) => ranges.some(([first, last]) => first <= point && point <= last);
 	for (const point of [0x20, 0x41, 0x7e, 0xe9]) assert.equal(matches(point), false);
 	for (const character of "中文，。龜") assert.equal(matches(character.codePointAt(0) ?? 0), true);
+	const defaultStack = css.match(/--font-ui:([^;]+);/)?.[1] ?? "";
+	assert.ok(defaultStack.indexOf('"Hipi Noto Sans SC"') < defaultStack.indexOf("sans-serif"));
+	assert.match(defaultStack, /"Microsoft YaHei", "Hipi Noto Sans SC",\s*sans-serif/);
 	assert.match(css, /--font-code:[^;]*"Hipi Noto Sans SC", monospace;/);
 });

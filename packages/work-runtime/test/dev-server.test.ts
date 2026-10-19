@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import type { Serializable } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -135,6 +137,96 @@ test("a real host resource close failure never reports a clean process exit", { 
 		await reopened.close();
 	} finally {
 		await host.close().catch(() => {});
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+for (const code of ["EPIPE", "ERR_IPC_CHANNEL_CLOSED", "EIO"]) {
+	test(`shutdown ${code} is checked against the real child lifecycle`, { timeout: 15000 }, async (context) => {
+		const directory = await mkdtemp(join(tmpdir(), "hipi-host-ipc-race-"));
+		const host = await startDevHost({ directory, provider: "deterministic", origin: "http://127.0.0.1:5173" });
+		const send = host.child.send.bind(host.child);
+		// Deliver a real shutdown, but deterministically report the transport failure before exit.
+		// This models the stale connected=true window without depending on OS event timing.
+		context.mock.method(host.child, "send", (message: Serializable, callback: (error: Error | null) => void) =>
+			send(message, (error) => callback(error ?? Object.assign(new Error(`Injected ${code}`), { code }))),
+		);
+		try {
+			if (code === "EIO") await assert.rejects(host.close(), /Injected EIO/);
+			else {
+				const closed = host.close();
+				assert.equal(host.close(), closed);
+				await closed;
+				assert.equal(host.child.exitCode, 0);
+				assert.equal(host.child.signalCode, null);
+			}
+		} finally {
+			await host.close().catch(() => {});
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+}
+
+test("an IPC write race cannot hide a real resource close failure", { timeout: 15000 }, async (context) => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-host-ipc-close-failure-"));
+	const host = await startDevHost({
+		directory,
+		provider: "deterministic",
+		origin: "http://127.0.0.1:5173",
+		preload: new URL("./helpers/dev-host-close-failure.ts", import.meta.url),
+	});
+	const send = host.child.send.bind(host.child);
+	context.mock.method(host.child, "send", (message: Serializable, callback: (error: Error | null) => void) =>
+		send(message, (error) => callback(error ?? Object.assign(new Error("Injected EPIPE"), { code: "EPIPE" }))),
+	);
+	try {
+		await assert.rejects(host.close(), /Graceful shutdown must complete every owned resource close/);
+		assert.equal(host.child.exitCode, 1);
+	} finally {
+		await host.close().catch(() => {});
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("an IPC write failure cannot report a still-running host as closed", { timeout: 15000 }, async (context) => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-host-ipc-still-running-"));
+	const host = await startDevHost({ directory, provider: "deterministic", origin: "http://127.0.0.1:5173" });
+	context.mock.method(host.child, "send", (_message: Serializable, callback: (error: Error | null) => void) => {
+		callback(Object.assign(new Error("Injected EPIPE without shutdown delivery"), { code: "EPIPE" }));
+		return false;
+	});
+	try {
+		await assert.rejects(host.close(), /Acceptance host did not shut down gracefully/);
+		assert.notEqual(host.child.signalCode, null, "Forced cleanup must not become a graceful result");
+	} finally {
+		await host.close().catch(() => {});
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("a clean child exit cannot hide an open acceptance port", { timeout: 15000 }, async (context) => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-host-ipc-open-port-"));
+	const host = await startDevHost({ directory, provider: "deterministic", origin: "http://127.0.0.1:5173" });
+	const replacement = createServer((socket) => socket.destroy());
+	const send = host.child.send.bind(host.child);
+	context.mock.method(host.child, "send", (message: Serializable, callback: (error: Error | null) => void) => {
+		// Hold the send result until the real child exits and a listener occupies its old port.
+		host.child.once("exit", () => {
+			replacement.once("error", callback);
+			replacement.listen(Number(new URL(host.connection.url).port), "127.0.0.1", () =>
+				callback(Object.assign(new Error("Injected EPIPE"), { code: "EPIPE" })),
+			);
+		});
+		return send(message, (error) => {
+			if (error) callback(error);
+		});
+	});
+	try {
+		await assert.rejects(host.close(), /Acceptance host port remained open after exit/);
+		assert.equal(host.child.exitCode, 0);
+	} finally {
+		await host.close().catch(() => {});
+		await new Promise<void>((resolve, reject) => replacement.close((error) => (error ? reject(error) : resolve())));
 		await rm(directory, { recursive: true, force: true });
 	}
 });
