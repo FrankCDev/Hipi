@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,7 +20,8 @@ import { openRuntime } from "../src/node.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
 async function fixture() {
-	const root = await mkdtemp(join(tmpdir(), "hipi-recovery-"));
+	// System tmpdir can have symlink ancestors; derive maintenance paths from the real fixture root.
+	const root = await realpath(await mkdtemp(join(tmpdir(), "hipi-recovery-")));
 	const source = join(root, "source");
 	await mkdir(source);
 	const runtime = await openTestRuntime(source, {
@@ -166,7 +167,7 @@ test("ready archive refuses changed payload; zero-byte competitor is preserved",
 
 for (const outcome of ["pending", "unknown"] as const)
 	test(`${outcome} snapshot remains historical after external effects; reads never execute or reconcile`, async () => {
-		const root = await mkdtemp(join(tmpdir(), "hipi-recovery-effect-"));
+		const root = await realpath(await mkdtemp(join(tmpdir(), "hipi-recovery-effect-")));
 		const source = join(root, "source");
 		const filesRoot = join(root, "files");
 		await mkdir(filesRoot);
@@ -357,7 +358,7 @@ for (const sql of ["DELETE FROM archive_conversations", "UPDATE archive_conversa
 	});
 
 test("mixed-case workspace order matches SQLite; empty archive cannot be laundered through lost identity", async () => {
-	const root = await mkdtemp(join(tmpdir(), "hipi-recovery-catalog-"));
+	const root = await realpath(await mkdtemp(join(tmpdir(), "hipi-recovery-catalog-")));
 	try {
 		const source = join(root, "source");
 		const runtime = await openTestRuntime(source);

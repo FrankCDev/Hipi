@@ -55,6 +55,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Hydrate only the hash-pinned public model catalog
         run: node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
+      - name: Record host filesystem sync diagnostics
+        run: node apps/hipi-work-desktop/scripts/probe-filesystem-sync.mjs
       - name: Verify explicit deterministic source test lists and boundaries
         run: node apps/hipi-work-desktop/scripts/verify-source.mjs
       - name: Build production bundles without source maps
@@ -63,6 +65,8 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/stage-release.mjs
       - name: Package unsigned native-host artifacts without publishing
         run: node apps/hipi-work-desktop/scripts/package-release.mjs --${{ matrix.arch }}
+      - name: Smoke relocated packaged Electron and offline maintenance
+        run: node apps/hipi-work-desktop/scripts/smoke-packaged.mjs
       # This retains build evidence only. It does not create a release or publish updates.
       - name: Retain unsigned packages and integrity evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
@@ -76,11 +80,12 @@ jobs:
             .artifacts/hipi-work/packages/*.tar.gz
             .artifacts/hipi-work/packages/SHA256SUMS
             .artifacts/hipi-work/packages/release-provenance.json
+            .artifacts/hipi-work/packages/packaged-smoke.json
           if-no-files-found: error
           retention-days: 7
       # No release creation, signing, certificate import, updater publication, or install command.
       - name: Record remaining native acceptance gates
         shell: bash
         run: |
-          echo 'Unsigned package and payload verification only.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Unsigned package, payload and relocated Electron Node-mode maintenance smoke passed.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Pending: signing/notarization, installation, GUI/IME/accessibility, utility/worker lifecycle, keychain, updates/migration recovery.' >> "$GITHUB_STEP_SUMMARY"

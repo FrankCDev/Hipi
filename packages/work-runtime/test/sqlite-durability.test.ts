@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,7 +8,8 @@ import { readWorkspaceDirectory, StoreCatalog } from "../src/store-catalog.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
 test("all Hipi workspace SQLite connection paths request FULL on the actual connection", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "hipi-sqlite-durability-"));
+	// Direct catalog admission must use the same canonical identity root as runtime admission.
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-sqlite-durability-")));
 	const observed: string[] = [];
 	let phase = "runtime";
 	const originalExec = DatabaseSync.prototype.exec;

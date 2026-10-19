@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { link, mkdir, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { link, mkdir, mkdtemp, open, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,13 +12,15 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { DocumentId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage, openNodeSqliteStorageReadOnly } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { backupStore } from "../src/maintenance/backup.ts";
+import { syncPath } from "../src/maintenance/paths.ts";
 import { inspectCatalog } from "../src/maintenance/sqlite.ts";
 import { parseBackupManifest, verifyBackup } from "../src/maintenance/verify.ts";
 import { StoreOwnerLease } from "../src/store-owner.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
 async function fixture() {
-	const parent = await mkdtemp(join(tmpdir(), "hipi-backup-test-"));
+	// Normalize only the fixture root; maintenance must still reject explicit aliases below it.
+	const parent = await realpath(await mkdtemp(join(tmpdir(), "hipi-backup-test-")));
 	const source = join(parent, "source"),
 		destination = join(parent, "backup");
 	const runtime = await openTestRuntime(source);
@@ -403,3 +406,81 @@ test("schema SQL bytes are screened before schema signature materialization", as
 		await rm(f.parent, { recursive: true, force: true });
 	}
 });
+
+test("flushing an existing output file preserves its bytes, identity and metadata", async () => {
+	const parent = await mkdtemp(join(tmpdir(), "hipi-flush-file-"));
+	const path = join(parent, "output");
+	try {
+		const content = Buffer.from("existing output must never be truncated or rewritten");
+		await writeFile(path, content);
+		await fs.utimes(path, 1_700_000_000, 1_700_000_001);
+		const before = await fs.stat(path, { bigint: true });
+		await syncPath(path);
+		const after = await fs.stat(path, { bigint: true });
+		assert.equal(after.ino, before.ino);
+		assert.equal(after.dev, before.dev);
+		assert.equal(after.size, before.size);
+		assert.equal(after.mode, before.mode);
+		assert.equal(after.nlink, before.nlink);
+		assert.equal(after.uid, before.uid);
+		assert.equal(after.gid, before.gid);
+		assert.equal(after.mtimeNs, before.mtimeNs);
+		assert.equal(after.ctimeNs, before.ctimeNs);
+		assert.equal(after.atimeNs, before.atimeNs);
+		assert.deepEqual(await readFile(path), content);
+		await assert.rejects(syncPath(join(parent, "missing")), { code: "ENOENT" });
+		await assert.rejects(fs.stat(join(parent, "missing")), { code: "ENOENT" });
+	} finally {
+		await rm(parent, { recursive: true, force: true });
+	}
+});
+
+test("flush opens files write-capable without truncation and directories read-only; open failures propagate", async (t) => {
+	const parent = await mkdtemp(join(tmpdir(), "hipi-flush-flags-"));
+	const path = join(parent, "output");
+	await writeFile(path, "fixture");
+	const calls: { path: unknown; flags: unknown }[] = [];
+	const mocked = t.mock.method(fs, "open", async (target: unknown, flags: unknown) => {
+		calls.push({ path: target, flags });
+		throw Object.assign(new Error("injected open failure"), { code: "EPERM" });
+	});
+	syncBuiltinESMExports();
+	try {
+		await assert.rejects(syncPath(path), { code: "EPERM" });
+		await assert.rejects(syncPath(parent), { code: "EPERM" });
+		assert.deepEqual(calls, [
+			{ path, flags: "r+" },
+			{ path: parent, flags: "r" },
+		]);
+	} finally {
+		mocked.mock.restore();
+		syncBuiltinESMExports();
+		await rm(parent, { recursive: true, force: true });
+	}
+});
+
+test(
+	"directory sync failure is not treated as a supported durability guarantee",
+	{ skip: process.platform !== "linux" },
+	async (t) => {
+		const parent = await mkdtemp(join(tmpdir(), "hipi-flush-directory-"));
+		const handle = await open(parent, "r");
+		const prototype = Object.getPrototypeOf(handle);
+		await handle.close();
+		const mocked = t.mock.method(prototype, "sync", async () => {
+			throw Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
+		});
+		try {
+			await assert.rejects(syncPath(parent), (error) => {
+				assert.ok(error instanceof Error);
+				assert.equal("code" in error && error.code, "DURABILITY_UNVERIFIED");
+				assert.ok(error.cause instanceof Error);
+				assert.equal("code" in error.cause && error.cause.code, "EIO");
+				return true;
+			});
+		} finally {
+			mocked.mock.restore();
+			await rm(parent, { recursive: true, force: true });
+		}
+	},
+);

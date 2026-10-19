@@ -44,12 +44,18 @@ export async function allocateDirectory(source: string, destination: string): Pr
 	await mkdir(target, { mode: 0o700 });
 	return target;
 }
+/** Only operation-owned outputs are flushed; this never grants write access to a source database. */
 export async function syncPath(path: string): Promise<void> {
-	const handle = await open(path, "r");
+	const info = await lstat(path);
+	if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile()) || (info.isFile() && info.nlink !== 1))
+		throw new MaintenanceError("INVALID_PATH");
+	// Windows FlushFileBuffers requires a write-capable file handle. r+ opens an existing
+	// file without creation/truncation. Directory flushing remains platform-qualified separately.
+	const handle = await open(path, info.isFile() ? "r+" : "r");
 	try {
 		await handle.sync();
-	} catch {
-		throw new MaintenanceError("DURABILITY_UNVERIFIED");
+	} catch (error) {
+		throw new MaintenanceError("DURABILITY_UNVERIFIED", "", "flush", error);
 	} finally {
 		await handle.close();
 	}

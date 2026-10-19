@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -75,7 +75,8 @@ test("CLI reports invalid arguments without echoing private values or creating o
 });
 
 test("CLI backs up a closed real store, restores an isolated archive and exports persisted history", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "hipi-store-cli-"));
+	// Pass canonical fixture paths, as a user must when tmpdir has symlink ancestors on macOS.
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-store-cli-")));
 	const source = join(directory, "原 工作库");
 	const backup = join(directory, "新 备份");
 	const archive = join(directory, "历史 档案");

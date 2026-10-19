@@ -75,7 +75,9 @@ for (const workspace of ["packages/work-runtime", "apps/hipi-work-ui", "apps/hip
 run("apps/hipi-work-desktop/scripts/check-boundaries.mjs");
 run("apps/hipi-work-desktop/scripts/check-brand-icons.mjs");
 run("packages/work-runtime/scripts/check-browser.mjs", [], resolve(root, "packages/work-runtime"));
-run("--conditions=source", ["--test", "--test-concurrency=2", ...nodeTests]);
+// A stuck test must produce a failure instead of silently consuming the whole CI job.
+// Explicit per-test deadlines can be stricter; no scenario is skipped on timeout.
+run("--conditions=source", ["--test", "--test-timeout=120000", "--test-concurrency=2", ...nodeTests]);
 run("node_modules/vitest/vitest.mjs", ["run", "--maxWorkers=2", "--config", "vitest.base.ts", ...uiTests]);
 // Durable's own config supplies source exports and current-only retention setup.
 // Do not replace it with the renderer-oriented root config.

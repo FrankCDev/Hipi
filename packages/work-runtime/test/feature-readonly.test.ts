@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -368,7 +368,8 @@ test("pack cursors fence membership and reject another store while active bindin
 
 for (const previousVersion of [1, 2]) {
 	test(`catalog ${previousVersion} upgrades to durable version 3 before runtime admission and retains identity/data`, async () => {
-		const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-v3-"));
+		// Catalog identity stores the canonical root, including macOS /private/var temporary paths.
+		const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-catalog-v3-")));
 		let runtime = await openTestRuntime(directory);
 		try {
 			await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
