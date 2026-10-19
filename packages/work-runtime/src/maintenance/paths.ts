@@ -49,9 +49,9 @@ export async function syncPath(path: string): Promise<void> {
 	const info = await lstat(path);
 	if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile()) || (info.isFile() && info.nlink !== 1))
 		throw new MaintenanceError("INVALID_PATH");
-	// Windows FlushFileBuffers requires a write-capable file handle. r+ opens an existing
-	// file without creation/truncation. Directory flushing remains platform-qualified separately.
-	const handle = await open(path, info.isFile() ? "r+" : "r");
+	// Windows FlushFileBuffers requires write access for files and directories. r+ opens
+	// an existing path without creation/truncation; successful flush is still platform-unqualified.
+	const handle = await open(path, info.isFile() || process.platform === "win32" ? "r+" : "r");
 	try {
 		await handle.sync();
 	} catch (error) {

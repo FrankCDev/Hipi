@@ -177,12 +177,15 @@ test("committed WAL is captured without changing source main/WAL", async () => {
 	await once(child, "exit");
 	try {
 		const fix = new DatabaseSync(join(f.source, "catalog.sqlite"));
-		fix.exec("PRAGMA wal_autocheckpoint=0; UPDATE workspaces SET name='Original' WHERE workspace_id='work'");
-		const before = await businessBytes(f.source);
-		const result = await backupStore(f);
-		assert.deepEqual(await businessBytes(f.source), before);
-		assert.deepEqual(result.manifest.reservations, [{ workspaceId: "wal", name: "WAL only" }]);
-		fix.close();
+		try {
+			fix.exec("PRAGMA wal_autocheckpoint=0; UPDATE workspaces SET name='Original' WHERE workspace_id='work'");
+			const before = await businessBytes(f.source);
+			const result = await backupStore(f);
+			assert.deepEqual(await businessBytes(f.source), before);
+			assert.deepEqual(result.manifest.reservations, [{ workspaceId: "wal", name: "WAL only" }]);
+		} finally {
+			fix.close();
+		}
 	} finally {
 		await rm(f.parent, { recursive: true, force: true });
 	}
@@ -250,27 +253,45 @@ test("strict manifest rejects unknown fields, aliases, duplicates and oversized 
 		await rm(f.parent, { recursive: true, force: true });
 	}
 });
-test("source connection close failure retains root ownership until process termination", async (t) => {
+test("source connection close failure retains root ownership until process termination", async () => {
 	const f = await fixture();
-	const original = DatabaseSync.prototype.close;
-	let failed: DatabaseSync | undefined;
-	const mocked = t.mock.method(DatabaseSync.prototype, "close", function (this: DatabaseSync) {
-		if (!failed) {
-			failed = this;
-			throw new Error("close fixture");
-		}
-		return original.call(this);
+	const script = join(f.parent, "close-failure.mjs");
+	await writeFile(
+		script,
+		`
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { backupStore } from ${JSON.stringify(new URL("../src/maintenance/backup.ts", import.meta.url).href)};
+const original = DatabaseSync.prototype.close;
+let failed = false;
+DatabaseSync.prototype.close = function () {
+	if (!failed) { failed = true; throw new Error('close fixture'); }
+	return original.call(this);
+};
+await assert.rejects(backupStore({ source: process.argv[2], destination: process.argv[3] }), { code: 'INTEGRITY_FAILED' });
+DatabaseSync.prototype.close = original;
+process.stdout.write('retained\\n');
+setInterval(() => {}, 1000);
+`,
+	);
+	const child = spawn(process.execPath, ["--conditions=source", script, f.source, f.destination], {
+		stdio: ["ignore", "pipe", "pipe"],
 	});
+	const exited = once(child, "exit");
 	try {
-		await assert.rejects(backupStore(f), { code: "INTEGRITY_FAILED" });
-		mocked.mock.restore();
+		await Promise.race([
+			once(child.stdout, "data", { signal: AbortSignal.timeout(10_000) }),
+			exited.then(() => {
+				throw new Error("Close-failure fixture exited before retaining ownership");
+			}),
+		]);
 		await assert.rejects(StoreOwnerLease.acquire(f.source), { code: "WORKSPACE_BUSY" });
 	} finally {
-		mocked.mock.restore();
-		if (failed)
-			original.call(
-				failed,
-			); /* The retained root lease intentionally survives this test; deletion is fixture-only. */
+		// Retained failed-close resources are released only by actual process termination.
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await exited;
+		const reopened = await StoreOwnerLease.acquire(f.source);
+		reopened.close();
 		await rm(f.parent, { recursive: true, force: true });
 	}
 });
@@ -435,52 +456,65 @@ test("flushing an existing output file preserves its bytes, identity and metadat
 	}
 });
 
-test("flush opens files write-capable without truncation and directories read-only; open failures propagate", async (t) => {
+test("flush selects platform-specific existing-path handles and propagates open failures", async (t) => {
 	const parent = await mkdtemp(join(tmpdir(), "hipi-flush-flags-"));
 	const path = join(parent, "output");
 	await writeFile(path, "fixture");
 	const calls: { path: unknown; flags: unknown }[] = [];
+	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	assert.ok(platformDescriptor);
 	const mocked = t.mock.method(fs, "open", async (target: unknown, flags: unknown) => {
 		calls.push({ path: target, flags });
 		throw Object.assign(new Error("injected open failure"), { code: "EPERM" });
 	});
 	syncBuiltinESMExports();
 	try {
-		await assert.rejects(syncPath(path), { code: "EPERM" });
-		await assert.rejects(syncPath(parent), { code: "EPERM" });
-		assert.deepEqual(calls, [
-			{ path, flags: "r+" },
-			{ path: parent, flags: "r" },
-		]);
+		for (const platform of ["win32", "linux", "darwin"]) {
+			Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+			calls.length = 0;
+			await assert.rejects(syncPath(path), { code: "EPERM" });
+			await assert.rejects(syncPath(parent), { code: "EPERM" });
+			assert.deepEqual(calls, [
+				{ path, flags: "r+" },
+				{ path: parent, flags: platform === "win32" ? "r+" : "r" },
+			]);
+		}
 	} finally {
+		Object.defineProperty(process, "platform", platformDescriptor);
 		mocked.mock.restore();
 		syncBuiltinESMExports();
 		await rm(parent, { recursive: true, force: true });
 	}
 });
 
-test(
-	"directory sync failure is not treated as a supported durability guarantee",
-	{ skip: process.platform !== "linux" },
-	async (t) => {
-		const parent = await mkdtemp(join(tmpdir(), "hipi-flush-directory-"));
-		const handle = await open(parent, "r");
-		const prototype = Object.getPrototypeOf(handle);
-		await handle.close();
-		const mocked = t.mock.method(prototype, "sync", async () => {
-			throw Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
-		});
-		try {
+test("directory sync failure closes the handle and never becomes a durability guarantee", async (t) => {
+	const parent = await mkdtemp(join(tmpdir(), "hipi-flush-directory-"));
+	let failureCode = "EIO";
+	let closed = 0;
+	const mocked = t.mock.method(fs, "open", async () => ({
+		sync: async () => {
+			throw Object.assign(new Error("injected directory sync failure"), { code: failureCode });
+		},
+		close: async () => {
+			closed++;
+		},
+	}));
+	syncBuiltinESMExports();
+	try {
+		for (const code of ["EIO", "EPERM"]) {
+			failureCode = code;
 			await assert.rejects(syncPath(parent), (error) => {
 				assert.ok(error instanceof Error);
 				assert.equal("code" in error && error.code, "DURABILITY_UNVERIFIED");
 				assert.ok(error.cause instanceof Error);
-				assert.equal("code" in error.cause && error.cause.code, "EIO");
+				assert.equal("code" in error.cause && error.cause.code, code);
 				return true;
 			});
-		} finally {
-			mocked.mock.restore();
-			await rm(parent, { recursive: true, force: true });
 		}
-	},
-);
+		assert.equal(closed, 2);
+	} finally {
+		mocked.mock.restore();
+		syncBuiltinESMExports();
+		await rm(parent, { recursive: true, force: true });
+	}
+});
