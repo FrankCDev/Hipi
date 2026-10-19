@@ -1,3 +1,7 @@
+> **Hipi Rust 重实现计划**：本 fork 计划以 Rust 原生实现跨平台、具备 PI 同等 Agent 能力的产品，追求可验证的性能、资源效率、稳定性和可嵌入性提升。模型接入采用 API Key，不实现厂商产品账号授权流程。目标、范围及模块验收原则见 [项目愿景](VISION.md)，开发执行标准见 [Rust 工程规范](docs/rust/ENGINEERING.md)与[测试规范](docs/rust/TESTING.md)。
+>
+> Rust 研发分支为 `dot/develop`。当前处于设计阶段，尚无本计划已验收的新 Rust Agent 实现或性能结论；下文保留上游 TypeScript PI 的说明，不代表 Rust 版本的安装方式。
+
 <p align="center">
   <a href="https://pi.dev">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">

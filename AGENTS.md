@@ -1,5 +1,18 @@
 # Development Rules
 
+## Hipi Rust Reimplementation
+
+- Read [VISION.md](VISION.md) before work on the Rust reimplementation. Preserve the defined PI capability target and the explicit API-key-only model access scope.
+- Review reusable existing Rust implementations before deciding to start over. Base retain/refactor/rewrite recommendations on capability, design, correctness, and performance evidence. Do not copy private source or private review details into this public repository without explicit sharing authorization.
+- New Hipi Rust modules must follow [Rust engineering standards](docs/rust/ENGINEERING.md) and [testing and benchmark standards](docs/rust/TESTING.md).
+- Before builds, dependency installation, tests, or benchmarks, read [resource safety](docs/rust/RESOURCE-SAFETY.md), recheck available disk/memory and effective limits, and apply its concurrency and stop budgets. Run at most one heavy task at a time; do not equate visible CPU count with dedicated capacity. Cache cleanup requires an identified, authorized scope and must preserve source, Git history, lockfiles, and verification evidence.
+- Before implementation, complete a risk-appropriate [module design](docs/rust/MODULE-DESIGN-TEMPLATE.md): behavior, ownership, data structures, resource budgets, failure/cancellation semantics, and complexity.
+- Preserve observable behavior and necessary compatibility contracts; prefer idiomatic Rust internally rather than translating TypeScript object structures mechanically. Language features are means to correctness, maintainability, and measured efficiency, not goals in themselves.
+- Before a module becomes a stable dependency, complete its [acceptance record](docs/rust/MODULE-ACCEPTANCE-TEMPLATE.md), including correctness checks and representative small-scale comparison with the frozen TypeScript baseline. Shared scenario coverage is appropriate for thin wrappers and pure types.
+- Keep passed, failed, and unexecuted checks distinct. A design document is not an implemented module; cross-compilation is not native platform acceptance; a language choice is not a measured performance result.
+- Record changes intended for publication on `dot/develop`. Do not push to `main`, force-push, merge a PR, publish a release, or expose credentials without the corresponding user authorization.
+- These requirements supplement the repository rules below; preserve the existing TypeScript implementation as a reference and do not silently change its functionality or testing safeguards.
+
 ## Conversational Style
 
 - Keep answers short and concise
