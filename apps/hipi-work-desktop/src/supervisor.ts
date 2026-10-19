@@ -4,6 +4,7 @@ import { credentialReply, type RuntimeCredentials } from "./credential-rpc.ts";
 import type { DiagnosticRuntimeState } from "./diagnostics.ts";
 import { HostConnection } from "./host-connection.ts";
 import { decode, encode, exact, WAIT_MS } from "./protocol.ts";
+import { type RuntimeDiagnostic, runtimeDiagnostic } from "./runtime-diagnostics.ts";
 
 type Child = {
 	postMessage(raw: string): void;
@@ -26,6 +27,7 @@ export class RuntimeSupervisor {
 	readonly #fork: (generation: string) => Child;
 	readonly #report: (event: "unavailable" | "shutdown-timeout") => void;
 	readonly #credentials?: RuntimeCredentials;
+	readonly #diagnostic: (diagnostic: RuntimeDiagnostic) => void;
 	#current?: Incarnation;
 	#restarts = 0;
 	#closing = false;
@@ -35,10 +37,12 @@ export class RuntimeSupervisor {
 		fork: (generation: string) => Child,
 		report: (event: "unavailable" | "shutdown-timeout") => void,
 		credentials?: RuntimeCredentials,
+		diagnostic: (diagnostic: RuntimeDiagnostic) => void = () => {},
 	) {
 		this.#fork = fork;
 		this.#report = report;
 		this.#credentials = credentials;
+		this.#diagnostic = diagnostic;
 	}
 	start() {
 		if (this.#current || this.#closing) throw new AppError("CLOSED");
@@ -78,7 +82,10 @@ export class RuntimeSupervisor {
 			try {
 				const message = decode(raw);
 				if (message.generation !== generation) return;
-				if (message.kind === "credentialRequest") {
+				if (message.kind === "diagnostic") {
+					const diagnostic = runtimeDiagnostic(message);
+					if (["starting", "ready", "stopping"].includes(current.state)) this.#diagnostic(diagnostic);
+				} else if (message.kind === "credentialRequest") {
 					if (
 						!this.#credentials ||
 						this.#closing ||

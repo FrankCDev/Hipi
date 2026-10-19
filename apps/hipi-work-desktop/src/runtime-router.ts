@@ -1,6 +1,7 @@
 import type { WorkRuntime } from "@hipi/work-runtime";
 import { AppError, PROTOCOL_VERSION, parseFrame, parseResult, type Subscription } from "@hipi/work-runtime/contracts";
 import { command, encode, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
+import { diagnoseRuntimeOperation, type RuntimeDiagnostic } from "./runtime-diagnostics.ts";
 
 type Active = { controller: AbortController; ack?: () => void; subscription?: Subscription };
 /** One trusted host connection. Cancel releases observation/wait only, never accepted execution. */
@@ -9,6 +10,7 @@ export function createRuntimeRouter(
 	generation: string,
 	post: (raw: string) => void,
 	beforeClose: () => Promise<void> = async () => {},
+	report: (diagnostic: RuntimeDiagnostic) => void = () => {},
 ) {
 	const active = new Map<string, Active>();
 	let closing: Promise<void> | undefined;
@@ -20,9 +22,13 @@ export function createRuntimeRouter(
 	};
 	const shutdown = () => {
 		closing ??= (async () => {
-			await beforeClose();
-			await Promise.all([...active.values()].map(release));
-			await runtime.close();
+			await diagnoseRuntimeOperation(beforeClose, { category: "close", phase: "file-services-close" }, report);
+			await diagnoseRuntimeOperation(
+				() => Promise.all([...active.values()].map(release)),
+				{ category: "close", phase: "subscriptions-close" },
+				report,
+			);
+			await diagnoseRuntimeOperation(() => runtime.close(), { category: "close", phase: "runtime-close" }, report);
 			active.clear();
 		})();
 		return closing;

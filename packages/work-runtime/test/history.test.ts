@@ -221,7 +221,7 @@ test(
 test(
 	"long committed and live text stays bounded over HTTP and reconstructs exact Unicode and escapes",
 	{ timeout: 30000 },
-	async () => {
+	async (t) => {
 		const directory = await mkdtemp(join(tmpdir(), "hipi-long-history-"));
 		let runtime = await openTestRuntime(directory);
 		const text = `a${'😀中文"\\\n\t\u0000'.repeat(100000)}`;
@@ -256,6 +256,12 @@ test(
 			runtime = await openTestRuntime(directory);
 			const origin = "http://127.0.0.1:4000";
 			const server = await serveLoopback(runtime, { origin });
+			let closing: Promise<void> | undefined;
+			const closeServer = () => {
+				closing ??= server.close();
+				return closing;
+			};
+			t.after(closeServer);
 			try {
 				const client = createHttpClient({ ...server, origin });
 				const snapshot = await client.call("snapshot", scope);
@@ -285,15 +291,32 @@ test(
 				assert.equal(end.text, "");
 				assert.equal(end.nextOffset, null);
 				const firstFrame = Promise.withResolvers<Frame>();
-				const watcher = await client.observe(scope, (frame) => {
-					firstFrame.resolve(frame);
-				});
-				const frame = await firstFrame.promise;
-				assert.deepEqual(frame.snapshot, snapshot);
-				assert.ok(Buffer.byteLength(`data: ${JSON.stringify({ kind: "frame", frame })}\n\n`) <= LIMITS.frameBytes);
-				await watcher.dispose();
+				const abort = () => firstFrame.reject(t.signal.reason);
+				t.signal.addEventListener("abort", abort, { once: true });
+				// Observe can fail before returning its subscription; handle that rejection without an orphaned wait.
+				void firstFrame.promise.catch(() => {});
+				let watcher: Awaited<ReturnType<typeof client.observe>> | undefined;
+				try {
+					watcher = await client.observe(
+						scope,
+						(frame) => firstFrame.resolve(frame),
+						t.signal,
+						(status) => {
+							if (status.state === "closed")
+								firstFrame.reject(new Error(`Observation closed: ${status.reason}`));
+						},
+					);
+					const frame = await firstFrame.promise;
+					assert.deepEqual(frame.snapshot, snapshot);
+					assert.ok(
+						Buffer.byteLength(`data: ${JSON.stringify({ kind: "frame", frame })}\n\n`) <= LIMITS.frameBytes,
+					);
+				} finally {
+					t.signal.removeEventListener("abort", abort);
+					await watcher?.dispose();
+				}
 			} finally {
-				await server.close();
+				await closeServer();
 			}
 		} finally {
 			await runtime.close();

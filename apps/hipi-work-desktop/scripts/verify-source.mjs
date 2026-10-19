@@ -28,6 +28,7 @@ nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
 nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
+nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
 const storageTests = [
 	"packages/chord/test/sqlite-readonly.test.ts",
 	"packages/chord/test/sqlite/node.test.ts",
@@ -77,7 +78,14 @@ run("apps/hipi-work-desktop/scripts/check-brand-icons.mjs");
 run("packages/work-runtime/scripts/check-browser.mjs", [], resolve(root, "packages/work-runtime"));
 // A stuck test must produce a failure instead of silently consuming the whole CI job.
 // Explicit per-test deadlines can be stricter; no scenario is skipped on timeout.
-run("--conditions=source", ["--test", "--test-timeout=120000", "--test-concurrency=2", ...nodeTests]);
+// TAP emits each failure's details immediately, even if a later test leaves handles open.
+run("--conditions=source", [
+	"--test",
+	"--test-reporter=tap",
+	"--test-timeout=120000",
+	"--test-concurrency=2",
+	...nodeTests,
+]);
 run("node_modules/vitest/vitest.mjs", ["run", "--maxWorkers=2", "--config", "vitest.base.ts", ...uiTests]);
 // Durable's own config supplies source exports and current-only retention setup.
 // Do not replace it with the renderer-oriented root config.

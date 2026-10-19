@@ -18,6 +18,7 @@ export type RuntimeOptions = Pick<
 	"failpoint" | "onError" | "resume" | "model" | "credentials" | "agentFiles"
 > & {
 	models: Models;
+	onDiagnostic?: (diagnostic: { category: "storage"; phase: "storage-open" }) => void;
 	catalogFailpoint?: (point: "after_reserve" | "after_directory" | "after_storage" | "before_ready") => Promise<void>;
 };
 /**
@@ -26,9 +27,20 @@ export type RuntimeOptions = Pick<
  * Network filesystems, cross-platform lock behavior and power-loss durability are not qualified.
  */
 export async function openRuntime(directory: string, options: RuntimeOptions): Promise<WorkRuntime> {
-	await mkdir(directory, { recursive: true, mode: 0o700 });
-	const root = await realpath(directory);
-	const catalog = await StoreCatalog.open(root);
+	let root: string;
+	let catalog: StoreCatalog;
+	try {
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		root = await realpath(directory);
+		catalog = await StoreCatalog.open(root);
+	} catch (error) {
+		try {
+			options.onDiagnostic?.({ category: "storage", phase: "storage-open" });
+		} catch {
+			/* Diagnostics cannot replace the original failure. */
+		}
+		throw error;
+	}
 	let unsafe = false;
 	return new WorkRuntime({
 		storeId: catalog.storeId,

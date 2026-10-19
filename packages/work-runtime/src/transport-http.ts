@@ -237,25 +237,69 @@ export async function serveLoopback(
 				"X-Content-Type-Options": "nosniff",
 			});
 			res.flushHeaders();
-			const timer = setTimeout(
-				() => res.end('event: close\ndata: {"state":"closed","reason":"expired"}\n\n'),
-				subscriptionTimeoutMs,
-			);
+			let writing = false;
+			const timer = setTimeout(() => {
+				if (writing) res.destroy();
+				else res.end('event: close\ndata: {"state":"closed","reason":"expired"}\n\n');
+			}, subscriptionTimeoutMs);
 			try {
 				subscription = await runtime.observe(
 					checkedScope,
-					(frame) => {
-						if (controller.signal.aborted) return;
-						const body = `data: ${JSON.stringify(parseFrame(frame))}\n\n`;
-						// A slow consumer reconnects and gets a fresh snapshot; never accumulate an unbounded queue.
-						if (Buffer.byteLength(body) > LIMITS.frameBytes || !res.write(body)) res.destroy();
+					async (frame) => {
+						if (controller.signal.aborted || res.destroyed || res.writableEnded) return;
+						// Producers must await delivery. Refuse concurrent writes instead of building a frame queue.
+						if (writing) {
+							res.destroy();
+							return;
+						}
+						writing = true;
+						try {
+							const body = `data: ${JSON.stringify(parseFrame(frame))}\n\n`;
+							if (Buffer.byteLength(body) > LIMITS.frameBytes) {
+								res.destroy();
+								return;
+							}
+							// false means accepted with backpressure, including a single legal frame above Windows' HWM.
+							if (res.write(body)) return;
+							await new Promise<void>((resolve) => {
+								const settled = () => {
+									clearTimeout(timeout);
+									res.off("drain", settled);
+									res.off("close", settled);
+									res.off("finish", settled);
+									res.off("error", settled);
+									controller.signal.removeEventListener("abort", settled);
+									resolve();
+								};
+								const timeout = setTimeout(() => {
+									res.destroy();
+									settled();
+								}, 10000);
+								res.once("drain", settled);
+								res.once("close", settled);
+								res.once("finish", settled);
+								res.once("error", settled);
+								controller.signal.addEventListener("abort", settled, { once: true });
+								if (
+									controller.signal.aborted ||
+									res.destroyed ||
+									res.writableFinished ||
+									!res.writableNeedDrain
+								)
+									settled();
+							});
+						} finally {
+							writing = false;
+						}
 					},
 					controller.signal,
 					(status) => {
 						if (status.state !== "closed" || controller.signal.aborted) return;
-						res.end(
-							`event: close\ndata: ${JSON.stringify({ ...status, reason: status.reason === "disposed" ? "disconnected" : status.reason })}\n\n`,
-						);
+						if (writing) res.destroy();
+						else
+							res.end(
+								`event: close\ndata: ${JSON.stringify({ ...status, reason: status.reason === "disposed" ? "disconnected" : status.reason })}\n\n`,
+							);
 						controller.abort();
 					},
 				);

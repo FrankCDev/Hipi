@@ -11,7 +11,9 @@ import {
 	ipcMain,
 	Menu,
 	MenuItem,
+	type MessageBoxOptions,
 	protocol,
+	type SaveDialogOptions,
 	safeStorage,
 	session,
 	utilityProcess,
@@ -19,7 +21,7 @@ import {
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
 import { CredentialStore } from "./credential-store.ts";
 import { diagnosticMessages } from "./diagnostic-messages.ts";
-import { DesktopDiagnostics, DiagnosticExporter, writeDiagnosticFile } from "./diagnostics.ts";
+import { DesktopDiagnostics, DiagnosticExporter, finishFailedStartup, writeDiagnosticFile } from "./diagnostics.ts";
 import { filePickerLabels } from "./file-messages.ts";
 import { manageFileRoots } from "./file-picker.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./file-protocol.ts";
@@ -39,27 +41,135 @@ const root = dirname(fileURLToPath(import.meta.url));
 protocol.registerSchemesAsPrivileged([
 	{ scheme: "hipi-work", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
+const diagnostics = new DesktopDiagnostics();
+const exporter = new DiagnosticExporter();
+let supervisor: RuntimeSupervisor | undefined;
+let startupWindow: BrowserWindow | undefined;
+let recoveringStartup = false;
+let diagnosticText = diagnosticMessages(Intl.DateTimeFormat().resolvedOptions().locale);
+function showDiagnosticMessage(window: BrowserWindow | undefined, options: MessageBoxOptions) {
+	return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+}
+function showDiagnosticSave(window: BrowserWindow | undefined, options: SaveDialogOptions) {
+	return window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options);
+}
+let diagnosticNotice = false;
+const exportDiagnostics = async (window?: BrowserWindow) => {
+	const outcome = await exporter.export({
+		snapshot: () =>
+			diagnostics.serialize(
+				{
+					productVersion: app.getVersion(),
+					electronVersion: process.versions.electron,
+					nodeVersion: process.versions.node,
+					platform: process.platform,
+					arch: process.arch,
+				},
+				supervisor?.diagnosticState() ?? "idle",
+			),
+		preview: async (content) =>
+			(
+				await showDiagnosticMessage(window, {
+					title: diagnosticText["diagnostics.title"],
+					message: diagnosticText["diagnostics.preview"],
+					detail: `${diagnosticText["diagnostics.scope"]}\n\n${content}`,
+					buttons: [diagnosticText["diagnostics.save"], diagnosticText["diagnostics.cancel"]],
+					defaultId: 1,
+					cancelId: 1,
+					noLink: true,
+				})
+			).response === 0,
+		pick: async () => {
+			const result = await showDiagnosticSave(window, {
+				title: diagnosticText["diagnostics.title"],
+				defaultPath: "hipi-work-diagnostics.json",
+				filters: [{ name: "JSON", extensions: ["json"] }],
+			});
+			return result.canceled ? null : (result.filePath ?? null);
+		},
+		write: writeDiagnosticFile,
+	});
+	if (outcome === "failed") diagnostics.record("EXPORT_FAILED");
+	if (outcome === "write-unknown") diagnostics.record("EXPORT_WRITE_UNKNOWN");
+	if (
+		!diagnosticNotice &&
+		(!window || !window.isDestroyed()) &&
+		["saved", "failed", "write-unknown", "busy"].includes(outcome)
+	) {
+		diagnosticNotice = true;
+		await showDiagnosticMessage(window, {
+			title: diagnosticText["diagnostics.title"],
+			message:
+				diagnosticText[
+					outcome === "busy"
+						? "diagnostics.busy"
+						: outcome === "saved"
+							? "diagnostics.saved"
+							: outcome === "failed"
+								? "diagnostics.failed"
+								: "diagnostics.unknown"
+				],
+		})
+			.catch(() => undefined)
+			.finally(() => {
+				diagnosticNotice = false;
+			});
+	}
+};
+
 if (!app.requestSingleInstanceLock()) app.exit(0);
 else
-	void start().catch(() => {
-		const text = hostMessages(app.isReady() ? app.getLocale() : Intl.DateTimeFormat().resolvedOptions().locale);
-		dialog.showErrorBox("Hipi Work", text["host.startup.failed"]);
-		app.exit(1);
+	void start().catch(async () => {
+		diagnostics.record("HOST_STARTUP_FAILED");
+		recoveringStartup = true;
+		// The native recovery UI stays alive until actual utility exit; a failed close is not clean shutdown.
+		app.on("before-quit", (event) => event.preventDefault());
+		if (startupWindow && !startupWindow.isDestroyed()) startupWindow.destroy();
+		await finishFailedStartup({
+			stop: () => supervisor?.close() ?? Promise.resolve(false),
+			review: async () => {
+				try {
+					await app.whenReady();
+				} catch {
+					dialog.showErrorBox(
+						"Hipi Work",
+						hostMessages(Intl.DateTimeFormat().resolvedOptions().locale)["host.startup.failed"],
+					);
+					return;
+				}
+				diagnosticText = diagnosticMessages(app.getLocale());
+				const text = hostMessages(app.getLocale());
+				const choice = await dialog.showMessageBox({
+					type: "error",
+					title: "Hipi Work",
+					message: text["host.startup.failed"],
+					buttons: [diagnosticText["diagnostics.menu"], diagnosticText["diagnostics.exit"]],
+					defaultId: 1,
+					cancelId: 1,
+					noLink: true,
+				});
+				if (choice.response === 0) await exportDiagnostics();
+			},
+			exit: () => {
+				exporter.close();
+				app.exit(1);
+			},
+		}).catch(() => {
+			dialog.showErrorBox("Hipi Work", hostMessages(app.isReady() ? app.getLocale() : "en")["host.shutdown.unknown"]);
+		});
 	});
 
 async function start() {
 	const mode = providerMode(process.argv);
 	await app.whenReady();
 	const text = hostMessages(app.getLocale());
+	diagnosticText = diagnosticMessages(app.getLocale());
 	const credentials = new CredentialStore(join(app.getPath("userData"), "credentials", "providers.enc"), safeStorage);
 	const assets = resolve(root, "renderer");
 	protocol.handle("hipi-work", createRendererAssetHandler(assets));
 	session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 	session.defaultSession.setPermissionCheckHandler(() => false);
-	const diagnostics = new DesktopDiagnostics();
-	const exporter = new DiagnosticExporter();
-	const diagnosticText = diagnosticMessages(app.getLocale());
-	const supervisor = new RuntimeSupervisor(
+	supervisor = new RuntimeSupervisor(
 		(generation) =>
 			utilityProcess.fork(runtimeResource(root), [join(app.getPath("userData"), `${mode}-store`), generation, mode], {
 				serviceName: "Hipi Work runtime",
@@ -70,8 +180,10 @@ async function start() {
 			if (event === "shutdown-timeout") dialog.showErrorBox("Hipi Work", text["host.shutdown.unknown"]);
 		},
 		credentials,
+		(diagnostic) => diagnostics.recordRuntime(diagnostic),
 	);
-	await supervisor.start();
+	const activeSupervisor = supervisor;
+	await activeSupervisor.start();
 	const window = new BrowserWindow({
 		icon: join(root, "branding/icon.png"),
 		width: 1400,
@@ -89,73 +201,14 @@ async function start() {
 			navigateOnDragDrop: false,
 		},
 	});
-	let diagnosticNotice = false;
-	const exportDiagnostics = async () => {
-		const outcome = await exporter.export({
-			snapshot: () =>
-				diagnostics.serialize(
-					{
-						productVersion: app.getVersion(),
-						electronVersion: process.versions.electron,
-						nodeVersion: process.versions.node,
-						platform: process.platform,
-						arch: process.arch,
-					},
-					supervisor.diagnosticState(),
-				),
-			preview: async (content) =>
-				(
-					await dialog.showMessageBox(window, {
-						title: diagnosticText["diagnostics.title"],
-						message: diagnosticText["diagnostics.preview"],
-						detail: `${diagnosticText["diagnostics.scope"]}\n\n${content}`,
-						buttons: [diagnosticText["diagnostics.save"], diagnosticText["diagnostics.cancel"]],
-						defaultId: 1,
-						cancelId: 1,
-						noLink: true,
-					})
-				).response === 0,
-			pick: async () => {
-				const result = await dialog.showSaveDialog(window, {
-					title: diagnosticText["diagnostics.title"],
-					defaultPath: "hipi-work-diagnostics.json",
-					filters: [{ name: "JSON", extensions: ["json"] }],
-				});
-				return result.canceled ? null : (result.filePath ?? null);
-			},
-			write: writeDiagnosticFile,
-		});
-		if (outcome === "failed") diagnostics.record("EXPORT_FAILED");
-		if (outcome === "write-unknown") diagnostics.record("EXPORT_WRITE_UNKNOWN");
-		if (!diagnosticNotice && !window.isDestroyed() && ["saved", "failed", "write-unknown", "busy"].includes(outcome)) {
-			diagnosticNotice = true;
-			await dialog
-				.showMessageBox(window, {
-					title: diagnosticText["diagnostics.title"],
-					message:
-						diagnosticText[
-							outcome === "busy"
-								? "diagnostics.busy"
-								: outcome === "saved"
-									? "diagnostics.saved"
-									: outcome === "failed"
-										? "diagnostics.failed"
-										: "diagnostics.unknown"
-						],
-				})
-				.catch(() => undefined)
-				.finally(() => {
-					diagnosticNotice = false;
-				});
-		}
-	};
+	startupWindow = window;
 	// Preserve the host's existing menu and append only this explicit user action.
 	const menu = Menu.getApplicationMenu() ?? new Menu();
 	const help = menu.items.find((item) => item.role === "help")?.submenu;
 	const diagnosticItem = new MenuItem({
 		label: diagnosticText["diagnostics.menu"],
 		click: () => {
-			void exportDiagnostics().catch(() => diagnostics.record("EXPORT_FAILED"));
+			void exportDiagnostics(window).catch(() => diagnostics.record("EXPORT_FAILED"));
 		},
 	});
 	if (help) help.append(diagnosticItem);
@@ -165,7 +218,9 @@ async function start() {
 		menu.append(new MenuItem({ label: diagnosticText["diagnostics.help"], submenu }));
 	}
 	Menu.setApplicationMenu(menu);
-	window.once("closed", () => exporter.close());
+	window.once("closed", () => {
+		if (!recoveringStartup) exporter.close();
+	});
 	const owner = window.webContents;
 	let rendererLifetime = 0;
 	let fileCalls = 0;
@@ -178,12 +233,12 @@ async function start() {
 			const lifetime = rendererLifetime;
 			try {
 				if (channel === FILE_CHANNEL)
-					return await supervisor
+					return await activeSupervisor
 						.connection()
 						.files.call({ operation: "request", request: parseFileRequest(decode(raw)) });
 				const result = await manageFileRoots(
 					decode(raw),
-					() => supervisor.connection().files,
+					() => activeSupervisor.connection().files,
 					() => lifetime === rendererLifetime && !owner.isDestroyed() && trustedSender(event, owner, PAGE),
 					async (writable) => {
 						if (picking) throw new FileServiceError("BUSY");
@@ -235,7 +290,7 @@ async function start() {
 			if (previewCalls.size >= MAX_ACTIVE) throw new FileServiceError("BUSY");
 			if (previewCalls.has(id)) throw new FileServiceError("INVALID_PATH");
 			const lifetime = rendererLifetime;
-			const connection = supervisor.connection();
+			const connection = activeSupervisor.connection();
 			const pending = connection.previews.call(request);
 			previewCalls.set(id, pending.cancel);
 			try {
@@ -256,7 +311,7 @@ async function start() {
 				if (
 					lifetime !== rendererLifetime ||
 					!trustedSender(event, owner, PAGE) ||
-					connection !== supervisor.connection()
+					connection !== activeSupervisor.connection()
 				)
 					throw new FileServiceError("CLOSED");
 				return result;
@@ -317,7 +372,7 @@ async function start() {
 		if (!trustedSender(event, owner, PAGE)) return { ok: false, error: "UNAUTHORIZED" };
 		if (calls.size >= MAX_ACTIVE) return { ok: false, error: "CAPACITY_EXCEEDED" };
 		try {
-			const pending = supervisor.connection().call(parseRequest(decode(raw)));
+			const pending = activeSupervisor.connection().call(parseRequest(decode(raw)));
 			calls.add(pending.cancel);
 			try {
 				return await pending.result;
@@ -350,7 +405,7 @@ async function start() {
 			const subscriptionId = id;
 			subscriptions.set(
 				id,
-				supervisor.connection().observe(observation(message.input), (value) => {
+				activeSupervisor.connection().observe(observation(message.input), (value) => {
 					const eventValue = value as { kind: string };
 					if (eventValue.kind === "status") subscriptions.delete(subscriptionId);
 					send(subscriptionId, value);
@@ -400,7 +455,7 @@ async function start() {
 		},
 		() => {
 			clearRenderer();
-			return supervisor.close();
+			return activeSupervisor.close();
 		},
 	);
 	app.on("before-quit", (event) => {
@@ -408,8 +463,11 @@ async function start() {
 		lifecycle.requestQuit();
 	});
 	window.once("closed", () => {
-		void lifecycle.windowClosed().then((clean) => app.exit(clean ? 0 : 1));
+		void lifecycle.windowClosed().then((clean) => {
+			if (!recoveringStartup) app.exit(clean ? 0 : 1);
+		});
 	});
 	app.on("window-all-closed", () => {});
 	await window.loadURL(PAGE);
+	startupWindow = undefined;
 }

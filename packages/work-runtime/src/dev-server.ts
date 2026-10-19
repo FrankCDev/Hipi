@@ -77,12 +77,37 @@ try {
 			await runtime.close();
 			vault.clear();
 		})();
-		void closing.catch(() => {
-			process.exitCode = 1;
-		});
+		return closing;
 	};
-	process.once("SIGINT", shutdown);
-	process.once("SIGTERM", shutdown);
+	const requestShutdown = () => {
+		void shutdown().then(
+			() => {
+				if (process.connected) process.disconnect();
+			},
+			() => {
+				process.exitCode = 1;
+				if (process.connected) process.disconnect();
+			},
+		);
+	};
+	process.once("SIGINT", requestShutdown);
+	process.once("SIGTERM", requestShutdown);
+	// An inherited Node IPC channel is a parent capability, not a network API. Windows
+	// kill(SIGTERM) is a forced termination, so forked hosts need an explicit graceful path.
+	if (process.send) {
+		process.on("message", (message: unknown) => {
+			if (
+				message &&
+				typeof message === "object" &&
+				!Array.isArray(message) &&
+				Object.keys(message).length === 1 &&
+				"type" in message &&
+				message.type === "hipi.dev-host.shutdown"
+			)
+				requestShutdown();
+		});
+		process.once("disconnect", requestShutdown);
+	}
 } catch (error) {
 	await previews.close();
 	await files.authority.close();

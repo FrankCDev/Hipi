@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath, rename, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { FileEntry, FileRoot, FileService, FileTarget, FileText } from "./contracts.ts";
 import { FILE_LIMITS, FileServiceError, validateRelativePath } from "./contracts.ts";
+
+import { rootDisplayName } from "./display-name.ts";
 
 type Grant = FileRoot & { principalId: string; canonicalPath: string; dev: number; ino: number };
 /** Trusted Node consumers only; never forward renderer-selected byte budgets. */
@@ -278,9 +280,7 @@ export function createFileAuthority(options: FileAuthorityOptions): TrustedFileA
 				if (!info.isDirectory()) throw new FileServiceError("BLOCKED_RESOURCE");
 				if (closed) throw new FileServiceError("CLOSED");
 				if (grants.size >= FILE_LIMITS.roots) throw new FileServiceError("LIMIT_EXCEEDED");
-				const name = basename(canonicalPath);
-				const displayName =
-					name && [...name].length <= 255 && !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(name) ? name : undefined;
+				const displayName = rootDisplayName(canonicalPath);
 				const root: FileRoot = {
 					workspaceId: input.workspaceId,
 					rootId: randomUUID(),

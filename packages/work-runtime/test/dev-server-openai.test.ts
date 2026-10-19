@@ -1,68 +1,22 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { createHttpCredentialBridge } from "../src/credential-http-client.ts";
 import { createHttpClient } from "../src/transport-http-client.ts";
 
+import { startDevHost } from "./helpers/dev-host.ts";
+
 const origin = "http://127.0.0.1:5173";
 const sentinel = "fictional-memory-key-not-for-network-use";
-async function start(directory: string) {
-	const child = spawn(
-		process.execPath,
-		[
-			"--conditions=source",
-			fileURLToPath(new URL("../src/dev-server.ts", import.meta.url)),
-			"--provider",
-			"openai",
-			"--origin",
-			origin,
-			"--data",
-			directory,
-		],
-		{
-			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, OPENAI_API_KEY: "fictional-ambient-key-must-be-ignored" },
-		},
-	);
-	const exited = once(child, "exit");
-	const ready = Promise.withResolvers<{ url: string; token: string }>();
-	let output = "";
-	let logs = "";
-	const timer = setTimeout(() => {
-		child.kill("SIGKILL");
-		ready.reject(new Error("Host startup timeout"));
-	}, 5000);
-	child.stdout.on("data", (chunk: Buffer) => {
-		output += chunk.toString("utf8");
-		const match = /API: (http:\/\/127\.0\.0\.1:\d+)\nToken: ([a-f0-9]+)\n/.exec(output);
-		if (match) {
-			clearTimeout(timer);
-			ready.resolve({ url: match[1], token: match[2] });
-		}
+function start(directory: string) {
+	return startDevHost({
+		directory,
+		provider: "openai",
+		origin,
+		env: { ...process.env, OPENAI_API_KEY: "fictional-ambient-key-must-be-ignored" },
 	});
-	child.stderr.on("data", (chunk: Buffer) => {
-		logs += chunk.toString("utf8");
-	});
-	child.once("error", () => {
-		clearTimeout(timer);
-		ready.reject(new Error("Host startup failed"));
-	});
-	const connection = await ready.promise;
-	return {
-		connection,
-		output,
-		logs: () => logs,
-		async close() {
-			child.kill("SIGTERM");
-			const [code] = await exited;
-			assert.equal(code, 0);
-		},
-	};
 }
 
 test(

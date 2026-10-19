@@ -1,8 +1,10 @@
 import { writeFile } from "node:fs/promises";
+import { RUNTIME_DIAGNOSTICS, type RuntimeDiagnostic } from "./runtime-diagnostics.ts";
 
 export const DIAGNOSTIC_LIMITS = { bytes: 4096, count: 9999, writeWaitMs: 10000 } as const;
 const codes = [
 	"RUNTIME_UNAVAILABLE",
+	"HOST_STARTUP_FAILED",
 	"SHUTDOWN_TIMEOUT",
 	"RENDERER_GONE",
 	"EXPORT_FAILED",
@@ -30,6 +32,14 @@ function version(value: unknown): string {
 /** Session-local counters only. Unknown codes and extra fields never enter retained state. */
 export class DesktopDiagnostics {
 	readonly #counts = new Map<DiagnosticCode, number>();
+	readonly #runtimeCounts = new Map<RuntimeDiagnostic, number>();
+	recordRuntime(diagnostic: RuntimeDiagnostic): void {
+		const allowed = RUNTIME_DIAGNOSTICS.find(
+			(item) => item.category === diagnostic.category && item.phase === diagnostic.phase,
+		);
+		if (allowed)
+			this.#runtimeCounts.set(allowed, Math.min(DIAGNOSTIC_LIMITS.count, (this.#runtimeCounts.get(allowed) ?? 0) + 1));
+	}
 	record(code: unknown): void {
 		for (const allowed of codes) {
 			if (code === allowed) {
@@ -42,7 +52,7 @@ export class DesktopDiagnostics {
 		// Construct from scalars; never spread input, serialize exceptions, or inspect logs.
 		const content = `${JSON.stringify(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				product: "Hipi Work",
 				productVersion: version(metadata.productVersion),
 				electronVersion: version(metadata.electronVersion),
@@ -53,6 +63,11 @@ export class DesktopDiagnostics {
 				counterScope: "current-desktop-process",
 				counterLimit: DIAGNOSTIC_LIMITS.count,
 				events: codes.map((code) => ({ code, count: this.#counts.get(code) ?? 0 })),
+				runtimeEvents: RUNTIME_DIAGNOSTICS.map((item) => ({
+					category: item.category,
+					phase: item.phase,
+					count: this.#runtimeCounts.get(item) ?? 0,
+				})),
 			},
 			null,
 			2,
@@ -63,6 +78,26 @@ export class DesktopDiagnostics {
 }
 
 export type ExportOutcome = "saved" | "cancelled" | "busy" | "closed" | "failed" | "write-unknown";
+/** Startup recovery has no renderer. Review failure or cancellation cannot end a live writer. */
+export async function finishFailedStartup(ports: {
+	stop(): Promise<boolean>;
+	review(): Promise<void>;
+	exit(): void;
+}): Promise<void> {
+	const stopped = Promise.resolve()
+		.then(ports.stop)
+		.then(
+			() => true,
+			() => false,
+		);
+	try {
+		await ports.review();
+	} catch {
+		/* Native dialog failure must still wait for observed runtime exit. */
+	}
+	if (!(await stopped)) throw new Error("RUNTIME_EXIT_UNCONFIRMED");
+	ports.exit();
+}
 type ExportPorts = {
 	snapshot(): string;
 	preview(content: string): Promise<boolean>;

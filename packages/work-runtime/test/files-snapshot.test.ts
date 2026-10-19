@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { FILE_LIMITS, FileServiceError } from "../src/files/contracts.ts";
+import { rootDisplayName } from "../src/files/display-name.ts";
 import { createFileAuthority } from "../src/files/service.ts";
 
 async function fixture() {
@@ -198,7 +199,7 @@ test("root display names are basename-only and omit control/format characters", 
 	try {
 		assert.equal(f.root.displayName, basename(f.directory));
 		assert.deepEqual(await f.authority.forPrincipal("alice").listRoots("workspace"), [f.root]);
-		for (const name of ["project\nname", "project\u202ename"]) {
+		for (const name of ["project\u202ename"]) {
 			const directory = join(f.directory, name);
 			await mkdir(directory);
 			const root = await f.authority.grantRoot({
@@ -214,4 +215,12 @@ test("root display names are basename-only and omit control/format characters", 
 	} finally {
 		await f.cleanup();
 	}
+});
+
+test("root display sanitization covers controls and surrogates without OS-invalid fixture names", () => {
+	for (const name of ["project\nname", "project\tname", "project\u007fname", "project\u202ename", "project\ud800name"])
+		assert.equal(rootDisplayName(join(tmpdir(), name)), undefined);
+	assert.equal(rootDisplayName(join(tmpdir(), "parent", "Visible project")), "Visible project");
+	assert.equal(rootDisplayName(join(tmpdir(), "x".repeat(256))), undefined);
+	assert.equal(rootDisplayName(join(tmpdir(), "界".repeat(255))), "界".repeat(255));
 });
