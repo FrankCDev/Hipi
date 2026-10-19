@@ -1,14 +1,46 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
+import { until } from "./gui-flow.mjs";
 import {
 	bindingCard,
+	closeToolPacks,
 	exerciseToolPacks,
 	packageDigest,
 	packageText,
 	packCard,
 	readToolPacks,
 } from "./gui-tool-packs.mjs";
+
+test("mouse close targets only the fixed X and both close routes await actual parent focus", async () => {
+	for (const mouse of [false, true]) {
+		const calls = [];
+		let polls = 0;
+		const trigger = { textContent: "Tool packs" };
+		await closeToolPacks(
+			{},
+			{
+				click: async (_cdp, selector) => calls.push(selector),
+				pressKey: async (_cdp, key) => calls.push(key),
+				until,
+				evaluate: async (_cdp, expression) => {
+					polls++;
+					return runInNewContext(expression, {
+						document: {
+							querySelector: () => null,
+							querySelectorAll: () => [trigger],
+							activeElement: polls < 2 ? null : trigger,
+						},
+					});
+				},
+			},
+			mouse,
+		);
+		assert.deepEqual(calls, [mouse ? '.tool-packs-dialog button[data-slot="dialog-close"]' : "Escape"]);
+		assert.equal(polls, 2);
+	}
+});
 
 test("fixture identity is exact UTF-8 JSON and exposes only a deterministic transform", () => {
 	assert.equal(packageDigest, createHash("sha256").update(packageText, "utf8").digest("hex"));
@@ -120,6 +152,11 @@ test("cold restart performs only read controls and validates retained uninstalle
 			assert.equal(key, "Escape");
 		},
 		async assertNoAlerts() {},
+		async inspectModal(_cdp, selector, placement) {
+			assert.equal(selector, ".tool-packs-dialog");
+			assert.equal(placement, "center");
+			return { titleReachable: true, closeReachable: true, scrolledToBottom: true };
+		},
 		async capture(_cdp, _directory, name) {
 			assert.equal(name, "tool-packs-reopened");
 		},
@@ -132,5 +169,7 @@ test("cold restart performs only read controls and validates retained uninstalle
 	);
 	assert.equal(result.coldRead, true);
 	assert.equal(result.managementOnly, true);
+	assert.equal(result.retainedGeometry.closeReachable, true);
+	assert.equal(result.escapeFocus, true);
 	assert.ok(clicked.includes("Read full source"));
 });

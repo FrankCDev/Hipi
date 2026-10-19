@@ -85,6 +85,7 @@ const evidence = {
 	harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
 	visualReview: "not_run; screenshots require inspection",
 	checks: [],
+	fontObservations: [],
 	errors: [],
 	artifacts: [],
 	notValidated: [
@@ -207,8 +208,10 @@ try {
 				recordRendererError(evidence, iteration, method, params, [owned, profile]);
 			}
 		});
+		const fontObservations = [];
+		evidence.fontObservations.push({ iteration, targets: fontObservations });
 		const flow = await withNativeLogBudget(
-			() => exercise(page, artifacts, iteration === 1),
+			() => exercise(page, artifacts, iteration === 1, fontObservations),
 			() => readNativeLog(nativeLogs, iteration, [owned, profile]),
 		);
 		if (iteration === 0) {

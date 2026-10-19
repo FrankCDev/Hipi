@@ -24,7 +24,31 @@ const codes = new Set([
 	"NO_MATCHING_DIALOG_OBSERVED",
 	"ENUMERATION_UNAVAILABLE",
 ]);
-const unknown = () => ({ status: "unknown", reason: "owned-window-query-unavailable" });
+const reasons = new Set([
+	"request",
+	"process-lookup",
+	"process-handle",
+	"process-start-time",
+	"process-session",
+	"process-image",
+	"session-mismatch",
+	"image-mismatch",
+	"process-exited",
+	"spawn-window",
+	"capture-identity",
+	"native-compile",
+	"native-query",
+	"post-query-identity",
+	"helper-timeout",
+	"helper-exit",
+	"helper-policy-denied",
+	"helper-output",
+	"owned-window-query-unavailable",
+]);
+const unknown = (reason) => ({
+	status: "unknown",
+	reason: reasons.has(reason) ? reason : "owned-window-query-unavailable",
+});
 
 async function query(request, run) {
 	try {
@@ -39,10 +63,18 @@ async function query(request, run) {
 			timeout: 10_000,
 			maxBuffer: 16 * 1024,
 		});
-		if (typeof stdout !== "string" || stdout.length > 16 * 1024) return unknown();
-		return JSON.parse(stdout.replace(/^\uFEFF/, ""));
-	} catch {
-		return unknown();
+		if (typeof stdout !== "string" || stdout.length > 16 * 1024) return unknown("helper-output");
+		try {
+			return JSON.parse(stdout.replace(/^\uFEFF/, ""));
+		} catch {
+			return unknown("helper-output");
+		}
+	} catch (error) {
+		if (error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return unknown("helper-output");
+		// Classify only a fixed PowerShell security marker; never expose its text/path.
+		if (typeof error?.stderr === "string" && /\bPSSecurityException\b/.test(error.stderr))
+			return unknown("helper-policy-denied");
+		return unknown(error?.killed ? "helper-timeout" : "helper-exit");
 	}
 }
 
@@ -57,6 +89,7 @@ export async function captureWindowsIdentity(input, { platform = process.platfor
 	)
 		return unknown();
 	const result = await query({ mode: "identity", ...input }, run);
+	if (result?.status === "unknown") return unknown(result.reason);
 	if (
 		result?.status !== "confirmed" ||
 		result.pid !== input.pid ||
@@ -77,7 +110,7 @@ export async function captureWindowsIdentity(input, { platform = process.platfor
 /** Read only the verified main process's error dialogs, before existing termination logic. */
 export async function readWindowsDialogs(identity, { platform = process.platform, run = execute } = {}) {
 	if (platform !== "win32") return { status: "not-applicable" };
-	if (identity?.status !== "confirmed") return unknown();
+	if (identity?.status !== "confirmed") return unknown(identity?.reason);
 	const result = await query(
 		{
 			mode: "capture",
@@ -88,6 +121,7 @@ export async function readWindowsDialogs(identity, { platform = process.platform
 		},
 		run,
 	);
+	if (result?.status === "unknown") return unknown(result.reason);
 	if (
 		result?.status !== "observed" ||
 		!Array.isArray(result.codes) ||

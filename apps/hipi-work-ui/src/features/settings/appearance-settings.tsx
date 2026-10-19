@@ -10,7 +10,14 @@ import {
 	useThemeSettings,
 } from "../../app/theme/index.ts";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+	DialogTrigger,
+} from "../../components/ui/dialog.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
@@ -37,20 +44,22 @@ export function AppearanceSettings() {
 					</Button>
 				</DialogTrigger>
 				{open && (
-					<DialogContent closeLabel={t("settings.cancel")} className="settings-dialog">
+					<DialogContent scrollBody closeLabel={t("settings.cancel")} className="settings-dialog">
 						<DialogTitle>{t("settings.title")}</DialogTitle>
-						<DialogDescription>{t("settings.description")}</DialogDescription>
-						<SettingsForm
-							onSave={() => {
-								theme.save();
-								setSaved(true);
-								setOpen(false);
-							}}
-							onCancel={() => {
-								theme.cancel();
-								setOpen(false);
-							}}
-						/>
+						<DialogBody>
+							<DialogDescription>{t("settings.description")}</DialogDescription>
+							<SettingsForm
+								onSave={() => {
+									theme.save();
+									setSaved(true);
+									setOpen(false);
+								}}
+								onCancel={() => {
+									theme.cancel();
+									setOpen(false);
+								}}
+							/>
+						</DialogBody>
 					</DialogContent>
 				)}
 			</Dialog>

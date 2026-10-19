@@ -5,7 +5,14 @@ import { useCredentialClient } from "../../app/client-provider.tsx";
 import type { CredentialRequest } from "../../app/credential-client.ts";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import {
+	Dialog,
+	DialogBody,
+	DialogContent,
+	DialogDescription,
+	DialogTitle,
+	DialogTrigger,
+} from "../../components/ui/dialog.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
 export function ModelSettings() {
@@ -69,61 +76,63 @@ export function ModelSettings() {
 					{t("model.settings")}
 				</Button>
 			</DialogTrigger>
-			<DialogContent closeLabel={t("common.close")} closeDisabled={busy}>
+			<DialogContent scrollBody className="model-settings-dialog" closeLabel={t("common.close")} closeDisabled={busy}>
 				<DialogTitle>{t("model.settings")}</DialogTitle>
-				<DialogDescription>
-					{t(credentials?.storage === "memory" ? "model.memoryNote" : "model.secretNote")}
-				</DialogDescription>
-				{!credentials ? (
-					<p>{t("model.noPort")}</p>
-				) : (
-					<form
-						className="grid gap-4"
-						onSubmit={(event) => {
-							event.preventDefault();
-							if (secret && !busy && (state === "missing" || state === "configured"))
-								void run({ operation: "set", provider: "openai", secret });
-						}}
-					>
-						<output>{busy ? t("common.loading") : state ? t(`model.${state}`) : t("receipt.unconfirmed")}</output>
-						<label className="field" htmlFor={inputId}>
-							{t("model.key")}
-							<Input
-								id={inputId}
-								type="password"
-								autoComplete="off"
-								spellCheck={false}
-								maxLength={4096}
-								value={secret}
-								disabled={busy}
-								onChange={(event) => setSecret(event.target.value)}
-							/>
-						</label>
-						{outcome && <output>{t(`model.${outcome}`)}</output>}
-						<p className="text-sm text-muted-foreground">{t("model.removeNote")}</p>
-						<div className="flex flex-wrap gap-2">
-							<Button type="submit" disabled={!secret || busy || (state !== "missing" && state !== "configured")}>
-								{t("model.save")}
-							</Button>
-							<Button
-								type="button"
-								variant="outline"
-								disabled={busy || state !== "configured"}
-								onClick={() => void run({ operation: "remove", provider: "openai" })}
-							>
-								{t("model.remove")}
-							</Button>
-							<Button
-								type="button"
-								variant="ghost"
-								disabled={busy}
-								onClick={() => void run({ operation: "status", provider: "openai" })}
-							>
-								{t("model.refresh")}
-							</Button>
-						</div>
-					</form>
-				)}
+				<DialogBody>
+					<DialogDescription>
+						{t(credentials?.storage === "memory" ? "model.memoryNote" : "model.secretNote")}
+					</DialogDescription>
+					{!credentials ? (
+						<p>{t("model.noPort")}</p>
+					) : (
+						<form
+							className="grid gap-4"
+							onSubmit={(event) => {
+								event.preventDefault();
+								if (secret && !busy && (state === "missing" || state === "configured"))
+									void run({ operation: "set", provider: "openai", secret });
+							}}
+						>
+							<output>{busy ? t("common.loading") : state ? t(`model.${state}`) : t("receipt.unconfirmed")}</output>
+							<label className="field" htmlFor={inputId}>
+								{t("model.key")}
+								<Input
+									id={inputId}
+									type="password"
+									autoComplete="off"
+									spellCheck={false}
+									maxLength={4096}
+									value={secret}
+									disabled={busy}
+									onChange={(event) => setSecret(event.target.value)}
+								/>
+							</label>
+							{outcome && <output>{t(`model.${outcome}`)}</output>}
+							<p className="text-sm text-muted-foreground">{t("model.removeNote")}</p>
+							<div className="flex flex-wrap gap-2">
+								<Button type="submit" disabled={!secret || busy || (state !== "missing" && state !== "configured")}>
+									{t("model.save")}
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									disabled={busy || state !== "configured"}
+									onClick={() => void run({ operation: "remove", provider: "openai" })}
+								>
+									{t("model.remove")}
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									disabled={busy}
+									onClick={() => void run({ operation: "status", provider: "openai" })}
+								>
+									{t("model.refresh")}
+								</Button>
+							</div>
+						</form>
+					)}
+				</DialogBody>
 			</DialogContent>
 		</Dialog>
 	);

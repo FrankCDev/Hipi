@@ -14,6 +14,7 @@ import {
 	fixture,
 	inspectModal,
 	modalBounds,
+	modalWheelPoint,
 	pressKey,
 	receiptScope,
 	resolvedTheme,
@@ -94,7 +95,7 @@ test("receipt scope comes from exact visible receipt identifiers and rejects mal
 });
 
 test("modal bounds rejects an offscreen or covered Close without sending input", async () => {
-	for (const reason of ["offscreen", "covered", "valid"]) {
+	for (const reason of ["offscreen", "covered", "title-offscreen", "title-covered", "valid", "center"]) {
 		const rect = { x: 500, y: 10, width: 400, height: 600 };
 		const close = {
 			textContent: "Close",
@@ -102,11 +103,15 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 			contains: () => reason !== "covered",
 		};
 		const body = { getBoundingClientRect: () => rect, scrollTop: 0, clientHeight: 500, scrollHeight: 500 };
+		const title = {
+			getBoundingClientRect: () => ({ x: 520, y: reason === "title-offscreen" ? -50 : 20, width: 200, height: 25 }),
+			contains: () => reason !== "title-covered",
+		};
 		const dialog = {
-			dataset: { placement: "right" },
+			dataset: { placement: reason === "center" ? "center" : "right", scrollBody: "true" },
 			getBoundingClientRect: () => rect,
 			querySelectorAll: () => [close],
-			querySelector: () => body,
+			querySelector: (selector) => (selector === '[data-slot="dialog-title"]' ? title : body),
 		};
 		const cdp = {
 			async request(method, params) {
@@ -123,7 +128,8 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 				};
 			},
 		};
-		if (reason === "valid") assert.equal((await modalBounds(cdp, ".dialog", 1)).ready, true);
+		if (reason === "valid" || reason === "center")
+			assert.equal((await modalBounds(cdp, ".dialog", 1, reason === "center" ? "center" : "right")).ready, true);
 		else await assert.rejects(modalBounds(cdp, ".dialog", 1), /modal viewport and reachable Close/);
 	}
 });
@@ -133,9 +139,13 @@ test("overflowing modal scrolls through real wheel input and rechecks Close reac
 	let reads = 0;
 	const cdp = {
 		async request(method, params) {
+			if (method === "Runtime.evaluate" && params.expression.includes("let blocked=false"))
+				return { result: { value: { x: 104, y: 300 } } };
 			if (method === "Input.dispatchMouseEvent") {
 				assert.equal(params.type, "mouseWheel");
 				assert.equal(params.deltaY, 1200);
+				assert.equal(params.x, 104);
+				assert.equal(params.y, 300);
 				scrolled = true;
 				return {};
 			}
@@ -155,6 +165,40 @@ test("overflowing modal scrolls through real wheel input and rechecks Close reac
 	};
 	assert.equal((await inspectModal(cdp, ".dialog")).scrolledToBottom, true);
 	assert.ok(reads >= 3);
+});
+
+test("modal wheel hit testing avoids nested textareas and rejects an overlay covering the body", async () => {
+	const body = {
+		getBoundingClientRect: () => ({ x: 100, y: 100, width: 300, height: 400 }),
+		contains: (node) => node === body || node === textarea,
+	};
+	const textarea = { tagName: "TEXTAREA", parentElement: body, scrollHeight: 600, clientHeight: 150 };
+	let covered = false;
+	const cdp = {
+		request: async (method, params) => {
+			assert.equal(method, "Runtime.evaluate");
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						innerWidth: 1000,
+						innerHeight: 800,
+						getComputedStyle: () => ({ overflowY: "auto" }),
+						document: {
+							querySelector: () => ({ querySelector: () => body }),
+							elementFromPoint: (x) => (covered ? {} : x === 250 ? textarea : body),
+						},
+					}),
+				},
+			};
+		},
+	};
+	const point = await modalWheelPoint(cdp, ".tool-packs-dialog");
+	assert.equal(point.x, 104);
+	assert.equal(point.y, 300);
+	textarea.tagName = "DIV";
+	assert.equal((await modalWheelPoint(cdp, ".tool-packs-dialog")).x, 104);
+	covered = true;
+	await assert.rejects(modalWheelPoint(cdp, ".tool-packs-dialog"), /no unobstructed non-nested wheel target/);
 });
 
 test("click failure identifies requested text and refuses covered or ambiguous controls", async () => {

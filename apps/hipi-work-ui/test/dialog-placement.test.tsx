@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
@@ -10,10 +11,10 @@ vi.mock("radix-ui", async (original) => {
 	return { ...actual, Dialog: { ...actual.Dialog, Portal: ({ children }: { children: ReactNode }) => children } };
 });
 
-function markup(placement?: "center" | "right") {
+function markup(placement?: "center" | "right", scrollBody = false) {
 	return renderToStaticMarkup(
 		<Dialog open>
-			<DialogContent placement={placement} closeLabel="Close" aria-describedby={undefined}>
+			<DialogContent scrollBody={scrollBody} placement={placement} closeLabel="Close" aria-describedby={undefined}>
 				<DialogTitle>Details</DialogTitle>
 				<DialogBody>
 					<p>Long body</p>
@@ -41,4 +42,33 @@ test("default dialog retains its centered placement", () => {
 	assert.match(html, /data-placement="center"/);
 	assert.match(html, /top-\[50%\] left-\[50%\]/);
 	assert.match(html, /translate-x-\[-50%\] translate-y-\[-50%\]/);
+});
+
+test("long centered dialogs opt into a bounded shell with heading and Close outside the scroll body", () => {
+	const html = markup("center", true);
+	const panel = html.match(/<div[^>]*data-slot="dialog-content"[^>]*>/)?.[0] ?? "";
+	assert.match(panel, /data-placement="center"/);
+	assert.match(panel, /data-scroll-body="true"/);
+	assert.match(panel, /max-h-\[calc\(100dvh-2rem\)\]/);
+	assert.match(panel, /flex-col overflow-hidden/);
+	assert.doesNotMatch(panel, /(?:^| )grid(?: |$)/);
+	assert.match(html, /<h2[^>]*data-slot="dialog-title"[^>]*>Details<\/h2><div data-slot="dialog-body"/);
+	assert.match(html, /Long body<\/p><\/div><button[^>]*data-slot="dialog-close"/);
+	assert.doesNotMatch(markup(), /data-scroll-body/);
+});
+
+test("all long management panels opt in without moving descriptions or forms outside the body", () => {
+	for (const file of [
+		"tool-packs/tool-packs-dialog.tsx",
+		"settings/appearance-settings.tsx",
+		"workbench/model-settings.tsx",
+	]) {
+		const source = readFileSync(new URL(`../src/features/${file}`, import.meta.url), "utf8");
+		assert.match(source, /<DialogContent\s+scrollBody/);
+		assert.match(source, /<\/DialogTitle>\s*<DialogBody>\s*<DialogDescription/);
+		assert.match(source, /<\/DialogBody>\s*<\/DialogContent>/);
+		assert.doesNotMatch(source.match(/<DialogContent[^>]*>/)?.[0] ?? "", /overflow-y-auto/);
+	}
+	const css = readFileSync(new URL("../src/theme.css", import.meta.url), "utf8");
+	assert.doesNotMatch(css.match(/\.settings-dialog\s*\{[^}]+\}/)?.[0] ?? "", /overflow/);
 });

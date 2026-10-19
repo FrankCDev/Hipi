@@ -1388,8 +1388,6 @@
 	text-decoration-style: dotted;
 }
 .settings-dialog {
-	max-height: calc(100dvh - 32px);
-	overflow: auto;
 	width: min(720px, calc(100vw - 32px));
 	max-width: 720px;
 }

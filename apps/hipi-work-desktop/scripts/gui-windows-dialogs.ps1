@@ -1,22 +1,34 @@
 $ErrorActionPreference = 'Stop'
+$phase = 'request'
 # No policy override, foreground change, click, close, screenshot, or broad process scan.
 try {
     $request = $env:HIPI_WINDOW_REQUEST | ConvertFrom-Json
+    $phase = 'process-lookup'
     $process = [Diagnostics.Process]::GetProcessById([int]$request.pid)
+    $phase = 'process-handle'
     $heldHandle = $process.Handle
+    $phase = 'process-start-time'
     $start = $process.StartTime.ToUniversalTime()
+    $phase = 'process-session'
     $session = $process.SessionId
+    $phase = 'process-image'
     $binary = [IO.Path]::GetFullPath($process.MainModule.FileName)
-    if ($session -ne [Diagnostics.Process]::GetCurrentProcess().SessionId -or
-        -not [String]::Equals($binary, [IO.Path]::GetFullPath($request.binary), [StringComparison]::OrdinalIgnoreCase) -or
-        $process.HasExited) { throw 'identity' }
+    $phase = 'session-mismatch'
+    if ($session -ne [Diagnostics.Process]::GetCurrentProcess().SessionId) { throw 'identity' }
+    $phase = 'image-mismatch'
+    if (-not [String]::Equals($binary, [IO.Path]::GetFullPath($request.binary), [StringComparison]::OrdinalIgnoreCase)) { throw 'identity' }
+    $phase = 'process-exited'
+    if ($process.HasExited) { throw 'identity' }
     if ($request.mode -eq 'identity') {
+        $phase = 'spawn-window'
         $spawned = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$request.spawnedAt).UtcDateTime
         if ($start -lt $spawned.AddSeconds(-1) -or $start -gt $spawned.AddSeconds(10)) { throw 'start' }
         @{ status='confirmed'; pid=$process.Id; startTicks=$start.Ticks.ToString(); session=$session } | ConvertTo-Json -Compress
         exit 0
     }
+    $phase = 'capture-identity'
     if ($request.mode -ne 'capture' -or $start.Ticks.ToString() -ne $request.startTicks -or $session -ne $request.session) { throw 'identity' }
+    $phase = 'native-compile'
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -81,12 +93,14 @@ public static class HipiOwnedDialogReader {
     }
 }
 '@
+    $phase = 'native-query'
     $codes = [HipiOwnedDialogReader]::Read($process)
+    $phase = 'post-query-identity'
     if ($process.HasExited -or $process.StartTime.ToUniversalTime().Ticks.ToString() -ne $request.startTicks) { throw 'changed' }
     @{ status='observed'; codes=@($codes) } | ConvertTo-Json -Compress
 } catch {
     # Never serialize exceptions, command lines, paths, window titles or raw text.
-    @{ status='unknown'; reason='owned-window-query-unavailable' } | ConvertTo-Json -Compress
+    @{ status='unknown'; reason=$phase } | ConvertTo-Json -Compress
 } finally {
     if ($null -ne $process) { $process.Dispose() }
 }

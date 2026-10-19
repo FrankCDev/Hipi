@@ -23,6 +23,12 @@ export function redactNativeLog(text, roots) {
 		.replace(/ws:\/\/127\.0\.0\.1:\d+\/devtools\/[^\s]+/g, "<private-debugger>")
 		.split(/\r\n|[\r\n]/)
 		.map((line) => {
+			// Normalize Chromium's timestamp/module envelope before treating slashes as private paths.
+			const envelope = line.match(
+				/^\[(?:\d+:){1,2}\d{4}\/\d{6}\.\d{3,6}:(INFO|WARNING|ERROR|FATAL|VERBOSE\d*):[A-Za-z0-9_./-]+(?::\d+|\(\d+\))\]\s*/,
+			);
+			const prefix = envelope ? `[Chromium ${envelope[1]}] ` : "";
+			if (envelope) line = line.slice(envelope[0].length);
 			if (
 				/authorization|bearer|api[_-]?key|password|credential|token\s*[=:]|\b[A-Za-z_][A-Za-z0-9_]*\s*=/i.test(line)
 			) {
@@ -30,11 +36,11 @@ export function redactNativeLog(text, roots) {
 					line.match(
 						/\b(?:TypeError|SyntaxError|RangeError|ReferenceError|Error|EACCES|EPERM|ENOENT|ERR_MODULE_NOT_FOUND|ERR_REQUIRE_ESM)\b/g,
 					) ?? [];
-				return `<redacted-sensitive-line>${reason.length ? ` ${[...new Set(reason)].join(" ")}` : ""}`;
+				return `${prefix}<redacted-sensitive-line>${reason.length ? ` ${[...new Set(reason)].join(" ")}` : ""}`;
 			}
 			// Unknown absolute paths may contain spaces. Discard the remainder rather than expose a suffix.
 			// This also handles Windows case/slash variants, UNC and file URLs without knowing a user's home.
-			return line.replace(/(?:[A-Za-z]:[\\/]|\\\\|\/).*$/g, "<absolute-path>");
+			return prefix + line.replace(/(?:[A-Za-z]:[\\/]|\\\\|\/).*$/g, "<absolute-path>");
 		})
 		.join("\n");
 }

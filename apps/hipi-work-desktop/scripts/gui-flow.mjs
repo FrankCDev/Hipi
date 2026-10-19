@@ -214,7 +214,9 @@ async function inspectTheme(cdp, directory, reopened) {
 	await waitAppearanceClosed(cdp);
 	await click(cdp, ".workbench-settings button", "Appearance and language");
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
-	await closeAppearance(cdp);
+	const geometry = await inspectModal(cdp, ".settings-dialog", "center");
+	await click(cdp, '.settings-dialog button[data-slot="dialog-close"]');
+	await waitAppearanceClosed(cdp);
 	await dismissTo(cdp, settings);
 	const expected = resolvedTheme(
 		original.mode,
@@ -230,9 +232,12 @@ async function inspectTheme(cdp, directory, reopened) {
 		restoredResolved: expected,
 		darkCaptured: true,
 		nestedEscapeFocus: true,
+		nestedMouseCloseFocus: true,
+		geometry,
 	};
 }
-export async function modalBounds(cdp, selector, milliseconds = 30000) {
+export async function modalBounds(cdp, selector, milliseconds = 30000, placement = "right") {
+	assert.ok(["center", "right"].includes(placement), "Unknown modal placement");
 	return until(
 		async () => {
 			const state = await evaluate(
@@ -241,15 +246,16 @@ export async function modalBounds(cdp, selector, milliseconds = 30000) {
 		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
 		const dialog = document.querySelector(${JSON.stringify(selector)});
 		if (!dialog) return null;
-		const closes = [...dialog.querySelectorAll('button')].filter(e => e.textContent.trim() === 'Close');
+		const closes = [...dialog.querySelectorAll('button[data-slot="dialog-close"]')];
 		const body = dialog.querySelector('[data-slot="dialog-body"]');
-		if (closes.length !== 1 || !body) return null;
+		const title = dialog.querySelector('[data-slot="dialog-title"]');
+		if (closes.length !== 1 || !body || !title) return null;
 		const close = closes[0];
 		const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; };
 		const inside = r => r.width>0 && r.height>0 && r.x>=0 && r.y>=0 && r.x+r.width<=innerWidth+1 && r.y+r.height<=innerHeight+1;
-		const d=rect(dialog), c=rect(close), b=rect(body);
-		return { ready: dialog.dataset.placement === 'right' && inside(d) && inside(c) && !close.disabled && close.contains(document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)),
-			dialog:d,close:c,body:b,scrollTop:body.scrollTop,clientHeight:body.clientHeight,scrollHeight:body.scrollHeight };
+		const d=rect(dialog), c=rect(close), b=rect(body), t=rect(title);
+		return { ready: dialog.dataset.placement === ${JSON.stringify(placement)} && dialog.dataset.scrollBody === 'true' && inside(d) && inside(c) && inside(t) && inside(b) && !close.disabled && close.contains(document.elementFromPoint(c.x+c.width/2,c.y+c.height/2)) && title.contains(document.elementFromPoint(t.x+t.width/2,t.y+t.height/2)),
+			dialog:d,close:c,title:t,body:b,scrollTop:body.scrollTop,clientHeight:body.clientHeight,scrollHeight:body.scrollHeight };
 	})()`,
 			);
 			return state?.ready ? state : null;
@@ -258,24 +264,56 @@ export async function modalBounds(cdp, selector, milliseconds = 30000) {
 		milliseconds,
 	);
 }
-export async function inspectModal(cdp, selector) {
-	const before = await modalBounds(cdp, selector);
+export async function inspectModal(cdp, selector, placement = "right") {
+	const before = await modalBounds(cdp, selector, 30000, placement);
 	const overflow = before.scrollHeight > before.clientHeight + 1;
 	if (overflow) {
+		const point = await modalWheelPoint(cdp, selector);
 		await cdp.request("Input.dispatchMouseEvent", {
 			type: "mouseWheel",
-			x: before.body.x + before.body.width / 2,
-			y: before.body.y + before.body.height / 2,
+			x: point.x,
+			y: point.y,
 			deltaX: 0,
 			deltaY: before.scrollHeight,
 		});
 		await until(async () => {
-			const after = await modalBounds(cdp, selector);
+			const after = await modalBounds(cdp, selector, 30000, placement);
 			return after.scrollTop + after.clientHeight >= after.scrollHeight - 2 ? after : null;
 		}, "modal body scrolled to bottom with Close still reachable");
 	}
-	await modalBounds(cdp, selector);
-	return { viewportContained: true, closeReachable: true, overflowingBody: overflow, scrolledToBottom: overflow };
+	await modalBounds(cdp, selector, 30000, placement);
+	return {
+		viewportContained: true,
+		titleReachable: true,
+		closeReachable: true,
+		overflowingBody: overflow,
+		scrolledToBottom: overflow,
+	};
+}
+export async function modalWheelPoint(cdp, selector) {
+	const point = await evaluate(
+		cdp,
+		`(() => {
+		const body=document.querySelector(${JSON.stringify(selector)})?.querySelector('[data-slot="dialog-body"]');
+		if(!body)return null;
+		const r=body.getBoundingClientRect();
+		for(const y of [r.y+r.height/2,r.y+4,r.y+r.height-4])for(const x of [r.x+r.width/2,r.x+4,r.x+r.width-4]){
+			if(x<=r.x || x>=r.x+r.width || y<=r.y || y>=r.y+r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight)continue;
+			let hit=document.elementFromPoint(x,y);
+			if(!hit || !body.contains(hit))continue;
+			let blocked=false;
+			while(hit!==body){
+				const style=getComputedStyle(hit);
+				if(['TEXTAREA','SELECT','INPUT'].includes(hit.tagName) || (/(auto|scroll)/.test(style.overflowY) && hit.scrollHeight>hit.clientHeight+1)){blocked=true;break;}
+				hit=hit.parentElement;
+			}
+			if(!blocked)return {x,y};
+		}
+		return null;
+	})()`,
+	);
+	assert.ok(point, "Modal body has no unobstructed non-nested wheel target");
+	return point;
 }
 async function inspectControls(cdp) {
 	await click(cdp, 'button[aria-label="Model status"]');
@@ -478,7 +516,7 @@ async function inspectActivities(cdp, directory, reopened) {
 	await waitForOverlayClosed(cdp, "button", "View activity");
 	return evidence;
 }
-export async function exercise(cdp, directory, reopened = false) {
+export async function exercise(cdp, directory, reopened = false, fontObservations = []) {
 	await cdp.request("Runtime.enable");
 	await cdp.request("Log.enable");
 	await cdp.request("Page.enable");
@@ -523,11 +561,11 @@ export async function exercise(cdp, directory, reopened = false) {
 		const controls = await inspectControls(cdp);
 		const theme = await inspectTheme(cdp, directory, true);
 		await assertNoAlerts(cdp);
-		const fonts = await renderedFonts(cdp, fixture);
+		const fonts = await renderedFonts(cdp, fixture, process.platform, fontObservations);
 		await capture(cdp, directory, "reopened");
 		const toolPacks = await exerciseToolPacks(
 			cdp,
-			{ click, evaluate, until, pressKey, assertNoAlerts, capture },
+			{ click, evaluate, until, pressKey, assertNoAlerts, capture, inspectModal },
 			directory,
 			{ reopened: true, expectedScope: scope },
 		);
@@ -609,11 +647,11 @@ export async function exercise(cdp, directory, reopened = false) {
 	const controls = await inspectControls(cdp);
 	const theme = await inspectTheme(cdp, directory, false);
 	await assertNoAlerts(cdp);
-	const fonts = await renderedFonts(cdp, fixture);
+	const fonts = await renderedFonts(cdp, fixture, process.platform, fontObservations);
 	await capture(cdp, directory, "completed");
 	const toolPacks = await exerciseToolPacks(
 		cdp,
-		{ click, evaluate, until, pressKey, assertNoAlerts, capture },
+		{ click, evaluate, until, pressKey, assertNoAlerts, capture, inspectModal },
 		directory,
 		{ expectedScope: scope },
 	);

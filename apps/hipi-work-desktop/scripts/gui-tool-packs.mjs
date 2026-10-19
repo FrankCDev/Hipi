@@ -77,10 +77,23 @@ export function bindingCard(state, status) {
 	return cards[0];
 }
 
+export async function closeToolPacks(cdp, { click, pressKey, until, evaluate }, mouse = false) {
+	if (mouse) await click(cdp, '.tool-packs-dialog button[data-slot="dialog-close"]');
+	else await pressKey(cdp, "Escape");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`!document.querySelector(${JSON.stringify(dialog)}) && [...document.querySelectorAll('.workbench-settings button')].some(e => e === document.activeElement && e.textContent.trim() === 'Tool packs')`,
+			),
+		"tool packs parent focus",
+	);
+}
+
 // Call once after the baseline completed screenshot; call read-only reopened mode after cold restart.
 // expectedScope must come from the existing receipt's workspace-id/conversation-id DOM, not a bridge RPC.
 export async function exerciseToolPacks(cdp, helpers, directory, { reopened = false, expectedScope }) {
-	const { click, evaluate, until, pressKey, assertNoAlerts, capture } = helpers;
+	const { click, evaluate, until, pressKey, assertNoAlerts, capture, inspectModal } = helpers;
 	assert.ok(expectedScope?.workspaceId && expectedScope?.conversationId, "Receipt scope required");
 	const read = () => evaluate(cdp, `(${readToolPacks.toString()})(document, ${JSON.stringify(dialog)})`);
 	const ready = async () =>
@@ -100,15 +113,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		}, `${kind} persisted ${status}`);
 	const button = (card, label) => click(cdp, `${card.selector} button`, label);
 	const close = async () => {
-		await pressKey(cdp, "Escape");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!document.querySelector(${JSON.stringify(dialog)}) && [...document.querySelectorAll('.workbench-settings button')].some(e => e === document.activeElement && e.textContent.trim() === 'Tool packs')`,
-				),
-			"tool packs parent focus",
-		);
+		await closeToolPacks(cdp, helpers);
 		await pressKey(cdp, "Escape");
 		await until(
 			() =>
@@ -122,6 +127,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 	await click(cdp, 'button[aria-label="Workbench settings"]');
 	await click(cdp, ".workbench-settings button", "Tool packs");
 	await ready();
+	let activeGeometry;
 	if (!reopened) {
 		assert.equal((await read()).cards.length, 0, "Fresh profile must have no packages or bindings");
 		await click(cdp, `${dialog} textarea:not([readonly])`);
@@ -156,9 +162,12 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 			return d.checked && !d.disabled;
 		}, "explicit consent recorded");
 		await click(cdp, `${disclosure.selector} button`, "Authorize live access");
-		const active = await waitCard("binding", "Active");
+		await waitCard("binding", "Active");
+		activeGeometry = await inspectModal(cdp, ".tool-packs-dialog", "center");
 		await capture(cdp, directory, "tool-packs-active");
-		await button(active, "Revoke");
+		await closeToolPacks(cdp, helpers, true);
+		await click(cdp, ".workbench-settings button", "Tool packs");
+		await button(await waitCard("binding", "Active"), "Revoke");
 		await until(
 			async () => (await ready()).cards.every((c) => c.paragraphs[0] !== "Live tool access"),
 			"revoked binding absent from active view",
@@ -181,6 +190,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 	await click(cdp, `${dialog} button`, "Binding history");
 	await waitCard("binding", "Revoked");
 	await assertNoAlerts(cdp);
+	const retainedGeometry = await inspectModal(cdp, ".tool-packs-dialog", "center");
 	await capture(cdp, directory, reopened ? "tool-packs-reopened" : "tool-packs-uninstalled");
 	await close();
 	return {
@@ -191,5 +201,9 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		sourceRetained: true,
 		coldRead: reopened,
 		managementOnly: true,
+		activeGeometry,
+		retainedGeometry,
+		mouseCloseFocus: !reopened,
+		escapeFocus: true,
 	};
 }

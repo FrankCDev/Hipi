@@ -13,6 +13,24 @@ import {
 	withNativeLogBudget,
 } from "./gui-native-log.mjs";
 
+test("Chromium timestamp envelopes preserve safe error text without exposing paths or environment", () => {
+	for (const envelope of [
+		"[4440:1019/231817.849:ERROR:dbus/bus.cc:408]",
+		"[4440:4441:1019/231817.849123:ERROR:bus.cc(408)]",
+	]) {
+		assert.equal(redactNativeLog(`${envelope} Font decode failed`, []), "[Chromium ERROR] Font decode failed");
+		assert.equal(
+			redactNativeLog(`${envelope} Cannot open /home/private-user/font.woff2`, []),
+			"[Chromium ERROR] Cannot open <absolute-path>",
+		);
+		assert.equal(
+			redactNativeLog(`${envelope} HOME=/home/private-user`, []),
+			"[Chromium ERROR] <redacted-sensitive-line>",
+		);
+	}
+	assert.ok(!redactNativeLog("[4440:1019/private-user] unsafe", []).includes("private-user"));
+});
+
 test("shared evidence writers redact failures, cleanup and renderer details without losing click diagnostics", async () => {
 	const evidence = { errors: [] };
 	recordGuiFailure(evidence, "failure", new Error("EACCES open C:\\Users\\private-user\\secret.log"), []);
