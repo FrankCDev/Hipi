@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { until } from "./gui-flow.mjs";
-import { startProcess } from "./gui-process.mjs";
+import { startProcess, waitForCimExit } from "./gui-process.mjs";
 
 test("native runner observes actual close before releasing a child", async () => {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-gui-child-test-")));
@@ -54,7 +54,7 @@ test("terminate never signals the old PID or process group after observed close"
 test("exit-before-close waits without signaling on POSIX and Windows, independent of native stdio timing", async () => {
 	const source = await readFile(new URL("./gui-process.mjs", import.meta.url), "utf8");
 	const begin = source.indexOf("export function startProcess(");
-	const end = source.indexOf("\nexport async function assertNoPackageProcesses", begin);
+	const end = source.indexOf("\nexport async function waitForCimExit", begin);
 	assert.ok(begin >= 0 && end > begin, "Test must exercise the actual process owner implementation");
 	const implementation = source.slice(begin, end).replace(/^export /, "");
 	for (const platform of ["linux", "win32"]) {
@@ -99,4 +99,49 @@ test("exit-before-close waits without signaling on POSIX and Windows, independen
 			assert.equal(signals, 0, "Neither exit nor close permits signalling the old identity");
 		}
 	}
+});
+
+test("CIM exit observation authorizes cleanup only after an actual zero result within the shared deadline", async () => {
+	let time = 0;
+	const budgets = [];
+	let calls = 0;
+	const clock = {
+		milliseconds: 1000,
+		now: () => time,
+		pause: async (ms) => {
+			time += ms;
+		},
+	};
+	await waitForCimExit(async (timeout) => {
+		budgets.push(timeout);
+		time += 100;
+		if (++calls < 3) throw Object.assign(new Error("still present"), { code: 2 });
+	}, clock);
+	assert.equal(calls, 3);
+	assert.deepEqual(budgets, [1000, 650, 300]);
+	time = 0;
+	await assert.rejects(
+		waitForCimExit(async () => {
+			throw Object.assign(new Error("still present"), { code: 2 });
+		}, clock),
+		/remain.*deadline/,
+	);
+	assert.equal(time, 1000);
+	time = 0;
+	calls = 0;
+	await assert.rejects(
+		waitForCimExit(async () => {
+			calls++;
+			throw Object.assign(new Error("query denied"), { code: 1 });
+		}, clock),
+		/query denied/,
+	);
+	assert.equal(calls, 1);
+	assert.equal(time, 0);
+	await assert.rejects(
+		waitForCimExit(async (timeout) => {
+			time += timeout;
+		}, clock),
+		/deadline/,
+	);
 });

@@ -22,7 +22,8 @@ export async function until(check, label, milliseconds = 30000) {
 	}
 	throw new Error(`Timed out: ${label}`);
 }
-async function click(cdp, selector, text) {
+export async function click(cdp, selector, text, milliseconds = 30000) {
+	let lastState;
 	const point = await until(
 		() =>
 			evaluate(
@@ -30,13 +31,21 @@ async function click(cdp, selector, text) {
 				`(() => {
 		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
 		const nodes = [...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => !e.disabled && e.getClientRects().length && (!${JSON.stringify(text ?? "")} || e.textContent.trim() === ${JSON.stringify(text ?? "")}));
-		if (nodes.length !== 1) return null;
+		if (nodes.length !== 1) return { count: nodes.length, hit: false };
 		const e = nodes[0]; e.scrollIntoView({ block: 'center' }); const r=e.getBoundingClientRect();
-		const x=r.x+r.width/2, y=r.y+r.height/2; if (!e.contains(document.elementFromPoint(x,y))) return null;
-		return {x,y}; })()`,
-			),
-		`click ${selector}`,
-	);
+		const x=r.x+r.width/2, y=r.y+r.height/2;
+		return { count: 1, hit: e.contains(document.elementFromPoint(x,y)), point: {x,y} }; })()`,
+			).then((state) => {
+				lastState = state;
+				return state.hit ? state.point : null;
+			}),
+		`click ${selector}${text === undefined ? "" : ` text=${JSON.stringify(text)}`}`,
+		milliseconds,
+	).catch((error) => {
+		throw new Error(
+			`${error.message}; candidates=${lastState?.count ?? "unavailable"}, centerHit=${lastState?.hit ?? "unavailable"}`,
+		);
+	});
 	await cdp.request("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
 	await cdp.request("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", clickCount: 1 });
 }
@@ -76,6 +85,101 @@ async function selectEnglish(cdp) {
 	);
 	await dismissTo(cdp, 'button[aria-label="Workbench settings"]');
 }
+export async function assertNoAlerts(cdp) {
+	const alerts = await evaluate(
+		cdp,
+		`Array.from(document.querySelectorAll('[role="alert"]')).slice(0, 10).map(e => e.textContent.trim().slice(0, 200))`,
+	);
+	assert.equal(alerts.length, 0, `Unexpected application alert: ${JSON.stringify(alerts)}`);
+}
+export function resolvedTheme(mode, systemDark) {
+	assert.ok(["Light", "Dark", "Follow system"].includes(mode), "Unknown appearance mode");
+	return mode === "Follow system" ? (systemDark ? "dark" : "light") : mode.toLowerCase();
+}
+export async function appearanceChoice(cdp) {
+	return until(
+		() =>
+			evaluate(
+				cdp,
+				`(() => {
+		const dialog = document.querySelector('.settings-dialog[role="dialog"]');
+		if (!dialog) return null;
+		const labels = [...dialog.querySelectorAll('label')].filter(e => e.textContent.trim() === 'Theme');
+		if (labels.length !== 1) return null;
+		const control = document.getElementById(labels[0].htmlFor);
+		if (!control || control.getAttribute('role') !== 'combobox') return null;
+		return { mode: control.textContent.trim(), selector: '#' + CSS.escape(control.id) };
+	})()`,
+			),
+		"appearance theme choice",
+	);
+}
+async function closeAppearance(cdp) {
+	await pressKey(cdp, "Escape");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`!document.querySelector('.settings-dialog') && !!document.querySelector('.workbench-settings[role="dialog"]') && [...document.querySelectorAll('.workbench-settings button')].some(e => e.textContent.trim() === 'Appearance and language' && e === document.activeElement)`,
+			),
+		"nested appearance closed with parent and trigger focus retained",
+	);
+}
+async function inspectTheme(cdp, directory, reopened) {
+	const settings = 'button[aria-label="Workbench settings"]';
+	const toggle = '.workbench-settings button[aria-label="Toggle light / dark theme"]';
+	const originalResolved = await evaluate(cdp, "document.documentElement.dataset.theme");
+	assert.ok(["light", "dark"].includes(originalResolved));
+	await click(cdp, settings);
+	await click(cdp, ".workbench-settings button", "Appearance and language");
+	const original = await appearanceChoice(cdp);
+	resolvedTheme(original.mode, false); // Reject unknown mode labels before changing anything.
+	await assertNoAlerts(cdp);
+	await closeAppearance(cdp);
+	if (originalResolved === "dark") {
+		await click(cdp, toggle);
+		await until(
+			() => evaluate(cdp, `document.documentElement.dataset.theme === 'light'`),
+			"theme button light transition",
+		);
+	}
+	await click(cdp, toggle);
+	await until(() => evaluate(cdp, `document.documentElement.dataset.theme === 'dark'`), "theme button dark transition");
+	await dismissTo(cdp, settings);
+	await assertNoAlerts(cdp);
+	await capture(cdp, directory, reopened ? "dark-reopened" : "dark-completed");
+	// Toggle saves an explicit mode. Restore the original system/light/dark preference through the form.
+	await click(cdp, settings);
+	await click(cdp, ".workbench-settings button", "Appearance and language");
+	const current = await appearanceChoice(cdp);
+	await click(cdp, current.selector);
+	await click(cdp, '[role="option"]', original.mode);
+	await click(cdp, ".settings-dialog button", "Save");
+	await until(
+		() =>
+			evaluate(cdp, `!document.querySelector('.settings-dialog') && !!document.querySelector('.workbench-settings')`),
+		"appearance saved without closing parent",
+	);
+	await click(cdp, ".workbench-settings button", "Appearance and language");
+	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
+	await closeAppearance(cdp);
+	await dismissTo(cdp, settings);
+	const expected = resolvedTheme(
+		original.mode,
+		await evaluate(cdp, `matchMedia('(prefers-color-scheme: dark)').matches`),
+	);
+	await until(
+		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(expected)}`),
+		"original resolved theme restored",
+	);
+	return {
+		originalMode: original.mode,
+		originalResolved,
+		restoredResolved: expected,
+		darkCaptured: true,
+		nestedEscapeFocus: true,
+	};
+}
 async function inspectControls(cdp) {
 	await click(cdp, 'button[aria-label="Model status"]');
 	await until(
@@ -89,6 +193,7 @@ async function inspectControls(cdp) {
 			`[...document.querySelectorAll('.model-status-popover button')].some(e => e.textContent.trim() === 'Refresh model status')`,
 		),
 	);
+	await assertNoAlerts(cdp);
 	await dismissTo(cdp, 'button[aria-label="Model status"]');
 	await click(cdp, ".permission-controls button", "Agent file permissions");
 	await until(
@@ -105,6 +210,7 @@ async function inspectControls(cdp) {
 			`[...document.querySelectorAll('.permission-detail-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
 		),
 	);
+	await assertNoAlerts(cdp);
 	await dismissTo(cdp, ".permission-controls button");
 	const actions = `header button[aria-label="Conversation actions: ${fixture.conversation}"]`;
 	await click(cdp, actions);
@@ -161,6 +267,39 @@ export async function capture(cdp, directory, name) {
 	assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
 	assert.ok(bytes.length > 1000, "Empty screenshot");
 	await writeFile(join(directory, `${name}.png`), bytes);
+}
+export async function captureFailure(cdp, directory) {
+	const result = { controls: "unavailable", screenshot: "unavailable" };
+	try {
+		const controls = await evaluate(
+			cdp,
+			`(() => {
+		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
+		const allowed = new Set(['Close','Close activity','Refresh this page','View activity','Conversation details','Model status','Refresh model status','Agent file permissions','Refresh permissions','Authorize model context','Rename conversation','View details','Workbench settings','Appearance and language','Save','Cancel','New workspace','New conversation','Switch to English','切换到中文','Toggle light / dark theme']);
+		const nodes = [...document.querySelectorAll('button,[role="button"],[role="menuitem"]')];
+		return { total: nodes.length, truncated: nodes.length > 100, controls: nodes.slice(0,100).map(e => {
+			const raw = (e.getAttribute('aria-label') || e.textContent || '').trim();
+			const r = e.getBoundingClientRect();
+			return { role: e.getAttribute('role') === 'menuitem' ? 'menuitem' : 'button',
+				label: allowed.has(raw) ? raw : '<unrecognized>', visible: !!e.getClientRects().length,
+				disabled: !!e.disabled, inDialog: !!e.closest('[role="dialog"]'),
+				centerHit: e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)) };
+		}) };
+	})()`,
+		);
+		await writeFile(join(directory, "failure-controls.json"), `${JSON.stringify(controls, null, 2)}\n`);
+		result.controls = "saved";
+	} catch {
+		/* Diagnostic failure must not replace the original smoke failure. */
+	}
+	try {
+		assert.equal(await evaluate(cdp, "location.href"), "hipi-work://app/index.html");
+		await capture(cdp, directory, "failure");
+		result.screenshot = "saved";
+	} catch {
+		/* Preserve the original error even when the renderer is gone. */
+	}
+	return result;
 }
 async function historyEvidence(cdp) {
 	const rows = await until(async () => {
@@ -270,8 +409,17 @@ export async function exercise(cdp, directory, reopened = false) {
 		);
 		const activities = await inspectActivities(cdp, directory, true);
 		const controls = await inspectControls(cdp);
+		const theme = await inspectTheme(cdp, directory, true);
+		await assertNoAlerts(cdp);
 		await capture(cdp, directory, "reopened");
-		return { reopened: true, activities, controls, messageKeys: await historyEvidence(cdp) };
+		return {
+			reopened: true,
+			activities,
+			controls,
+			theme,
+			noUnexpectedAlerts: true,
+			messageKeys: await historyEvidence(cdp),
+		};
 	}
 	await capture(cdp, directory, "initial");
 	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
@@ -331,6 +479,15 @@ export async function exercise(cdp, directory, reopened = false) {
 	await until(() => evaluate(cdp, `!document.querySelector('[role="dialog"]')`), "conversation details closed");
 	const activities = await inspectActivities(cdp, directory, false);
 	const controls = await inspectControls(cdp);
+	const theme = await inspectTheme(cdp, directory, false);
+	await assertNoAlerts(cdp);
 	await capture(cdp, directory, "completed");
-	return { ...observed, activities, controls, messageKeys: await historyEvidence(cdp) };
+	return {
+		...observed,
+		activities,
+		controls,
+		theme,
+		noUnexpectedAlerts: true,
+		messageKeys: await historyEvidence(cdp),
+	};
 }

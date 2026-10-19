@@ -93,30 +93,51 @@ export function startProcess(binary, args, options) {
 	};
 }
 
+export async function waitForCimExit(
+	query,
+	{ milliseconds = 10000, now = Date.now, pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {},
+) {
+	const deadline = now() + milliseconds;
+	while (now() < deadline) {
+		try {
+			await query(Math.max(1, deadline - now()));
+			if (now() >= deadline) break;
+			return;
+		} catch (error) {
+			if (error.code !== 2) throw error;
+		}
+		const remaining = deadline - now();
+		if (remaining > 0) await pause(Math.min(250, remaining));
+	}
+	throw new Error("Packaged helpers remain or exit observation exceeded its deadline");
+}
+
 export async function assertNoPackageProcesses(appDirectory) {
 	if (process.platform === "win32") {
 		// Fixed command; path is passed as data, never interpolated into PowerShell source.
-		const result = await execute(
-			"powershell.exe",
-			[
-				"-NoProfile",
-				"-NonInteractive",
-				"-Command",
-				"$p = $env:HIPI_SMOKE_PACKAGE; $found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($p + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) }); if ($found.Count -ne 0) { exit 2 }",
-			],
-			{
-				env: {
-					...Object.fromEntries(
-						Object.entries(process.env).filter(([name]) => /^(PATH|SYSTEMROOT|WINDIR)$/i.test(name)),
-					),
-					HIPI_SMOKE_PACKAGE: appDirectory,
+		await waitForCimExit((timeout) =>
+			execute(
+				"powershell.exe",
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					"$p = $env:HIPI_SMOKE_PACKAGE; $found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($p + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) }); if ($found.Count -ne 0) { exit 2 }",
+				],
+				{
+					env: {
+						...Object.fromEntries(
+							Object.entries(process.env).filter(([name]) => /^(PATH|SYSTEMROOT|WINDIR)$/i.test(name)),
+						),
+						HIPI_SMOKE_PACKAGE: appDirectory,
+					},
+					windowsHide: true,
+					timeout,
+					maxBuffer: 1024 * 1024,
 				},
-				windowsHide: true,
-				timeout: 15000,
-				maxBuffer: 1024 * 1024,
-			},
+			),
 		);
-		return result;
+		return;
 	}
 	const result = await execute("ps", ["-ww", "-axo", "pid=,command="], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
 	if (result.stdout.split("\n").some((line) => line.includes(`${appDirectory}/`)))

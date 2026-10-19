@@ -28,6 +28,7 @@ nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");

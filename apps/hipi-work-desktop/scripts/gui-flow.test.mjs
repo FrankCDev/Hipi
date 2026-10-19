@@ -1,7 +1,93 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { activityEvidence, fixture, pressKey, selectReopenedConversation } from "./gui-flow.mjs";
+import {
+	activityEvidence,
+	appearanceChoice,
+	assertNoAlerts,
+	captureFailure,
+	click,
+	fixture,
+	pressKey,
+	resolvedTheme,
+	selectReopenedConversation,
+} from "./gui-flow.mjs";
+
+test("click failure identifies requested text and refuses covered or ambiguous controls", async () => {
+	for (const state of [
+		{ count: 1, hit: false },
+		{ count: 2, hit: false },
+	]) {
+		const cdp = {
+			async request(method) {
+				assert.equal(method, "Runtime.evaluate", "No input may be sent to an unverified target");
+				return { result: { value: state } };
+			},
+		};
+		await assert.rejects(
+			click(cdp, '[role="dialog"] button', "Close", 1),
+			/text="Close"; candidates=[12], centerHit=false/,
+		);
+	}
+});
+
+test("failure capture is bounded and redacts unknown button text; renderer loss never throws", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-gui-diagnostic-test-"));
+	const node = {
+		textContent: "private-content-must-not-be-recorded",
+		getAttribute: () => null,
+		getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }),
+		getClientRects: () => [{}],
+		closest: () => null,
+		contains: () => false,
+		get value() {
+			throw new Error("Input values must never be read");
+		},
+	};
+	const png = Buffer.alloc(1100);
+	Buffer.from("89504e470d0a1a0a", "hex").copy(png);
+	const cdp = {
+		async request(method, params) {
+			if (method === "Page.captureScreenshot") return { data: png.toString("base64") };
+			assert.equal(method, "Runtime.evaluate");
+			if (params.expression.startsWith("document.fonts.ready")) return { result: { value: undefined } };
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						location: { href: "hipi-work://app/index.html" },
+						document: { querySelectorAll: () => Array.from({ length: 105 }, () => node), elementFromPoint: () => null },
+					}),
+				},
+			};
+		},
+	};
+	try {
+		assert.deepEqual(await captureFailure(cdp, directory), { controls: "saved", screenshot: "saved" });
+		const raw = await readFile(join(directory, "failure-controls.json"), "utf8");
+		assert.ok(!raw.includes("private-content"));
+		const value = JSON.parse(raw);
+		assert.equal(value.total, 105);
+		assert.equal(value.controls.length, 100);
+		assert.equal(value.truncated, true);
+		assert.equal(value.controls[0].label, "<unrecognized>");
+		assert.deepEqual(
+			await captureFailure(
+				{
+					request: async () => {
+						throw new Error("closed");
+					},
+				},
+				directory,
+			),
+			{ controls: "unavailable", screenshot: "unavailable" },
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 function renderer({ expanded = true, delay = 0, selected = false } = {}) {
 	const clicks = [];
@@ -73,6 +159,64 @@ test("keyboard smoke emits paired native CDP events and rejects unknown keys", a
 	]);
 	await assert.rejects(pressKey(cdp, "Delete"), /Unsupported smoke key/);
 	assert.equal(events.length, 2);
+});
+
+test("theme restoration distinguishes system preference from explicit light and dark", () => {
+	assert.equal(resolvedTheme("Follow system", false), "light");
+	assert.equal(resolvedTheme("Follow system", true), "dark");
+	assert.equal(resolvedTheme("Light", true), "light");
+	assert.equal(resolvedTheme("Dark", false), "dark");
+	assert.throws(() => resolvedTheme("unknown", false), /Unknown appearance mode/);
+});
+
+test("appearance choice follows the Theme label association rather than an arbitrary combobox", async () => {
+	const control = { id: "theme-choice", textContent: " Follow system ", getAttribute: () => "combobox" };
+	const document = {
+		querySelector(selector) {
+			assert.equal(selector, '.settings-dialog[role="dialog"]');
+			return {
+				querySelectorAll: () => [
+					{ textContent: "Language", htmlFor: "locale-choice" },
+					{ textContent: "Theme", htmlFor: "theme-choice" },
+				],
+			};
+		},
+		getElementById(id) {
+			assert.equal(id, "theme-choice");
+			return control;
+		},
+	};
+	const cdp = {
+		async request(_method, params) {
+			return { result: { value: runInNewContext(params.expression, { document, CSS: { escape: (value) => value } }) } };
+		},
+	};
+	const choice = await appearanceChoice(cdp);
+	assert.equal(choice.mode, "Follow system");
+	assert.equal(choice.selector, "#theme-choice");
+});
+
+test("unexpected application alerts fail even without console errors or visible geometry", async () => {
+	let elements = [];
+	const cdp = {
+		async request(_method, params) {
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						document: {
+							querySelectorAll(selector) {
+								assert.equal(selector, '[role="alert"]');
+								return elements;
+							},
+						},
+					}),
+				},
+			};
+		},
+	};
+	await assertNoAlerts(cdp);
+	elements = [{ textContent: " Records could not be read ", getClientRects: () => [] }];
+	await assert.rejects(assertNoAlerts(cdp), /Unexpected application alert.*Records could not be read/);
 });
 
 test("reopen waits for delayed workspace DOM and never collapses an already expanded branch", async () => {

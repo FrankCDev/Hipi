@@ -5,8 +5,9 @@ import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
-import { evaluate, exercise, until } from "./gui-flow.mjs";
+import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
 import { assertNoPackageProcesses, debuggerClosed, startProcess } from "./gui-process.mjs";
+import { profileEvidence } from "./gui-profile-evidence.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 assert.equal(process.argv.length, 2, "Usage: node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs");
@@ -225,6 +226,8 @@ try {
 } catch (error) {
 	evidence.status = "failed";
 	evidence.failure = error.message;
+	evidence.profileMetadata = await profileEvidence(profile);
+	if (page) evidence.failureCapture = await captureFailure(page, artifacts);
 	page?.close();
 	browser?.close();
 	try {
