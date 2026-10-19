@@ -34,7 +34,14 @@ import type {
 	TaskRecord,
 } from "../../types.ts";
 import { nextCursor, type ScanStart, scanStart } from "../scan.ts";
-import { applySqliteMigrationsForSchema } from "./migrations.ts";
+import { applySqliteMigrationsForSchema, CURRENT_SQLITE_SCHEMA_VERSION } from "./migrations.ts";
+import {
+	closeReadOnlyDatabase,
+	ReadonlyCapacityError,
+	ReadonlyCloseError,
+	type SqliteReadOnlyLimits,
+	validateReadOnlyBudgets,
+} from "./readonly.ts";
 import { createSqliteSchema, type SqliteSchema } from "./schema.ts";
 
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
@@ -68,6 +75,27 @@ export type SqliteStorageOptions = {
 	 */
 	readonly prefix?: string;
 };
+
+export type SqliteStorageReadOnlyOptions = SqliteStorageOptions & { readonly limits?: SqliteReadOnlyLimits };
+
+/** Read capabilities only; future Storage mutations are not automatically exposed here. */
+export type ReadonlySqliteStorage = Pick<
+	Storage,
+	| "conversation"
+	| "scanConversations"
+	| "entry"
+	| "findLatestHeadMarker"
+	| "scanEntries"
+	| "task"
+	| "scanTasks"
+	| "submission"
+	| "scanSubmissions"
+	| "submissionByRequest"
+	| "findDocument"
+	| "document"
+	| "scanDocuments"
+	| "close"
+>;
 
 const parseJson = <T>(value: string): T => JSON.parse(value) as T;
 const encodeJson = (value: unknown): string => JSON.stringify(value) as string;
@@ -152,16 +180,18 @@ const writeId = (write: StorageWrite): Id<string> | undefined => {
 export class SqliteStorage implements Storage {
 	private readonly db: SqliteDatabase;
 	private readonly schema: SqliteSchema;
+	private readonly readOnly: boolean;
 	private nextId: number;
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private admittedReads = 0;
 	private readsDrained: (() => void) | undefined;
 
-	private constructor(db: SqliteDatabase, schema: SqliteSchema, nextId: number) {
+	private constructor(db: SqliteDatabase, schema: SqliteSchema, nextId: number, readOnly = false) {
 		this.db = db;
 		this.schema = schema;
 		this.nextId = nextId;
+		this.readOnly = readOnly;
 	}
 
 	/** Initialize storage over an owned SQLite database facade. */
@@ -184,8 +214,65 @@ export class SqliteStorage implements Storage {
 		}
 	}
 
+	/**
+	 * Validate the current schema without migrations or repair. Owns and closes the supplied facade on failure.
+	 * Callers must supply a genuinely read-only facade and prevent writers throughout its lifetime. Performs a
+	 * full JSON-size/reconstruction preflight; oversized records are rejected. Scans allow at most 100 items and
+	 * ancestry traversal at most 256 conversations. These limits apply only to this read-only entrypoint.
+	 */
+	static async openReadOnly(db: SqliteDatabase, options: SqliteStorageReadOnlyOptions = {}): Promise<SqliteStorage> {
+		try {
+			const schema = createSqliteSchema(options.prefix);
+			const nextId = await db.transaction(async (transaction) => {
+				const tables = await transaction.all<{ readonly name: string; readonly type: string }>("PRAGMA table_list");
+				for (const name of Object.values(schema.tables)) {
+					if (!tables.some((table) => table.name === name && table.type === "table")) {
+						throw new StorageRequestError("Durable SQLite schema is missing a required table");
+					}
+				}
+				const versions = await transaction.all<{ readonly singleton: number; readonly version: number }>(
+					`SELECT singleton, version FROM ${schema.tables.durableSchema} LIMIT 2`,
+				);
+				if (
+					versions.length !== 1 ||
+					versions[0]?.singleton !== 1 ||
+					versions[0].version !== CURRENT_SQLITE_SCHEMA_VERSION
+				) {
+					throw new StorageRequestError("Unsupported durable SQLite schema version");
+				}
+				await validateReadOnlyBudgets(transaction, schema, options.limits);
+				const rows = await transaction.all<MetadataRow & { readonly singleton: number }>(
+					`SELECT singleton, next_id, next_seq FROM ${schema.tables.durableMetadata} LIMIT 2`,
+				);
+				const metadata = rows[0];
+				if (
+					rows.length !== 1 ||
+					metadata?.singleton !== 1 ||
+					typeof metadata.next_id !== "string" ||
+					!/^[1-9][0-9]*$/.test(metadata.next_id) ||
+					!Number.isSafeInteger(Number(metadata.next_id)) ||
+					Number(metadata.next_id) < 2 ||
+					!Number.isSafeInteger(metadata.next_seq) ||
+					metadata.next_seq < 1
+				) {
+					throw new StorageRequestError("Invalid durable SQLite metadata");
+				}
+				return Number(metadata.next_id);
+			});
+			return new SqliteStorage(db, schema, nextId, true);
+		} catch (error) {
+			try {
+				await closeReadOnlyDatabase(db);
+			} catch (closeError) {
+				throw new ReadonlyCloseError(new AggregateError([error, closeError]));
+			}
+			throw error;
+		}
+	}
+
 	async commit(writes: readonly StorageWrite[], _context: Context): Promise<Seq> {
 		this.assertOpen();
+		if (this.readOnly) throw new StorageRequestError("Durable SQLite storage is read-only");
 		const documentActions = this.prepareDocumentActions(writes);
 		const candidateNextId = this.candidateNextId(writes);
 		const seq = await this.db.transaction(async (transaction) => {
@@ -211,6 +298,7 @@ export class SqliteStorage implements Storage {
 
 	async mintId<I extends Id<string>>(): Promise<I> {
 		this.assertOpen();
+		if (this.readOnly) throw new StorageRequestError("Durable SQLite storage is read-only");
 		if (!Number.isSafeInteger(this.nextId)) throw new Error("ID space is exhausted");
 		return idFromNumber<I>(this.nextId++);
 	}
@@ -228,6 +316,7 @@ export class SqliteStorage implements Storage {
 		_context: Context,
 	): Promise<Page<ConversationRecord, Cursor>> {
 		this.assertOpen();
+		this.assertReadLimit(limit);
 		const start = scanStart(query.order, cursor, "ascending");
 		const scan = scanSql(start);
 		const clauses = [scan.clause];
@@ -280,7 +369,10 @@ export class SqliteStorage implements Storage {
 		cursor: Cursor | undefined,
 		_context: Context,
 	): Promise<Page<EntryRecord, Cursor>> {
-		return this.admitRead(() => this.readEntries(query, limit, cursor));
+		return this.admitRead(() => {
+			this.assertReadLimit(limit);
+			return this.readEntries(query, limit, cursor);
+		});
 	}
 
 	private async readEntry(
@@ -309,7 +401,9 @@ export class SqliteStorage implements Storage {
 		const entry = parseJson<EntryRecord>(row.record);
 		if (conversation !== undefined) {
 			let upperEntryId = Number.POSITIVE_INFINITY;
+			let depth = 0;
 			while (conversation.id !== entry.conversationId) {
+				this.assertReadDepth(++depth);
 				if (conversation.parent === undefined) return undefined;
 				upperEntryId = Math.min(upperEntryId, conversation.parent.at);
 				conversation = (await this.readConversation(conversation.parent.conversationId))!;
@@ -326,7 +420,9 @@ export class SqliteStorage implements Storage {
 		let conversation = await this.readConversation(conversationId);
 		if (conversation === undefined) throw new StorageRequestError(`Unknown conversation: ${conversationId}`);
 		let upper: number | undefined = atOrBeforeEntryId;
+		let depth = 0;
 		while (true) {
+			this.assertReadDepth(++depth);
 			const row =
 				upper === undefined
 					? await this.db.get<JsonRow>(
@@ -357,7 +453,9 @@ export class SqliteStorage implements Storage {
 		let upper: number | undefined = query.maxEntryId;
 		if (after !== undefined) upper = Math.min(upper ?? Number.MAX_SAFE_INTEGER, after - 1);
 		const values: EntryRecord[] = [];
+		let depth = 0;
 		while (true) {
+			this.assertReadDepth(++depth);
 			const clauses = ["conversation_id = ?"];
 			const params: SqliteValue[] = [conversation.id];
 			if (query.minEntryId !== undefined) {
@@ -392,7 +490,9 @@ export class SqliteStorage implements Storage {
 		let conversation = await this.readConversation(query.conversationId);
 		if (conversation === undefined) throw new StorageRequestError(`Unknown conversation: ${query.conversationId}`);
 		let upper: number | undefined = query.maxEntryId;
+		let depth = 0;
 		while (true) {
+			this.assertReadDepth(++depth);
 			segments.push({ conversationId: conversation.id, upper });
 			if (conversation.parent === undefined) break;
 			upper = upper === undefined ? conversation.parent.at : Math.min(upper, conversation.parent.at);
@@ -437,6 +537,7 @@ export class SqliteStorage implements Storage {
 		_context: Context,
 	): Promise<Page<StoredTask, Cursor>> {
 		this.assertOpen();
+		this.assertReadLimit(limit);
 		const start = scanStart(query.order, cursor, "ascending");
 		const scan = scanSql(start);
 		const clauses = [scan.clause];
@@ -486,6 +587,7 @@ export class SqliteStorage implements Storage {
 		_context: Context,
 	): Promise<Page<SubmissionRecord, Cursor>> {
 		this.assertOpen();
+		this.assertReadLimit(limit);
 		const start = scanStart(query.order, cursor, "ascending");
 		const scan = scanSql(start);
 		const clauses = [scan.clause];
@@ -559,6 +661,7 @@ export class SqliteStorage implements Storage {
 		_context: Context,
 	): Promise<Page<DocumentRecord, Cursor>> {
 		this.assertOpen();
+		this.assertReadLimit(limit);
 		const scope = scopeColumns(query.scope);
 		const clauses = ["scope_kind = ?", "owner_id = ?", "id > ?"];
 		const params: SqliteValue[] = [scope.scopeKind, scope.ownerId, cursorId(cursor) ?? -1];
@@ -597,7 +700,8 @@ export class SqliteStorage implements Storage {
 				this.readsDrained = resolve;
 			});
 		}
-		await this.db.close();
+		if (this.readOnly) await closeReadOnlyDatabase(this.db);
+		else await this.db.close();
 	}
 
 	/**
@@ -953,5 +1057,17 @@ export class SqliteStorage implements Storage {
 
 	private assertOpen(): void {
 		if (this.closed) throw new Error("SqliteStorage is closed");
+	}
+
+	private assertReadLimit(limit: number): void {
+		if (this.readOnly && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) {
+			throw new StorageRequestError("Read-only SQLite scan limit must be between 1 and 100");
+		}
+	}
+
+	private assertReadDepth(depth: number): void {
+		if (this.readOnly && depth > 256) {
+			throw new ReadonlyCapacityError("Read-only SQLite conversation ancestry budget exceeded");
+		}
 	}
 }

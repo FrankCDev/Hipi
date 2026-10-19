@@ -10,10 +10,27 @@ export type NodeSqliteDatabaseOptions = {
 	readonly walAutoCheckpointPages?: number;
 	/** Time SQLite waits for a competing file lock. SQLite defaults to 0; this adapter defaults to 5,000 ms. */
 	readonly busyTimeoutMs?: number;
+	/** WAL commit synchronization policy. Defaults to NORMAL; durability-sensitive hosts may request FULL. */
+	readonly synchronous?: "NORMAL" | "FULL";
 };
+
+/** Read-only connections never configure journals or checkpoint on close. */
+export type NodeSqliteDatabaseReadOnlyOptions = Pick<NodeSqliteDatabaseOptions, "busyTimeoutMs">;
 
 const DEFAULT_WAL_AUTO_CHECKPOINT_PAGES = 1_000;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+
+// A failed close is not proof that native locks were released. Keep ownership until process exit.
+const failedReadOnlyConnections = new Set<DatabaseSync>();
+
+export class NodeSqliteReadOnlyCloseError extends Error {
+	readonly code = "READONLY_CLOSE_FAILED";
+
+	constructor(cause: unknown) {
+		super("Read-only SQLite connection could not be closed", { cause });
+		this.name = "NodeSqliteReadOnlyCloseError";
+	}
+}
 
 type TransactionScope = { active: boolean };
 
@@ -131,14 +148,17 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
 export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
 	private readonly access = new SerialOperationQueue();
 	private closed = false;
+	private readonly readOnly: boolean;
+	private closeFailure: NodeSqliteReadOnlyCloseError | undefined;
 
-	constructor(database: DatabaseSync) {
+	constructor(database: DatabaseSync, options: { readonly readOnly?: boolean } = {}) {
 		super(database, new Map());
+		this.readOnly = options.readOnly ?? false;
 	}
 
 	transaction<T>(callback: (transaction: SqliteExecutor) => Promise<T>): Promise<T> {
 		return this.access.runAsync(async () => {
-			this.database.exec("BEGIN IMMEDIATE");
+			this.database.exec(this.readOnly ? "BEGIN" : "BEGIN IMMEDIATE");
 			const scope = { active: true };
 			try {
 				const result = await callback(new NodeSqliteTransaction(this.database, this.statements, scope));
@@ -159,9 +179,20 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteData
 
 	close(): Promise<void> {
 		return this.access.run(() => {
+			if (this.closeFailure !== undefined) throw this.closeFailure;
 			if (this.closed) return;
 			this.closed = true;
 			this.statements.clear();
+			if (this.readOnly) {
+				try {
+					this.database.close();
+				} catch (error) {
+					failedReadOnlyConnections.add(this.database);
+					this.closeFailure = new NodeSqliteReadOnlyCloseError(error);
+					throw this.closeFailure;
+				}
+				return;
+			}
 			try {
 				this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 			} finally {
@@ -175,11 +206,40 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteData
 	}
 }
 
+/** Open an existing database without creating directories, changing journal mode, or checkpointing. */
+export async function openNodeSqliteDatabaseReadOnly(
+	path: string,
+	options: NodeSqliteDatabaseReadOnlyOptions = {},
+): Promise<NodeSqliteDatabase> {
+	const database = new DatabaseSync(path, {
+		readOnly: true,
+		allowExtension: false,
+		timeout: options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+	});
+	const adapter = new NodeSqliteDatabase(database, { readOnly: true });
+	try {
+		await adapter.exec("PRAGMA trusted_schema = OFF");
+		await adapter.exec("PRAGMA query_only = ON");
+		return adapter;
+	} catch (error) {
+		try {
+			await adapter.close();
+		} catch (closeError) {
+			throw new NodeSqliteReadOnlyCloseError(new AggregateError([error, closeError]));
+		}
+		throw error;
+	}
+}
+
 /** Open and configure a Node-backed SQLite database facade. */
 export async function openNodeSqliteDatabase(
 	path: string,
 	options: NodeSqliteDatabaseOptions = {},
 ): Promise<NodeSqliteDatabase> {
+	const synchronous = options.synchronous === undefined ? "NORMAL" : options.synchronous;
+	if (synchronous !== "NORMAL" && synchronous !== "FULL") {
+		throw new TypeError("Invalid SQLite synchronous policy");
+	}
 	const checkpointPages = options.walAutoCheckpointPages ?? DEFAULT_WAL_AUTO_CHECKPOINT_PAGES;
 	const timeout = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
 	if (path !== ":memory:") await mkdir(dirname(path), { recursive: true });
@@ -187,7 +247,7 @@ export async function openNodeSqliteDatabase(
 	const adapter = new NodeSqliteDatabase(database);
 	try {
 		await adapter.exec("PRAGMA journal_mode = WAL");
-		await adapter.exec("PRAGMA synchronous = NORMAL");
+		await adapter.exec(synchronous === "FULL" ? "PRAGMA synchronous = FULL" : "PRAGMA synchronous = NORMAL");
 		await adapter.exec(`PRAGMA wal_autocheckpoint = ${checkpointPages}`);
 		return adapter;
 	} catch (error) {

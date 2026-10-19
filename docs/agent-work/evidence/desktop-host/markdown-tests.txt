@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui
+
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  21:59:06
+   Duration  509ms (transform 86ms, setup 0ms, import 220ms, tests 152ms, environment 0ms)
+

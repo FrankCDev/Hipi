@@ -12,6 +12,7 @@
 	],
 	"exports": {
 		".": {
+			"source": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
@@ -24,6 +25,7 @@
 			"import": "./dist/compat.js"
 		},
 		"./providers/*": {
+			"source": "./src/providers/*.ts",
 			"types": "./dist/providers/*.d.ts",
 			"import": "./dist/providers/*.js"
 		},
@@ -32,6 +34,7 @@
 			"import": "./dist/api/*.js"
 		},
 		"./utils/*": {
+			"source": "./src/utils/*.ts",
 			"types": "./dist/utils/*.d.ts",
 			"import": "./dist/utils/*.js"
 		},

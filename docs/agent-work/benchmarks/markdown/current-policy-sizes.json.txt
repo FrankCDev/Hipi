@@ -1,0 +1,223 @@
+{
+  "hashes": {
+    "apps/hipi-work-ui/src/features/workbench/message-markdown.tsx": "e1db8df2baf5d05a56ebdf56eeefb7d0cfa88f299a4674417c37b14979eb84d3",
+    "apps/hipi-work-ui/src/features/workbench/markdown-policy.ts": "4e896c855b80bc349637207259078c7931864ad940d6f524df8b2529572c018c",
+    "apps/hipi-work-ui/src/app/preferences.tsx": "23317c3e9abbf7a387bd1e849ad0d0b8eef8532a815e6b1dc402a0851a3a41bd",
+    "package-lock.json": "b98a041bd89bb16dd5379838cdb4e68853f859b855e0389e14f6c385f37fd6d3"
+  },
+  "prose": "# Implementation summary\n\nThis response explains **bounded rendering**, with 中文 and `inline code`.\n\n- Read the source\n- [x] Validate behavior\n- [ ] Review output\n\n| Stage | Result |\n| --- | --- |\n| Parse | Ready |\n| Render | Safe |\n\n```ts\nconst result = { stable: true };\n```\n\n[Documentation](https://example.com/docs)\n\n",
+  "node": "v24.19.0",
+  "platform": "linux",
+  "arch": "x64",
+  "records": [
+    {
+      "inputUtf16Units": 2048,
+      "inputBytes": 2076,
+      "inputSha256": "cada859d80e6df09d607d14a11ec79bc31f96ba6443056c3f1ad829cdf2f3131",
+      "repair": {
+        "firstMs": 1.6510220000000118,
+        "warmMs": [
+          0.25785900000005313,
+          0.1154749999999467,
+          0.10438699999997425,
+          0.1768969999999399,
+          0.11912999999992735
+        ],
+        "warmP50Ms": 0.11912999999992735,
+        "warmMinMs": 0.10438699999997425,
+        "warmMaxMs": 0.25785900000005313
+      },
+      "parseSource": "repaired-display-source",
+      "parse": {
+        "firstMs": 81.31364600000006,
+        "warmMs": [
+          28.795664999999985,
+          32.50428099999999,
+          22.10393299999987,
+          16.14622099999997,
+          10.209950999999819
+        ],
+        "warmP50Ms": 22.10393299999987,
+        "warmMinMs": 10.209950999999819,
+        "warmMaxMs": 32.50428099999999
+      },
+      "ssr": {
+        "firstMs": 52.191178000000036,
+        "warmMs": [
+          29.42861999999991,
+          25.120106000000078,
+          35.36146499999995,
+          26.022820000000138,
+          32.62079799999992
+        ],
+        "warmP50Ms": 29.42861999999991,
+        "warmMinMs": 25.120106000000078,
+        "warmMaxMs": 35.36146499999995
+      },
+      "hasRichBody": true,
+      "outputUtf16Units": 7175,
+      "outputBytes": 7347,
+      "cumulativeProcessMaxRssKiB": 100360
+    },
+    {
+      "inputUtf16Units": 4096,
+      "inputBytes": 4148,
+      "inputSha256": "8a2d2b2f6494c119f9e899dfa3097d2c9c01ff97432706d9ebd49c7bd67ba76d",
+      "repair": {
+        "status": "policy-rejected",
+        "error": "Rich display ceiling exceeded"
+      },
+      "parseSource": "raw-source-policy-rejected",
+      "parse": {
+        "firstMs": 32.83547199999998,
+        "warmMs": [
+          27.26675699999987,
+          32.41787199999999,
+          46.36138899999992,
+          24.57515400000011,
+          29.640008999999964
+        ],
+        "warmP50Ms": 29.640008999999964,
+        "warmMinMs": 24.57515400000011,
+        "warmMaxMs": 46.36138899999992
+      },
+      "ssr": {
+        "firstMs": 0.5525639999998475,
+        "warmMs": [
+          0.2123109999999997,
+          0.2251699999999346,
+          0.338991999999962,
+          0.1707370000001447,
+          0.13291100000014922
+        ],
+        "warmP50Ms": 0.2123109999999997,
+        "warmMinMs": 0.13291100000014922,
+        "warmMaxMs": 0.338991999999962
+      },
+      "hasRichBody": false,
+      "outputUtf16Units": 4220,
+      "outputBytes": 4338,
+      "cumulativeProcessMaxRssKiB": 130516
+    },
+    {
+      "inputUtf16Units": 8192,
+      "inputBytes": 8296,
+      "inputSha256": "5d12d8aaad305ba2ba26f40f979c100d5fc315137c491984c67d0983ffc717c9",
+      "repair": {
+        "status": "policy-rejected",
+        "error": "Rich display ceiling exceeded"
+      },
+      "parseSource": "raw-source-policy-rejected",
+      "parse": {
+        "firstMs": 68.38957800000003,
+        "warmMs": [
+          38.609887999999955,
+          67.64272000000005,
+          40.63250100000005,
+          72.56831000000011,
+          48.186063000000104
+        ],
+        "warmP50Ms": 48.186063000000104,
+        "warmMinMs": 38.609887999999955,
+        "warmMaxMs": 72.56831000000011
+      },
+      "ssr": {
+        "firstMs": 0.3335629999999128,
+        "warmMs": [
+          0.15447299999982533,
+          0.11296100000004117,
+          0.10643100000015693,
+          0.10203400000000329,
+          0.17579599999999118
+        ],
+        "warmP50Ms": 0.11296100000004117,
+        "warmMinMs": 0.10203400000000329,
+        "warmMaxMs": 0.17579599999999118
+      },
+      "hasRichBody": false,
+      "outputUtf16Units": 8316,
+      "outputBytes": 8486,
+      "cumulativeProcessMaxRssKiB": 157392
+    },
+    {
+      "inputUtf16Units": 16384,
+      "inputBytes": 16588,
+      "inputSha256": "8d7a58ff711e1e807db66b82703af882229247b656351cb35f32aeec0fbae899",
+      "repair": {
+        "status": "policy-rejected",
+        "error": "Rich display ceiling exceeded"
+      },
+      "parseSource": "raw-source-policy-rejected",
+      "parse": {
+        "firstMs": 206.525621,
+        "warmMs": [
+          168.49685999999974,
+          178.66272500000014,
+          197.324744,
+          181.5323559999997,
+          184.068894
+        ],
+        "warmP50Ms": 181.5323559999997,
+        "warmMinMs": 168.49685999999974,
+        "warmMaxMs": 197.324744
+      },
+      "ssr": {
+        "firstMs": 0.525583000000097,
+        "warmMs": [
+          0.18627100000003338,
+          0.2359559999999874,
+          0.17495499999995445,
+          0.2157959999999548,
+          0.1837279999999737
+        ],
+        "warmP50Ms": 0.18627100000003338,
+        "warmMinMs": 0.17495499999995445,
+        "warmMaxMs": 0.2359559999999874
+      },
+      "hasRichBody": false,
+      "outputUtf16Units": 16508,
+      "outputBytes": 16778,
+      "cumulativeProcessMaxRssKiB": 228084
+    },
+    {
+      "inputUtf16Units": 32768,
+      "inputBytes": 33180,
+      "inputSha256": "2946134f23e489d096030ccf23ae452d60c8ee5299cba37f51f94f598fc3b39f",
+      "repair": {
+        "status": "policy-rejected",
+        "error": "Rich display ceiling exceeded"
+      },
+      "parseSource": "raw-source-policy-rejected",
+      "parse": {
+        "firstMs": 341.36769300000014,
+        "warmMs": [
+          363.4722019999999,
+          310.6511440000004,
+          366.6491679999999,
+          360.614654,
+          309.39226699999926
+        ],
+        "warmP50Ms": 360.614654,
+        "warmMinMs": 309.39226699999926,
+        "warmMaxMs": 366.6491679999999
+      },
+      "ssr": {
+        "firstMs": 24.14036699999997,
+        "warmMs": [
+          0.5236810000005789,
+          0.476900000000569,
+          0.3261019999999917,
+          0.39066899999943416,
+          0.3252910000001066
+        ],
+        "warmP50Ms": 0.39066899999943416,
+        "warmMinMs": 0.3252910000001066,
+        "warmMaxMs": 0.5236810000005789
+      },
+      "hasRichBody": false,
+      "outputUtf16Units": 17328,
+      "outputBytes": 17610,
+      "cumulativeProcessMaxRssKiB": 292788
+    }
+  ]
+}

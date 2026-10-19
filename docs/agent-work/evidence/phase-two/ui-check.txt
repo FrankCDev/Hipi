@@ -1,0 +1,7 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+npm warn Unknown project config "min-release-age". This will stop working in the next major version of npm.
+
+> @hipi/work-ui@0.0.1 check
+> node ../../node_modules/@biomejs/biome/bin/biome check --error-on-warnings . && tsc --noEmit -p tsconfig.json
+
+Checked 28 files in 18ms. No fixes applied.

@@ -1,18 +1,5 @@
 # Development Rules
 
-## Hipi Rust Reimplementation
-
-- Read [VISION.md](VISION.md) before work on the Rust reimplementation. Preserve the defined PI capability target and the explicit API-key-only model access scope.
-- Review reusable existing Rust implementations before deciding to start over. Base retain/refactor/rewrite recommendations on capability, design, correctness, and performance evidence. Do not copy private source or private review details into this public repository without explicit sharing authorization.
-- New Hipi Rust modules must follow [Rust engineering standards](docs/rust/ENGINEERING.md) and [testing and benchmark standards](docs/rust/TESTING.md).
-- Before builds, dependency installation, tests, or benchmarks, read [resource safety](docs/rust/RESOURCE-SAFETY.md), recheck available disk/memory and effective limits, and apply its concurrency and stop budgets. Run at most one heavy task at a time; do not equate visible CPU count with dedicated capacity. Cache cleanup requires an identified, authorized scope and must preserve source, Git history, lockfiles, and verification evidence.
-- Before implementation, complete a risk-appropriate [module design](docs/rust/MODULE-DESIGN-TEMPLATE.md): behavior, ownership, data structures, resource budgets, failure/cancellation semantics, and complexity.
-- Preserve observable behavior and necessary compatibility contracts; prefer idiomatic Rust internally rather than translating TypeScript object structures mechanically. Language features are means to correctness, maintainability, and measured efficiency, not goals in themselves.
-- Before a module becomes a stable dependency, complete its [acceptance record](docs/rust/MODULE-ACCEPTANCE-TEMPLATE.md), including correctness checks and representative small-scale comparison with the frozen TypeScript baseline. Shared scenario coverage is appropriate for thin wrappers and pure types.
-- Keep passed, failed, and unexecuted checks distinct. A design document is not an implemented module; cross-compilation is not native platform acceptance; a language choice is not a measured performance result.
-- Record changes intended for publication on `dot/develop`. Do not push to `main`, force-push, merge a PR, publish a release, or expose credentials without the corresponding user authorization.
-- These requirements supplement the repository rules below; preserve the existing TypeScript implementation as a reference and do not silently change its functionality or testing safeguards.
-
 ## Conversational Style
 
 - Keep answers short and concise
@@ -136,3 +123,17 @@ For release preparation, publishing, verification, or recovery, load and follow 
 ## User Override
 
 If the user's instructions conflict with any rule in this document, ask for explicit confirmation before overriding. Only then execute their instructions.
+
+## Hipi Work 客户端补充约束
+
+本仓库规划基于 PI Durable 的全新跨平台 Agent Work 客户端 Hipi Work，工程标识为 `hipi-work`，仓库名保持 Hipi。`client` 仅用于内部客户端接口模块。以上上游规则保留；以下约束适用于本产品开发，不代表上游能力承诺。
+
+- 开始产品开发前，阅读 [VISION.md](VISION.md)、[产品原则](docs/agent-work/PRODUCT-PRINCIPLES.md)与[工程原则](docs/agent-work/ENGINEERING-PRINCIPLES.md)；完整入口见 [Hipi Work 文档](docs/agent-work/README.md)。
+- 维护跨平台、好看、交互友好、插件生态、可靠、稳定六个核心目标；主题、字体、国际化、流畅体验和异常恢复均属于产品质量要求。
+- Electron 桌面、TypeScript 主进程、shadcn/ui、Tailwind CSS 与 TanStack 家族方向已明确。遵循[架构决策](docs/agent-work/ARCHITECTURE.md)：UI 只依赖应用契约与注入的 AppClient，IPC/HTTP 适配不进入页面；应用核心不依赖 Electron 或 HTTP 框架。React 与 TanStack 细项、具体版本兼容、最低系统与硬件要求、性能预算和首版范围仍待验证或评审，不得将建议写成已确认决策。
+- 当前 PI Durable 文档基线为 `1402973a9dbe8c627341e04c9744c54953e285ca`，上游标注 Experimental。通过薄适配层接入、固定版本并验证升级；不得承诺自动获得端到端 exactly-once 或权限沙箱。
+- 保持业务规则、持久执行状态和 UI 临时状态的边界；IPC 与插件入口必须有明确契约和输入校验。
+- 阶段可以缩小功能范围，但不得降低正式代码的封装与工程质量。封装必须明确职责、所有权、不变量、错误与资源生命周期，不以接口或包装层数量衡量。测试模型与兼容性实验单独标识和组装，不能代替真实链路验收。提交恢复、连接隔离与重复执行等风险必须有行为回归证据。
+- 新功能同时考虑三平台、主题、国际化、权限、取消与恢复，按风险提供验证证据；不得用文档或演示替代生产可靠性证明。
+- 完成报告明确已验证内容与未运行检查。文档改动检查相对链接及 `git diff --check`，不得声称等价于功能测试通过。
+- 客户端开发与评审必须遵守[开发规范](docs/agent-work/DEVELOPMENT-STANDARDS.md)，覆盖模块边界、严格类型、异步资源、组件、测试、依赖与交付；其中标注待实施的自动门禁不得当作已配置。以上命令、导入和 Git 规则继续有效。

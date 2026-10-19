@@ -1,0 +1,31 @@
+{
+  "hashes": {
+    "apps/hipi-work-ui/src/features/workbench/message-markdown.tsx": "e1db8df2baf5d05a56ebdf56eeefb7d0cfa88f299a4674417c37b14979eb84d3",
+    "apps/hipi-work-ui/src/features/workbench/markdown-policy.ts": "4e896c855b80bc349637207259078c7931864ad940d6f524df8b2529572c018c",
+    "apps/hipi-work-ui/src/app/preferences.tsx": "23317c3e9abbf7a387bd1e849ad0d0b8eef8532a815e6b1dc402a0851a3a41bd",
+    "package-lock.json": "b98a041bd89bb16dd5379838cdb4e68853f859b855e0389e14f6c385f37fd6d3"
+  },
+  "prose": "# Implementation summary\n\nThis response explains **bounded rendering**, with 中文 and `inline code`.\n\n- Read the source\n- [x] Validate behavior\n- [ ] Review output\n\n| Stage | Result |\n| --- | --- |\n| Parse | Ready |\n| Render | Safe |\n\n```ts\nconst result = { stable: true };\n```\n\n[Documentation](https://example.com/docs)\n\n",
+  "node": "v24.19.0",
+  "platform": "linux",
+  "arch": "x64",
+  "records": [
+    {
+      "name": "above-ceiling-32769",
+      "streaming": true,
+      "inputUtf16Units": 32769,
+      "inputBytes": 33181,
+      "inputSha256": "9eafdf2ace6ca01d4ab7fd6d0dfe7db8be42e9701a7484754e37677478bb70f8",
+      "outputUtf16Units": 17328,
+      "outputBytes": 17610,
+      "hasRichBody": false,
+      "firstMs": 12.178110000000004,
+      "warmMs": [
+        0.7277279999999564,
+        0.45966300000003457,
+        0.49694899999997233
+      ],
+      "cumulativeProcessMaxRssKiB": 71672
+    }
+  ]
+}

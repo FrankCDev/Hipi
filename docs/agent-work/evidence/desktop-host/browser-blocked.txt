@@ -1,0 +1,10 @@
+2026-10-19 12:57 UTC, cloud Linux x64
+Command: chromium --headless --disable-gpu --no-first-run --user-data-dir=/tmp/hipi-browser-verification-1257 --dump-dom about:blank
+Exit code: 134
+Sandbox was not disabled.
+
+chrome_crashpad_handler: --database is required
+FATAL:chrome/browser/process_singleton_posix.cc:297
+Check failed: . socket() failed: Operation not permitted (1)
+
+The browser failed before a page was created. No UI assertions, selection checks, network assertions or screenshots ran. No claim of graphical or Electron verification follows from this attempt.

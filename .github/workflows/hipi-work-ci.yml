@@ -1,0 +1,86 @@
+name: Hipi Work unsigned staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dot/develop'
+    paths:
+      - 'apps/hipi-work-*/**'
+      - 'packages/**'
+      - 'package*.json'
+      - 'nix/model-catalog.json'
+      - '.github/workflows/hipi-work-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/hipi-work-*/**'
+      - 'packages/**'
+      - 'package*.json'
+      - 'nix/model-catalog.json'
+      - '.github/workflows/hipi-work-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hipi-work-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-package:
+    # These are build hosts, not product minimum OS or tested support claims.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: windows-2022
+            arch: x64
+          - os: macos-14
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, repository baseline
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, repository baseline
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Hydrate only the hash-pinned public model catalog
+        run: node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
+      - name: Verify explicit deterministic source test lists and boundaries
+        run: node apps/hipi-work-desktop/scripts/verify-source.mjs
+      - name: Build production bundles without source maps
+        run: node apps/hipi-work-desktop/scripts/build-release.mjs
+      - name: Stage allowlisted runtime and public licenses
+        run: node apps/hipi-work-desktop/scripts/stage-release.mjs
+      - name: Package unsigned native-host artifacts without publishing
+        run: node apps/hipi-work-desktop/scripts/package-release.mjs --${{ matrix.arch }}
+      # This retains build evidence only. It does not create a release or publish updates.
+      - name: Retain unsigned packages and integrity evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-unsigned-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/*.dmg
+            .artifacts/hipi-work/packages/*.zip
+            .artifacts/hipi-work/packages/*.exe
+            .artifacts/hipi-work/packages/*.AppImage
+            .artifacts/hipi-work/packages/*.tar.gz
+            .artifacts/hipi-work/packages/SHA256SUMS
+            .artifacts/hipi-work/packages/release-provenance.json
+          if-no-files-found: error
+          retention-days: 7
+      # No release creation, signing, certificate import, updater publication, or install command.
+      - name: Record remaining native acceptance gates
+        shell: bash
+        run: |
+          echo 'Unsigned package and payload verification only.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Pending: signing/notarization, installation, GUI/IME/accessibility, utility/worker lifecycle, keychain, updates/migration recovery.' >> "$GITHUB_STEP_SUMMARY"

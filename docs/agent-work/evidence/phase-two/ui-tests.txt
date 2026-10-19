@@ -1,0 +1,40 @@
+✔ connection waits for a valid handshake before exposing trusted store identity (4.235281ms)
+✔ malformed protocol and store identity never authorize restoration (1.322475ms)
+✔ an aborted old handshake cannot become an active connection even if the client resolves late (0.314475ms)
+✔ authentication, browser network and malformed response errors stay distinct (0.278642ms)
+✔ store editing lease excludes another tab until explicit disconnect release (7.355013ms)
+✔ missing browser Web Locks fails closed (0.295837ms)
+✔ abrupt owner termination releases the native store lease (84.839867ms)
+✔ verified store restores original retry payload and later draft, while other store stays isolated (3.519513ms)
+✔ confirmation survives reload and protects a newly authored identical draft (0.83217ms)
+✔ corrupt, wrong-store, wrong-scope and unknown-version browser data is ignored (0.410497ms)
+✔ failed persistence prevents submission admission while retaining an editable in-memory draft (0.298462ms)
+✔ old connection callbacks cannot overwrite restored input or persist a new request (0.363578ms)
+✔ independent tabs preserve other scopes and cannot replace an unresolved request (0.607338ms)
+✔ simultaneous browser admissions serialize before saving and allow only one unresolved request (2.573204ms)
+✔ receipt confirmation cannot clear a different tab's newer draft (0.283158ms)
+✔ released writer lease blocks callbacks synchronously before provider cleanup (0.362355ms)
+✔ failed draft clearing cannot persist a confirmation that would resurrect a sendable submitted draft (0.358831ms)
+✔ separate connections cannot restore each other's navigation, drafts or requests, even with identical IDs (1.715296ms)
+✔ same-connection pending retry retains the original ID and exact payload despite later draft edits (0.420632ms)
+✔ a null receipt preserves the submitted draft; confirmed acceptance clears only that unchanged draft (0.130043ms)
+✔ unknown execution or mismatched request/scope cannot clear user input (0.285862ms)
+✔ connection-owned reconciliation marker survives pane remount and preserves a newly authored identical draft (0.428834ms)
+✔ receipt mismatch {"requestId":"other"} cannot confirm or clear pending work (2.549399ms)
+✔ receipt mismatch {"workspaceId":"other"} cannot confirm or clear pending work (0.20316ms)
+✔ receipt mismatch {"conversationId":"other"} cannot confirm or clear pending work (0.153476ms)
+✔ receipt mismatch {"state":"reconciliation_required"} cannot confirm or clear pending work (0.225453ms)
+✔ matching receipt confirms acceptance and clears only the unchanged draft (0.400171ms)
+✔ cancelled openWorkspace cannot reopen A after B was chosen, even if transport ignores abort (2.779359ms)
+✔ cancelled listConversations cannot reopen A after B was chosen, even if transport ignores abort (0.334194ms)
+✔ unmount cancellation ignores a late rejection and prevents queued requests from starting (0.362045ms)
+✔ active lookup errors remain visible and release the request for retry (0.769818ms)
+✔ submission captures both trimmed IDs before the input values change (0.503685ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 263.306933

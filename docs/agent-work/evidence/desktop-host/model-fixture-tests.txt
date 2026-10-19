@@ -1,0 +1,10 @@
+
+ RUN  v4.1.11 /workspace/scratch/c51696462341/Hipi/packages/ai
+
+·················································
+
+ Test Files  1 passed (1)
+      Tests  49 passed (49)
+   Start at  21:59:30
+   Duration  1.55s (transform 927ms, setup 0ms, import 1.29s, tests 76ms, environment 0ms)
+

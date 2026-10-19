@@ -5,4 +5,10 @@ export {
 	SQLITE_MIGRATIONS,
 	type SqliteMigration,
 } from "./migrations.ts";
-export { SqliteStorage, type SqliteStorageOptions } from "./storage.ts";
+export { ReadonlyCapacityError, ReadonlyCloseError, type SqliteReadOnlyLimits } from "./readonly.ts";
+export {
+	type ReadonlySqliteStorage,
+	SqliteStorage,
+	type SqliteStorageOptions,
+	type SqliteStorageReadOnlyOptions,
+} from "./storage.ts";

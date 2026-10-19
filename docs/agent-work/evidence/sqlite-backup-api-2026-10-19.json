@@ -1,0 +1,24 @@
+{
+  "date": "2026-10-19",
+  "platform": "linux",
+  "architecture": "x64",
+  "status": "passed",
+  "scope": "Isolated node:sqlite API probe on temporary fixture data only",
+  "runtimes": [
+    { "node": "24.19.0", "electron": null, "sqlite": "3.53.3" },
+    { "node": "24.19.0", "electron": "42.11.15", "sqlite": "3.53.3", "mode": "ELECTRON_RUN_AS_NODE=1" }
+  ],
+  "verified": [
+    "backup() accepts a readOnly DatabaseSync source",
+    "Committed data in an uncheckpointed WAL reaches the backup",
+    "Source database and WAL bytes remain unchanged during backup",
+    "Read-only target returns expected data and integrity_check reports ok"
+  ],
+  "notVerified": [
+    "Product backup or restore implementation",
+    "Multi-database consistency and owner exclusion",
+    "Process crash or power-loss durability",
+    "macOS or Windows behavior",
+    "Electron GUI or utility process integration"
+  ]
+}

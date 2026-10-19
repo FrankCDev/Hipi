@@ -1,0 +1,146 @@
+✔ paging replaces one result and ignores a slow prior page even when transport ignores abort (1.542878ms)
+✔ Latest resets held data and aborted history cannot restore it (0.203336ms)
+✔ explicit cancel preserves current page, terminates loading and suppresses late text (0.167313ms)
+✔ scope disposal blocks old success and failure from publishing into a new store or conversation (0.321415ms)
+✔ failed pages do not retry automatically; explicit retry keeps the exact cursor (0.257248ms)
+✔ late clipboard feedback for an unmounted original page cannot label the replacement page copied (0.198009ms)
+✔ connection waits for a valid handshake before exposing trusted store identity (1.808338ms)
+✔ malformed protocol and store identity never authorize restoration (2.631851ms)
+✔ an aborted old handshake cannot become an active connection even if the client resolves late (0.37804ms)
+✔ authentication, browser network and malformed response errors stay distinct (0.273433ms)
+✔ store editing lease excludes another tab until explicit disconnect release (6.680941ms)
+✔ missing browser Web Locks fails closed (0.265541ms)
+✔ abrupt owner termination releases the native store lease (92.01351ms)
+✔ desktop calls pin identity and never automatically replay commands on host loss (3.30756ms)
+✔ cancelled requests stop waiting, suppress late results, and never send cancellation of execution (0.405061ms)
+✔ a late aborted handshake cannot authorize a new store (0.406233ms)
+✔ malformed results and store changes are rejected before restoration (0.654989ms)
+✔ snapshot delivery awaits the consumer, ignores duplicates and closes foreign scopes (9.268996ms)
+✔ aborting slow observation releases subscription immediately and ignores late frames (0.957084ms)
+✔ host closure and callback errors terminate observation exactly once (0.88798ms)
+✔ a silent host has bounded startup and does not report connected without a snapshot (4.119826ms)
+✔ terminal before initial snapshot rejects startup and releases the subscription (0.380784ms)
+✔ cancel during initial handshake does not start a late observation (0.390509ms)
+✔ synchronous terminal callbacks and throwing disposers do not escape cleanup (0.358601ms)
+✔ unknown envelope keys fail closed (0.478201ms)
+✔ late callbacks from a disposed generation do not overwrite a replacement observation (0.527155ms)
+✔ history accepts an empty continuation page but rejects a foreign conversation (2.556237ms)
+✔ text reads reject wrong identity, changed length, and unrelated offsets (0.803602ms)
+✔ previous-page requests may overlap one UTF-16 unit to preserve a surrogate pair (0.265411ms)
+✖ verified store restores original retry payload and later draft, while other store stays isolated (1.953978ms)
+✖ confirmation survives reload and protects a newly authored identical draft (0.25212ms)
+✔ corrupt, wrong-store, wrong-scope and unknown-version browser data is ignored (0.628458ms)
+✔ failed persistence prevents submission admission while retaining an editable in-memory draft (0.519344ms)
+✔ old connection callbacks cannot overwrite restored input or persist a new request (0.519433ms)
+✖ independent tabs preserve other scopes and cannot replace an unresolved request (0.206251ms)
+✖ simultaneous browser admissions serialize before saving and allow only one unresolved request (4.230293ms)
+✔ receipt confirmation cannot clear a different tab's newer draft (0.35133ms)
+✖ released writer lease blocks callbacks synchronously before provider cleanup (0.337509ms)
+✖ failed draft clearing cannot persist a confirmation that would resurrect a sendable submitted draft (0.375897ms)
+✔ separate connections cannot restore each other's navigation, drafts or requests, even with identical IDs (2.102252ms)
+✔ same-connection pending retry retains the original ID and exact payload despite later draft edits (0.454576ms)
+✔ a null receipt preserves the submitted draft; confirmed acceptance clears only that unchanged draft (0.177378ms)
+✔ unknown execution or mismatched request/scope cannot clear user input (0.204438ms)
+✔ connection-owned reconciliation marker survives pane remount and preserves a newly authored identical draft (0.2193ms)
+✔ stream updates coalesce to latest and disposal cancels pending delivery (3.411137ms)
+✔ selection freezes partial and final replacement and release publishes only latest (0.279872ms)
+✔ pending hint changes only on transitions, never for every blocked token or after disposal (0.440685ms)
+✔ final flush cancels older timer; interrupted canonical projection is immediate (2.185327ms)
+✔ range intersection detects crossing selection even when endpoints are outside (0.34463ms)
+✔ receipt mismatch {"requestId":"other"} cannot confirm or clear pending work (1.547195ms)
+✔ receipt mismatch {"workspaceId":"other"} cannot confirm or clear pending work (0.120753ms)
+✔ receipt mismatch {"conversationId":"other"} cannot confirm or clear pending work (0.121693ms)
+✔ receipt mismatch {"state":"reconciliation_required"} cannot confirm or clear pending work (0.079429ms)
+✔ matching receipt confirms acceptance and clears only the unchanged draft (0.282496ms)
+✔ cancelled openWorkspace cannot reopen A after B was chosen, even if transport ignores abort (2.805844ms)
+✔ cancelled listConversations cannot reopen A after B was chosen, even if transport ignores abort (0.257649ms)
+✔ unmount cancellation ignores a late rejection and prevents queued requests from starting (0.247143ms)
+✔ active lookup errors remain visible and release the request for retry (0.569339ms)
+✔ submission captures both trimmed IDs before the input values change (0.459373ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 53
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 309.264754
+
+✖ failing tests:
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:24:1
+✖ verified store restores original retry payload and later draft, while other store stays isolated (1.953978ms)
+  Error: Cannot preserve pending request for recovery
+      at LocalState.remember (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/src/features/workbench/local-state.ts:98:10)
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:27:8)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:39:1
+✖ confirmation survives reload and protects a newly authored identical draft (0.25212ms)
+  Error: Cannot preserve pending request for recovery
+      at LocalState.remember (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/src/features/workbench/local-state.ts:98:10)
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:42:8)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:98:1
+✖ independent tabs preserve other scopes and cannot replace an unresolved request (0.206251ms)
+  Error: Cannot preserve pending request for recovery
+      at LocalState.remember (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/src/features/workbench/local-state.ts:98:10)
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:102:8)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:109:1
+✖ simultaneous browser admissions serialize before saving and allow only one unresolved request (4.230293ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'rejected'
+  - 'fulfilled'
+  
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:135:9)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'rejected',
+    expected: 'fulfilled',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:150:1
+✖ released writer lease blocks callbacks synchronously before provider cleanup (0.337509ms)
+  Error: Cannot preserve pending request for recovery
+      at LocalState.remember (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/src/features/workbench/local-state.ts:98:10)
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:154:6)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)
+
+test at apps/hipi-work-ui/test/local-persistence.test.ts:167:1
+✖ failed draft clearing cannot persist a confirmation that would resurrect a sendable submitted draft (0.375897ms)
+  Error: Cannot preserve pending request for recovery
+      at LocalState.remember (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/src/features/workbench/local-state.ts:98:10)
+      at TestContext.<anonymous> (file:///workspace/scratch/c51696462341/Hipi/apps/hipi-work-ui/test/local-persistence.test.ts:171:8)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

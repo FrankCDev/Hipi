@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /tmp/hipi-markdown-perf
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  22:07:24
+   Duration  1.13s (transform 73ms, setup 0ms, import 216ms, tests 773ms, environment 0ms)
+

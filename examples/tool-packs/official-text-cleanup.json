@@ -1,0 +1,28 @@
+{
+  "formatVersion": 1,
+  "id": "org.hipi.text-cleanup",
+  "version": "1.0.0",
+  "name": "Text cleanup",
+  "description": "Local, deterministic text cleanup. This label does not establish publisher trust or authorize model disclosure.",
+  "tools": [
+    {
+      "id": "clean_lines",
+      "name": "Clean text lines",
+      "description": "Normalize CRLF and CR to LF, remove trailing ASCII spaces and tabs, remove empty lines, and keep the first occurrence of each line.",
+      "pipeline": [
+        { "op": "normalizeNewlines" },
+        { "op": "trimLineEnds" },
+        { "op": "removeEmptyLines" },
+        { "op": "deduplicateLines" }
+      ]
+    },
+    {
+      "id": "normalize_separator",
+      "name": "Normalize separator",
+      "description": "Replace every literal fullwidth comma with a comma. All other text remains unchanged.",
+      "pipeline": [
+        { "op": "literalReplace", "search": "，", "replacement": "," }
+      ]
+    }
+  ]
+}

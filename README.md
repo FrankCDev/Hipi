@@ -1,6 +1,4 @@
-> **Hipi Rust 重实现计划**：本 fork 计划以 Rust 原生实现跨平台、具备 PI 同等 Agent 能力的产品，追求可验证的性能、资源效率、稳定性和可嵌入性提升。模型接入采用 API Key，不实现厂商产品账号授权流程。目标、范围及模块验收原则见 [项目愿景](VISION.md)，开发执行标准见 [Rust 工程规范](docs/rust/ENGINEERING.md)与[测试规范](docs/rust/TESTING.md)。
->
-> Rust 研发分支为 `dot/develop`。当前处于设计阶段，尚无本计划已验收的新 Rust Agent 实现或性能结论；下文保留上游 TypeScript PI 的说明，不代表 Rust 版本的安装方式。
+> 本仓库正在规划基于 PI Durable 的全新跨平台 Agent Work 客户端 **Hipi Work**，工程标识为 `hipi-work`，仓库名保持 Hipi。目标与原则见 [愿景](VISION.md)和 [Hipi Work 文档](docs/agent-work/README.md)。以下保留上游 Pi 说明，不代表新客户端已交付。
 
 <p align="center">
   <a href="https://pi.dev">
@@ -107,12 +105,29 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.m
 
 ```bash
 npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
+npm run hydrate:model-data  # Fetch required model JSON before source startup/checks
+npm run check:model-data    # Validate model JSON and manifest
 npm run build         # Refresh model data, then build all packages
 npm run build:offline # Rebuild using existing model data without network access
 npm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
 ```
+
+Git checkouts and Hipi source-only archives omit `packages/ai/src/providers/data`.
+Dependency installation does not recreate it. Run `hydrate:model-data` before
+starting Hipi Work from source, including deterministic mode, or preparing its
+desktop build. This downloads public catalog metadata, not model inference, and
+does not require API keys or rewrite the generated TypeScript catalog. The
+separate upstream release archive described below includes its release data.
+
+If startup reports a missing `providers/data/*.json`, or `check:model-data`
+reports missing/stale data, hydrate and validate again from the repository root.
+Hydration uses strict catalog fetching: resolve network/HTTP failures for the
+reported catalog endpoint before retrying. Do not substitute empty JSON,
+disable validation, or add real credentials. For offline use, retain a validated
+data directory from the same source revision, including `.manifest.json`, then
+run `check:model-data`; `build:offline` cannot create missing model data.
 
 ### Using local packages outside the monorepo
 

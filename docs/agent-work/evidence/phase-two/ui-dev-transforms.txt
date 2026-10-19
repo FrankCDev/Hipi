@@ -1,0 +1,1 @@
+PASS: HTTP entry and 24 Vite development transforms. No browser execution claimed.

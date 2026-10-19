@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"target": "ES2024",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"skipLibCheck": true,
+		"types": ["node", "electron"],
+		"lib": ["ES2024", "DOM"],
+		"customConditions": ["source"]
+	},
+	"include": ["src", "test"]
+}

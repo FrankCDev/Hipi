@@ -1,0 +1,10 @@
+Both esbuild and oxc options were set. oxc options will be used and esbuild options will be ignored. The following esbuild options were set: `{ jsx: 'automatic' }`
+
+ RUN  v4.1.11 /tmp/hipi-markdown-perf
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  22:06:44
+   Duration  3.20s (transform 71ms, setup 0ms, import 220ms, tests 2.83s, environment 0ms)
+

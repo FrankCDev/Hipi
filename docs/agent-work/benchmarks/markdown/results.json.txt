@@ -1,0 +1,163 @@
+{
+  "hashes": {
+    "apps/hipi-work-ui/src/features/workbench/message-markdown.tsx": "9a78efe416c3f90d91549f71dd1c9115f21570e07f5fc91eee8479bc1febf16a",
+    "apps/hipi-work-ui/src/features/workbench/markdown-policy.ts": "b5f25b27e279662560e9ef1b6e2056a9ffc721968f606e78468f914239de3c39",
+    "apps/hipi-work-ui/src/app/preferences.tsx": "63b42de85a4aa0129b4912f805d86713691c4411596c85fff2f603a56cbbfc7f",
+    "package-lock.json": "b98a041bd89bb16dd5379838cdb4e68853f859b855e0389e14f6c385f37fd6d3"
+  },
+  "records": [
+    {
+      "name": "realistic-8Ki",
+      "streaming": false,
+      "inputUtf16Units": 8192,
+      "inputBytes": 8296,
+      "inputSha256": "5d12d8aaad305ba2ba26f40f979c100d5fc315137c491984c67d0983ffc717c9",
+      "outputUtf16Units": 28307,
+      "outputBytes": 28943,
+      "hasRichBody": true,
+      "firstMs": 114.064257,
+      "warmMs": [
+        56.50466800000004,
+        61.273544000000015,
+        59.36987099999999
+      ],
+      "cumulativeProcessMaxRssKiB": 126536
+    },
+    {
+      "name": "realistic-32Ki",
+      "streaming": false,
+      "inputUtf16Units": 32768,
+      "inputBytes": 33180,
+      "inputSha256": "2946134f23e489d096030ccf23ae452d60c8ee5299cba37f51f94f598fc3b39f",
+      "outputUtf16Units": 97019,
+      "outputBytes": 99299,
+      "hasRichBody": true,
+      "firstMs": 204.63899300000003,
+      "warmMs": [
+        176.87034399999993,
+        174.27028100000007,
+        181.30161099999987
+      ],
+      "cumulativeProcessMaxRssKiB": 257492
+    },
+    {
+      "name": "realistic-streaming-32Ki",
+      "streaming": true,
+      "inputUtf16Units": 32768,
+      "inputBytes": 33180,
+      "inputSha256": "2946134f23e489d096030ccf23ae452d60c8ee5299cba37f51f94f598fc3b39f",
+      "outputUtf16Units": 97019,
+      "outputBytes": 99299,
+      "hasRichBody": true,
+      "firstMs": 192.87344000000007,
+      "warmMs": [
+        174.49328800000012,
+        145.322858,
+        164.39116999999987
+      ],
+      "cumulativeProcessMaxRssKiB": 298844
+    },
+    {
+      "name": "delimiter-run-32Ki",
+      "streaming": false,
+      "inputUtf16Units": 32768,
+      "inputBytes": 32768,
+      "inputSha256": "e1319fe98edde6e1fb2bed9422ee3b250239b1d8ae1fa88d0f8c10b7cdb81236",
+      "outputUtf16Units": 17389,
+      "outputBytes": 17413,
+      "hasRichBody": true,
+      "firstMs": 9.677071999999953,
+      "warmMs": [
+        9.950693999999658,
+        8.280944999999974,
+        9.245380000000296
+      ],
+      "cumulativeProcessMaxRssKiB": 298844
+    },
+    {
+      "name": "unmatched-brackets-32Ki",
+      "streaming": true,
+      "inputUtf16Units": 32768,
+      "inputBytes": 32768,
+      "inputSha256": "a90ff70ad51360979071d268065d422fdea638d17ee71a1dd76d12f4e71578b1",
+      "outputUtf16Units": 50127,
+      "outputBytes": 50151,
+      "hasRichBody": true,
+      "firstMs": 148.88690099999985,
+      "warmMs": [
+        168.871576,
+        153.38307499999974,
+        141.2926220000004
+      ],
+      "cumulativeProcessMaxRssKiB": 312552
+    },
+    {
+      "name": "nested-quotes-depth512-32Ki",
+      "streaming": false,
+      "inputUtf16Units": 32768,
+      "inputBytes": 32768,
+      "inputSha256": "1f16296f6eeb4a6766c6e375fa19fe61e42e0793e02f2c93cf05157af50f865c",
+      "outputUtf16Units": 64495,
+      "outputBytes": 64519,
+      "hasRichBody": true,
+      "firstMs": 46.00885199999993,
+      "warmMs": [
+        35.16780299999982,
+        33.307986999999684,
+        31.5047169999998
+      ],
+      "cumulativeProcessMaxRssKiB": 312936
+    },
+    {
+      "name": "mixed-delimiters-32Ki",
+      "streaming": true,
+      "inputUtf16Units": 32768,
+      "inputBytes": 32768,
+      "inputSha256": "c832226da081a21d8d25db46dfc10e03486edbcd3074dd4bd5eea58ed19a2c55",
+      "outputUtf16Units": 56806,
+      "outputBytes": 56830,
+      "hasRichBody": true,
+      "firstMs": 90.08826099999987,
+      "warmMs": [
+        80.05871800000023,
+        76.77472799999987,
+        71.46413500000017
+      ],
+      "cumulativeProcessMaxRssKiB": 312936
+    },
+    {
+      "name": "above-ceiling-32769",
+      "streaming": true,
+      "inputUtf16Units": 32769,
+      "inputBytes": 33181,
+      "inputSha256": "9eafdf2ace6ca01d4ab7fd6d0dfe7db8be42e9701a7484754e37677478bb70f8",
+      "outputUtf16Units": 17328,
+      "outputBytes": 17610,
+      "hasRichBody": false,
+      "firstMs": 0.31653800000003685,
+      "warmMs": [
+        0.2549949999997807,
+        0.18841400000019348,
+        0.2003020000001925
+      ],
+      "cumulativeProcessMaxRssKiB": 312936
+    },
+    {
+      "name": "fallback-1Mi",
+      "streaming": true,
+      "inputUtf16Units": 1048576,
+      "inputBytes": 1061684,
+      "inputSha256": "d2435ac99b3071008e969867cc40728da31a3660c7f10d4f3b14fc62a4f3e36d",
+      "outputUtf16Units": 17329,
+      "outputBytes": 17611,
+      "hasRichBody": false,
+      "firstMs": 0.3808249999997315,
+      "warmMs": [
+        0.191899999999805,
+        0.2705489999998463,
+        0.19727700000021287
+      ],
+      "cumulativeProcessMaxRssKiB": 312936
+    }
+  ]
+}

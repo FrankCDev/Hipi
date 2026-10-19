@@ -1,0 +1,27 @@
+{
+  "hashes": {
+    "apps/hipi-work-ui/src/features/workbench/message-markdown.tsx": "9a78efe416c3f90d91549f71dd1c9115f21570e07f5fc91eee8479bc1febf16a",
+    "apps/hipi-work-ui/src/features/workbench/markdown-policy.ts": "b5f25b27e279662560e9ef1b6e2056a9ffc721968f606e78468f914239de3c39",
+    "apps/hipi-work-ui/src/app/preferences.tsx": "63b42de85a4aa0129b4912f805d86713691c4411596c85fff2f603a56cbbfc7f",
+    "package-lock.json": "b98a041bd89bb16dd5379838cdb4e68853f859b855e0389e14f6c385f37fd6d3"
+  },
+  "records": [
+    {
+      "name": "realistic-streaming-32Ki",
+      "streaming": true,
+      "inputUtf16Units": 32768,
+      "inputBytes": 33180,
+      "inputSha256": "2946134f23e489d096030ccf23ae452d60c8ee5299cba37f51f94f598fc3b39f",
+      "outputUtf16Units": 97019,
+      "outputBytes": 99299,
+      "hasRichBody": true,
+      "firstMs": 248.51970200000005,
+      "warmMs": [
+        190.15996799999994,
+        173.04351499999996,
+        157.34045099999992
+      ],
+      "cumulativeProcessMaxRssKiB": 265260
+    }
+  ]
+}

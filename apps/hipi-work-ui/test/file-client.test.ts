@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { FileServiceError } from "@hipi/work-runtime/files";
+import { type DesktopFileBridge, desktopFiles } from "../src/app/file-client.ts";
+
+test("desktop authority is scoped to verified store and explicit read/write picker", async () => {
+	const requests: unknown[] = [];
+	const bridge: DesktopFileBridge = {
+		request: async () => {
+			throw Error("unused");
+		},
+		manage: async (request) => {
+			requests.push(request);
+			return { ok: true, result: null };
+		},
+	};
+	const ports = desktopFiles(bridge, "store");
+	await ports.fileAuthority.chooseRoot("workspace");
+	await ports.fileAuthority.revokeRoot("workspace", "root");
+	assert.deepEqual(requests, [
+		{ version: 1, expectedStoreId: "store", workspaceId: "workspace", operation: "pick", writable: true },
+		{ version: 1, expectedStoreId: "store", workspaceId: "workspace", operation: "revoke", rootId: "root" },
+	]);
+});
+test("malformed and cross-workspace picker results fail closed", async () => {
+	for (const result of [
+		{ ok: false, error: "UNAUTHORIZED" },
+		{ ok: true },
+		{ ok: true, result: { workspaceId: "other", rootId: "root", writable: true } },
+	]) {
+		const ports = desktopFiles({ request: async () => null, manage: async () => result }, "store");
+		await assert.rejects(() => ports.fileAuthority.chooseRoot("workspace"), FileServiceError);
+	}
+});
+test("desktop file transport validates response store and preserves unknown write semantics", async () => {
+	const ports = desktopFiles(
+		{
+			request: async () => ({
+				version: 1,
+				storeId: "other",
+				method: "saveText",
+				target: { workspaceId: "workspace", rootId: "root", path: "file" },
+				ok: true,
+				result: { text: "text", bytes: 4, revision: "b".repeat(64), encoding: "utf-8" },
+			}),
+			manage: async () => null,
+		},
+		"store",
+	);
+	await assert.rejects(
+		() => ports.files.saveText({ workspaceId: "workspace", rootId: "root", path: "file" }, "text", "a".repeat(64)),
+		(error: unknown) => error instanceof FileServiceError && error.code === "WRITE_OUTCOME_UNKNOWN",
+	);
+});

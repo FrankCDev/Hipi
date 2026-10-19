@@ -1,0 +1,27 @@
+/* Only the containing workbench geometry is synthetic. Message styling is production CSS. */
+.fixture-shell {
+	display: flex;
+	height: calc(100dvh - 36px);
+	width: 100%;
+	max-width: 1100px;
+	min-height: 0;
+	margin-inline: auto;
+}
+
+.fixture-controls {
+	display: flex;
+	gap: 12px;
+	align-items: center;
+	height: 36px;
+	padding-inline: 12px;
+}
+.fixture-controls button {
+	border: 1px solid currentColor;
+	padding: 2px 8px;
+}
+
+/* Controlled geometry for the estimate-equals-first-measure regression. */
+.fixture-shell[data-fixed="true"] .virtual-message-row {
+	height: 160px;
+	overflow: hidden;
+}

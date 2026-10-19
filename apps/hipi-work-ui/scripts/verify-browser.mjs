@@ -1,0 +1,205 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { serveLoopback } from "@hipi/work-runtime/http";
+import { openTestRuntime } from "@hipi/work-runtime/testing";
+import { createServer } from "vite";
+
+// Playwright is external acceptance tooling, not a production UI dependency.
+// Point HIPI_PLAYWRIGHT_PATH at an already provisioned Playwright package if needed.
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.HIPI_PLAYWRIGHT_PATH || "playwright");
+const root = fileURLToPath(new URL("../", import.meta.url));
+const output = process.env.HIPI_EVIDENCE_DIR || join(tmpdir(), "hipi-work-ui-evidence");
+const data = await mkdtemp(join(tmpdir(), "hipi-ui-runtime-"));
+const checks = [];
+const errors = [];
+let runtime;
+let api;
+let vite;
+let browser;
+let failure;
+await mkdir(output, { recursive: true });
+try {
+  runtime = await openTestRuntime(data);
+  vite = await createServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false } });
+  await vite.listen();
+  const address = vite.httpServer.address();
+  assert(address && typeof address === "object");
+  const origin = `http://127.0.0.1:${address.port}`;
+  api = await serveLoopback(runtime, { origin });
+  browser = await chromium.launch({ executablePath: process.env.HIPI_CHROMIUM_PATH || "/usr/bin/chromium", headless: true, chromiumSandbox: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  page.on("pageerror", error => errors.push(error.message));
+  page.on("dialog", dialog => { void dialog.accept(); });
+  await page.goto(origin);
+  const connect = async () => {
+    await page.locator('[name="runtime-url"]').fill(api.url);
+    await page.locator('[name="runtime-token"]').fill(api.token);
+    await page.getByRole("button", { name: "连接", exact: true }).click();
+  };
+  const details = page.locator(".app-toolbar").getByRole("button", { name: "会话详情", exact: true });
+  const openDetails = async () => {
+    if (await details.getAttribute("aria-expanded") !== "true") await details.click();
+  };
+  const waitConnected = async () => {
+    await page.getByLabel("任务目标", { exact: true }).waitFor();
+    // Healthy connection chrome is intentionally hidden; connecting/stale/paused remains visible.
+    await page.locator(".conversation-panel .connection-bar").waitFor({ state: "hidden" });
+  };
+  const create = async (kind, name) => {
+    await page.getByRole("button", { name: kind, exact: true }).first().click();
+    await page.getByRole("dialog").getByLabel("名称", { exact: true }).fill(name);
+    if (kind === "新建会话") {
+      await page.getByRole("dialog").getByRole("combobox", { name: "选择模型", exact: true }).click();
+      // Protocol 3 requires an explicit conversation model, including acceptance mode.
+      await page.getByRole("option", { name: "faux-1 · faux", exact: true }).click();
+    }
+    await page.getByRole("dialog").getByRole("button", { name: "创建", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+  };
+  await page.locator('[name="runtime-url"]').fill(api.url);
+  await page.locator('[name="runtime-token"]').fill("invalid-token");
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await page.getByRole("alert").waitFor();
+  assert.equal(await page.locator(".work-shell").count(), 0);
+  assert((await page.locator(".connect-card").innerText()).includes(origin));
+  checks.push("Rejected handshake stays outside the workbench and displays the current page origin");
+  await connect();
+  await create("新建工作区", "验收工作区");
+  await create("新建会话", "真实执行验收");
+  await waitConnected();
+  await page.screenshot({ path: join(output, "work-ui-empty.png"), fullPage: true });
+  await openDetails();
+  assert((await page.getByTestId("workspace-id").innerText()).length > 0);
+  assert((await page.getByTestId("conversation-id").innerText()).length > 0);
+  const project = page.getByRole("button", { name: /^验收工作区/ });
+  assert.equal(await project.getAttribute("aria-expanded"), "true");
+  await project.click();
+  assert.equal(await project.getAttribute("aria-expanded"), "false");
+  await page.getByRole("button", { name: "真实执行验收", exact: true }).waitFor({ state: "hidden" });
+  await project.click();
+  await page.getByRole("button", { name: "真实执行验收", exact: true }).waitFor();
+  checks.push("Project disclosure hides and restores its nested conversation list");
+  checks.push("Created workspace and conversation with an explicitly selected deterministic model through the real HTTP AppClient");
+  const goal = page.getByLabel("任务目标", { exact: true });
+  await goal.fill("第一行");
+  await goal.press("End");
+  await goal.press("Shift+Enter");
+  assert.equal(await goal.inputValue(), "第一行\n");
+  assert.equal(await page.getByTestId("request-id").count(), 0);
+  checks.push("Shift+Enter inserts a newline without submitting");
+  await goal.fill("保留草稿：验收第一阶段");
+  await goal.dispatchEvent("compositionstart");
+  await goal.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true, keyCode: 229 });
+  assert.equal(await goal.inputValue(), "保留草稿：验收第一阶段");
+  assert.equal(await page.getByTestId("request-id").count(), 0);
+  await goal.dispatchEvent("compositionend");
+  checks.push("Synthetic composition guard prevents shortcut submission; not a native IME test");
+  await create("新建会话", "第二个会话");
+  await page.getByRole("button", { name: "真实执行验收", exact: true }).click();
+  assert.equal(await goal.inputValue(), "保留草稿：验收第一阶段");
+  await openDetails();
+  checks.push("Conversation switching restores its own draft");
+  await goal.press("Enter");
+  await page.getByTestId("execution-status").filter({ hasText: "结果已确认" }).waitFor({ timeout: 20000 });
+  assert.equal(await goal.inputValue(), "");
+  assert((await page.locator(".message-assistant .message-text").innerText()).length > 0);
+  let requestId = await page.getByTestId("request-id").innerText();
+  checks.push("Plain Enter submits; acceptance, streamed authoritative history, and final receipt confirmed");
+  await page.getByRole("button", { name: "停止等待", exact: true }).click();
+  await page.getByText("已停止等待 · 执行可能仍在继续", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "重新连接并核对", exact: true }).click();
+  await waitConnected();
+  assert.equal(await page.getByTestId("request-id").innerText(), requestId);
+  checks.push("Stop waiting and manual reconnect retain the original request and history");
+  let dropBeforeAdmission = true;
+  await page.route(`${api.url}call`, async route => {
+    const body = route.request().postDataJSON();
+    if (dropBeforeAdmission && body.method === "submit") { dropBeforeAdmission = false; await route.abort("failed"); }
+    else await route.continue();
+  });
+  await goal.fill("same request recovery");
+  await page.getByRole("button", { name: "提交任务", exact: false }).click();
+  await page.getByRole("button", { name: "以同一请求重试", exact: true }).waitFor();
+  requestId = await page.getByTestId("request-id").innerText();
+  await goal.fill("later edit must survive recovery");
+  await page.getByRole("button", { name: "以同一请求重试", exact: true }).click();
+  await page.getByTestId("execution-status").filter({ hasText: "结果已确认" }).waitFor({ timeout: 20000 });
+  assert.equal(await page.getByTestId("request-id").innerText(), requestId);
+  assert.equal(await goal.inputValue(), "later edit must survive recovery");
+  assert.equal(await page.locator(".message-user").count(), 2);
+  await page.unroute(`${api.url}call`);
+  checks.push("Pre-admission connection loss retries the same ID/payload while preserving later edits");
+  let dropAcceptedReply = true;
+  await page.route(`${api.url}call`, async route => {
+    const body = route.request().postDataJSON();
+    if (dropAcceptedReply && body.method === "submit") { dropAcceptedReply = false; await route.fetch(); await route.abort("failed"); }
+    else await route.continue();
+  });
+  await goal.fill("accepted reply loss recovery");
+  await page.getByRole("button", { name: "提交任务", exact: false }).click();
+  await page.getByTestId("execution-status").filter({ hasText: "结果已确认" }).waitFor({ timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
+  assert.equal(await page.locator(".message-user").count(), 3);
+  await page.unroute(`${api.url}call`);
+  checks.push("Lost accepted response reconciles and clears only original text without a second execution");
+  await goal.fill("刷新后保留的草稿");
+  await openDetails();
+  await page.screenshot({ path: join(output, "work-ui-light.png"), fullPage: true });
+  await page.getByRole("button", { name: "切换明暗主题", exact: true }).click();
+  assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
+  await page.getByRole("button", { name: "Switch to English", exact: true }).click();
+  assert.equal(await page.locator("html").getAttribute("lang"), "en");
+  assert.equal(await page.getByLabel("Task goal", { exact: true }).inputValue(), "刷新后保留的草稿");
+  await page.screenshot({ path: join(output, "work-ui-dark-en.png"), fullPage: true });
+  checks.push("Theme and language changes preserve the draft");
+  await page.reload();
+  await connect();
+  await page.getByRole("button", { name: "真实执行验收", exact: true }).waitFor();
+  await waitConnected();
+  assert.equal(await goal.inputValue(), "刷新后保留的草稿");
+  assert.equal(await page.locator(".message-user").count(), 3);
+  const saved = await page.evaluate(() => Object.values(localStorage).join("\n"));
+  assert(!saved.includes(api.token));
+  checks.push("Verified store restoration reloads authoritative navigation, draft, immutable request, and core history; token is not persisted");
+  await goal.fill("保留到相同数据目录");
+  await page.getByRole("button", { name: "断开连接", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+  assert.equal(await goal.inputValue(), "保留到相同数据目录");
+  await page.getByRole("button", { name: "断开连接", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "确认断开", exact: true }).click();
+  await connect();
+  await waitConnected();
+  assert.equal(await goal.inputValue(), "保留到相同数据目录");
+  checks.push("Active disconnect can be cancelled; confirmed reconnect restores only the verified store");
+  await goal.fill("当前连接草稿");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: join(output, "work-ui-narrow.png"), fullPage: true });
+  await page.getByRole("button", { name: "切换导航", exact: true }).click();
+  await page.getByRole("button", { name: "真实执行验收", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(".work-shell").getAttribute("data-navigation-open"), "false");
+  checks.push("No horizontal page overflow at 390 px; narrow navigation opens and closes with Escape");
+  await api.close();
+  api = undefined;
+  await page.getByText("连接已断开 · 下方为上次已知内容", { exact: true }).waitFor({ timeout: 10000 });
+  assert.equal(await goal.inputValue(), "当前连接草稿");
+  checks.push("Actual transport shutdown marks cached history stale without losing the draft");
+  assert.deepEqual(errors, []);
+} catch (error) {
+  failure = error instanceof Error ? error.message : "Unknown verification failure";
+  process.exitCode = 1;
+} finally {
+  await browser?.close();
+  await api?.close();
+  await vite?.close();
+  await runtime?.close();
+  await rm(data, { recursive: true, force: true });
+  await writeFile(join(output, "verification.json"), JSON.stringify({ date: new Date().toISOString(), result: failure ? "FAILED_OR_BLOCKED" : "PASS", checks, errors, failure, limitations: ["Linux Chromium only; no native Electron, Windows, macOS, screen reader or native IME verification", "Deterministic model, real PI Durable / SQLite and HTTP; no paid model or project file operations", "Browser drafts and pending payloads are isolated by verified persistent store identity; tokens stay in memory"] }, null, 2));
+  console.log(JSON.stringify({ result: failure ? "FAILED_OR_BLOCKED" : "PASS", checks: checks.length, output }));
+}

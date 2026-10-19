@@ -1,0 +1,37 @@
+✔ encrypted store serializes set/remove/read and never persists a plaintext sentinel (36.662346ms)
+✔ Linux unavailable and weak or unknown backends fail closed without a file (2.892905ms)
+✔ corrupt, oversized, and undecryptable files stay intact on set and remove (11.598631ms)
+✔ failed atomic replacement preserves original and cleans temporary files (4.419979ms)
+✔ renderer credential capability rejects read, unknown fields, and invalid secrets (0.512793ms)
+✔ private credential RPC rejects stale generation, bounds requests, and redacts errors (1.572553ms)
+✔ source guard rejects same URL foreign windows and child frames (1.409797ms)
+✔ protocol rejects arbitrary methods and unknown fields (1.22627ms)
+✔ obsolete handshake reply closes the host instead of accepting an incompatible runtime (2.898434ms)
+✔ host loss resolves in-flight command as unknown and never replays (0.577261ms)
+✔ incarnation mismatch cannot settle an active request (0.483489ms)
+✔ host bounds active waits and releases observations on close (0.935071ms)
+✔ cancel does not release runtime admission slot before accepted work settles (1.149044ms)
+✔ observation checks pinned store, waits for ack, and cancels source (8.80051ms)
+✔ shutdown failure cannot publish stopped or report a clean close (0.464451ms)
+✔ throwing renderer callback cannot strand other waiters during close (0.56312ms)
+✔ a second unacknowledged frame closes bounded host connection (0.459384ms)
+✔ timed-out invocations retain quota until underlying invocation settles (7.232384ms)
+✔ supervisor restarts only after exit with fresh generation and no replay (2.789539ms)
+✔ close failure keeps ownership; shutdown does not resolve before actual exit (1.172059ms)
+✔ unexpected exits exhaust a finite restart budget (0.509619ms)
+✔ cancelled window close leaves runtime usable; confirmed close shuts down once (0.244449ms)
+✔ closing during startup rejects readiness; a late ready cannot reopen admission (0.500896ms)
+✔ malformed utility reply revokes admission and requests exit before replacement (0.838184ms)
+✔ late readiness cannot revive a failed incarnation (0.340283ms)
+✔ late startup ready does not cancel the independent shutdown watchdog (0.92068ms)
+✔ private credential replies cannot cross a utility replacement or leak into public replies (3.293199ms)
+✔ real PI receipt survives lost desktop reply and runtime reopen without resubmit (58.171234ms)
+✔ desktop routers preserve bounded history and exact Unicode text after PI reopen (23.974726ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 560.681013

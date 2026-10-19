@@ -1761,7 +1761,19 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("uses OpenRouter reasoning object instead of reasoning_effort", async () => {
-		const model = getModel("openrouter", "deepseek/deepseek-r1")!;
+		// Test request formatting independently of the live OpenRouter catalog.
+		const model = {
+			id: "deepseek/deepseek-r1",
+			name: "OpenRouter reasoning test model",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		} satisfies Model<"openai-completions">;
 		let payload: unknown;
 
 		await streamSimple(

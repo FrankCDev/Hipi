@@ -1,0 +1,29 @@
+✔ SQLite-backed loop, concurrent retries, target/content conflicts, stream and read-only reopen (404.34199ms)
+✔ recover persisted intent at after_accept without creating a second input (146.698587ms)
+✔ recover persisted intent at after_dispatch_mark without creating a second input (138.67366ms)
+✔ recover persisted intent at after_submit without creating a second input (151.722844ms)
+✔ cancelWait and observer disposal do not cancel execution; directory alias cannot acquire a second owner (344.271825ms)
+✔ diagnostic throw cannot break close or release a live writer (159.744607ms)
+✔ diagnostic rejection cannot break close or release a live writer (158.925676ms)
+✔ concurrent retries do not append duplicate dispatch closures (137.430191ms)
+✔ aborting a hung first observer releases every reserved slot (13.321163ms)
+✔ a PI open failure with failed cleanup is conservatively marked unsafe to unlock (4.230447ms)
+✔ reopening and reading a pending submission never resumes model scheduling (1066.879399ms)
+✔ input quota rejects atomically without publishing a receipt (51.145724ms)
+✔ documented acceptance-host command serves real persisted work and shuts down cleanly (1158.571474ms)
+✔ real PI SQLite via HTTP: streamed execution survives cancelWait and reconnect (250.511002ms)
+✔ real PI SQLite in Node child: SIGKILL/restart keeps completed receipt and resumes pending input once (1610.254336ms)
+✔ HTTP loopback uses the same application semantics and releases cancelled subscriptions (221.909608ms)
+✔ Node child IPC uses the same semantics; disconnect rejects pending waits (275.659658ms)
+✔ HTTP rejects missing auth, malicious Origin, malformed payload, excessive body and Host (28.256255ms)
+✔ HTTP subscription expiry and disconnect are explicit; manual reconnect gets a snapshot (64.494177ms)
+✔ HTTP dispose releases the stream even when its consumer never resolves (5.234644ms)
+✔ source failure closes both transports explicitly; IPC adapter shutdown disconnects ready observers (139.387888ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3335.869511

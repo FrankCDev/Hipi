@@ -1,0 +1,91 @@
+import type { Scope, Snapshot } from "@hipi/work-runtime/contracts";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useAppClient } from "../../app/client-provider.tsx";
+import { usePreferences } from "../../app/preferences.tsx";
+import { Button } from "../../components/ui/button.tsx";
+import { ConversationHistoryController, type ConversationHistoryState } from "./conversation-history-controller.ts";
+import { ConversationMessages } from "./conversation-messages.tsx";
+import { readHistoryPage } from "./history-reads.ts";
+
+type Props = { scope: Scope; snapshot: Snapshot | undefined; error: boolean };
+
+export function ConversationHistory(props: Props) {
+	return <ScopedHistory key={`${props.scope.workspaceId}:${props.scope.conversationId}`} {...props} />;
+}
+
+function ScopedHistory({ scope, snapshot, error }: Props) {
+	const client = useAppClient();
+	const { t } = usePreferences();
+	const [state, setState] = useState<ConversationHistoryState>({
+		snapshot,
+		loading: false,
+		failed: false,
+		reconciling: false,
+		capacity: false,
+		blocked: null,
+	});
+	const [displayGeneration, setDisplayGeneration] = useState(0);
+	const controller = useRef<ConversationHistoryController | null>(null);
+	useLayoutEffect(() => {
+		const boundScope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
+		const owner = new ConversationHistoryController(
+			boundScope,
+			(cursor, signal) => readHistoryPage(client, boundScope, cursor, signal),
+			setState,
+		);
+		controller.current = owner;
+		return () => {
+			owner.dispose();
+			controller.current = null;
+		};
+	}, [client, scope.workspaceId, scope.conversationId]);
+	useLayoutEffect(() => {
+		if (snapshot) controller.current?.update(snapshot);
+	}, [snapshot]);
+	const onNearTop = useCallback((nearTop: boolean) => controller.current?.setNearTop(nearTop), []);
+	const status = state.blocked || state.failed || state.loading || state.reconciling;
+	return (
+		<ConversationMessages
+			key={displayGeneration}
+			snapshot={state.snapshot}
+			error={error}
+			onNearTop={onNearTop}
+			historyStatus={
+				status ? (
+					<div className="history-status">
+						<output>
+							{t(
+								state.capacity
+									? "history.capacity"
+									: state.blocked === "scan-limit"
+										? "history.scanLimit"
+										: state.failed
+											? "history.failed"
+											: state.reconciling
+												? "history.reconciling"
+												: "common.loading",
+							)}
+						</output>
+						{(state.failed || state.blocked === "scan-limit") && (
+							<Button size="sm" variant="ghost" onClick={() => controller.current?.retry()}>
+								{t(state.blocked === "scan-limit" ? "history.continueScan" : "history.retry")}
+							</Button>
+						)}
+						{state.capacity && (
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => {
+									controller.current?.resetToLatest();
+									setDisplayGeneration((generation) => generation + 1);
+								}}
+							>
+								{t("history.releaseLatest")}
+							</Button>
+						)}
+					</div>
+				) : undefined
+			}
+		/>
+	);
+}

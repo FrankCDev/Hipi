@@ -1,0 +1,52 @@
+{
+	"name": "@hipi/work-runtime",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/core.ts",
+		"./contracts": "./src/contracts.ts",
+		"./credentials": "./src/credential-contracts.ts",
+		"./credential-http-client": "./src/credential-http-client.ts",
+		"./files": "./src/files/contracts.ts",
+		"./files/node": "./src/files/service.ts",
+		"./files/protocol": "./src/files/protocol.ts",
+		"./files/http-client": "./src/files/http-client.ts",
+		"./files/host": "./src/files/host.ts",
+		"./previews/contracts": "./src/previews/contracts.ts",
+		"./previews/protocol": "./src/previews/protocol.ts",
+		"./previews/http-client": "./src/previews/http-client.ts",
+		"./previews/host": "./src/previews/host.ts",
+		"./model-provider": "./src/model-provider.ts",
+		"./maintenance": "./src/maintenance/index.ts",
+		"./node": "./src/node.ts",
+		"./testing": "./src/testing.ts",
+		"./http-client": "./src/transport-http-client.ts",
+		"./http": "./src/transport-http.ts",
+		"./ipc": "./src/transport-ipc.ts"
+	},
+	"scripts": {
+		"test:core": "node --conditions=source --test test/core.test.ts",
+		"dev": "node --conditions=source src/dev-server.ts",
+		"store": "node --conditions=source src/store-cli.ts",
+		"check": "tsc --noEmit -p tsconfig.json && node scripts/check-browser.mjs"
+	},
+	"dependencies": {
+		"@earendil-works/chord": "1.3.0",
+		"@earendil-works/pi-ai": "1.3.0",
+		"@earendil-works/pi-durable": "1.3.0",
+		"mammoth": "1.13.0",
+		"papaparse": "5.7.0",
+		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+		"yauzl": "3.4.0"
+	},
+	"devDependencies": {
+		"@types/papaparse": "5.5.2",
+		"@types/yauzl": "3.4.0",
+		"ajv": "8.20.0",
+		"esbuild": "0.28.2"
+	},
+	"engines": {
+		"node": ">=24.19.0"
+	}
+}

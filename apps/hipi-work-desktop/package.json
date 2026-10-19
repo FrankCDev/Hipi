@@ -1,0 +1,28 @@
+{
+	"name": "@hipi/work-desktop",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"main": "dist/main.mjs",
+	"scripts": {
+		"check": "node ../../node_modules/@biomejs/biome/bin/biome check --error-on-warnings . && tsc --noEmit -p tsconfig.json && node scripts/check-boundaries.mjs",
+		"prepare:desktop": "node scripts/prepare.mjs",
+		"hydrate:release": "node scripts/hydrate-release-models.mjs",
+		"verify:source": "node scripts/verify-source.mjs",
+		"build:release": "node scripts/build-release.mjs",
+		"stage:release": "node scripts/stage-release.mjs",
+		"package:release": "node scripts/package-release.mjs",
+		"start": "electron . --provider=production",
+		"start:deterministic": "electron . --provider=deterministic"
+	},
+	"dependencies": {
+		"@hipi/work-runtime": "0.0.1",
+		"@hipi/work-ui": "0.0.1"
+	},
+	"devDependencies": {
+		"electron": "42.11.15",
+		"electron-builder": "26.15.3",
+		"esbuild": "0.28.2",
+		"vite": "8.0.16"
+	}
+}

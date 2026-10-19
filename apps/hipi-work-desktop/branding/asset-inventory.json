@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "source": "icon.svg",
+  "pngSizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "icoSizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icnsSizes": [
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "files": [
+    {
+      "file": "icon.svg",
+      "bytes": 321,
+      "sha256": "9012b5bc7fb632521bf8965d7d7f78e49061e7cf9f532a8394e961158196b75b"
+    },
+    {
+      "file": "icon.ico",
+      "bytes": 7249,
+      "sha256": "9bdf9549ff7d805a165043538ab703a263b28689202f4868bb6312950a876c24"
+    },
+    {
+      "file": "icon.icns",
+      "bytes": 28030,
+      "sha256": "2f52a5bacd0fb63d9f1bdf68d38b93f3e2a0c61ec0b49ddc406cead80aa0ccef"
+    },
+    {
+      "file": "png/16x16.png",
+      "bytes": 291,
+      "sha256": "073c9a05160329c1bc22cc9d718f8c6634d551d0854aa068e536213f4b8ac24d"
+    },
+    {
+      "file": "png/24x24.png",
+      "bytes": 466,
+      "sha256": "9d682907bd6f7881dd593f45f183f8a99541c6b9209aa2ca9f8c64e4f08b7bdf"
+    },
+    {
+      "file": "png/32x32.png",
+      "bytes": 433,
+      "sha256": "b5d160a7ea377791839162a62419893c55bd7c554d070ccf05759465476e642a"
+    },
+    {
+      "file": "png/48x48.png",
+      "bytes": 631,
+      "sha256": "3e4f7cc0e3e6baf7a7d0a956d4c792421fa7c0b3ab6e91dfb5b8df9dac0f9ab6"
+    },
+    {
+      "file": "png/64x64.png",
+      "bytes": 778,
+      "sha256": "ecac6a963399fe236a553802f39649d5ec2172bfb27e16fe3aa2bf053e774d07"
+    },
+    {
+      "file": "png/128x128.png",
+      "bytes": 1485,
+      "sha256": "e0cf109681a115db864cc143b69eb1baa549705bc121a16c156f5b91402c7a4c"
+    },
+    {
+      "file": "png/256x256.png",
+      "bytes": 3047,
+      "sha256": "20f84ebda7190ab7b5f81dfb00f6e680f8903a5a8e29caca342ab07cf28f1258"
+    },
+    {
+      "file": "png/512x512.png",
+      "bytes": 6612,
+      "sha256": "551529d9032c6061c63b89e59c7b1e37998697e34a997cd21f2f6706b96ffade"
+    },
+    {
+      "file": "png/1024x1024.png",
+      "bytes": 15320,
+      "sha256": "fabf9d5eb4b3b2b31caafafc3ba23bebce8c53d0c689a6e924db997ff5a39719"
+    }
+  ]
+}

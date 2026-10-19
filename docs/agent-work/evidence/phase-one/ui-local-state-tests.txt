@@ -1,0 +1,13 @@
+✔ separate connections cannot restore each other's navigation, drafts or requests, even with identical IDs (1.625781ms)
+✔ same-connection pending retry retains the original ID and exact payload despite later draft edits (0.209389ms)
+✔ a null receipt preserves the submitted draft; confirmed acceptance clears only that unchanged draft (0.119166ms)
+✔ unknown execution or mismatched request/scope cannot clear user input (0.134108ms)
+✔ connection-owned reconciliation marker survives pane remount and preserves a newly authored identical draft (0.156992ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 122.31988

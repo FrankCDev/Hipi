@@ -1,0 +1,26 @@
+{
+	"recordedAt": "2026-10-19T17:16:40Z",
+	"scope": "message component browser acceptance",
+	"result": "blocked",
+	"browser": "supported cloud Chromium",
+	"browserInventory": "available",
+	"pageNavigation": {
+		"target": "http://127.0.0.1:5187",
+		"result": "ERR_CONNECTION_REFUSED"
+	},
+	"alternativeLocalServerStart": "failed: environment read-only filesystem",
+	"securityOverrides": [],
+	"browserBehaviorAssertionsPassed": 0,
+	"screenshotsProduced": 0,
+	"developmentServerCleanup": "stopped",
+	"subsequentSourceChecks": {
+		"fixtureTypeCheck": "passed",
+		"viteTransformCount": 7,
+		"viteTransformResult": "TRANSFORM_ONLY_BROWSER_NOT_RUN"
+	},
+	"limitations": [
+		"A running cloud browser does not prove connectivity to the development execution environment.",
+		"Source transforms do not execute React, layout, selection, IME or scrolling assertions.",
+		"No native Electron or cross-platform acceptance was completed by this attempt."
+	]
+}

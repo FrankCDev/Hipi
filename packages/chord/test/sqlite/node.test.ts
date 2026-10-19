@@ -1,22 +1,50 @@
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SqliteExecutor } from "../../src/sqlite/index.ts";
-import { openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
+import { type NodeSqliteDatabaseOptions, openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
 
 describe("Node SQLite driver", () => {
 	it("configures connection defaults and accepts explicit settings", async () => {
-		for (const options of [{}, { busyTimeoutMs: 123, walAutoCheckpointPages: 0 }]) {
+		const configurations: NodeSqliteDatabaseOptions[] = [
+			{},
+			{ busyTimeoutMs: 123, walAutoCheckpointPages: 0 },
+			{ synchronous: "NORMAL" },
+			{ synchronous: "FULL" },
+		];
+		for (const options of configurations) {
 			const database = await openNodeSqliteDatabase(":memory:", options);
 			try {
 				expect(await database.get("PRAGMA busy_timeout")).toEqual({ timeout: options.busyTimeoutMs ?? 5_000 });
 				expect(await database.get("PRAGMA wal_autocheckpoint")).toEqual({
 					wal_autocheckpoint: options.walAutoCheckpointPages ?? 1_000,
 				});
-				expect(await database.get("PRAGMA synchronous")).toEqual({ synchronous: 1 });
+				expect(await database.get("PRAGMA synchronous")).toEqual({
+					synchronous: options.synchronous === "FULL" ? 2 : 1,
+				});
 			} finally {
 				await database.close();
 			}
 		}
 	});
+
+	it.each(["OFF", "FULL; DROP TABLE example", 2, null])(
+		"rejects invalid synchronization policy %s before filesystem changes",
+		async (synchronous) => {
+			const directory = await mkdtemp(join(tmpdir(), "chord-sync-"));
+			try {
+				const parent = join(directory, "missing");
+				// @ts-expect-error Exercise untyped JavaScript callers at the options boundary.
+				await expect(openNodeSqliteDatabase(join(parent, "db.sqlite"), { synchronous })).rejects.toThrow(
+					"Invalid SQLite synchronous policy",
+				);
+				await expect(stat(parent)).rejects.toMatchObject({ code: "ENOENT" });
+			} finally {
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("commits work done through the transaction handle and closes idempotently", async () => {
 		const database = await openNodeSqliteDatabase(":memory:");
