@@ -141,6 +141,7 @@ export function useFileLineNavigation<Snapshot>({
 			<fieldset
 				className="file-line-navigation"
 				aria-label={l["line.title"]}
+				data-file-editor-cancel="go-to-line"
 				onKeyDown={(event) => {
 					if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
 					if (event.key === "Escape") {

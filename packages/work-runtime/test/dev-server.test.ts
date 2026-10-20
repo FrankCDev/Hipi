@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { Serializable } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -227,6 +227,36 @@ test("a clean child exit cannot hide an open acceptance port", { timeout: 15000 
 	} finally {
 		await host.close().catch(() => {});
 		await new Promise<void>((resolve, reject) => replacement.close((error) => (error ? reject(error) : resolve())));
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("startup timeout reports safe lifecycle metadata only after child cleanup", { timeout: 15000 }, async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-host-startup-timeout-"));
+	const pidPath = join(directory, "child.pid");
+	try {
+		await assert.rejects(
+			startDevHost({
+				directory,
+				provider: "deterministic",
+				origin: "http://127.0.0.1:5173",
+				env: { ...process.env, HIPI_TEST_CHILD_PID_PATH: pidPath },
+				preload: new URL("./helpers/dev-host-startup-stall.ts", import.meta.url),
+			}),
+			(error: unknown) => {
+				assert.ok(error instanceof Error);
+				assert.match(
+					error.message,
+					/^Acceptance host did not become ready \(elapsedMs=\d+, readinessMarkerObserved=false, exitCode=null, signal=SIGKILL\)$/,
+				);
+				assert.doesNotMatch(String(error.cause), /synthetic|Token:|https?:\/\//);
+				return true;
+			},
+		);
+		const pid = Number(await readFile(pidPath, "utf8"));
+		assert.ok(Number.isSafeInteger(pid) && pid > 0);
+		assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
 });

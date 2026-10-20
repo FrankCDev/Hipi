@@ -23,12 +23,14 @@ import { useConversation } from "./use-conversation.ts";
 
 export function ConversationPane({
 	conversation,
+	draftRecoveryRevision,
 	detailsOpen,
 	onDetailsClose,
 	onOpenArtifact,
 	onOpenModelSettings,
 }: {
 	conversation: Conversation;
+	draftRecoveryRevision?: string;
 	detailsOpen: boolean;
 	onDetailsClose: () => void;
 	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
@@ -36,7 +38,7 @@ export function ConversationPane({
 }) {
 	const { t, locale } = usePreferences();
 	const failureTracker = conversationFailureTrackerFor(useAppClient());
-	const controller = useConversation(conversation);
+	const controller = useConversation(conversation, draftRecoveryRevision);
 	const { observation } = controller;
 	const failure = useMemo(
 		() =>

@@ -438,6 +438,15 @@ test(
 				expiresAt: Date.now() + 60000,
 				disclosureVersion: 1,
 			});
+			const assertNoLiveContext = (prompt: string | undefined, rootIds: string[]) => {
+				assert.equal(
+					prompt,
+					"No live project file context is authorized for this chat and model. File root IDs come only from authorized app context: never invent them or ask the user to type internal rootId values or absolute host paths. If project files are needed, ask the user to use Permissions (权限) or Allow project access (允许访问项目) in the app. Choosing a folder alone does not authorize model access. Do not call file tools until authorized roots are supplied.",
+				);
+				for (const privateValue of [...rootIds, directory, "note.txt", "private file content", grant.grantId])
+					assert.equal(prompt.includes(privateValue), false);
+				assert.equal(prompt.includes("Authorized file roots and relative path prefixes:"), false);
+			};
 			const turn = async () => {
 				const submission = await conversation.submit(
 					{ type: "input", content: `User ${"u".repeat(400)}` },
@@ -456,7 +465,7 @@ test(
 			await turn();
 			const conversationId = conversation.id;
 			files.revokeRoot(root.rootId);
-			assert.equal(await broker.promptContext(conversationId), undefined);
+			assertNoLiveContext(await broker.promptContext(conversationId), [root.rootId]);
 			broker.close();
 			await harness.close(background);
 			const newRoot = await files.grantRoot({
@@ -490,7 +499,7 @@ test(
 				expiresAt: Date.now() + 60000,
 				disclosureVersion: 1,
 			});
-			assert.equal(await broker.promptContext(conversation.id), undefined);
+			assertNoLiveContext(await broker.promptContext(conversation.id), [root.rootId, newRoot.rootId]);
 			const restored = await harness.waitForTask(await conversation.compact(undefined, background), background);
 			assert.equal(restored.state.outcome.status, "completed");
 			assert.equal(summaries, 2);

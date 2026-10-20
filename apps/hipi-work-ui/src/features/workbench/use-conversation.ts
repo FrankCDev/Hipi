@@ -14,13 +14,22 @@ import { submitRequest } from "./submit-request.ts";
 import { useObservation } from "./use-observation.ts";
 
 /** Owns submission identity, draft reconciliation and request cancellation for one mounted conversation. */
-export function useConversation(conversation: Conversation) {
+export function useConversation(conversation: Conversation, draftRecoveryRevision?: string) {
 	const client = useAppClient();
 	const local = useLocalState();
 	const cache = useQueryClient();
 	const localKey = `${conversation.workspaceId}.${conversation.conversationId}`;
 	const [draft, setDraft] = useState(() => local.read(`draft.${localKey}`) ?? "");
 	const currentDraft = useRef(draft);
+	useEffect(() => {
+		if (!draftRecoveryRevision) return;
+		const recovered = local.valueSnapshot(`draft.${localKey}`);
+		// Only an explicit recovery of this exact draft may update an already mounted composer.
+		// A subsequent user edit has its own revision and wins over a delayed effect.
+		if (recovered?.revision !== draftRecoveryRevision) return;
+		currentDraft.current = recovered.value;
+		setDraft(recovered.value);
+	}, [draftRecoveryRevision, local, localKey]);
 	const [pending, setPending] = useState(() => local.pending(localKey));
 	const requestId = pending?.requestId ?? "";
 	const [reconciledRequest, setReconciledRequest] = useState(() =>

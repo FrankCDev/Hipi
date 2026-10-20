@@ -1,6 +1,17 @@
-import { LIMITS, type ModelReference, PROTOCOL_VERSION, parseRequest, type Submit } from "@hipi/work-runtime/contracts";
+import {
+	LIMITS,
+	type ModelReference,
+	PROTOCOL_VERSION,
+	parseRequest,
+	type ReceiptView,
+	type Submit,
+} from "@hipi/work-runtime/contracts";
 import type { CatalogCommand } from "./command-recovery.ts";
+import { type InitialContext, parseStagedProjectConsent, type StagedProjectConsent } from "./initial-context.ts";
+import type { SavedValue } from "./local-persistence.ts";
 import type { LocalState } from "./local-state.ts";
+
+export type { StagedProjectConsent } from "./initial-context.ts";
 
 type WorkspaceCommand = Extract<CatalogCommand, { method: "createWorkspace" }>;
 type ConversationCommand = Extract<CatalogCommand, { method: "createConversation" }>;
@@ -10,6 +21,7 @@ export type InitialSendInput = {
 	title: string;
 	model?: ModelReference;
 	sourceKey: string;
+	context?: StagedProjectConsent;
 };
 /** Authorization to finish one captured Send, not an independently persisted execution status. */
 export type InitialSend = {
@@ -20,6 +32,7 @@ export type InitialSend = {
 	sourceKey: string;
 	sourceRevision: string | null;
 	conversationId: string | null;
+	context?: InitialContext;
 };
 export type InitialSendRecovery = { request: CatalogCommand | null; initialSend: InitialSend };
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -67,7 +80,7 @@ export function readInitialSendRecovery(value: unknown): InitialSendRecovery {
 	const saved = object(value);
 	const task = object(saved.initialSend);
 	if (
-		saved.version !== 3 ||
+		(saved.version !== 3 && saved.version !== 4) ||
 		Object.keys(saved).some((key) => !["version", "request", "initialSend"].includes(key)) ||
 		Object.keys(task).some(
 			(key) =>
@@ -79,6 +92,7 @@ export function readInitialSendRecovery(value: unknown): InitialSendRecovery {
 					"sourceKey",
 					"sourceRevision",
 					"conversationId",
+					"context",
 				].includes(key),
 		) ||
 		typeof task.text !== "string" ||
@@ -99,6 +113,71 @@ export function readInitialSendRecovery(value: unknown): InitialSendRecovery {
 		sourceRevision: nullableIdentifier(task.sourceRevision),
 		conversationId: nullableIdentifier(task.conversationId),
 	};
+	if (saved.version === 4) {
+		const context = object(task.context);
+		const staged = parseStagedProjectConsent(context.staged);
+		const model = conversation.params.model;
+		if (
+			Object.keys(context).some(
+				(key) =>
+					![
+						"staged",
+						"requestId",
+						"createAttempted",
+						"authorization",
+						"submitAttempted",
+						"invalidated",
+						"draftCombination",
+					].includes(key),
+			) ||
+			typeof context.createAttempted !== "boolean" ||
+			typeof context.submitAttempted !== "boolean" ||
+			typeof context.invalidated !== "boolean" ||
+			staged.workspaceId !== conversation.params.workspaceId ||
+			workspace !== null ||
+			!model ||
+			model.provider !== staged.model.provider ||
+			model.modelId !== staged.model.modelId
+		)
+			throw new Error("INVALID_INITIAL_CONTEXT");
+		const requestId = identifier(context.requestId);
+		const authorization =
+			context.authorization === null
+				? null
+				: parseRequest({ version: PROTOCOL_VERSION, method: "authorizeAgentContext", params: context.authorization });
+		if (authorization && authorization.method !== "authorizeAgentContext") throw new Error("INVALID_INITIAL_CONTEXT");
+		const expected = initialContextRequest(staged, requestId, initialSend.conversationId ?? "unverified");
+		if (
+			(authorization &&
+				(!initialSend.conversationId || JSON.stringify(authorization.params) !== JSON.stringify(expected))) ||
+			(initialSend.conversationId !== null && !context.createAttempted) ||
+			(context.submitAttempted && !authorization)
+		)
+			throw new Error("INVALID_INITIAL_CONTEXT");
+		initialSend.context = {
+			staged,
+			requestId,
+			createAttempted: context.createAttempted,
+			authorization: authorization?.params ?? null,
+			submitAttempted: context.submitAttempted,
+			invalidated: context.invalidated,
+		};
+		if (context.draftCombination !== undefined) {
+			const combination = object(context.draftCombination);
+			if (
+				Object.keys(combination).some((key) => !["beforeRevision", "revision"].includes(key)) ||
+				context.submitAttempted ||
+				(context.createAttempted && !initialSend.conversationId)
+			)
+				throw new Error("INVALID_INITIAL_CONTEXT");
+			initialSend.context.draftCombination = {
+				beforeRevision: nullableIdentifier(combination.beforeRevision),
+				revision: identifier(combination.revision),
+			};
+			if (initialSend.context.draftCombination.beforeRevision === initialSend.context.draftCombination.revision)
+				throw new Error("INVALID_INITIAL_CONTEXT");
+		}
+	} else if (task.context !== undefined) throw new Error("INVALID_INITIAL_CONTEXT");
 	const request = saved.request === null ? null : parseRequest(saved.request);
 	if (
 		(request === null && initialSend.conversationId === null) ||
@@ -112,7 +191,60 @@ export function readInitialSendRecovery(value: unknown): InitialSendRecovery {
 	return { request, initialSend };
 }
 function save(local: LocalState, record: InitialSendRecovery) {
-	local.persistValue({ kind: "value", key: recoveryKey, value: JSON.stringify({ version: 3, ...record }) });
+	local.persistValue({
+		kind: "value",
+		key: recoveryKey,
+		value: JSON.stringify({ version: record.initialSend.context ? 4 : 3, ...record }),
+	});
+}
+function initialContextRequest(staged: StagedProjectConsent, requestId: string, conversationId: string) {
+	return {
+		workspaceId: staged.workspaceId,
+		conversationId,
+		requestId,
+		rootId: staged.rootId,
+		pathPrefixes: staged.pathPrefixes,
+		model: staged.model,
+		expiresAt: staged.expiresAt,
+		disclosureVersion: staged.disclosureVersion,
+	};
+}
+/** Persist the exact next prerequisite before issuing its side effect. */
+export function advanceInitialContext(
+	local: LocalState,
+	expected: InitialSendRecovery,
+	stage: "create" | "authorize" | "submit" | "invalidate",
+	signal: AbortSignal,
+) {
+	return local.withAdmission(recoveryKey, () => {
+		signal.throwIfAborted();
+		const saved = currentInitialSend(local, expected);
+		const task = saved.initialSend;
+		const context = task.context;
+		if (
+			!context ||
+			(stage === "create" && (saved.request?.method !== "createConversation" || task.conversationId)) ||
+			((stage === "authorize" || stage === "submit") && (!task.conversationId || saved.request))
+		)
+			throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+		const next = {
+			...saved,
+			initialSend: {
+				...task,
+				context: {
+					...context,
+					...(stage === "create" ? { createAttempted: true } : {}),
+					...(stage === "authorize" && task.conversationId
+						? { authorization: initialContextRequest(context.staged, context.requestId, task.conversationId) }
+						: {}),
+					...(stage === "submit" ? { submitAttempted: true } : {}),
+					...(stage === "invalidate" ? { invalidated: true } : {}),
+				},
+			},
+		};
+		save(local, next);
+		return next;
+	});
 }
 export function currentInitialSend(local: LocalState, expected: InitialSendRecovery): InitialSendRecovery {
 	const raw = local.storedValue(recoveryKey)?.value;
@@ -159,7 +291,7 @@ export function admitInitialSend(local: LocalState, input: InitialSendInput, sig
 			},
 		};
 		const record = readInitialSendRecovery({
-			version: 3,
+			version: captured.context ? 4 : 3,
 			request: createWorkspace ? workspace : conversation,
 			initialSend: {
 				workspaceCommand: workspace,
@@ -169,6 +301,18 @@ export function admitInitialSend(local: LocalState, input: InitialSendInput, sig
 				sourceKey: key,
 				sourceRevision,
 				conversationId: null,
+				...(captured.context
+					? {
+							context: {
+								staged: captured.context,
+								requestId: crypto.randomUUID(),
+								createAttempted: false,
+								authorization: null,
+								submitAttempted: false,
+								invalidated: false,
+							},
+						}
+					: {}),
 			},
 		});
 		save(local, record);
@@ -209,16 +353,123 @@ export function finishInitialConversation(
 		return next;
 	});
 }
+/** Explicit pre-submit recovery only. Keeps the project draft and never creates execution recovery. */
+export function releaseInitialDraft(
+	local: LocalState,
+	expected: InitialSendRecovery,
+	signal: AbortSignal,
+	combination?: { key: string; stored: SavedValue | null; edited: SavedValue | null },
+) {
+	return local.withAdmission(recoveryKey, () => {
+		signal.throwIfAborted();
+		const saved = currentInitialSend(local, expected);
+		const { initialSend: task, request } = saved;
+		if (!task.context || task.context.submitAttempted) throw new Error("INITIAL_CONTEXT_PREREQUISITE_REQUIRED");
+		if (
+			(task.context.createAttempted && (request || !task.conversationId)) ||
+			(!task.context.createAttempted && (task.conversationId || request?.method !== "createConversation"))
+		)
+			throw new Error("INITIAL_SEND_COMMAND_MISMATCH");
+		const destinationKey = task.conversationId
+			? `draft.${task.conversationCommand.params.workspaceId}.${task.conversationId}`
+			: task.sourceKey;
+		if (combination) {
+			const stored = local.storedValue(destinationKey);
+			const edited = local.valueSnapshot(destinationKey);
+			if (
+				combination.key !== destinationKey ||
+				JSON.stringify(combination.stored) !== JSON.stringify(combination.edited) ||
+				JSON.stringify(stored) !== JSON.stringify(combination.stored) ||
+				JSON.stringify(edited) !== JSON.stringify(combination.edited)
+			)
+				return false;
+			const journal = task.context.draftCombination;
+			if (journal && stored?.revision !== journal.revision && (stored?.revision ?? null) !== journal.beforeRevision)
+				return false;
+			if (!journal || stored?.revision !== journal.revision) {
+				const existing = stored?.value ?? "";
+				const text = existing ? `${existing}\n\n---\n\n${task.text}` : task.text;
+				if (text.length > LIMITS.text) return false;
+				const revision = crypto.randomUUID();
+				// The journal makes a successful draft write recognizable if clearing its owner fails.
+				save(local, {
+					...saved,
+					initialSend: {
+						...task,
+						context: {
+							...task.context,
+							invalidated: true,
+							draftCombination: { beforeRevision: stored?.revision ?? null, revision },
+						},
+					},
+				});
+				local.persistValue({
+					kind: "value",
+					key: destinationKey,
+					value: text,
+					revision,
+					...(task.conversationId ? { handoffRequestId: task.submissionId, handoffRevision: revision } : {}),
+				});
+			}
+			local.persistValue({ kind: "value", key: recoveryKey, value: JSON.stringify({ version: 2, request: null }) });
+			return true;
+		}
+		if (!task.context.createAttempted) {
+			if (task.conversationId || request?.method !== "createConversation")
+				throw new Error("INITIAL_SEND_COMMAND_MISMATCH");
+			const source = local.storedValue(task.sourceKey);
+			const edited = local.valueSnapshot(task.sourceKey);
+			if (source?.value !== task.text || edited?.value !== task.text || source?.revision !== edited?.revision) {
+				if (source?.value || edited?.value || source?.revision !== edited?.revision) return false;
+				local.persistValue({
+					kind: "value",
+					key: task.sourceKey,
+					value: task.text,
+					revision: crypto.randomUUID(),
+				});
+			}
+			local.persistValue({ kind: "value", key: recoveryKey, value: JSON.stringify({ version: 2, request: null }) });
+			return true;
+		}
+		if (request || !task.conversationId) throw new Error("INITIAL_CONTEXT_PREREQUISITE_REQUIRED");
+		const key = `draft.${task.conversationCommand.params.workspaceId}.${task.conversationId}`;
+		const stored = local.storedValue(key);
+		const edited = local.valueSnapshot(key);
+		if (stored?.handoffRequestId !== task.submissionId) {
+			if (stored?.value || edited?.value || stored?.revision !== edited?.revision) return false;
+			const revision = crypto.randomUUID();
+			local.persistValue({
+				kind: "value",
+				key,
+				value: task.text,
+				revision,
+				handoffRequestId: task.submissionId,
+				handoffRevision: revision,
+			});
+		}
+		local.persistValue({ kind: "value", key: recoveryKey, value: JSON.stringify({ version: 2, request: null }) });
+		return true;
+	});
+}
 /** The only execution recovery owner is the existing per-conversation pending Submit record. */
 export async function transferInitialSubmission(
 	local: LocalState,
 	expected: InitialSendRecovery,
 	signal: AbortSignal,
 	onAdmitted: (input: Submit) => void,
+	confirmedConsentReceipt?: ReceiptView,
 ): Promise<{ input: Submit; newlyAdmitted: boolean }> {
 	const { input, draftRevision } = await local.withAdmission(recoveryKey, () => {
 		signal.throwIfAborted();
 		const { initialSend: task, request } = currentInitialSend(local, expected);
+		if (
+			task.context &&
+			(!confirmedConsentReceipt ||
+				confirmedConsentReceipt.workspaceId !== task.conversationCommand.params.workspaceId ||
+				confirmedConsentReceipt.conversationId !== task.conversationId ||
+				confirmedConsentReceipt.requestId !== task.submissionId)
+		)
+			throw new Error("INITIAL_CONTEXT_PREREQUISITE_REQUIRED");
 		if (request || !task.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
 		const input: Submit = {
 			workspaceId: task.conversationCommand.params.workspaceId,

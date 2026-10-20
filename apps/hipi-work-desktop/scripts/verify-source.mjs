@@ -30,6 +30,7 @@ nodeTests.push("apps/hipi-work-desktop/test/credential-crypto.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/connection-lifetime.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/conversation-failure.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/observation-session.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/initial-context-runtime.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
@@ -49,6 +50,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-editor-escape.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
@@ -83,6 +85,7 @@ const uiTests = [
 	"permission-presentation",
 	"retained-context-consent",
 	"file-panel",
+	"file-panel-escape",
 	"file-workbench",
 	"file-search",
 	"file-line-navigation",
@@ -99,6 +102,7 @@ const uiTests = [
 	"custom-provider-settings",
 	"legacy-provider-editor",
 	"conversation-turn-failure",
+	"conversation-draft-recovery",
 	"observation-recovery-ui",
 	"project-folder-interaction",
 	"conversation-capabilities",
@@ -133,6 +137,7 @@ uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
+uiTests.push("apps/hipi-work-ui/test/initial-context-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/command-recovery.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-packs.test.ts");
 uiTests.push("apps/hipi-work-ui/test/artifact-navigation.test.ts");

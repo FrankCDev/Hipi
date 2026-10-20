@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
 import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
-import { fileFixture } from "./gui-file-workbench-fixture.mjs";
+import { fileFixture } from "./gui-file-fixture-data.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
 import {
 	readNativeLog,

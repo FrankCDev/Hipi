@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -7,13 +8,28 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { smokeProfile } from "../src/smoke-profile.ts";
-import { fileFixture } from "./gui-file-workbench-fixture.mjs";
+import { fileFixture } from "./gui-file-fixture-data.mjs";
 import {
 	assertScenarioWorkspaceDatabases,
 	baselineResponseArguments,
 	createGuiProfile,
 	sourceProvenanceEvidence,
 } from "./smoke-packaged-gui.mjs";
+
+test("plain-Node packaged GUI entry imports without source conditions or package builds", () => {
+	const entry = new URL("./smoke-packaged-gui.mjs", import.meta.url).href;
+	const output = execFileSync(
+		process.execPath,
+		[
+			"--input-type=module",
+			"--eval",
+			`import { baselineResponseArguments } from ${JSON.stringify(entry)};
+				console.log(JSON.stringify(baselineResponseArguments("baseline")));`,
+		],
+		{ encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "" }, timeout: 10000 },
+	);
+	assert.deepEqual(JSON.parse(output), ["--smoke-response=baseline-stream", "--smoke-scenario=baseline"]);
+});
 
 test("known stream response is opt-in only for the isolated baseline scenario", () => {
 	assert.deepEqual(baselineResponseArguments("baseline"), [

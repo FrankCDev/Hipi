@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { exerciseNarrowEditorEscape } from "./gui-file-editor-escape.mjs";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { documentPreviewState, exerciseDocumentPreviews } from "./gui-file-previews.mjs";
@@ -854,6 +855,10 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, previous
 	);
 	await expectEditor(cdp, fileFixture.draft, { dirty: true, id: primaryId });
 	await capture(cdp, directory, "file-conflict-narrow-modal");
+	await exerciseNarrowEditorEscape(cdp, directory);
+	await expectEditor(cdp, fileFixture.draft, { dirty: true, id: primaryId });
+	assert.equal((await readOwnedFixture(nativeContext.ownedProfileRoot)).toString("utf8"), fileFixture.external);
+	record({ narrowFindEscape: true, narrowLineEscape: true, nativeIme: "not_run" });
 	await pressKey(cdp, "Escape");
 	await until(
 		() =>

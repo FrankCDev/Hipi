@@ -1,4 +1,5 @@
 import {
+	type AgentContext,
 	type AppClient,
 	AppError,
 	type Conversation,
@@ -7,15 +8,20 @@ import {
 	type Submit,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
+import { parseProjectFolder } from "@hipi/work-runtime/files/protocol";
+import type { FileAuthority } from "../../app/file-client.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
+import { matchesInitialGrant } from "./initial-context.ts";
 import {
 	admitInitialSend,
+	advanceInitialContext,
 	currentInitialSend,
 	defaultChatWorkspaceId,
 	finishInitialConversation,
 	finishInitialWorkspace,
 	type InitialSend,
 	type InitialSendInput,
+	releaseInitialDraft,
 	transferInitialSubmission,
 } from "./initial-send.ts";
 import type { LocalState } from "./local-state.ts";
@@ -44,6 +50,10 @@ export type CatalogState = {
 	submission: Submit | null;
 	receipt: ReceiptView | null;
 	errorCode: ErrorCode | null;
+	initialConsentInvalidated: boolean;
+	initialConsentStage: "create" | "authorize" | "submit" | null;
+	initialConsentGrantActive: boolean;
+	initialConsentCanRecoverDraft: boolean;
 };
 /** Owns immutable directory commands. A lost reply is resolved by exact read-only lookup. */
 export class CatalogSession {
@@ -53,9 +63,12 @@ export class CatalogSession {
 	private disposed = false;
 	private client: AppClient;
 	private local: LocalState;
-	constructor(client: AppClient, local: LocalState) {
+	private fileAuthority: Pick<FileAuthority, "getProject"> | undefined;
+	private liveConsentId: string | null = null;
+	constructor(client: AppClient, local: LocalState, fileAuthority?: Pick<FileAuthority, "getProject">) {
 		this.client = client;
 		this.local = local;
+		this.fileAuthority = fileAuthority;
 		const saved = readCatalogRecovery(local.read("command.catalog"));
 		this.state = {
 			pending: saved.request,
@@ -71,6 +84,16 @@ export class CatalogSession {
 			submission: null,
 			receipt: null,
 			errorCode: null,
+			initialConsentInvalidated: !!saved.initialSend?.context,
+			initialConsentStage: saved.initialSend?.context
+				? saved.request
+					? "create"
+					: saved.initialSend.context.submitAttempted
+						? "submit"
+						: "authorize"
+				: null,
+			initialConsentGrantActive: false,
+			initialConsentCanRecoverDraft: !!saved.initialSend?.context && !saved.initialSend.context.createAttempted,
 		};
 	}
 	getSnapshot = () => this.state;
@@ -82,15 +105,29 @@ export class CatalogSession {
 	private publish(patch: Partial<CatalogState>) {
 		if (this.disposed) return;
 		this.state = { ...this.state, ...patch };
+		const task = this.state.initialSend;
+		this.state.initialConsentInvalidated =
+			!!task?.context && (task.context.invalidated || this.liveConsentId !== task.submissionId);
+		this.state.initialConsentStage = task?.context
+			? this.state.pending
+				? "create"
+				: task.context.submitAttempted
+					? "submit"
+					: "authorize"
+			: null;
+		if (!task?.context || task.context.submitAttempted) this.state.initialConsentCanRecoverDraft = false;
+		else if (!task.context.createAttempted) this.state.initialConsentCanRecoverDraft = true;
 		for (const listener of this.listeners) listener();
 	}
 	activate() {
 		this.disposed = false;
+		if (this.state.initialSend?.context) this.publish({});
 	}
 	dispose() {
 		this.disposed = true;
 		this.request?.abort();
 		this.request = undefined;
+		this.liveConsentId = null;
 		this.listeners.clear();
 	}
 	private async run(work: (signal: AbortSignal) => Promise<void>) {
@@ -233,6 +270,93 @@ export class CatalogSession {
 		if (!this.state.preparedTask?.conversationId) return Promise.resolve();
 		return this.run((signal) => this.lookup(signal, true));
 	};
+	/** Keeps a verified pre-submit conversation as a draft. Never abandons an unknown Submit. */
+	recoverInitialDraft = () => this.recoverDraft(false);
+	/** Explicit conflict resolution only: preserve the current draft first, then the original unsent text. */
+	combineInitialDraft = () => this.recoverDraft(true);
+	private recoverDraft(combine: boolean) {
+		const task = this.state.initialSend;
+		if (!task?.context || task.context.submitAttempted) return Promise.resolve();
+		if (task.context.createAttempted && !task.conversationId) return Promise.resolve();
+		return this.run(async (signal) => {
+			// Capture at the explicit click, before provenance reads or a queued admission can yield.
+			const key = task.conversationId
+				? `draft.${task.conversationCommand.params.workspaceId}.${task.conversationId}`
+				: task.sourceKey;
+			const combination = combine
+				? { key, stored: this.local.storedValue(key), edited: this.local.valueSnapshot(key) }
+				: undefined;
+			this.liveConsentId = null;
+			this.publish({});
+			if (!task.context?.createAttempted) {
+				const released = await releaseInitialDraft(
+					this.local,
+					{ request: this.state.pending, initialSend: task },
+					signal,
+					combination,
+				);
+				signal.throwIfAborted();
+				this.publish({
+					...(released ? { initialSend: null, pending: null } : {}),
+					handoffConflict: !released,
+				});
+				return;
+			}
+			if (!task.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+			const conversationId = task.conversationId;
+			currentInitialSend(this.local, { request: null, initialSend: task });
+			const scope = { workspaceId: task.conversationCommand.params.workspaceId, conversationId };
+			const creation = await this.client.call(
+				"getConversationCommandResult",
+				{ workspaceId: scope.workspaceId, requestId: task.conversationCommand.params.requestId },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (
+				creation?.method !== "createConversation" ||
+				creation.result.workspaceId !== scope.workspaceId ||
+				creation.result.conversationId !== scope.conversationId ||
+				creation.result.title !== task.conversationCommand.params.title
+			)
+				throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+			const conversation = await this.client.call("getConversation", scope, signal);
+			signal.throwIfAborted();
+			if (conversation.workspaceId !== scope.workspaceId || conversation.conversationId !== scope.conversationId)
+				throw new Error("SCOPE_MISMATCH");
+			const authorization = task.context?.authorization;
+			if (authorization) {
+				const result = await this.client.call(
+					"getAgentCommandResult",
+					{ ...scope, requestId: authorization.requestId },
+					signal,
+				);
+				signal.throwIfAborted();
+				// A missing receipt does not establish that an authorization was never dispatched.
+				if (result?.method !== "authorizeAgentContext" || !matchesInitialGrant(authorization, result.result))
+					throw new Error("INITIAL_CONTEXT_AUTHORIZATION_UNKNOWN");
+				const active = await this.client.call("listActiveAgentContexts", scope, signal);
+				signal.throwIfAborted();
+				this.publish({
+					initialConsentGrantActive: active.some(
+						(grant) =>
+							grant.grantId === result.result.grantId &&
+							grant.revision === result.result.revision &&
+							grant.status === "active" &&
+							grant.expiresAt > Date.now() &&
+							matchesInitialGrant(authorization, grant),
+					),
+				});
+			}
+			const released = await releaseInitialDraft(this.local, { request: null, initialSend: task }, signal, combination);
+			signal.throwIfAborted();
+			this.publish({
+				...(released ? { initialSend: null, pending: null, initialConsentCanRecoverDraft: false } : {}),
+				handoffConflict: !released,
+				result: conversation,
+				resultMethod: "createConversation",
+			});
+		});
+	}
 	execute = (command: CatalogCommand, options?: { preparedDraft?: string }) => {
 		if (this.state.pending || this.state.initialSend || this.state.incompatible || this.state.busy)
 			return Promise.resolve();
@@ -254,8 +378,13 @@ export class CatalogSession {
 	/** Explicit user retry only, after an exact lookup. Never a new identity or edited payload. */
 	retry = () => {
 		if (this.state.initialSend) {
+			if (this.state.initialSend.context && this.state.initialConsentInvalidated) return Promise.resolve();
 			if (!this.state.notFound && this.state.pending) return Promise.resolve();
-			return this.run((signal) => this.continueInitial(signal));
+			return this.run(async (signal) => {
+				// Consent retries first reconcile every exact outcome; never replay from a stale missing-result flag.
+				if (this.state.initialSend?.context) await this.recoverInitial(signal);
+				if (this.state.initialSend) await this.continueInitial(signal);
+			});
 		}
 		const command = this.state.pending;
 		if (!command || !this.state.notFound) return Promise.resolve();
@@ -267,6 +396,7 @@ export class CatalogSession {
 			return Promise.resolve();
 		return this.run(async (signal) => {
 			const saved = await admitInitialSend(this.local, input, signal);
+			this.liveConsentId = saved.initialSend.context ? saved.initialSend.submissionId : null;
 			this.publish({
 				pending: saved.request,
 				initialSend: saved.initialSend,
@@ -301,6 +431,16 @@ export class CatalogSession {
 					(savedWorkspace && workspace.name !== savedWorkspace.params.name)
 				)
 					throw new Error("SCOPE_MISMATCH");
+			}
+			if (this.state.initialSend.context) await this.validateInitialContext(this.state.initialSend, signal);
+			if (this.state.initialSend.context && !this.state.initialSend.context.createAttempted) {
+				const saved = await advanceInitialContext(
+					this.local,
+					{ request: command, initialSend: this.state.initialSend },
+					"create",
+					signal,
+				);
+				this.publish({ initialSend: saved.initialSend, initialConsentCanRecoverDraft: false });
 			}
 			signal.throwIfAborted();
 			currentInitialSend(this.local, { request: command, initialSend: this.state.initialSend });
@@ -347,6 +487,10 @@ export class CatalogSession {
 		signal.throwIfAborted();
 		if (conversation.workspaceId !== scope.workspaceId || conversation.conversationId !== scope.conversationId)
 			throw new Error("SCOPE_MISMATCH");
+		if (task.context) {
+			await this.handoffInitialContext(task, conversation, signal, allowDispatch);
+			return;
+		}
 		const transfer = await transferInitialSubmission(this.local, expected, signal, (submission) => {
 			this.publish({ submission, result: conversation, resultMethod: "createConversation" });
 		});
@@ -385,6 +529,199 @@ export class CatalogSession {
 		const key = `${scope.workspaceId}.${scope.conversationId}`;
 		reconcileReceipt(this.local, key, this.local.read(`draft.${key}`) ?? "", transfer.input, receipt);
 		this.publish({ receipt });
+	}
+	private async invalidateInitialContext(task: InitialSend, signal: AbortSignal): Promise<never> {
+		this.liveConsentId = null;
+		const saved = await advanceInitialContext(
+			this.local,
+			{ request: this.state.pending, initialSend: task },
+			"invalidate",
+			signal,
+		);
+		this.publish({ initialSend: saved.initialSend });
+		throw new Error("INITIAL_CONTEXT_INVALIDATED");
+	}
+	private async validateInitialContext(task: InitialSend, signal: AbortSignal) {
+		const context = task.context;
+		if (!context || context.invalidated || this.liveConsentId !== task.submissionId)
+			throw new Error("INITIAL_CONTEXT_INVALIDATED");
+		if (!this.fileAuthority?.getProject) throw new Error("INITIAL_CONTEXT_AUTHORITY_UNAVAILABLE");
+		const staged = context.staged;
+		const folder = parseProjectFolder(await this.fileAuthority.getProject(staged.workspaceId), staged.workspaceId);
+		signal.throwIfAborted();
+		currentInitialSend(this.local, { request: this.state.pending, initialSend: task });
+		if (
+			staged.expiresAt <= Date.now() ||
+			folder.status !== "available" ||
+			folder.bindingId !== staged.bindingId ||
+			folder.revision !== staged.bindingRevision ||
+			folder.root.rootId !== staged.rootId
+		)
+			await this.invalidateInitialContext(task, signal);
+		if (task.conversationId) {
+			const scope = { workspaceId: staged.workspaceId, conversationId: task.conversationId };
+			const conversation = await this.client.call("getConversation", scope, signal);
+			signal.throwIfAborted();
+			if (
+				conversation.workspaceId !== scope.workspaceId ||
+				conversation.conversationId !== scope.conversationId ||
+				conversation.archivedAt !== null
+			)
+				await this.invalidateInitialContext(task, signal);
+			const model = await this.client.call("getConversationModel", scope, signal);
+			signal.throwIfAborted();
+			if (model.model.provider !== staged.model.provider || model.model.modelId !== staged.model.modelId)
+				await this.invalidateInitialContext(task, signal);
+			if (!canExecuteModel(model, false))
+				throw new AppError(model.credentialState !== "configured" ? "CREDENTIAL_REQUIRED" : "RESUME_REQUIRED");
+		}
+		currentInitialSend(this.local, { request: this.state.pending, initialSend: task });
+		if (staged.expiresAt <= Date.now()) await this.invalidateInitialContext(task, signal);
+	}
+	private async readInitialGrant(task: InitialSend, signal: AbortSignal): Promise<AgentContext | null> {
+		const authorization = task.context?.authorization;
+		if (!authorization) return null;
+		const receipt = await this.client.call(
+			"getAgentCommandResult",
+			{
+				workspaceId: authorization.workspaceId,
+				conversationId: authorization.conversationId,
+				requestId: authorization.requestId,
+			},
+			signal,
+		);
+		signal.throwIfAborted();
+		if (!receipt) {
+			this.publish({ initialConsentGrantActive: false, initialConsentCanRecoverDraft: false });
+			return null;
+		}
+		if (receipt.method !== "authorizeAgentContext" || !matchesInitialGrant(authorization, receipt.result))
+			throw new Error("INITIAL_CONTEXT_GRANT_MISMATCH");
+		const active = await this.client.call(
+			"listActiveAgentContexts",
+			{ workspaceId: authorization.workspaceId, conversationId: authorization.conversationId },
+			signal,
+		);
+		signal.throwIfAborted();
+		const grant = active.find(
+			(item) =>
+				item.grantId === receipt.result.grantId &&
+				item.revision === receipt.result.revision &&
+				item.status === "active" &&
+				matchesInitialGrant(authorization, item),
+		);
+		this.publish({ initialConsentGrantActive: !!grant, initialConsentCanRecoverDraft: !task.context?.submitAttempted });
+		if (!grant || receipt.result.status !== "active" || grant.expiresAt <= Date.now())
+			await this.invalidateInitialContext(task, signal);
+		return grant ?? null;
+	}
+	private async finishInitialContextReceipt(task: InitialSend, receipt: ReceiptView, signal: AbortSignal) {
+		const transfer = await transferInitialSubmission(
+			this.local,
+			{ request: null, initialSend: task },
+			signal,
+			(submission) => this.publish({ submission }),
+			receipt,
+		);
+		signal.throwIfAborted();
+		const key = `${transfer.input.workspaceId}.${transfer.input.conversationId}`;
+		reconcileReceipt(this.local, key, this.local.read(`draft.${key}`) ?? "", transfer.input, receipt);
+		this.liveConsentId = null;
+		this.publish({ initialSend: null, pending: null, receipt, notFound: false });
+	}
+	private async handoffInitialContext(
+		task: InitialSend,
+		conversation: Conversation,
+		signal: AbortSignal,
+		allowDispatch: boolean,
+	) {
+		if (!task.context || !task.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+		const input: Submit = {
+			workspaceId: task.conversationCommand.params.workspaceId,
+			conversationId: task.conversationId,
+			requestId: task.submissionId,
+			text: task.text,
+		};
+		this.publish({ result: conversation, resultMethod: "createConversation" });
+		this.publish({ initialConsentCanRecoverDraft: !task.context.submitAttempted && !task.context.authorization });
+		if (task.context.submitAttempted) {
+			const receipt = await this.client.call(
+				"getReceipt",
+				{ workspaceId: input.workspaceId, requestId: input.requestId },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (receipt) {
+				await this.finishInitialContextReceipt(task, receipt, signal);
+				return;
+			}
+		}
+		let grant = await this.readInitialGrant(task, signal);
+		if (!allowDispatch) {
+			this.publish({ notFound: true });
+			return;
+		}
+		await this.validateInitialContext(task, signal);
+		if (!task.context.authorization) {
+			const saved = await advanceInitialContext(this.local, { request: null, initialSend: task }, "authorize", signal);
+			task = saved.initialSend;
+			this.publish({ initialSend: task });
+		}
+		const authorization = task.context?.authorization;
+		if (!authorization) throw new Error("INITIAL_CONTEXT_PREREQUISITE_REQUIRED");
+		if (!grant) {
+			await this.validateInitialContext(task, signal);
+			try {
+				const result = await this.client.call("authorizeAgentContext", authorization, signal);
+				signal.throwIfAborted();
+				if (!matchesInitialGrant(authorization, result)) throw new Error("INITIAL_CONTEXT_GRANT_MISMATCH");
+			} catch (error) {
+				signal.throwIfAborted();
+				if (error instanceof AppError && error.code === "STORE_MISMATCH") throw error;
+				grant = await this.readInitialGrant(task, signal);
+				if (!grant) {
+					this.publish({ notFound: true });
+					return;
+				}
+			}
+			grant = await this.readInitialGrant(task, signal);
+			if (!grant) {
+				this.publish({ notFound: true });
+				return;
+			}
+		}
+		await this.validateInitialContext(task, signal);
+		// Re-read current authority after the last model/binding check, not merely the historical command result.
+		if (!(await this.readInitialGrant(task, signal))) {
+			this.publish({ notFound: true });
+			return;
+		}
+		if (!task.context?.submitAttempted) {
+			const saved = await advanceInitialContext(this.local, { request: null, initialSend: task }, "submit", signal);
+			task = saved.initialSend;
+			this.publish({ initialSend: task });
+		}
+		currentInitialSend(this.local, { request: null, initialSend: task });
+		signal.throwIfAborted();
+		if (!task.context || task.context.staged.expiresAt <= Date.now()) await this.invalidateInitialContext(task, signal);
+		let receipt: ReceiptView | null;
+		try {
+			receipt = await this.client.call("submit", input, signal);
+		} catch (error) {
+			signal.throwIfAborted();
+			if (error instanceof AppError && error.code === "STORE_MISMATCH") throw error;
+			receipt = await this.client.call(
+				"getReceipt",
+				{ workspaceId: input.workspaceId, requestId: input.requestId },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (!receipt) {
+				this.publish({ notFound: true });
+				return;
+			}
+		}
+		await this.finishInitialContextReceipt(task, receipt, signal);
 	}
 	private async send(command: CatalogCommand, signal: AbortSignal) {
 		// Recheck on explicit retry too: a stale session never dispatches a displaced recovery record.

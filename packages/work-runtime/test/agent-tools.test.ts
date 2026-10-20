@@ -341,6 +341,10 @@ test("a bound project is discovered only after explicit chat consent, without ex
 				assert.ok(!transcript.includes(rootId));
 				assert.ok(!transcript.includes(otherRootId));
 				assert.ok(!transcript.includes(f.directory));
+				assert.ok(transcript.includes("Permissions (权限)"));
+				assert.ok(transcript.includes("Allow project access (允许访问项目)"));
+				assert.ok(transcript.includes("never invent them or ask the user to type internal rootId"));
+				assert.ok(!transcript.includes("Authorized file roots and relative path prefixes:"));
 				return fauxAssistantMessage("Project access needs your permission.");
 			},
 		]);

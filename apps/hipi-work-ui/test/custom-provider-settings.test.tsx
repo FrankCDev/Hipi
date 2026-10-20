@@ -82,6 +82,7 @@ vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => ({ call: runtimeCall }),
 	useCredentialClient: () => credentials,
 	useLocalState: () => local,
+	useFiles: () => ({}),
 }));
 vi.mock("../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale, t: (key: string) => key }),

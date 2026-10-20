@@ -1,0 +1,21 @@
+// Dependency-free synthetic data shared by plain-Node launch gates and source-only seeding.
+export const fileFixture = Object.freeze({
+	workspaceId: "file-gui-work",
+	workspaceTitle: "File GUI 中文",
+	otherWorkspaceId: "file-gui-other",
+	otherWorkspaceTitle: "Other file workspace 中文",
+	conversationTitle: "File acceptance 中文",
+	folder: "workbench-files",
+	textName: "notes.txt",
+	secondName: "second.txt",
+	csvName: "cells.csv",
+	imageName: "pixel.png",
+	initial: "BASELINE_ONLY\nOriginal 中文 text",
+	saved: "SAVED_ONLY\nEdited 中文 text",
+	draft: "UNSAVED_ONLY\nProtected 中文 input",
+	external: "EXTERNAL_ONLY\nConcurrent 中文 disk edit",
+	secondInitial: "SECOND_BASELINE\nIndependent 中文 buffer",
+	secondSaved: "SECOND_AUTOSAVED\nBackground 中文 save",
+	secondClosed: "SECOND_CLOSE_SAVED\nConditional 中文 close",
+	csv: "label,value\n中文,42\nfixture,read-only",
+});

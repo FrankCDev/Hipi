@@ -329,3 +329,33 @@ test.each(shortcutPlatforms)(
 		);
 	},
 );
+
+test.each([false, true])(
+	"Pierre Find cancellation returns focus without scrolling or editing when readOnly is %s",
+	(readOnly) => {
+		const editorFocus = vi.fn();
+		const sectionFocus = vi.fn();
+		const onChange = vi.fn();
+		const onSave = vi.fn();
+		const props = { text: "first\nsecond", name: "file.txt", label: "Editor", readOnly, onChange, onSave };
+		const render = () => {
+			const surface = PierreCodeEditor(props);
+			return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+		};
+		let tree = drive(render);
+		const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+		(code.props.ref as React.RefObject<unknown>).current = {
+			getEditor: () => (readOnly ? undefined : { focus: editorFocus }),
+		};
+		const section = element(tree, (item) => item.type === "section");
+		(section.props.ref as React.RefObject<unknown>).current = { focus: sectionFocus };
+		(element(tree, (item) => item.props["aria-label"] === "Find in file").props.onClick as () => void)();
+		tree = drive(render);
+		(element(tree, (item) => item.type === "search").props.onKeyDown as (event: unknown) => void)(key("Escape"));
+		assert.deepEqual((readOnly ? sectionFocus : editorFocus).mock.calls, [[{ preventScroll: true }]]);
+		assert.equal((readOnly ? editorFocus : sectionFocus).mock.calls.length, 0);
+		assert.throws(() => element(drive(render), (item) => item.type === "search"));
+		assert.equal(onChange.mock.calls.length, 0);
+		assert.equal(onSave.mock.calls.length, 0);
+	},
+);

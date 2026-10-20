@@ -76,6 +76,16 @@ export function FilePanel({
 					className="file-panel-dialog"
 					closeLabel={l["filePanel.hide"]}
 					showCloseButton={false}
+					onEscapeKeyDown={(event) => {
+						// Radix handles Escape at document capture, before nested controls can cancel it.
+						// Keep the dialog open during IME too; the nested surface owns cancellation.
+						if (
+							event
+								.composedPath()
+								.some((target) => target instanceof Element && target.hasAttribute("data-file-editor-cancel"))
+						)
+							event.preventDefault();
+					}}
 					onCloseAutoFocus={(event) => {
 						event.preventDefault();
 						trigger.current?.focus({ preventScroll: true });

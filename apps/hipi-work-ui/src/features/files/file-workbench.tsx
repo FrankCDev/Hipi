@@ -212,7 +212,23 @@ export function FileWorkbench({
 		if (!requested.length) return;
 		authorityLease.closing = true;
 		setClosing(true);
-		const blocked = await session.close(requested);
+		const rootLifetimes = new Map(authorityLease.roots);
+		const rootPermissions = new Map(currentRoots.current?.map((root) => [root.rootId, root.writable]));
+		const blocked = await session.close(
+			requested,
+			(tab) => {
+				const lifetime = rootLifetimes.get(tab.target.rootId);
+				return (
+					isCurrent() &&
+					tab.target.workspaceId === workspaceId &&
+					lifetime?.active !== false &&
+					authorityLease.roots.get(tab.target.rootId) === lifetime &&
+					currentRoots.current?.find((root) => root.rootId === tab.target.rootId)?.writable ===
+						rootPermissions.get(tab.target.rootId)
+				);
+			},
+			(tab) => rootLifetimes.get(tab.target.rootId)?.active === true && rootPermissions.get(tab.target.rootId) === true,
+		);
 		authorityLease.closing = false;
 		if (!isCurrent()) return;
 		setClosing(false);

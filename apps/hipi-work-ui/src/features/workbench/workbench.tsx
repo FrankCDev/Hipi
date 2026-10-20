@@ -31,6 +31,7 @@ import { CreateDialog } from "./create-dialog.tsx";
 import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
 import { FILE_PANEL, FilePanelController, panelLayout } from "./file-panel-controller.ts";
 import { filePanelLabels } from "./file-panel-labels.ts";
+import type { StagedProjectConsent } from "./initial-context.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
 import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
@@ -69,7 +70,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, [searchOpen]);
 	const local = useLocalState();
 	const cache = useQueryClient();
-	const catalog = useMemo(() => new CatalogSession(client, local), [client, local]);
+	const catalog = useMemo(() => new CatalogSession(client, local, fileAuthority), [client, local, fileAuthority]);
 	const catalogState = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot, catalog.getSnapshot);
 	useEffect(() => {
 		catalog.activate();
@@ -175,6 +176,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		searchTrigger.current?.focus();
 	};
 	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
+	const [recoveredDrafts, setRecoveredDrafts] = useState<Record<string, string>>({});
 	const preparedKey = (workspaceId: string) => (workspaceId ? `task-draft.${workspaceId}` : "chat-draft.global");
 	const preparedDraft = (workspaceId: string) =>
 		preparedDrafts[preparedKey(workspaceId)] ?? local.read(preparedKey(workspaceId)) ?? "";
@@ -265,6 +267,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const applyCatalogResult = (origin?: number) => {
 		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
 		const state = catalog.getSnapshot();
+		// A consent-bearing first Send retains its recovery owner until delivery is confirmed.
+		if (state.initialSend?.context) return;
 		if (state.submission && !state.busy && state.result && "conversationId" in state.result) {
 			const result = state.result;
 			if (
@@ -306,7 +310,21 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	};
 	const resolveCatalog = async (operation: () => Promise<void>) => {
 		const origin = navigationRevision.current;
+		const initial = catalog.getSnapshot().initialSend;
 		await operation();
+		if (
+			initial &&
+			!catalog.getSnapshot().initialSend &&
+			connectionLease.active &&
+			currentConnection.current === connectionLease
+		) {
+			setPreparedDrafts((current) => ({ ...current, [initial.sourceKey]: local.read(initial.sourceKey) ?? "" }));
+			if (initial.conversationId && initial.context && !initial.context.submitAttempted) {
+				const scope = `${initial.conversationCommand.params.workspaceId}.${initial.conversationId}`;
+				const revision = local.valueSnapshot(`draft.${scope}`)?.revision;
+				if (revision) setRecoveredDrafts((current) => ({ ...current, [scope]: revision }));
+			}
+		}
 		applyCatalogResult(origin);
 	};
 	const createWorkspace = async (name: string, folder?: ProjectFolderSelection) => {
@@ -344,7 +362,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			}
 		}
 	};
-	const sendInitial = async (text: string, model: ModelReference) => {
+	const sendInitial = async (text: string, model: ModelReference, context?: StagedProjectConsent) => {
 		const origin = navigationRevision.current;
 		await catalog.sendInitial({
 			workspaceId: selectedWorkspace || null,
@@ -352,11 +370,15 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			title: text.trim().split("\n")[0]?.slice(0, 128) ?? "",
 			model,
 			sourceKey: preparedKey(selectedWorkspace),
+			...(context ? { context } : {}),
 		});
 		applyCatalogResult(origin);
 		if (
 			!catalog.getSnapshot().submission &&
-			(catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
+			(catalog.getSnapshot().initialSend ||
+				catalog.getSnapshot().pending ||
+				catalog.getSnapshot().failed ||
+				catalog.getSnapshot().incompatible)
 		)
 			throw new Error("UNCONFIRMED");
 	};
@@ -675,6 +697,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<ConversationPane
 								key={`${selected.workspaceId}.${selected.conversationId}`}
 								conversation={selected}
+								draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
 								onOpenModelSettings={(returnFocus) => {
 									settingsReturn.current = returnFocus;
 									setSettingsCategory("models");
@@ -709,6 +732,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 										)}
 										<PreparedTaskEntry
 											key={selectedWorkspace || "global"}
+											workspaceId={selectedWorkspace}
 											draft={preparedDraft(selectedWorkspace)}
 											onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
 											disabled={catalogBlocked}

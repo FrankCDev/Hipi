@@ -760,7 +760,9 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 						return false;
 					}
 				});
-				if (!grants.length || state.cancelled) return undefined;
+				if (state.cancelled) return undefined;
+				if (!grants.length)
+					return "No live project file context is authorized for this chat and model. File root IDs come only from authorized app context: never invent them or ask the user to type internal rootId values or absolute host paths. If project files are needed, ask the user to use Permissions (权限) or Allow project access (允许访问项目) in the app. Choosing a folder alone does not authorize model access. Do not call file tools until authorized roots are supplied.";
 				const roots = grants.map((grant) => ({ rootId: grant.rootId, pathPrefixes: grant.pathPrefixes }));
 				const prompt = JSON.stringify(roots);
 				if (Buffer.byteLength(prompt) > 8192) throw new AppError("CAPACITY_EXCEEDED");

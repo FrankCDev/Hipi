@@ -27,6 +27,7 @@ export async function startDevHost(input: {
 	env?: NodeJS.ProcessEnv;
 	preload?: URL;
 }) {
+	const startedAt = performance.now();
 	const child = spawn(
 		process.execPath,
 		[
@@ -48,12 +49,16 @@ export async function startDevHost(input: {
 	const ready = Promise.withResolvers<{ url: string; token: string }>();
 	let output = "",
 		logs = "";
+	let readinessMarkerObserved = false;
 	assert.ok(child.stdout);
 	assert.ok(child.stderr);
 	child.stdout.on("data", (chunk: Buffer) => {
 		output = (output + chunk.toString("utf8")).slice(-65536);
 		const match = /API: (http:\/\/127\.0\.0\.1:\d+)\nToken: ([a-f0-9]+)\n/.exec(output);
-		if (match) ready.resolve({ url: match[1], token: match[2] });
+		if (match) {
+			readinessMarkerObserved = true;
+			ready.resolve({ url: match[1], token: match[2] });
+		}
 	});
 	child.stderr.on("data", (chunk: Buffer) => {
 		logs = (logs + chunk.toString("utf8")).slice(-65536);
@@ -71,7 +76,16 @@ export async function startDevHost(input: {
 	try {
 		connection = await deadline(ready.promise, 5000, "Acceptance host did not become ready");
 	} catch (error) {
+		const elapsedMs = Math.round(performance.now() - startedAt);
 		await forceCleanup();
+		if (error instanceof Error && error.message === "Acceptance host did not become ready") {
+			// stdout contains a capability token; stderr can contain credentials or paths.
+			// Report only fixed lifecycle metadata, never captured child output.
+			throw new Error(
+				`Acceptance host did not become ready (elapsedMs=${elapsedMs}, readinessMarkerObserved=${readinessMarkerObserved}, exitCode=${child.exitCode}, signal=${child.signalCode})`,
+				{ cause: error },
+			);
+		}
 		throw error;
 	}
 	let closing: Promise<void> | undefined;

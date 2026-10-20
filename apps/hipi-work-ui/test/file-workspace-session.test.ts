@@ -328,3 +328,270 @@ test("disposal cancels every autosave timer", async () => {
 	assert.equal(f.saved.length, 0);
 	assert.equal(f.owner.snapshot().tabs.length, 0);
 });
+
+test("close joins the exact running autosave then saves newer input against its confirmed revision", async () => {
+	const first = Promise.withResolvers<FileText>();
+	const second = Promise.withResolvers<FileText>();
+	const writes: { value: string; revision: string }[] = [];
+	const f = fixture({
+		saveText: (_target, value, revision) => {
+			writes.push({ value, revision });
+			return writes.length === 1 ? first.promise : second.promise;
+		},
+	});
+	await f.owner.open(target, true);
+	const tab = active(f.owner);
+	tab.editor.edit("first");
+	await vi.advanceTimersByTimeAsync(FILE_AUTOSAVE_DELAY);
+	let settled = false;
+	const closing = f.owner.close([tab.id]).then((blocked) => {
+		settled = true;
+		return blocked;
+	});
+	await Promise.resolve();
+	assert.equal(settled, false);
+	assert.equal(writes.length, 1);
+	tab.editor.edit("newer");
+	first.resolve(text("first", "b"));
+	await vi.advanceTimersByTimeAsync(0);
+	assert.deepEqual(writes, [
+		{ value: "first", revision: "a".repeat(64) },
+		{ value: "newer", revision: "b".repeat(64) },
+	]);
+	assert.equal(settled, false);
+	second.resolve(text("newer", "c"));
+	assert.deepEqual(await closing, []);
+	assert.equal(f.owner.snapshot().tabs.length, 0);
+});
+
+test("continued typing bounds close to two writes and keeps newer input without discard review", async () => {
+	const first = Promise.withResolvers<FileText>();
+	const second = Promise.withResolvers<FileText>();
+	let calls = 0;
+	const f = fixture({ saveText: () => (++calls === 1 ? first.promise : second.promise) });
+	await f.owner.open(target, true);
+	const tab = active(f.owner);
+	tab.editor.edit("first");
+	const closing = f.owner.close([tab.id]);
+	tab.editor.edit("second");
+	first.resolve(text("first", "b"));
+	await vi.advanceTimersByTimeAsync(0);
+	tab.editor.edit("third");
+	second.resolve(text("second", "c"));
+	assert.deepEqual(await closing, []);
+	assert.equal(calls, 2);
+	assert.equal(f.owner.snapshot().tabs[0]?.id, tab.id);
+	assert.equal(tab.editor.snapshot().document?.text, "third");
+	assert.equal(tab.editor.snapshot().document?.baseline.text, "second");
+});
+
+for (const failure of ["VERSION_CONFLICT", "WRITE_OUTCOME_UNKNOWN", "IO_ERROR"] as const) {
+	test(`joined close stops on ${failure} without another write`, async () => {
+		const pending = Promise.withResolvers<FileText>();
+		let calls = 0;
+		const f = fixture({
+			saveText: () => {
+				calls++;
+				return pending.promise;
+			},
+		});
+		await f.owner.open(target, true);
+		const tab = active(f.owner);
+		tab.editor.edit("submitted");
+		const saving = tab.editor.save();
+		assert.equal(tab.editor.save(), saving, "join preserves exact save promise");
+		const closing = f.owner.close([tab.id]);
+		tab.editor.edit("later");
+		pending.reject(new FileServiceError(failure));
+		assert.deepEqual(await closing, [tab.id]);
+		assert.equal(await saving, false);
+		await vi.advanceTimersByTimeAsync(FILE_AUTOSAVE_DELAY * 3);
+		assert.equal(calls, 1);
+		assert.equal(tab.editor.snapshot().document?.text, "later");
+	});
+}
+
+test.each(["workspace", "authority", "target", "same-target", "dispose"] as const)(
+	"retired %s close intent neither continues saving nor requests discard",
+	async (retirement) => {
+		const pending = Promise.withResolvers<FileText>();
+		let calls = 0;
+		let authority = true;
+		const f = fixture({
+			saveText: () => {
+				calls++;
+				return pending.promise;
+			},
+		});
+		await f.owner.open(target, true);
+		const tab = active(f.owner);
+		tab.editor.edit("submitted");
+		const closing = f.owner.close([tab.id], () => authority);
+		tab.editor.edit("later");
+		if (retirement === "workspace") f.owner.setWorkspace("other");
+		if (retirement === "authority") authority = false;
+		if (retirement === "target" || retirement === "same-target") {
+			tab.editor.clear();
+			await tab.editor.open(retirement === "same-target" ? target : { ...target, path: "replacement" }, true);
+		}
+		if (retirement === "dispose") f.owner.dispose();
+		pending.resolve(text("submitted", "b"));
+		assert.deepEqual(await closing, []);
+		assert.equal(calls, 1);
+		if (retirement !== "dispose") assert.equal(f.owner.snapshot().tabs[0]?.id, tab.id);
+	},
+);
+
+test("close during comparison does not join the read or issue a save", async () => {
+	const pending = Promise.withResolvers<FileText>();
+	const f = fixture();
+	await f.owner.open(target, true);
+	const tab = active(f.owner);
+	tab.editor.edit("protected");
+	f.files.readText = () => pending.promise;
+	const comparing = tab.editor.compare();
+	assert.deepEqual(await f.owner.close([tab.id]), [tab.id]);
+	assert.equal(f.saved.length, 0);
+	pending.resolve(text("disk", "b"));
+	await comparing;
+	assert.equal(tab.editor.snapshot().document?.text, "protected");
+});
+
+test("active close fallback uses workspace-local positions despite interleaved global tabs", async () => {
+	const f = fixture();
+	await f.owner.open({ ...target, workspaceId: "hidden", path: "h1" }, true, { pinned: true });
+	await f.owner.open({ ...target, workspaceId: "hidden", path: "h2" }, true, { pinned: true });
+	await f.owner.open(target, true, { pinned: true });
+	const first = active(f.owner);
+	await f.owner.open({ ...target, path: "second" }, true, { pinned: true });
+	const second = active(f.owner);
+	await f.owner.open({ ...target, path: "third" }, true, { pinned: true });
+	f.owner.select(first.id);
+	await f.owner.close([first.id]);
+	assert.equal(f.owner.snapshot().activeId, second.id);
+	f.owner.setWorkspace("hidden");
+	assert.equal(active(f.owner).target.path, "h2");
+});
+
+test("reorder supports both edges including final insertion and rejects stale or foreign targets", async () => {
+	const f = fixture();
+	const ids: string[] = [];
+	for (const path of ["a", "b", "c"]) {
+		await f.owner.open({ ...target, path }, true, { pinned: true });
+		ids.push(active(f.owner).id);
+	}
+	const [a, b, c] = ids as [string, string, string];
+	f.owner.move(a, c, "after");
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[b, c, a],
+	);
+	f.owner.move(a, b, "before");
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[a, b, c],
+	);
+	await f.owner.open({ ...target, workspaceId: "other" }, true, { pinned: true });
+	const foreign = active(f.owner).id;
+	f.owner.move(a, foreign, "after");
+	f.owner.move(a, "retired", "after");
+	f.owner.move("retired", a, "before");
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[a, b, c, foreign],
+	);
+});
+
+test("a failed follow-on close save stops at its error and canceled join retains uncertain submitted bytes", async () => {
+	const first = Promise.withResolvers<FileText>();
+	let calls = 0;
+	const f = fixture({
+		saveText: () => {
+			calls++;
+			return calls === 1 ? first.promise : Promise.reject(new FileServiceError("VERSION_CONFLICT"));
+		},
+	});
+	await f.owner.open(target, true);
+	const tab = active(f.owner);
+	tab.editor.edit("first");
+	const closing = f.owner.close([tab.id]);
+	tab.editor.edit("later");
+	first.resolve(text("first", "b"));
+	assert.deepEqual(await closing, [tab.id]);
+	assert.equal(calls, 2);
+	assert.equal(tab.editor.snapshot().error, "VERSION_CONFLICT");
+	assert.equal(tab.editor.snapshot().document?.text, "later");
+	const pending = Promise.withResolvers<FileText>();
+	const other = fixture({ saveText: () => pending.promise });
+	await other.owner.open(target, true);
+	const canceled = active(other.owner);
+	canceled.editor.edit("submitted");
+	const save = canceled.editor.save();
+	const close = other.owner.close([canceled.id]);
+	canceled.editor.edit("newer");
+	canceled.editor.cancel();
+	pending.resolve(text("submitted", "b"));
+	assert.equal(await save, false);
+	assert.deepEqual(await close, [canceled.id]);
+	assert.equal(canceled.editor.snapshot().unknown, "submitted");
+	assert.equal(canceled.editor.snapshot().document?.text, "newer");
+});
+
+test("superseded close does not remove its original target after the joined save resolves", async () => {
+	const pending = Promise.withResolvers<FileText>();
+	const f = fixture({ saveText: () => pending.promise });
+	await f.owner.open(target, true, { pinned: true });
+	const first = active(f.owner);
+	await f.owner.open({ ...target, path: "other" }, true, { pinned: true });
+	const second = active(f.owner);
+	first.editor.edit("first");
+	const old = f.owner.close([first.id]);
+	assert.deepEqual(await f.owner.close([second.id]), []);
+	pending.resolve(text("first", "b"));
+	assert.deepEqual(await old, []);
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[first.id],
+	);
+});
+
+test("unavailable authority still permits clean close but never starts a write for a protected tab", async () => {
+	const f = fixture();
+	await f.owner.open(target, true, { pinned: true });
+	const clean = active(f.owner);
+	await f.owner.open({ ...target, path: "dirty" }, true, { pinned: true });
+	const dirty = active(f.owner);
+	dirty.editor.edit("keep");
+	assert.deepEqual(
+		await f.owner.close(
+			[clean.id, dirty.id],
+			() => true,
+			() => false,
+		),
+		[dirty.id],
+	);
+	assert.equal(f.saved.length, 0);
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[dirty.id],
+	);
+});
+
+test("batch close retains a later target reloaded while the first target is saving", async () => {
+	const pending = Promise.withResolvers<FileText>();
+	const f = fixture({ saveText: () => pending.promise });
+	await f.owner.open(target, true, { pinned: true });
+	const first = active(f.owner);
+	await f.owner.open({ ...target, path: "second" }, true, { pinned: true });
+	const second = active(f.owner);
+	first.editor.edit("saving");
+	const closing = f.owner.close([first.id, second.id]);
+	second.editor.clear();
+	await second.editor.open(second.target, true);
+	pending.resolve(text("saving", "b"));
+	assert.deepEqual(await closing, []);
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.id),
+		[second.id],
+	);
+});

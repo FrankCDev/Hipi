@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
+	type AgentContext,
 	type AppClient,
 	type Conversation,
 	type Method,
 	PROTOCOL_VERSION,
+	parseRequest,
 	parseResult,
 	type Submit,
 	type Workspace,
@@ -781,6 +783,252 @@ test("New chat opens the scoped composer without creating objects or discarding 
 		assert.equal(state.read("task-draft.other"), "Other project's goal");
 	}
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+});
+
+test.each([false, true])(
+	"prepared project consent stays with its owner until confirmed submission, including unknown grant=%s",
+	async (unknownGrant) => {
+		saveCommand(local, "catalog", null);
+		vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+		const goal = "Inspect the selected project";
+		const model = { provider: "faux", modelId: "one" };
+		const target = { ...conversation, conversationId: "consented", title: goal };
+		const folder: ProjectFolder = {
+			workspaceId: "current",
+			bindingId: "bound-project",
+			revision: 1,
+			displayName: "Project source",
+			status: "available",
+			root: { workspaceId: "current", rootId: "project-root", writable: false, displayName: "Project source" },
+		};
+		fileAuthority = {
+			chooseRoot: async () => {},
+			revokeRoot: async () => {},
+			getProject: async () => folder,
+		};
+		local.write("task-draft.current", goal);
+		local.write("conversation", "");
+		const waiting = Promise.withResolvers<void>();
+		let grant: AgentContext | undefined;
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+			const request = parseRequest({ version: PROTOCOL_VERSION, method, params });
+			if (request.method === "getWorkspace") return parseResult(method, workspaces[0]);
+			if (request.method === "getConversationModel")
+				return parseResult(method, { model, credentialState: "configured", executionState: "ready" });
+			if (request.method === "getConversationCommandResult")
+				return parseResult(method, { method: "createConversation", result: target });
+			if (request.method === "createConversation" || request.method === "getConversation")
+				return parseResult(method, target);
+			if (request.method === "authorizeAgentContext") {
+				await waiting.promise;
+				if (unknownGrant) throw new Error("Unknown grant outcome");
+				grant = { ...request.params, grantId: "grant", revision: 1, purpose: "live-files", status: "active" };
+				return parseResult(method, grant);
+			}
+			if (request.method === "getAgentCommandResult")
+				return parseResult(method, grant ? { method: "authorizeAgentContext", result: grant } : null);
+			if (request.method === "listActiveAgentContexts") return parseResult(method, grant ? [grant] : []);
+			if (request.method === "submit")
+				return parseResult(method, {
+					workspaceId: request.params.workspaceId,
+					conversationId: request.params.conversationId,
+					requestId: request.params.requestId,
+					receiptId: "receipt",
+					state: "accepted",
+				});
+			throw new Error(`Unexpected ${method}`);
+		});
+		const initial = drive();
+		const entry = element(element(initial.content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+		assert.equal(entry.props.workspaceId, "current");
+		const sending = entry.props
+			.onSend(goal, model, {
+				workspaceId: "current",
+				bindingId: "bound-project",
+				bindingRevision: 1,
+				rootId: "project-root",
+				model,
+				pathPrefixes: ["src"],
+				expiresAt: Date.now() + 60000,
+				disclosureVersion: 1,
+			})
+			.then(
+				() => null,
+				(error: unknown) => error,
+			);
+		await vi.waitFor(() =>
+			assert.ok(vi.mocked(client.call).mock.calls.some(([method]) => method === "authorizeAgentContext")),
+		);
+		const during = drive();
+		assert.equal(during.tree.selectedConversation, "");
+		assert.equal(during.pane, undefined);
+		assert.equal(local.pending("current.consented"), null);
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length, 0);
+		assert.equal(
+			element(element(during.content, WorkbenchWelcome).props.action, PreparedTaskEntry).props.disabled,
+			true,
+		);
+		waiting.resolve();
+		const error = await sending;
+		assert.equal(error instanceof Error, unknownGrant);
+		const after = drive();
+		assert.equal(after.tree.selectedConversation, unknownGrant ? "" : "consented");
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
+		assert.equal(
+			vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length,
+			unknownGrant ? 0 : 1,
+		);
+		assert.equal(Boolean(after.tree.catalog.getSnapshot().initialSend), unknownGrant);
+		assert.equal(local.pending("current.consented")?.text, unknownGrant ? undefined : goal);
+		assert.equal(local.read("task-draft.current"), unknownGrant ? goal : "");
+	},
+);
+
+test("explicit conflict combine refreshes the project composer with both exact texts and never sends", async () => {
+	saveCommand(local, "catalog", null);
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+	const original = "  Original unsent project question\n";
+	const later = "\nNewer project draft  ";
+	const model = { provider: "faux", modelId: "one" };
+	local.write("task-draft.current", original);
+	local.write("conversation", "");
+	fileAuthority = {
+		chooseRoot: async () => {},
+		revokeRoot: async () => {},
+		getProject: async () => ({
+			workspaceId: "current",
+			bindingId: "bound-project",
+			revision: 2,
+			displayName: "Project source",
+			status: "available",
+			root: { workspaceId: "current", rootId: "project-root", writable: false, displayName: "Project source" },
+		}),
+	};
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+		assert.equal(method, "getWorkspace");
+		return parseResult(method, workspaces[0]);
+	});
+	const initial = drive();
+	const home = () => element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props;
+	await assert.rejects(
+		home().onSend(original, model, {
+			workspaceId: "current",
+			bindingId: "bound-project",
+			bindingRevision: 1,
+			rootId: "project-root",
+			model,
+			pathPrefixes: [""],
+			expiresAt: Date.now() + 60000,
+			disclosureVersion: 1,
+		}),
+		/UNCONFIRMED/,
+	);
+	assert.equal(initial.tree.catalog.getSnapshot().initialSend?.context?.createAttempted, false);
+	home().onDraftChange(later);
+	const recovery = () => {
+		const props = element(drive().content, PreparedTaskRecovery).props;
+		return PreparedTaskRecovery(props);
+	};
+	const keep = elements(recovery(), Button).find(
+		(button) => button.props.children === "Keep message and review permissions",
+	);
+	assert.ok(keep);
+	press(keep);
+	await vi.waitFor(() => assert.equal(initial.tree.catalog.getSnapshot().handoffConflict, true));
+	const conflict = recovery();
+	assert.ok(
+		elements(conflict, "p").some(
+			(item) => typeof item.props.children === "string" && item.props.children.includes("that draft first"),
+		),
+	);
+	const combine = elements(conflict, Button).find(
+		(button) => button.props.children === "Combine both texts into a draft",
+	);
+	assert.ok(combine);
+	assert.equal(
+		elements(conflict, Button).some((button) => button.props.children === "Keep the existing conversation draft"),
+		false,
+	);
+	press(combine);
+	await vi.waitFor(() => assert.equal(initial.tree.catalog.getSnapshot().initialSend, null));
+	assert.equal(home().draft, `${later}\n\n---\n\n${original}`);
+	assert.equal(local.read("task-draft.current"), home().draft);
+	assert.equal(drive().tree.selectedConversation, "");
+	assert.deepEqual(
+		vi.mocked(client.call).mock.calls.map(([method]) => method),
+		["getWorkspace"],
+	);
+	assert.equal(local.pending("current.consented"), null);
+});
+
+test("combining into the already selected created chat signals only its draft, without remounting the pane", async () => {
+	storage = new MemoryStorage();
+	local = new LocalState("store", storage);
+	local.write("workspace", "current");
+	local.write("conversation", "");
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+	const original = conversation.title;
+	const model = { provider: "faux", modelId: "one" };
+	local.write("task-draft.current", original);
+	let reads = 0;
+	fileAuthority = {
+		chooseRoot: async () => {},
+		revokeRoot: async () => {},
+		getProject: async () => ({
+			workspaceId: "current",
+			bindingId: "bound-project",
+			revision: ++reads === 1 ? 1 : 2,
+			displayName: "Project source",
+			status: "available",
+			root: { workspaceId: "current", rootId: "project-root", writable: false, displayName: "Project source" },
+		}),
+	};
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+		if (method === "getWorkspace") return parseResult(method, workspaces[0]);
+		if (method === "getConversationCommandResult")
+			return parseResult(method, { method: "createConversation", result: conversation });
+		assert.ok(method === "createConversation" || method === "getConversation");
+		return parseResult(method, conversation);
+	});
+	const initial = drive();
+	const home = element(element(initial.content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+	await assert.rejects(
+		home.props.onSend(original, model, {
+			workspaceId: "current",
+			bindingId: "bound-project",
+			bindingRevision: 1,
+			rootId: "project-root",
+			model,
+			pathPrefixes: [""],
+			expiresAt: Date.now() + 60000,
+			disclosureVersion: 1,
+		}),
+		/UNCONFIRMED/,
+	);
+	initial.tree.onSelect(conversation);
+	const selected = drive();
+	assert.ok(selected.pane);
+	local.write(`draft.${scope}`, "Newer selected chat draft");
+	await initial.tree.catalog.recoverInitialDraft();
+	assert.equal(initial.tree.catalog.getSnapshot().handoffConflict, true);
+	const recovery = element(drive().content, PreparedTaskRecovery);
+	const combine = elements(PreparedTaskRecovery(recovery.props), Button).find(
+		(button) => button.props.children === "Combine both texts into a draft",
+	);
+	assert.ok(combine);
+	press(combine);
+	await vi.waitFor(() => assert.equal(initial.tree.catalog.getSnapshot().initialSend, null));
+	const result = drive();
+	assert.equal(result.pane?.key, selected.pane.key);
+	assert.equal(result.pane?.props.conversation, selected.pane.props.conversation);
+	assert.equal(result.pane?.props.draftRecoveryRevision, local.valueSnapshot(`draft.${scope}`)?.revision);
+	assert.ok(result.pane?.props.draftRecoveryRevision);
+	assert.equal(local.read(`draft.${scope}`), `Newer selected chat draft\n\n---\n\n${original}`);
+	assert.equal(
+		vi.mocked(client.call).mock.calls.filter(([method]) => ["submit", "authorizeAgentContext"].includes(method)).length,
+		0,
+	);
+	assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
 });
 
 test.each([

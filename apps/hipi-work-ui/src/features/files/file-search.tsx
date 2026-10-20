@@ -61,6 +61,7 @@ export function useFileSearch({
 	const [replacement, setReplacement] = useState("");
 	const [replacementFailure, setReplacementFailure] = useState<"limit" | "changed">();
 	const input = useRef<HTMLInputElement>(null);
+	const composing = useRef(false);
 	let matches: Match[] = [];
 	let failed = false;
 	if (state.query) {
@@ -95,6 +96,7 @@ export function useFileSearch({
 		select(range);
 	};
 	const close = () => {
+		composing.current = false;
 		setOpen(false);
 		focus();
 	};
@@ -116,7 +118,7 @@ export function useFileSearch({
 		setCurrent(-1);
 	};
 	const onKeyDown = (event: KeyboardEvent) => {
-		if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+		if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
 		const again = resolveFindAgainShortcut(event.nativeEvent);
 		if (matchesEditorBinding(event, bindings.replace ?? DEFAULT_EDITOR_KEYBINDINGS.replace)) {
 			event.preventDefault();
@@ -139,7 +141,25 @@ export function useFileSearch({
 		open: () => setOpen(true),
 		onKeyDown,
 		panel: open ? (
-			<search className="file-find" aria-label={l["find.title"]} onKeyDown={onKeyDown}>
+			<search
+				className="file-find"
+				aria-label={l["find.title"]}
+				data-file-editor-cancel="find"
+				onCompositionStart={() => {
+					composing.current = true;
+				}}
+				onCompositionEnd={() => {
+					composing.current = false;
+				}}
+				onKeyDown={(event) => {
+					if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+					if (event.key === "Escape") {
+						event.preventDefault();
+						event.stopPropagation();
+						close();
+					} else onKeyDown(event);
+				}}
+			>
 				<Button
 					size="icon-xs"
 					variant="ghost"
@@ -158,14 +178,10 @@ export function useFileSearch({
 						value={state.query}
 						onChange={(event) => setState({ ...state, query: event.currentTarget.value })}
 						onKeyDown={(event) => {
-							if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+							if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
 							if (event.key === "Enter") {
 								event.preventDefault();
 								move(event.shiftKey ? -1 : 1);
-							} else if (event.key === "Escape") {
-								event.preventDefault();
-								event.stopPropagation();
-								close();
 							}
 						}}
 					/>
@@ -228,14 +244,10 @@ export function useFileSearch({
 							disabled={readOnly}
 							onChange={(event) => setReplacement(event.currentTarget.value)}
 							onKeyDown={(event) => {
-								if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+								if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
 								if (event.key === "Enter") {
 									event.preventDefault();
 									applyReplacement(false);
-								} else if (event.key === "Escape") {
-									event.preventDefault();
-									event.stopPropagation();
-									close();
 								}
 							}}
 						/>

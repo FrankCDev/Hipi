@@ -119,7 +119,11 @@ function PierreSurface({
 			handle.current?.getEditor("document")?.setSelections([{ start, end, direction: "forward" }]);
 			handle.current?.scrollTo({ type: "line", id: "document", lineNumber: start.line + 1, align: "center" });
 		},
-		focus: () => handle.current?.getEditor("document")?.focus(),
+		focus: () => {
+			const editor = handle.current?.getEditor("document");
+			if (editor) editor.focus({ preventScroll: true });
+			else if (current() && readOnly) section.current?.focus({ preventScroll: true });
+		},
 	});
 	const lineNavigation = useFileLineNavigation<PierreNavigationSnapshot>({
 		bindings,

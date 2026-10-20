@@ -40,7 +40,7 @@ export function readCatalogRecovery(raw: string | null): CatalogRecoveryRecord {
 	try {
 		if (raw.length > 30000) throw new Error("INVALID_CATALOG_RECOVERY");
 		const saved: unknown = JSON.parse(raw);
-		if (saved && typeof saved === "object" && "version" in saved && saved.version === 3)
+		if (saved && typeof saved === "object" && "version" in saved && (saved.version === 3 || saved.version === 4))
 			return { ...readInitialSendRecovery(saved), preparedTask: null, incompatible: false };
 		if (
 			!saved ||

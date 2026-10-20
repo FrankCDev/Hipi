@@ -532,3 +532,94 @@ test("hiding a retained panel cancels pending preview acquisition and cannot res
 	assert.equal(session.snapshot().tabs[0], tab);
 	assert.equal(session.snapshot().activeId, tab.id);
 });
+
+test("tab drop uses target halves including the last edge and ignores a canceled or external drag", async () => {
+	const first = await open("first.txt");
+	const second = await open("second.txt");
+	const third = await open("third.txt");
+	hooks.cursor = 0;
+	const tree = FileTabs({ tabs: session.snapshot().tabs, activeId: third.id, session, close: vi.fn(), closing: false });
+	const buttons = elements(tree, "button").filter((node) => node.props.role === "tab");
+	const start = buttons[0]?.props.onDragStart;
+	const end = buttons[0]?.props.onDragEnd;
+	const drop = buttons[2]?.props.onDrop;
+	assert.ok(start && end && drop);
+	const values = new Map<string, string>();
+	const event = {
+		preventDefault: vi.fn(),
+		clientX: 90,
+		currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 100 }) },
+		dataTransfer: {
+			effectAllowed: "none",
+			setData: (type: string, value: string) => values.set(type, value),
+			getData: (type: string) => values.get(type) ?? "",
+		},
+	};
+	values.set("application/x-hipi-file-tab", first.id);
+	Reflect.apply(drop, undefined, [event]);
+	assert.deepEqual(
+		session.snapshot().tabs.map((tab) => tab.id),
+		[first.id, second.id, third.id],
+	);
+	Reflect.apply(start, undefined, [event]);
+	Reflect.apply(end, undefined, [event]);
+	Reflect.apply(drop, undefined, [event]);
+	assert.deepEqual(
+		session.snapshot().tabs.map((tab) => tab.id),
+		[first.id, second.id, third.id],
+	);
+	Reflect.apply(start, undefined, [event]);
+	Reflect.apply(drop, undefined, [event]);
+	assert.deepEqual(
+		session.snapshot().tabs.map((tab) => tab.id),
+		[second.id, third.id, first.id],
+	);
+	Reflect.apply(start, undefined, [event]);
+	Reflect.apply(drop, undefined, [{ ...event, clientX: 10 }]);
+	assert.deepEqual(
+		session.snapshot().tabs.map((tab) => tab.id),
+		[second.id, first.id, third.id],
+	);
+});
+
+test("close during autosave keeps the dialog closed and stale authority cannot initiate a follow-on write", async () => {
+	const pending = Promise.withResolvers<typeof text>();
+	vi.mocked(port.files.saveText).mockImplementationOnce(() => pending.promise);
+	const tab = await open("pending-autosave.txt");
+	tab.editor.edit("submitted");
+	const saving = tab.editor.save();
+	drive().tabs?.props.close([tab.id]);
+	assert.equal(drive().dialog.props.open, false);
+	tab.editor.edit("newer draft");
+	port = { files: { ...port.files } };
+	drive();
+	pending.resolve({ ...text, text: "submitted", revision: "b".repeat(64) });
+	await saving;
+	await flush();
+	assert.equal(drive().dialog.props.open, false);
+	assert.equal(vi.mocked(port.files.saveText).mock.calls.length, 1);
+	assert.equal(tab.editor.snapshot().document?.text, "newer draft");
+	assert.equal(session.snapshot().tabs[0]?.id, tab.id);
+});
+
+test("close cancels its continuation when the same root loses write authority during a save", async () => {
+	const pending = Promise.withResolvers<typeof text>();
+	vi.mocked(port.files.saveText).mockImplementationOnce(() => pending.promise);
+	const tab = await open("authority-change.txt");
+	tab.editor.edit("submitted");
+	drive().tabs?.props.close([tab.id]);
+	tab.editor.edit("later");
+	try {
+		root.writable = false;
+		drive();
+		pending.resolve({ ...text, text: "submitted", revision: "b".repeat(64) });
+		await flush();
+		await flush();
+		assert.equal(vi.mocked(port.files.saveText).mock.calls.length, 1);
+		assert.equal(drive().dialog.props.open, false);
+		assert.equal(session.snapshot().tabs[0]?.id, tab.id);
+		assert.equal(tab.editor.snapshot().document?.text, "later");
+	} finally {
+		root.writable = true;
+	}
+});

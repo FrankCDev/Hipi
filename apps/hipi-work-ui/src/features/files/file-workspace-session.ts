@@ -37,6 +37,7 @@ export class FileWorkspaceSession {
 	private listeners = new Set<() => void>();
 	private resources = new Map<string, TabResources>();
 	private sequence = 0;
+	private closeSequence = 0;
 	private workspaceId = "";
 	private activeByWorkspace = new Map<string, string>();
 	private closed = false;
@@ -79,6 +80,7 @@ export class FileWorkspaceSession {
 		this.closed = false;
 	}
 	setWorkspace(workspaceId: string) {
+		if (this.workspaceId !== workspaceId) this.closeSequence++;
 		this.workspaceId = workspaceId;
 		const activeId = this.activeByWorkspace.get(workspaceId);
 		this.publish({
@@ -101,15 +103,12 @@ export class FileWorkspaceSession {
 			tabs: this.state.tabs.map((tab) => (tab.id === id && !tab.pinned ? { ...tab, pinned: true } : tab)),
 		});
 	}
-	move(id: string, beforeId: string) {
+	move(id: string, targetId: string, placement: "before" | "after" = "before") {
 		const tab = this.state.tabs.find((item) => item.id === id);
-		if (!tab || id === beforeId || !this.state.tabs.some((item) => item.id === beforeId)) return;
+		const target = this.state.tabs.find((item) => item.id === targetId);
+		if (!tab || !target || id === targetId || tab.target.workspaceId !== target.target.workspaceId) return;
 		const tabs = this.state.tabs.filter((item) => item.id !== id);
-		tabs.splice(
-			tabs.findIndex((item) => item.id === beforeId),
-			0,
-			tab,
-		);
+		tabs.splice(tabs.findIndex((item) => item.id === targetId) + (placement === "after" ? 1 : 0), 0, tab);
 		this.publish({ ...this.state, tabs });
 	}
 	private release(tab: WorkspaceFileTab) {
@@ -122,7 +121,9 @@ export class FileWorkspaceSession {
 	}
 	private remove(ids: ReadonlySet<string>) {
 		const tabs = this.state.tabs.filter((tab) => !ids.has(tab.id));
-		const oldIndex = this.state.tabs.findIndex((tab) => tab.id === this.state.activeId);
+		const oldIndex = this.state.tabs
+			.filter((tab) => tab.target.workspaceId === this.workspaceId)
+			.findIndex((tab) => tab.id === this.state.activeId);
 		for (const tab of this.state.tabs) if (ids.has(tab.id)) this.release(tab);
 		for (const workspace of this.activeByWorkspace.keys())
 			if (!tabs.some((tab) => tab.target.workspaceId === workspace)) this.activeByWorkspace.delete(workspace);
@@ -251,31 +252,70 @@ export class FileWorkspaceSession {
 		await preview.open(tab.target);
 	}
 	/** Conditional-save before close; never retry a conflict or an unknown result automatically. */
-	async close(ids: readonly string[]) {
-		const requested = this.state.tabs.filter((tab) => ids.includes(tab.id));
-		const blocked: string[] = [];
-		for (const tab of requested) {
+	async close(
+		ids: readonly string[],
+		isCurrent: (tab: WorkspaceFileTab) => boolean = () => true,
+		canSave: (tab: WorkspaceFileTab) => boolean = () => true,
+	) {
+		const intent = ++this.closeSequence;
+		const requested = this.state.tabs
+			.filter((tab) => ids.includes(tab.id))
+			.map((tab) => ({
+				tab,
+				documentTarget: tab.kind === "editor" ? tab.editor.snapshot().document?.target : undefined,
+			}));
+		const blocked = new Map<string, () => boolean>();
+		for (const { tab, documentTarget } of requested) {
+			const current = () => {
+				const document = tab.kind === "editor" ? tab.editor.snapshot().document : undefined;
+				return (
+					!this.closed &&
+					intent === this.closeSequence &&
+					this.state.tabs.some(
+						(item) =>
+							item.id === tab.id &&
+							(tab.kind === "editor"
+								? item.kind === "editor" && item.editor === tab.editor
+								: item.kind === "preview" && item.preview === tab.preview),
+					) &&
+					(documentTarget === undefined || document?.target === documentTarget) &&
+					(!document || sameFileTarget(document.target, tab.target)) &&
+					isCurrent(tab)
+				);
+			};
+			if (!current()) continue;
 			if (tab.kind === "editor") {
-				const state = tab.editor.snapshot();
-				if (
-					tab.editor.protected &&
-					state.document?.writable &&
-					!state.operation &&
-					!state.error &&
-					!state.autosavePaused &&
-					state.unknown === undefined
-				)
-					await tab.editor.save();
-				// The tab could have closed while its save was pending.
-				if (!this.state.tabs.some((item) => item.id === tab.id)) continue;
+				// At most two writes: join/start one, then save newer edits once.
+				// Continued typing ends this close intent without a destructive prompt.
+				let writes = 0;
+				let saved = true;
+				while (current() && tab.editor.protected && writes < 2) {
+					const state = tab.editor.snapshot();
+					if (
+						(!canSave(tab) && state.operation !== "save") ||
+						!state.document?.writable ||
+						!sameFileTarget(state.document.target, tab.target) ||
+						(state.operation !== undefined && state.operation !== "save") ||
+						state.error ||
+						state.autosavePaused ||
+						state.unknown !== undefined
+					)
+						break;
+					writes++;
+					saved = await tab.editor.save();
+					if (!saved) break;
+				}
+				if (!current()) continue;
+				if (saved && writes === 2 && tab.editor.protected) continue;
 				if (tab.editor.protected) {
-					blocked.push(tab.id);
+					blocked.set(tab.id, current);
 					continue;
 				}
 			}
 			this.remove(new Set([tab.id]));
 		}
-		return blocked;
+		if (this.closed || intent !== this.closeSequence) return [];
+		return [...blocked].filter(([, current]) => current()).map(([id]) => id);
 	}
 	/** Hiding releases handles, not tab identity. Reopening reauthorizes the exact target. */
 	suspendPreviews() {
@@ -289,6 +329,7 @@ export class FileWorkspaceSession {
 		this.remove(new Set(this.state.tabs.map((tab) => tab.id)));
 	}
 	dispose() {
+		this.closeSequence++;
 		for (const tab of this.state.tabs) this.release(tab);
 		this.state = { tabs: [], limitReached: false };
 		this.activeByWorkspace.clear();

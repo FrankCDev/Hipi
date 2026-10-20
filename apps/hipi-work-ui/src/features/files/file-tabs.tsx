@@ -28,6 +28,7 @@ export function FileTabs({
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
 	const buttons = useRef(new Map<string, HTMLButtonElement>());
+	const dragged = useRef<{ id: string; session: FileWorkspaceSession } | undefined>(undefined);
 	return (
 		<div className="file-tabs-header">
 			<div className="file-tabs" role="tablist" aria-label={l["tabs.title"]}>
@@ -52,15 +53,24 @@ export function FileTabs({
 									title={tab.target.path}
 									draggable
 									onDragStart={(event) => {
+										dragged.current = { id: tab.id, session };
 										event.dataTransfer.effectAllowed = "move";
 										event.dataTransfer.setData("application/x-hipi-file-tab", tab.id);
+									}}
+									onDragEnd={() => {
+										dragged.current = undefined;
 									}}
 									onDragOver={(event) => {
 										if (event.dataTransfer.types.includes("application/x-hipi-file-tab")) event.preventDefault();
 									}}
 									onDrop={(event) => {
 										event.preventDefault();
-										session.move(event.dataTransfer.getData("application/x-hipi-file-tab"), tab.id);
+										const id = event.dataTransfer.getData("application/x-hipi-file-tab");
+										if (id !== dragged.current?.id || dragged.current.session !== session) return;
+										const rect = event.currentTarget.getBoundingClientRect();
+										const after = event.clientX >= rect.left + rect.width / 2;
+										session.move(id, tab.id, after ? "after" : "before");
+										dragged.current = undefined;
 									}}
 									onClick={() => session.select(tab.id)}
 									onDoubleClick={() => session.pin(tab.id)}

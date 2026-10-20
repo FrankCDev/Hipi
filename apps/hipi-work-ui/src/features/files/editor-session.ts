@@ -35,6 +35,7 @@ export class EditorSession {
 	private generation = 0;
 	private closed = false;
 	private submittedText?: string;
+	private pendingSave?: Promise<boolean>;
 	private client: FileClient;
 	constructor(client: FileClient) {
 		this.client = client;
@@ -133,8 +134,22 @@ export class EditorSession {
 			}
 		}
 	}
-	async save() {
-		if (this.closed) return;
+	/** Join only the current write, never a read or comparison. */
+	save(): Promise<boolean> {
+		if (this.state.operation === "save" && this.pendingSave) return this.pendingSave;
+		let finish: (saved: boolean) => void = () => {};
+		const completion = new Promise<boolean>((resolve) => {
+			finish = resolve;
+		});
+		this.pendingSave = completion;
+		void this.saveCurrent().then(finish, () => finish(false));
+		void completion.then(() => {
+			if (this.pendingSave === completion) this.pendingSave = undefined;
+		});
+		return completion;
+	}
+	private async saveCurrent(): Promise<boolean> {
+		if (this.closed) return false;
 		const document = this.state.document;
 		if (
 			!document ||
@@ -143,10 +158,10 @@ export class EditorSession {
 			this.state.unknown !== undefined ||
 			this.state.error === "VERSION_CONFLICT"
 		)
-			return;
+			return false;
 		if (new TextEncoder().encode(document.text).length > FILE_LIMITS.bytes) {
 			this.publish({ ...this.state, error: "LIMIT_EXCEEDED" });
-			return;
+			return false;
 		}
 		const generation = ++this.generation;
 		const controller = new AbortController();
@@ -169,8 +184,9 @@ export class EditorSession {
 			);
 			if (generation === this.generation)
 				this.publish({ document: { ...document, baseline, text: this.state.document?.text ?? document.text } });
+			return generation === this.generation && !this.closed;
 		} catch (error) {
-			if (generation !== this.generation) return;
+			if (generation !== this.generation) return false;
 			const code = error instanceof FileServiceError ? error.code : "WRITE_OUTCOME_UNKNOWN";
 			this.publish({
 				...this.state,
@@ -178,6 +194,7 @@ export class EditorSession {
 				error: code,
 				...(code === "WRITE_OUTCOME_UNKNOWN" ? { unknown: document.text } : {}),
 			});
+			return false;
 		} finally {
 			if (this.pending === controller) {
 				this.pending = undefined;
