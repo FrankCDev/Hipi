@@ -59,6 +59,9 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Hydrate only the hash-pinned public model catalog
         run: node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
+      - name: Hydrate the hash-pinned standalone Linux maintenance runtime
+        if: runner.os == 'Linux'
+        run: node apps/hipi-work-desktop/scripts/hydrate-maintenance-runtime.mjs
       - name: Record host filesystem sync diagnostics
         run: node apps/hipi-work-desktop/scripts/probe-filesystem-sync.mjs
       - name: Record Linux sandbox capabilities without changing host security
@@ -92,7 +95,7 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/stage-release.mjs
       - name: Package unsigned native-host artifacts without publishing
         run: node apps/hipi-work-desktop/scripts/package-release.mjs --${{ matrix.arch }}
-      - name: Smoke relocated packaged Electron and offline maintenance
+      - name: Smoke relocated package and platform-specific offline maintenance
         run: node apps/hipi-work-desktop/scripts/smoke-packaged.mjs
       - name: Verify real packaged desktop deterministic UI and restart
         id: gui_smoke
@@ -128,7 +131,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y xdotool
-          xdotool version
+          # Query package metadata without opening an ambient X display. Actual input
+          # is permitted only after the scenario creates and verifies its private Xvfb.
+          dpkg-query --show xdotool libxdo3
+          command -v xdotool
           command -v Xvfb
       - name: Verify real packaged Linux file workbench and native folder picker
         id: file_workbench
@@ -143,6 +149,21 @@ jobs:
             .artifacts/hipi-work/packages/gui-file-workbench/*.json
             .artifacts/hipi-work/packages/gui-file-workbench/*.png
             .artifacts/hipi-work/packages/gui-file-workbench/*.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify Linux Electron to standalone maintenance to Electron reopen
+        id: gui_maintenance
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.gui_smoke.outcome == 'success' }}
+        run: node apps/hipi-work-desktop/scripts/smoke-linux-maintenance-gui.mjs
+      - name: Retain native maintenance evidence even when validation fails
+        if: ${{ always() && steps.gui_maintenance.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-gui-maintenance-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-maintenance/*.json
+            .artifacts/hipi-work/packages/gui-maintenance/*.png
+            .artifacts/hipi-work/packages/gui-maintenance/*.log
           if-no-files-found: error
           retention-days: 7
       # This retains build evidence only. It does not create a release or publish updates.
@@ -165,5 +186,5 @@ jobs:
       - name: Record remaining native acceptance gates
         shell: bash
         run: |
-          echo 'Unsigned package, Node-mode maintenance and deterministic real-window UI/restart checks passed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Unsigned package, platform-specific offline maintenance and deterministic real-window UI/restart checks passed.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Pending: screenshot review, signing/notarization, installation, physical IME/accessibility, fault lifecycle, keychain, updates/migration recovery.' >> "$GITHUB_STEP_SUMMARY"

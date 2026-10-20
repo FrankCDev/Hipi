@@ -5,6 +5,7 @@ import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
+import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
 import {
 	readNativeLog,
@@ -20,8 +21,11 @@ import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 /** One lifecycle owns launch, evidence and cleanup for each independent private profile. */
-export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate } = {}) {
+export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate, betweenRuns } = {}) {
 	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
+	assert.ok(betweenRuns === undefined || typeof betweenRuns === "function", "Invalid between-runs callback");
+	assert.ok(!betweenRuns || scenario === "baseline", "Maintenance hook requires the unchanged baseline GUI flow");
+	const reportScenario = betweenRuns ? "maintenance" : scenario;
 	assert.equal(
 		scenario !== "baseline",
 		typeof prepare === "function" && typeof run === "function" && typeof verify === "function",
@@ -83,7 +87,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 	const nativeLogs = join(owned, "native-diagnostics");
 	const evidence = {
 		schemaVersion: 1,
-		scenario,
+		scenario: reportScenario,
 		status: "running",
 		platform: process.platform,
 		architecture: process.arch,
@@ -123,6 +127,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 	let reopenedFlow;
 	// Failed fixture closure must retain the profile even if native processes are absent.
 	let scenarioResourcesClosed = true;
+	const betweenRunsLifecycle = { resourcesClosed: true };
 	try {
 		await mkdir(artifacts);
 		await mkdir(nativeLogs);
@@ -244,6 +249,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 								reopened: iteration === 1,
 								seed,
 								previous: firstFlow,
+								fontObservations,
 								nativeContext: {
 									pid: native.child.pid,
 									display: env.DISPLAY,
@@ -290,6 +296,20 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			evidence.checks.push({ iteration, cleanExit: true });
 			native = undefined;
 			windowsIdentity = undefined;
+			if (iteration === 0 && betweenRuns) {
+				evidence.betweenRuns = await runBetweenGuiSessions(
+					betweenRuns,
+					{
+						ownedProfileRoot: profile,
+						ownedApplicationRoot: appDirectory,
+						ownedScratchRoot: owned,
+						firstFlow,
+						releaseProvenance: provenance,
+						assertAllOwnedProcessesExited: () => assertNoPackageProcesses(appDirectory),
+					},
+					betweenRunsLifecycle,
+				);
+			}
 		}
 		if (verify) {
 			scenarioResourcesClosed = false;
@@ -325,7 +345,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 				"A native process could not be terminated",
 			);
 			await assertNoPackageProcesses(appDirectory);
-			safeCleanup = scenarioResourcesClosed;
+			safeCleanup = scenarioResourcesClosed && betweenRunsLifecycle.resourcesClosed;
 		} catch (cleanupError) {
 			recordGuiFailure(evidence, "cleanupFailure", cleanupError, [owned, profile]);
 		}
@@ -355,7 +375,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 		evidence.cleanup = safeCleanup
 			? "confirmed processes stopped"
 			: "retained owned directories: process or fixture closure unconfirmed";
-		const destination = join(packages, scenario === "baseline" ? "gui-smoke" : `gui-${scenario}`);
+		const destination = join(packages, reportScenario === "baseline" ? "gui-smoke" : `gui-${reportScenario}`);
 		await mkdir(destination, { recursive: true });
 		for (const entry of await readdir(artifacts)) {
 			const bytes = await readFile(join(artifacts, entry));
@@ -363,7 +383,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			evidence.artifacts.push({ file: entry, bytes: bytes.length, sha256: hash(bytes) });
 		}
 		await writeFile(
-			join(destination, scenario === "baseline" ? "packaged-gui-smoke.json" : `packaged-${scenario}.json`),
+			join(destination, reportScenario === "baseline" ? "packaged-gui-smoke.json" : `packaged-${reportScenario}.json`),
 			`${JSON.stringify(evidence, null, 2)}\n`,
 		);
 		if (safeCleanup) {
@@ -371,7 +391,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			await rm(profile, { recursive: true, force: true, maxRetries: 3 });
 		}
 	}
-	console.log(`Packaged GUI ${scenario}: ${evidence.status}. This does not establish full native RC acceptance.`);
+	console.log(`Packaged GUI ${reportScenario}: ${evidence.status}. This does not establish full native RC acceptance.`);
 	return evidence;
 }
 

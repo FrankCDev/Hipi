@@ -2,11 +2,13 @@ const { copyFile, chmod } = require("node:fs/promises");
 const path = require("node:path");
 const verifyPack = require("./verify-pack.cjs");
 const { verifyLinuxSandboxFiles } = require("./verify-linux-sandbox.cjs");
+const { verifyLinuxMaintenancePackage } = require("./linux-maintenance.cjs");
 
 module.exports = async function afterPack(context) {
 	await verifyPack(context);
 	if (context.electronPlatformName !== "linux") return;
 	verifyLinuxSandboxFiles(context.appOutDir);
+	await verifyLinuxMaintenancePackage(context.appOutDir);
 	// builder 26.15.3 generates its launcher, then copies appOutDir over it.
 	// Final archive verification is mandatory: fail if this integration changes.
 	const destination = path.join(context.appOutDir, "AppRun");

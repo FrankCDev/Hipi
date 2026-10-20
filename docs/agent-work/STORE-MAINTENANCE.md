@@ -22,6 +22,8 @@
 
 ## 命令
 
+Linux x64 打包候选提供独立 `hipi-work-maintenance` 入口和固定官方 Node，不依赖系统 Node 或 npm。关闭 GUI 后，从独立终端运行该入口；不要用 GUI 的 `ELECTRON_RUN_AS_NODE` 方式。命令参数和只读档案语义不变，详见 [Linux 维护运行时](LINUX-MAINTENANCE-RUNTIME.md)。这不是 Debian 安装包或 Ubuntu 24.04 GUI 验收通过声明。下面仍是仓库开发环境的调用方式。
+
 从 Hipi 仓库根目录运行，需要 Node 24.19.0 或以上及已安装的仓库依赖。维护服务不加载模型目录、构造 Harness 或读取 API key。
 
 ```sh

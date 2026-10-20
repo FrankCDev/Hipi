@@ -8,9 +8,138 @@ import {
 	assertLongHistoryAcceptance,
 	executionState,
 	observeExecution,
+	observeStream,
 	prependEvidence,
+	streamEvidence,
 	viewport,
 } from "./gui-long-history.mjs";
+
+function streamModel(initial = {}) {
+	let value = {
+		executionState: "running",
+		partial: null,
+		jump: true,
+		scrollTop: 100,
+		scrollHeight: 1000,
+		clientHeight: 500,
+		rows: [{ key: "message:a", top: 100, visible: true }],
+		...initial,
+	};
+	let now = 0;
+	let nextFrame = 0;
+	let deadline;
+	const frames = new Map();
+	const observer = runInNewContext(`(${observeStream.toString()})(document,read)`, {
+		document: {},
+		read: () => {
+			if (value instanceof Error) throw value;
+			return value;
+		},
+		performance: { now: () => now },
+		requestAnimationFrame: (callback) => {
+			frames.set(++nextFrame, callback);
+			return nextFrame;
+		},
+		cancelAnimationFrame: (id) => frames.delete(id),
+		setTimeout: (callback) => {
+			deadline = callback;
+			return 1;
+		},
+		clearTimeout: () => {
+			deadline = undefined;
+		},
+	});
+	return {
+		observer,
+		callback: () => frames.values().next().value,
+		frame(update) {
+			value = update === null || update instanceof Error ? update : { ...value, ...update };
+			now += 16;
+			const [id, callback] = frames.entries().next().value ?? [];
+			frames.delete(id);
+			callback?.();
+		},
+		timeout: () => deadline?.(),
+		resources: () => frames.size + Number(!!deadline),
+	};
+}
+
+test("post-wheel frame sampling captures exact distinct running text between host polls, not length or terminal text", () => {
+	const model = streamModel({ partial: "aa" });
+	for (const partial of ["aa", "", " ", null, "bb", "cc"]) model.frame({ partial });
+	model.frame({ executionState: "ready", partial: "dd" });
+	assert.equal(model.observer.done, true);
+	const observation = model.observer.stop();
+	assert.deepEqual(
+		Array.from(observation.partialObservations, (sample) => sample.units),
+		[2, 2, 2],
+	);
+	assert.equal(observation.samples.at(-1).state, "ready");
+	const evidence = streamEvidence(observation);
+	assert.equal(evidence.streamValidation, "validated");
+	assert.equal(evidence.streamPartialSamples, 3);
+	assert.equal(evidence.streamAnchorSamples.length, 8);
+	assert.equal(model.resources(), 0);
+	assert.ok(!JSON.stringify(observation).includes('"aa"'));
+});
+
+test("stream sampler cannot count before leaving bottom or recover earlier partials after ready", () => {
+	const notAway = streamModel({ jump: false, partial: "pre-wheel" });
+	assert.equal(notAway.observer.stop().reason, "not-away-from-bottom");
+	assert.equal(notAway.observer.stop().partialObservations.length, 0);
+	assert.throws(() => streamEvidence(notAway.observer.stop()), /Incomplete frame observation/);
+	const ready = streamModel({ executionState: "ready", partial: "completed" });
+	const evidence = streamEvidence(ready.observer.stop());
+	assert.equal(evidence.streamPartialSamples, 0);
+	assert.equal(evidence.streamValidation, "notvalidated");
+	assert.equal(ready.resources(), 0);
+});
+
+test("transient unknown state, missing anchor, drift, invalid geometry and read failures are latched", () => {
+	for (const [update, reason] of [
+		[{ executionState: "unknown" }, "unknown-execution-state"],
+		[{ rows: [] }, "missing-anchor"],
+		[{ rows: [{ key: "message:a", top: 200 }] }, "anchor-moved"],
+		[{ rows: [{ key: "message:a", top: Number.NaN }] }, "anchor-moved"],
+		[null, "missing-viewport"],
+		[new Error("read failed"), "read-failed"],
+	]) {
+		const model = streamModel({ partial: "first" });
+		model.frame(update);
+		const failed = JSON.stringify(model.observer.stop());
+		model.frame({ executionState: "ready", rows: [{ key: "message:a", top: 100 }] });
+		assert.equal(model.observer.stop().reason, reason);
+		assert.equal(JSON.stringify(model.observer.stop()), failed);
+		assert.equal(model.resources(), 0);
+		assert.throws(() => streamEvidence(model.observer.stop()), /Incomplete frame observation/);
+	}
+});
+
+test("frame sampler bounds duration, frames, partial count and size, and disposes on early stop", () => {
+	const timeout = streamModel();
+	timeout.timeout();
+	assert.equal(timeout.observer.stop().reason, "timeout");
+	const frames = streamModel();
+	for (let n = 0; n < 2050; n++) frames.frame({});
+	assert.equal(frames.observer.stop().reason, "frame-count-limit");
+	assert.equal(frames.observer.stop().samples.length, 2048);
+	const count = streamModel();
+	for (let n = 0; n < 130; n++) count.frame({ partial: `sample:${n}` });
+	assert.equal(count.observer.stop().reason, "partial-count-limit");
+	assert.equal(count.observer.stop().partialObservations.length, 128);
+	const size = streamModel({ partial: "a".repeat(65537) });
+	assert.equal(size.observer.stop().reason, "partial-size-limit");
+	const cancelled = streamModel();
+	const retainedCallback = cancelled.callback();
+	assert.equal(cancelled.observer.stop().reason, "cancelled");
+	const stopped = JSON.stringify(cancelled.observer.stop());
+	retainedCallback();
+	assert.equal(JSON.stringify(cancelled.observer.stop()), stopped);
+	for (const model of [timeout, frames, count, size, cancelled]) {
+		assert.equal(model.resources(), 0);
+		assert.throws(() => streamEvidence(model.observer.stop()), /Incomplete frame observation/);
+	}
+});
 
 test("execution-start diagnostics distinguish missing status from missing partial, stay bounded and dispose", () => {
 	let callback;
@@ -130,6 +259,8 @@ test("scenario stays separate, preserves native lifecycle, and cannot mutate app
 		source,
 		/scrollTop\s*=|hipiWorkDesktop\.request\(|setResponses|tokensPerSecond|localStorage|sessionStorage/,
 	);
+	assert.ok(source.indexOf("await wheel(-200);") < source.indexOf("globalThis.__hipiStreamObservation="));
+	assert.match(source, /finally \{[\s\S]*o\.stop\(\);delete globalThis\.__hipiStreamObservation/);
 	const entry = await readFile(new URL("./smoke-packaged-long-history.mjs", import.meta.url), "utf8");
 	assert.match(entry, /scenario: "long-history"/);
 	assert.match(entry, /verify: verifyColdHistory/);

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
-import { changeOwnedFixture, fileFixture, readOwnedFixture } from "./gui-file-workbench-fixture.mjs";
+import { previewFixture } from "./gui-file-preview-fixtures.mjs";
+import { documentPreviewState, exerciseDocumentPreviews } from "./gui-file-previews.mjs";
+import { changeOwnedFixture, fileFixture, fileFixtureNames, readOwnedFixture } from "./gui-file-workbench-fixture.mjs";
 import { assertNoAlerts, capture, click, evaluate, pressKey, selectEnglish, until } from "./gui-flow.mjs";
 
 export function fileWorkbenchState(document) {
@@ -68,7 +70,7 @@ async function replaceEditor(cdp, text) {
 	await expectEditor(cdp, text, { dirty: true });
 }
 async function selectFile(cdp, name, preview = false) {
-	assert.ok([fileFixture.textName, fileFixture.csvName, fileFixture.imageName].includes(name));
+	assert.ok(fileFixtureNames.includes(name));
 	const selector = await until(
 		() =>
 			evaluate(
@@ -117,7 +119,7 @@ async function openRoot(cdp) {
 		() =>
 			evaluate(
 				cdp,
-				`JSON.stringify([...document.querySelectorAll('.file-entry span:last-child')].map(e=>e.textContent).sort()) === ${JSON.stringify(JSON.stringify([fileFixture.textName, fileFixture.csvName, fileFixture.imageName].sort()))}`,
+				`JSON.stringify([...document.querySelectorAll('.file-entry span:last-child')].map(e=>e.textContent).sort()) === ${JSON.stringify(JSON.stringify([...fileFixtureNames].sort()))}`,
 			),
 		"real owned-directory listing",
 	);
@@ -134,6 +136,15 @@ export function validateFileWorkbenchEvidence({ first, reopened }) {
 		"dirtyPanelPreservation",
 		"narrowModalPreservation",
 		"csvPreview",
+		"docxPreview",
+		"xlsxPreview",
+		"xlsxSavedValues",
+		"xlsxPagination",
+		"pdfPreview",
+		"pdfZoom",
+		"pdfReopenResetsZoom",
+		"dirtyPreviewGuardPreserved",
+		"unsupportedPreviewRejected",
 		"pngPreview",
 		"previewNotRestored",
 	])
@@ -291,6 +302,32 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 	record({ conflictDraftPreserved: true, conflictDidNotOverwriteDisk: true, explicitDiscardGuard: true });
 	// Presentation remounts collapse the directory, but the grant remains alive in this process.
 	await openRoot(cdp);
+	await replaceEditor(cdp, fileFixture.draft);
+	await selectFile(cdp, previewFixture.unsupportedName, true);
+	await click(cdp, '[role="dialog"] button', "Keep editing");
+	await expectEditor(cdp, fileFixture.draft, { dirty: true });
+	assert.equal(await evaluate(cdp, `(${documentPreviewState.toString()})(document)`), null);
+	assert.equal((await readOwnedFixture(nativeContext.ownedProfileRoot)).toString("utf8"), fileFixture.external);
+	// This second action deliberately discards the buffer. Do not claim draft retention after consent.
+	await selectFile(cdp, previewFixture.unsupportedName, true);
+	await click(cdp, '[role="dialog"] button', "Discard and continue");
+	await until(async () => {
+		const page = await evaluate(cdp, `(${documentPreviewState.toString()})(document)`);
+		return (
+			page?.path === previewFixture.unsupportedName &&
+			page.alerts.length === 1 &&
+			page.alerts[0].startsWith("Preview unavailable.") &&
+			page.retryAvailable &&
+			!page.loading &&
+			page.text === undefined &&
+			page.cells.length === 0
+		);
+	}, "unsupported preview reports a recoverable error");
+	assert.equal((await readOwnedFixture(nativeContext.ownedProfileRoot)).toString("utf8"), fileFixture.external);
+	await capture(cdp, directory, "file-unsupported-preview");
+	await click(cdp, ".file-buffer button", "Close preview");
+	await assertNoAlerts(cdp);
+	record({ dirtyPreviewGuardPreserved: true, unsupportedPreviewRejected: true });
 	await selectFile(cdp, fileFixture.csvName, true);
 	await until(
 		async () =>
@@ -300,6 +337,7 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 	);
 	await capture(cdp, directory, "file-csv-preview");
 	await click(cdp, ".file-buffer button", "Close preview");
+	const documents = await exerciseDocumentPreviews({ cdp, directory, selectFile, record });
 	await selectFile(cdp, fileFixture.imageName, true);
 	await until(async () => {
 		const value = (await state(cdp))?.image;
@@ -326,6 +364,9 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 		dirtyPanelPreservation: true,
 		narrowModalPreservation: true,
 		csvPreview: true,
+		...documents,
+		dirtyPreviewGuardPreserved: true,
+		unsupportedPreviewRejected: true,
 		pngPreview: true,
 		previewNotRestored: true,
 		nativePicker: picker,

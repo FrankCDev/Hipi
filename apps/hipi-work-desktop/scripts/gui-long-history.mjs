@@ -103,6 +103,87 @@ export function observeExecution(document, read) {
 	};
 }
 
+/** Start only after consumed native wheel input. No host polling gaps or pre-wheel samples. */
+export function observeStream(document, read) {
+	const started = performance.now();
+	const samples = [];
+	const partials = new Set();
+	const partialObservations = [];
+	let reading;
+	let anchor;
+	let reason;
+	let frame;
+	let timer;
+	const finish = (value) => {
+		if (reason) return;
+		reason = value;
+		cancelAnimationFrame(frame);
+		clearTimeout(timer);
+	};
+	const take = () => {
+		if (reason) return;
+		try {
+			const value = read(document);
+			if (!value) return finish("missing-viewport");
+			if (!reading) {
+				if (!value.jump || value.scrollHeight - value.clientHeight - value.scrollTop <= 64)
+					return finish("not-away-from-bottom");
+				anchor = value.rows.find((r) => r.visible && r.top >= 0 && r.key !== "partial-output");
+				if (!anchor) return finish("missing-anchor");
+				reading = { rows: [{ key: anchor.key, top: anchor.top }] };
+			}
+			const row = value.rows.find((r) => r.key === anchor.key);
+			const elapsedMs = Math.round(performance.now() - started);
+			samples.push({ state: value.executionState, top: row?.top ?? null, elapsedMs });
+			if (!row) return finish("missing-anchor");
+			if (!Number.isFinite(anchor.top) || !Number.isFinite(row.top) || Math.abs(row.top - anchor.top) > 4)
+				return finish("anchor-moved");
+			if (!["running", "ready"].includes(value.executionState)) return finish("unknown-execution-state");
+			if (value.executionState === "running" && typeof value.partial === "string" && value.partial.trim()) {
+				if (value.partial.length > 65536) return finish("partial-size-limit");
+				if (!partials.has(value.partial)) {
+					if (partials.size === 128) return finish("partial-count-limit");
+					partials.add(value.partial);
+					partialObservations.push({ units: value.partial.length, elapsedMs });
+				}
+			}
+			if (value.executionState === "ready") return finish("ready");
+			if (samples.length === 2048) return finish("frame-count-limit");
+			frame = requestAnimationFrame(take);
+		} catch {
+			finish("read-failed");
+		}
+	};
+	// rAF alone cannot provide a deadline when a native window stops producing frames.
+	timer = setTimeout(() => finish("timeout"), 30000);
+	take();
+	return {
+		get done() {
+			return !!reason;
+		},
+		stop() {
+			finish("cancelled");
+			return { reason, reading, samples, partialObservations };
+		},
+	};
+}
+
+export function streamEvidence(observation) {
+	assert.equal(observation.reason, "ready", `Incomplete frame observation: ${observation.reason}`);
+	assert.ok(observation.reading?.rows.length === 1 && observation.samples.length > 0);
+	assert.equal(observation.samples.at(-1).state, "ready");
+	const key = observation.reading.rows[0].key;
+	const anchors = observation.samples.map((sample) => {
+		assert.ok(["running", "ready"].includes(sample.state), "Execution state must remain known");
+		return anchored(observation.reading, { rows: [{ key, top: sample.top }] }, key);
+	});
+	return {
+		streamValidation: observation.partialObservations.length >= 3 ? "validated" : "notvalidated",
+		streamPartialSamples: observation.partialObservations.length,
+		streamAnchorSamples: anchors,
+	};
+}
+
 // Bounded passive observations only. The owning scenario removes every observer in finally.
 export function observePrepend(document, read, key) {
 	const host = document.querySelector(".message-scroll");
@@ -370,6 +451,7 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 	let streamValidation;
 	let streamPartialSamples;
 	let streamAnchorSamples;
+	let streamFrameObservation;
 	if (!reopened) {
 		await click(cdp, ".composer textarea");
 		await cdp.request("Input.insertText", { text: seed.probe });
@@ -393,25 +475,31 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 			});
 		}
 		await wheel(-200);
-		const reading = await read();
-		assert.ok(
-			reading.jump && reading.scrollHeight - reading.clientHeight - reading.scrollTop > 64,
-			"User intentionally left bottom",
-		);
-		const readingAnchor = reading.rows.find((r) => r.visible && r.top >= 0 && r.key !== "partial-output");
-		assert.ok(readingAnchor);
-		const partials = new Set();
-		addPartial(partials, reading);
-		streamAnchorSamples = [];
-		await until(async () => {
-			const value = await read();
-			assert.notEqual(value.executionState, "unknown", "Execution state must remain known");
-			addPartial(partials, value);
-			streamAnchorSamples.push(anchored(reading, value, readingAnchor.key));
-			return value.executionState === "ready";
-		}, "continuous anchor observation through execution completion");
-		streamPartialSamples = partials.size;
-		streamValidation = partials.size >= 3 ? "validated" : "notvalidated";
+		let streamObservation;
+		try {
+			await evaluate(
+				cdp,
+				`(()=>{const executionState=${executionState.toString()};globalThis.__hipiStreamObservation=(${observeStream.toString()})(document,${viewport.toString()});})()`,
+			);
+			await until(
+				() => evaluate(cdp, "globalThis.__hipiStreamObservation.done"),
+				"continuous frame observation through execution completion",
+			);
+		} finally {
+			streamObservation = await evaluate(
+				cdp,
+				"(()=>{const o=globalThis.__hipiStreamObservation;if(!o)return {reason:'not-installed',samples:[],partialObservations:[]};const result=o.stop();delete globalThis.__hipiStreamObservation;return result;})()",
+			);
+			streamFrameObservation = {
+				reason: streamObservation.reason,
+				samples: streamObservation.samples,
+				partialObservations: streamObservation.partialObservations,
+			};
+			record({ streamFrameObservation });
+		}
+		({ streamValidation, streamPartialSamples, streamAnchorSamples } = streamEvidence(streamObservation));
+		const reading = streamObservation.reading;
+		const readingAnchor = reading.rows[0];
 		record({ streamValidation, streamPartialSamples, streamAnchorSamples });
 		await capture(cdp, directory, "history-stream-away-from-bottom");
 		await click(cdp, 'button[aria-label="Conversation details"]');
@@ -469,6 +557,7 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 		streamValidation,
 		streamPartialSamples,
 		streamAnchorSamples,
+		streamFrameObservation,
 		mountedRows: { min: Math.min(...mountedCounts), max: Math.max(...mountedCounts) },
 		visibleDistinctMessageKeys: seen.size,
 		scopeIsolation: true,

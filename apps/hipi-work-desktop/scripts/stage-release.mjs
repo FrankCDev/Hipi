@@ -1,6 +1,7 @@
 import { cp, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import maintenance from "../packaging/linux-maintenance.cjs";
 import { assertFontAsset, fontAssets } from "./font-assets.mjs";
 import {
 	allowedPayload,
@@ -18,6 +19,11 @@ const root = resolve(desktop, "../..");
 const stage = resolve(root, ".artifacts/hipi-work/app");
 const manifest = JSON.parse(await readFile(join(desktop, "package.json"), "utf8"));
 const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
+let linuxMaintenance;
+if (process.platform === "linux") {
+	maintenance.assertRuntimeTarget(process.platform, process.arch);
+	linuxMaintenance = await maintenance.verifyMaintenanceRuntime(join(root, ".artifacts/hipi-work/maintenance-runtime"));
+}
 const sourceSnapshot = JSON.parse(await readFile(join(root, ".artifacts/hipi-work/source-snapshot.json"), "utf8"));
 for (const file of [
 	"package-lock.json",
@@ -185,6 +191,7 @@ const provenance = {
 	vite: manifest.devDependencies.vite,
 	lockSha256: sha256(await readFile(join(root, "package-lock.json"))),
 	modelCatalogPin: JSON.parse(await readFile(join(desktop, "packaging/model-catalog.json"), "utf8")),
+	...(linuxMaintenance ? { linuxMaintenanceRuntime: linuxMaintenance } : {}),
 	sourceSnapshotSha256: sourceSnapshot.sourceSnapshotSha256,
 	sourceSnapshot: sourceSnapshot.sourceSnapshot,
 	validation: {

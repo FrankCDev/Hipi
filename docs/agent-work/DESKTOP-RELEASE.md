@@ -6,6 +6,8 @@
 
 Run from the repository root with Node 24.19.0 and the reviewed lockfile:
 
+On Linux x64, run `node apps/hipi-work-desktop/scripts/hydrate-maintenance-runtime.mjs` after `npm ci --ignore-scripts` and before `verify-source.mjs` below to prepare the separate official offline-maintenance runtime. Do not run this Linux-only preparation on Windows or macOS.
+
 ```sh
 npm ci --ignore-scripts
 node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
@@ -22,6 +24,8 @@ Hydration fetches only the public typed catalog revision in `apps/hipi-work-desk
 The source entrypoint checks every explicitly named test file exists before invoking Node or Vitest, then checks hydrated model data, strict workspace types, browser/desktop boundaries, the listed Node tests, and the explicitly listed UI Vitest files. It never invokes the repository-wide Vitest suite or paid provider tests. Add newly approved tests to the explicit list; discovery is deliberately not automatic. The repository's full `npm run check` is a separate required integration check.
 
 `build-release.mjs` hashes workspace sources and necessary build inputs before and after `prepare --release`, rejecting edits during compilation. It records generated-bundle hashes. Staging refuses bundle or dependency/version drift from that record. Packaging also rejects a changed staging provenance during its run. Keep the worktree stable during a release candidate build; a later source fix requires a new build and new acceptance evidence.
+
+Linux GUI fuses, standalone maintenance and final archive checks are described in [Linux maintenance packaging](LINUX-MAINTENANCE-RUNTIME.md); Windows/macOS maintenance and fuses remain unchanged.
 
 ## Toolchain decision
 

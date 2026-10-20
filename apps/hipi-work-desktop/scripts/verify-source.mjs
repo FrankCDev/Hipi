@@ -37,6 +37,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");

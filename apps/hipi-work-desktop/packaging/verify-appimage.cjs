@@ -3,6 +3,7 @@ const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { portableExecutables } = require("./verify-linux-sandbox.cjs");
+const { assertAppImageCriticalFiles } = require("./verify-linux-artifacts.cjs");
 
 function assertToolEnvironment(environment) {
 	for (const key of Object.keys(environment)) {
@@ -35,11 +36,15 @@ function assertLauncherEntries(listing, readEntry, version) {
 	}
 }
 
-function verifyAppImage(archive, version, reader) {
+function verifyAppImage(archive, version, reader, criticalFiles = []) {
 	// Read archive bytes through the packager's pinned 7zip tool, never execute AppImage/AppRun.
 	const options = { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } };
 	const listing = execFileSync(reader, ["l", "-slt", archive], options).toString("utf8");
 	assertLauncherEntries(listing, (name) => execFileSync(reader, ["x", "-so", archive, name], options), version);
+	assertAppImageCriticalFiles(listing, (name, bytes) => {
+		assert.ok(bytes < 512 * 1024 * 1024, "Critical AppImage payload exceeds read budget");
+		return execFileSync(reader, ["x", "-so", archive, name], { ...options, maxBuffer: bytes + 1 });
+	}, criticalFiles);
 	console.log("Verified actual AppImage launcher/desktop bytes and portable executable modes/ownership; no sandbox fallback.");
 }
 

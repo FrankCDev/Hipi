@@ -7,6 +7,8 @@ import { createFileAuthority } from "@hipi/work-runtime/files/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { createPreviewClient } from "@hipi/work-runtime/previews/protocol";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
+import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";
+import { assertPdfPaint, documentPreviewState, pdfPreviewPaint } from "./gui-file-previews.mjs";
 import { fileWorkbenchState, validateFileWorkbenchEvidence } from "./gui-file-workbench.mjs";
 import {
 	changeOwnedFixture,
@@ -21,7 +23,7 @@ async function profile() {
 	return realpath(await mkdtemp(join(await realpath(tmpdir()), "Hipi GUI profile-")));
 }
 
-test("synthetic fixture exercises real file CAS and CSV/PNG preview without model or grant bypass", async () => {
+test("synthetic fixture exercises real file CAS and all preview transports without model or grant bypass", async () => {
 	const root = await profile();
 	let authority;
 	let previews;
@@ -76,6 +78,48 @@ test("synthetic fixture exercises real file CAS and CSV/PNG preview without mode
 			],
 		);
 		await client.close(csv.id);
+		const docx = await client.open({ ...target, path: previewFixture.docxName });
+		const word = await client.readPage(docx.id, 0);
+		assert.equal(word.content.kind, "document");
+		assert.equal(word.content.text, previewFixture.docxText);
+		assert.deepEqual(word.content.limitations, ["plain-text-only", "layout-images-and-embedded-content-omitted"]);
+		await client.close(docx.id);
+		const xlsx = await client.open({ ...target, path: previewFixture.xlsxName });
+		assert.equal(xlsx.summary.pages, 2);
+		const first = await client.readPage(xlsx.id, 0);
+		assert.equal(first.content.sheets[0].name, previewFixture.sheetName);
+		assert.deepEqual(
+			first.content.sheets[0].rows.map((row) => row.map((cell) => cell.display)),
+			[
+				["label", "value"],
+				["中文", "42"],
+				["cached formula", "999"],
+			],
+		);
+		assert.equal(first.content.sheets[0].rows[2][1].value, 999, "Saved formula value must not be recalculated");
+		const second = await client.readPage(xlsx.id, 1);
+		assert.equal(second.content.sheets[0].name, previewFixture.secondSheetName);
+		assert.deepEqual(
+			second.content.sheets[0].rows.map((row) => row.map((cell) => cell.display)),
+			[
+				["second", "page"],
+				["fixture", "unchanged"],
+			],
+		);
+		assert.deepEqual(await client.readPage(xlsx.id, 0), first);
+		await client.close(xlsx.id);
+		const pdf = await client.open({ ...target, path: previewFixture.pdfName });
+		assert.equal(pdf.kind, "pdf");
+		assert.equal(pdf.summary.pages, 0, "PDF.js discovers pages in the renderer; transport is not render evidence");
+		assert.deepEqual(
+			Buffer.from((await client.readBytes(pdf.id, 0)).base64, "base64"),
+			await readOwnedFixture(root, previewFixture.pdfName),
+		);
+		await client.close(pdf.id);
+		await assert.rejects(client.open({ ...target, path: previewFixture.unsupportedName }), {
+			code: "BLOCKED_RESOURCE",
+		});
+		// A denied preview must not poison subsequent supported preview operations.
 		const image = await client.open({ ...target, path: fileFixture.imageName });
 		assert.equal(image.kind, "png");
 		assert.deepEqual(
@@ -233,8 +277,78 @@ test(
 );
 
 test("file evidence refuses ambiguous presentation surfaces", () => {
-	for (const count of [0, 2])
+	for (const count of [0, 2]) {
 		assert.equal(fileWorkbenchState({ querySelectorAll: () => Array.from({ length: count }, () => ({})) }), null);
+		assert.equal(documentPreviewState({ querySelectorAll: () => Array.from({ length: count }, () => ({})) }), null);
+		assert.equal(pdfPreviewPaint({ querySelectorAll: () => Array.from({ length: count }, () => ({})) }), null);
+	}
+});
+
+test("original preview fixtures are byte-deterministic, bounded, and PDF xref entries point at real objects", () => {
+	const files = createPreviewFixtureFiles();
+	assert.deepEqual(files, createPreviewFixtureFiles());
+	assert.equal(new Set(files.map(([name]) => name)).size, 4);
+	for (const [, bytes] of files) assert.ok(bytes.length > 0 && bytes.length < 65536);
+	const pdf = files.find(([name]) => name === previewFixture.pdfName)[1].toString("ascii");
+	const xref = Number(pdf.match(/startxref\n(\d+)\n%%EOF\n$/)[1]);
+	assert.ok(pdf.slice(xref).startsWith("xref\n0 6\n"));
+	const entries = pdf.slice(xref).split("\n").slice(3, 8);
+	for (const [index, entry] of entries.entries())
+		assert.ok(pdf.slice(Number(entry.slice(0, 10))).startsWith(`${index + 1} 0 obj\n`));
+	assert.ok(!/\/JavaScript|\/OpenAction|\/URI|\/EmbeddedFile/.test(pdf));
+});
+
+test("PDF evidence requires actual text paint, rectangle, background and exact rendered zoom", () => {
+	const paint = {
+		zoom: 1,
+		width: 400,
+		height: 300,
+		blue: [0, 0, 255, 255],
+		white: [255, 255, 255, 255],
+		darkTextPixels: 101,
+	};
+	assertPdfPaint(paint, 1);
+	for (const change of [
+		{ darkTextPixels: 0 },
+		{ blue: [255, 255, 255, 255] },
+		{ white: [0, 0, 0, 255] },
+		{ width: 600 },
+		{ zoom: 1.5 },
+	])
+		assert.throws(() => assertPdfPaint({ ...paint, ...change }, 1));
+	assertPdfPaint({ ...paint, zoom: 1.5, width: 600, height: 450 }, 1.5);
+});
+
+test("PDF canvas observation waits for completed, unique rendering and measures the scaled text region", () => {
+	for (const zoom of [1, 1.5]) {
+		const width = 400 * zoom;
+		const height = 300 * zoom;
+		const data = new Uint8ClampedArray(width * height * 4).fill(255);
+		data.set([0, 0, 255, 255], (Math.floor(175 * zoom) * width + Math.floor(80 * zoom)) * 4);
+		const start = (Math.floor(60 * zoom) * width + Math.floor(40 * zoom)) * 4;
+		for (let index = 0; index < 101; index++) data.set([0, 0, 0, 255], start + index * 4);
+		const canvas = {
+			width,
+			height,
+			getAttribute: (name) => (name === "role" ? "img" : "PDF page 1"),
+			getContext: () => ({ getImageData: () => ({ data }) }),
+		};
+		let busy = "false";
+		const nodes = {
+			".file-preview-surface": [{ getAttribute: () => busy }],
+			canvas: [canvas],
+			".file-actions select": [{ value: String(zoom), disabled: false }],
+		};
+		const document = { querySelectorAll: () => [{ querySelectorAll: (selector) => nodes[selector] }] };
+		const paint = pdfPreviewPaint(document);
+		assertPdfPaint(paint, zoom);
+		assert.equal(paint.darkTextPixels, 101);
+		busy = "true";
+		assert.equal(pdfPreviewPaint(document), null);
+		busy = "false";
+		nodes.canvas.push(canvas);
+		assert.equal(pdfPreviewPaint(document), null);
+	}
 });
 
 test("completion gate requires every first-run, native-picker and cold-restart observation", () => {
@@ -249,6 +363,15 @@ test("completion gate requires every first-run, native-picker and cold-restart o
 			"dirtyPanelPreservation",
 			"narrowModalPreservation",
 			"csvPreview",
+			"docxPreview",
+			"xlsxPreview",
+			"xlsxSavedValues",
+			"xlsxPagination",
+			"pdfPreview",
+			"pdfZoom",
+			"pdfReopenResetsZoom",
+			"dirtyPreviewGuardPreserved",
+			"unsupportedPreviewRejected",
 			"pngPreview",
 			"previewNotRestored",
 		].map((key) => [key, true]),

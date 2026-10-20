@@ -1,9 +1,11 @@
 const path = require("node:path");
+const { linuxPackagingOptions } = require("./linux-maintenance.cjs");
 const desktop = path.resolve(__dirname, "..");
 const root = path.resolve(desktop, "../..");
 const manifest = require(path.join(desktop, "package.json"));
 
 module.exports = {
+	...linuxPackagingOptions(root),
 	appId: "org.hipi.work",
 	productName: "Hipi Work",
 	electronVersion: manifest.devDependencies.electron,

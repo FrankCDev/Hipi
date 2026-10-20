@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -10,6 +11,124 @@ import { captureWindowsIdentity, readWindowsDialogs } from "./gui-windows-dialog
 
 const input = { pid: 123, binary: "C:\\owned\\Hipi Work.exe", spawnedAt: 123456 };
 const confirmed = { status: "confirmed", pid: 123, startTicks: "123456789", session: 1 };
+
+// Fixture output is a fixed ASCII protocol, not an error-log transport.
+function fixtureReadiness(stdout, completion) {
+	const phases = new Set([
+		"forms-load",
+		"native-compile",
+		"timers-start",
+		"activation-create",
+		"activation-activate",
+		"task-dialog-call",
+		"classic-dialog-call",
+	]);
+	const failures = new Set([
+		"ERROR_FILE_NOT_FOUND",
+		"ERROR_PATH_NOT_FOUND",
+		"ERROR_ACCESS_DENIED",
+		"ERROR_INVALID_PARAMETER",
+		"ERROR_SXS_CANT_GEN_ACTCTX",
+		"ACTIVATION_NATIVE_FAILURE",
+		"E_INVALIDARG",
+		"E_OUTOFMEMORY",
+		"E_FAIL",
+		"TASK_DIALOG_FAILED",
+		"ENTRY_POINT_NOT_FOUND",
+		"DLL_NOT_FOUND",
+		"FIXTURE_EXCEPTION",
+	]);
+	return new Promise((resolve, reject) => {
+		let lastPhase = "fixture-start";
+		let bytes = 0;
+		let pending = "";
+		let settled = false;
+		function finish(code) {
+			if (settled) return;
+			settled = true;
+			stdout.off("data", receive);
+			stdout.resume();
+			if (code) reject(new Error(`Fixture readiness failed: ${code}; phase=${lastPhase}`));
+			else resolve();
+		}
+		function receive(chunk) {
+			bytes += chunk.length;
+			if (bytes > 4096) return finish("OUTPUT_LIMIT");
+			pending += chunk.toString("utf8");
+			while (!settled) {
+				const newline = pending.indexOf("\n");
+				if (newline === -1) break;
+				const line = pending.slice(0, newline).replace(/\r$/, "");
+				pending = pending.slice(newline + 1);
+				if (line.length > 128) return finish("OUTPUT_LIMIT");
+				if (line === "HIPI_FIXTURE_READY")
+					return finish(lastPhase.endsWith("-dialog-call") ? undefined : "UNEXPECTED_READY");
+				const phase = line.slice("HIPI_FIXTURE_PHASE:".length);
+				const failure = line.slice("HIPI_FIXTURE_FAILURE:".length);
+				if (line.startsWith("HIPI_FIXTURE_PHASE:") && phases.has(phase)) lastPhase = phase;
+				else if (line.startsWith("HIPI_FIXTURE_FAILURE:") && failures.has(failure)) return finish(failure);
+				else return finish("INVALID_OUTPUT");
+			}
+			if (pending.length > 128) finish("OUTPUT_LIMIT");
+		}
+		stdout.on("data", receive);
+		void completion.then(
+			(result) =>
+				finish(
+					result?.[0] === 0xc0000005 || result?.[0] === -1073741819 ? "NATIVE_ACCESS_VIOLATION" : "EXIT_BEFORE_READY",
+				),
+			() => finish("PROCESS_ERROR"),
+		);
+	});
+}
+
+test("fixture readiness accepts split fixed phases and reports bounded failure codes without raw output", async () => {
+	const stdout = new PassThrough();
+	const ready = fixtureReadiness(stdout, Promise.resolve());
+	stdout.write("HIPI_FIXTURE_PHASE:forms-load\nHIPI_FIXTURE_PHASE:task-dia");
+	stdout.write("log-call\r\nHIPI_FIXTURE_RE");
+	stdout.write("ADY\n");
+	await ready;
+	assert.equal(stdout.listenerCount("data"), 0);
+	for (const [output, code, phase] of [
+		["HIPI_FIXTURE_PHASE:activation-create\n", "EXIT_BEFORE_READY", "activation-create"],
+		["HIPI_FIXTURE_PHASE:task-dialog-call\nHIPI_FIXTURE_FAILURE:E_INVALIDARG\n", "E_INVALIDARG", "task-dialog-call"],
+		["HIPI_FIXTURE_PHASE:private-path\n", "INVALID_OUTPUT", "fixture-start"],
+		["HIPI_FIXTURE_FAILURE:private-secret\n", "INVALID_OUTPUT", "fixture-start"],
+		["private exception and path\n", "INVALID_OUTPUT", "fixture-start"],
+		["HIPI_FIXTURE_READY\n", "UNEXPECTED_READY", "fixture-start"],
+		["x".repeat(129), "OUTPUT_LIMIT", "fixture-start"],
+		["HIPI_FIXTURE_PHASE:forms-load\n".repeat(200), "OUTPUT_LIMIT", "fixture-start"],
+	]) {
+		const stream = new PassThrough();
+		const result = fixtureReadiness(stream, Promise.resolve());
+		stream.write(output);
+		await assert.rejects(result, { message: `Fixture readiness failed: ${code}; phase=${phase}` });
+		assert.equal(stream.listenerCount("data"), 0);
+	}
+	await assert.rejects(fixtureReadiness(new PassThrough(), Promise.reject(new Error("private spawn path"))), {
+		message: "Fixture readiness failed: PROCESS_ERROR; phase=fixture-start",
+	});
+	await assert.rejects(fixtureReadiness(new PassThrough(), Promise.resolve([0xc0000005, null])), {
+		message: "Fixture readiness failed: NATIVE_ACCESS_VIOLATION; phase=fixture-start",
+	});
+});
+
+test("task fixture preserves HRESULT diagnostics and uses the SDK's zero-extended error-icon resource", async () => {
+	const script = await readFile(new URL("./gui-windows-dialog-fixture.ps1", import.meta.url), "utf8");
+	assert.match(script, /static extern int TaskDialog\(/);
+	assert.match(script, /new IntPtr\(0xFFFE\)/);
+	assert.doesNotMatch(script, /new IntPtr\(-2\)|PreserveSig=false/);
+	assert.match(script, /result == unchecked\(\(int\)0x80070057\)/);
+	assert.match(script, /Phase\("activation-create"\)/);
+	assert.match(script, /Phase\("task-dialog-call"\)/);
+	const manifest = await readFile(new URL("./gui-windows-dialog-fixture.manifest", import.meta.url), "utf8");
+	assert.match(manifest, /<assembly[^>]*>\s*<assemblyIdentity type="win32" name="Hipi.Work.DialogFixture"/);
+	const failure = script.slice(script.lastIndexOf("\n} catch {"));
+	assert.match(failure, /\$code = 'FIXTURE_EXCEPTION'/);
+	assert.match(failure, /\$depth -lt 4/);
+	assert.doesNotMatch(failure, /\.Message|\.ToString\(|Write-Error/);
+});
 
 test("identity failures preserve only fixed diagnostic phases without weakening unknown", async () => {
 	for (const reason of [
@@ -313,13 +432,9 @@ for (const kind of ["classic", "task"])
 						env: { ...process.env, HIPI_DIALOG_DECOY: decoy ? "1" : "0", HIPI_DIALOG_KIND: kind },
 					},
 				);
-				const completion = once(child, "exit");
-				const ready = Promise.race([
-					once(child.stdout, "data").then(([data]) => assert.equal(data.toString().trim(), "HIPI_FIXTURE_READY")),
-					completion.then(() => {
-						throw new Error("Fixture exited before readiness");
-					}),
-				]);
+				// close follows stdout drain, so an early native failure cannot race its final fixed code.
+				const completion = once(child, "close");
+				const ready = fixtureReadiness(child.stdout, completion);
 				void ready.catch(() => {});
 				return { child, spawnedAt, completion, ready };
 			}
@@ -349,7 +464,8 @@ for (const kind of ["classic", "task"])
 				assert.ok(!result.codes.includes("ReferenceError"), "The separate decoy process must not be read");
 				assert.ok(!JSON.stringify(result).includes("private-fixture-secret"));
 			} finally {
-				await Promise.all([primary.completion, decoy?.completion]);
+				// Keep the sanitized readiness failure, not a raw OS spawn error from cleanup.
+				await Promise.allSettled([primary.completion, decoy?.completion]);
 			}
 		},
 	);

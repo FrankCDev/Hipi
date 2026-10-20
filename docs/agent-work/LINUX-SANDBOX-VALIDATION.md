@@ -43,7 +43,7 @@ Local test evidence: Debian 13 cloud workspace, Node 24.19.0, UID 1000; unshare 
 
 ## Smallest CI experiment
 
-1. Keep Ubuntu 24.04 source/package/Node-mode validation. Record sandbox capability separately and retain blocked native-GUI evidence. Do not claim Ubuntu 24.04 GUI acceptance or hide the failed native attempt behind a generic success summary.
+1. Keep Ubuntu 24.04 source/package/offline-maintenance validation, using the independent pinned Node runtime after the Linux hardening prerequisite below. Record sandbox capability separately and retain blocked native-GUI evidence. Do not claim Ubuntu 24.04 GUI acceptance or hide the failed native attempt behind a generic success summary.
 2. Add a **temporary, separate** `ubuntu-22.04` native GUI validation job, recording the actual runner image version and probe output. Keep the same pinned Electron, production sandbox preferences, fixture isolation and substantive UI/restart checks. Do not use sandbox-disabling flags or alter host policy. A probe pass must still be followed by the actual packaged GUI test; only completed checks count.
 3. Keep Ubuntu 24.04 installation/security prerequisites and native GUI acceptance open even if Ubuntu 22.04 passes. Testing a different supported OS configuration does not establish behavior on the blocked one.
 
@@ -82,6 +82,8 @@ Before a production candidate can be installed, resolve these concrete questions
 5. **Installed acceptance:** launch the installed executable at its reviewed attachment path as the ordinary user, using temporary user data only. The present GUI harness relocates the binary and therefore cannot prove a fixed-path policy works. An installed-mode harness must never copy, chmod or delete the installation; it must verify policy attachment and sandbox runtime evidence, exercise the substantive GUI/restart flow and confirm owned-process cleanup. Installation, update and recovery tests remain separate gates.
 
 The subsequent live action needs exact action-time approval for that identified host, package, dependency transaction, policy creation/load and specifically reviewed cleanup or disposable-host destruction. There is no pending installation attempt and no actual installable candidate approved by this review. No AppArmor command, privileged helper operation or host setting change was executed.
+
+The [Linux-only maintenance runtime prerequisite](LINUX-MAINTENANCE-RUNTIME.md) implements the interpreter-scope direction in a separate candidate: official pinned Node, standalone shell maintenance, restricted GUI fuses and post-builder/final-archive verification. It replaces Linux Electron Node-mode maintenance acceptance, not the native GUI gates. The earlier binary observations above remain historical; a fresh candidate must establish its own hashes and real utility/parser behavior. This prerequisite does not create or install a Debian package or change the host-policy approval boundary.
 
 ### Why another package format is not an immediate bypass
 

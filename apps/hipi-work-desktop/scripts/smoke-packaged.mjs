@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, statfs, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import maintenance from "../packaging/linux-maintenance.cjs";
 import { assertSourceSnapshot, brandIconSha256, inventory, sha256 } from "./release-policy.mjs";
+import { assertOriginalStoreUnchanged } from "./smoke-store-invariants.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
 const root = await realpath(resolve(scripts, "../../.."));
 const output = join(root, ".artifacts/hipi-work/packages");
+const require = createRequire(import.meta.url);
+const builderRequire = createRequire(require.resolve("app-builder-lib/package.json"));
+const { extractFile } = builderRequire("@electron/asar");
 assert.equal(process.argv.length, 2, "This smoke accepts no overrides or cross-platform shortcuts");
 assert.ok(["x64", "arm64"].includes(process.arch), "Unsupported host architecture");
 const platformKey = { linux: "linux", win32: "win", darwin: "mac" }[process.platform];
@@ -58,12 +64,18 @@ const evidence = {
 	releaseProvenanceSha256: sha256(provenanceBytes),
 	smokeScriptSha256: sha256(await readFile(fileURLToPath(import.meta.url))),
 	fixtureScriptSha256: sha256(await readFile(join(scripts, "smoke-packaged-fixture.mjs"))),
-	builtinsScriptSha256: sha256(await readFile(join(scripts, "smoke-packaged-builtins.mjs"))),
+	builtinsScriptSha256: sha256(
+		await readFile(
+			join(scripts, process.platform === "linux" ? "smoke-maintenance-builtins.mjs" : "smoke-packaged-builtins.mjs"),
+		),
+	),
+	maintenanceExecution: process.platform === "linux" ? "independent-official-Node" : "Electron-Node-mode",
 	packageBytes,
 	checks: [],
 	notValidated: [
 		"GUI",
 		"utilityProcess lifecycle",
+		"Electron-created store to standalone maintenance to Electron reopen",
 		"keychain",
 		"installation",
 		"signing/notarization",
@@ -125,14 +137,40 @@ try {
 		provenance.payload.find((item) => item.file === "dist/maintenance.mjs")?.sha256,
 	);
 	const probe = join(temporary, "内置 验证.mjs");
-	await cp(join(scripts, "smoke-packaged-builtins.mjs"), probe);
-	evidence.runtime = JSON.parse(await run(binary, [probe, resources, brandIconSha256], true));
-	assert.equal(evidence.runtime.electron, provenance.electron);
-	assert.equal(evidence.runtime.sourceSnapshotSha256, provenance.sourceSnapshotSha256);
+	let maintenanceBinary = binary;
+	let maintenanceArgs = [entry];
+	const useElectronNodeMode = process.platform !== "linux";
+	if (process.platform === "linux") {
+		evidence.linuxFuses = await maintenance.verifyLinuxFuses(binary);
+		evidence.linuxMaintenance = await maintenance.verifyLinuxMaintenancePackage(app);
+		assert.deepEqual(evidence.linuxMaintenance.runtime, provenance.linuxMaintenanceRuntime);
+		maintenanceBinary = join(app, "hipi-work-maintenance");
+		maintenanceArgs = [];
+		await cp(join(scripts, "smoke-maintenance-builtins.mjs"), probe);
+		evidence.runtime = JSON.parse(await run(join(resources, "maintenance-runtime/bin/node"), [probe, resources]));
+		assert.equal(evidence.runtime.node, maintenance.pin.version);
+		const archivedBuild = JSON.parse(extractFile(join(resources, "app.asar"), "build-provenance.json"));
+		assert.equal(archivedBuild.sourceSnapshotSha256, provenance.sourceSnapshotSha256);
+		assert.equal(sha256(extractFile(join(resources, "app.asar"), "dist/branding/icon.png")), brandIconSha256);
+		evidence.checks.push(
+			"Linux GUI fuses",
+			"relocated official maintenance runtime",
+			"complete official Node LICENSE and provenance",
+		);
+	} else {
+		await cp(join(scripts, "smoke-packaged-builtins.mjs"), probe);
+		evidence.runtime = JSON.parse(await run(binary, [probe, resources, brandIconSha256], true));
+		assert.equal(evidence.runtime.electron, provenance.electron);
+		assert.equal(evidence.runtime.sourceSnapshotSha256, provenance.sourceSnapshotSha256);
+		evidence.checks.push("relocated packaged Electron");
+	}
 	assert.equal(evidence.runtime.platform, process.platform);
 	assert.equal(evidence.runtime.architecture, process.arch);
-	evidence.checks.push("relocated packaged Electron", "SQLite", "parser worker", "icon digest");
-	assert.match(await run(binary, [entry, "--help"], true), /offline store maintenance/);
+	evidence.checks.push("SQLite", "parser worker", "icon digest");
+	assert.match(
+		await run(maintenanceBinary, [...maintenanceArgs, "--help"], useElectronNodeMode),
+		/offline store maintenance/,
+	);
 	evidence.checks.push("maintenance --help");
 	const source = join(temporary, "原 工作库");
 	const fixture = JSON.parse(
@@ -140,11 +178,12 @@ try {
 	);
 	assert.equal(fixture.execution, "done");
 	evidence.fixture = fixture;
+	const beforeMaintenance = await inventory(source);
 	const backup = join(temporary, "新 备份");
 	const archive = join(temporary, "历史 档案");
 	const destination = join(temporary, "历史 导出.ndjson");
 	const execute = async (args) => {
-		const value = JSON.parse(await run(binary, [entry, ...args], true));
+		const value = JSON.parse(await run(maintenanceBinary, [...maintenanceArgs, ...args], useElectronNodeMode));
 		assert.equal(value.ok, true);
 		assert.equal(value.command, args[0]);
 		evidence.checks.push(args[0]);
@@ -184,11 +223,31 @@ try {
 	assert.ok(exported.messages >= 2);
 	assert.match(exportBytes.toString("utf8"), /Packaged maintenance fixture 中文原文/);
 	assert.deepEqual(await inventory(archive), beforeReads, "Read-only archive changed");
+	evidence.originalTransientSidecars = assertOriginalStoreUnchanged(beforeMaintenance, await inventory(source));
+	const reopened = JSON.parse(
+		await run(process.execPath, [
+			"--conditions=source",
+			join(scripts, "smoke-packaged-fixture.mjs"),
+			source,
+			"reopen",
+			fixture.conversationId,
+		]),
+	);
+	assert.equal(reopened.execution, "done");
+	assert.deepEqual(
+		reopened.messageIds,
+		fixture.messageIds,
+		"Reopening changed original conversation message identities",
+	);
+	evidence.originalReopened = reopened;
 	evidence.checks.push(
 		"snapshot-only metadata",
 		"Chinese text round-trip",
 		"complete export",
 		"unchanged archive hashes",
+		"unchanged original database and preexisting-file hashes",
+		"new SQLite transient sidecars separately accounted for",
+		"original store reopens with original messages and completed receipt",
 	);
 	evidence.exportSha256 = sha256(exportBytes);
 	await assertSourceSnapshot(root, provenance.sourceSnapshot);
@@ -205,5 +264,5 @@ try {
 	await writeFile(join(output, "packaged-smoke.json"), `${JSON.stringify(evidence, null, 2)}\n`);
 }
 console.log(
-	"Relocated packaged Electron Node-mode smoke passed. Native GUI, installation and recovery gates remain pending.",
+	`Relocated ${process.platform === "linux" ? "official Node maintenance" : "Electron Node-mode"} smoke passed. Native GUI, installation and recovery gates remain pending.`,
 );

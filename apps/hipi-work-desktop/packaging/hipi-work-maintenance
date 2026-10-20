@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+# Run this from an independent terminal, not from the profiled GUI process.
+# Resolve the installed launcher, including a future /usr/bin symlink. Never use
+# PATH, APPDIR, a system Node, npm, or caller options to select executable code.
+SELF=$(/usr/bin/readlink -f -- "$0")
+test -f "$SELF"
+APP_ROOT=${SELF%/*}
+unset NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS ELECTRON_RUN_AS_NODE ELECTRON_NO_ASAR
+exec "$APP_ROOT/resources/maintenance-runtime/bin/node" "$APP_ROOT/resources/app.asar.unpacked/dist/maintenance.mjs" "$@"

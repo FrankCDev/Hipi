@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { openRuntime } from "@hipi/work-runtime/node";
+import { createPreviewFixtureFiles } from "./gui-file-preview-fixtures.mjs";
 
 export const fileFixture = Object.freeze({
 	workspaceId: "file-gui-work",
@@ -27,6 +28,13 @@ const image = Buffer.from(
 	"base64",
 );
 const digest = (value) => createHash("sha256").update(value).digest("hex");
+const previewFiles = createPreviewFixtureFiles();
+export const fileFixtureNames = Object.freeze([
+	fileFixture.textName,
+	fileFixture.csvName,
+	fileFixture.imageName,
+	...previewFiles.map(([name]) => name),
+]);
 
 /** Only caller-created private mkdtemp profiles are accepted; JSON evidence is not authority. */
 export async function ownedFileDirectory(ownedProfileRoot, { create = false } = {}) {
@@ -49,10 +57,10 @@ export async function ownedFileDirectory(ownedProfileRoot, { create = false } = 
 }
 
 export async function readOwnedFixture(ownedProfileRoot, name = fileFixture.textName) {
-	assert.ok([fileFixture.textName, fileFixture.csvName, fileFixture.imageName].includes(name));
+	assert.ok(fileFixtureNames.includes(name));
 	const path = join(await ownedFileDirectory(ownedProfileRoot), name);
 	const info = await lstat(path);
-	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size < 4096);
+	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size < 65536);
 	assert.equal(await realpath(path), path);
 	return readFile(path);
 }
@@ -81,6 +89,7 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 		[fileFixture.textName, fileFixture.initial],
 		[fileFixture.csvName, fileFixture.csv],
 		[fileFixture.imageName, image],
+		...previewFiles,
 	])
 		await writeFile(join(directory, name), contents, { flag: "wx", mode: 0o600 });
 	const profile = join(ownedProfileRoot, "profile");
@@ -97,10 +106,11 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 		return {
 			workspaceId: fileFixture.workspaceId,
 			conversationId: conversation.conversationId,
-			files: [fileFixture.textName, fileFixture.csvName, fileFixture.imageName],
+			files: fileFixtureNames,
 			initialSha256: digest(fileFixture.initial),
 			csvSha256: digest(fileFixture.csv),
 			imageSha256: digest(image),
+			previewSha256: Object.fromEntries(previewFiles.map(([name, bytes]) => [name, digest(bytes)])),
 			syntheticOnly: true,
 			seedViaPublicRuntime: true,
 			grantsPreseeded: false,
@@ -114,12 +124,10 @@ export async function verifyColdFileWorkbench({ ownedProfileRoot, assertAllOwned
 	await assertAllOwnedProcessesExited();
 	assert.equal(gui.conflictDraftPreserved, true);
 	assert.equal(gui.savedBytesVerified, true);
-	assert.deepEqual(
-		(await readdir(await ownedFileDirectory(ownedProfileRoot))).sort(),
-		[fileFixture.textName, fileFixture.csvName, fileFixture.imageName].sort(),
-	);
+	assert.deepEqual((await readdir(await ownedFileDirectory(ownedProfileRoot))).sort(), [...fileFixtureNames].sort());
 	assert.equal((await readOwnedFixture(ownedProfileRoot)).toString("utf8"), fileFixture.external);
 	assert.equal((await readOwnedFixture(ownedProfileRoot, fileFixture.csvName)).toString("utf8"), fileFixture.csv);
 	assert.deepEqual(await readOwnedFixture(ownedProfileRoot, fileFixture.imageName), image);
+	for (const [name, bytes] of previewFiles) assert.deepEqual(await readOwnedFixture(ownedProfileRoot, name), bytes);
 	return { finalDiskSha256: digest(fileFixture.external), syntheticFilesIntact: true, externalEditPreserved: true };
 }
