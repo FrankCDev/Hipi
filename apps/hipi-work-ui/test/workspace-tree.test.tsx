@@ -52,6 +52,7 @@ function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "n
 					search={search}
 					isExpanded={() => expanded}
 					onToggle={() => {}}
+					onOpenProject={() => {}}
 					onSelect={() => {}}
 					onDetails={() => {}}
 					onCreate={async () => {}}
@@ -68,6 +69,9 @@ test("project and conversation share a selected row surface without nested actio
 	assert.match(html, /class="sidebar-preview-row project-row" data-selected="true"/);
 	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
+	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
+	assert.match(html, />收起项目<\/span>/);
+	assert.match(html, />打开项目<\/span>/);
 	assert.match(html, /aria-label="新建会话"/);
 	assert.match(html, /aria-label="会话操作: My conversation"/);
 	assert.match(html, /aria-haspopup="menu"/);
@@ -82,9 +86,33 @@ test("project and conversation share a selected row surface without nested actio
 test("collapsed projects retain their row preview entry and expansion semantics", () => {
 	const html = renderTree(false);
 	assert.match(html, /class="project-toggle" aria-expanded="false"/);
+	assert.match(html, />展开项目<\/span>/);
+	assert.match(html, /class="project-open"/);
 	assert.match(html, /hidden="" class="project-conversations"/);
 	assert.equal((html.match(/lucide-ellipsis/g) ?? []).length, 1);
 	assert.doesNotMatch(html, /conversation-preview-row/);
+});
+
+test("project disclosure and navigation have distinct names and only disclosure controls expansion", () => {
+	const html = renderTree(true);
+	const disclosure = html.match(/<button\b[^>]*class="project-toggle"[^>]*>[\s\S]*?<\/button>/)?.[0];
+	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>[\s\S]*?<\/button>/)?.[0];
+	assert.ok(disclosure);
+	assert.ok(open);
+	const disclosureLabels = disclosure.match(/aria-labelledby="([^"]+)"/)?.[1].split(" ");
+	const openLabels = open.match(/aria-labelledby="([^"]+)"/)?.[1].split(" ");
+	assert.equal(disclosureLabels?.length, 2);
+	assert.equal(openLabels?.length, 2);
+	assert.notEqual(disclosureLabels?.[0], openLabels?.[0]);
+	assert.equal(disclosureLabels?.[1], openLabels?.[1], "Both actions identify the same visible project title");
+	assert.ok(open.includes(`id="${openLabels?.[1]}" class="project-name">My project 0</span>`));
+	assert.match(disclosure, /收起项目/);
+	assert.match(open, /打开项目/);
+	assert.doesNotMatch(disclosure, /project-icon|project-name|project-page-count/);
+	assert.doesNotMatch(open, /aria-expanded|aria-controls|project-chevron/);
+	const region = disclosure.match(/aria-controls="([^"]+)"/)?.[1];
+	assert.ok(region);
+	assert.ok(html.includes(`<section id="${region}" aria-labelledby="${openLabels?.[1]}"`));
 });
 
 test("a catalog page is rendered without the old lifetime slice and pagination remains explicit", () => {

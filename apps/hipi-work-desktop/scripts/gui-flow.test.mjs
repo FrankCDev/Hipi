@@ -398,11 +398,12 @@ function renderer({ expanded = true, delay = 0, selected = false } = {}) {
 	const document = {
 		querySelector(selector) {
 			if (selector === ".toolbar-conversation") return selected ? { textContent: fixture.conversation } : null;
-			if (selector === ".project-toggle") return ++reads > delay ? toggle : null;
+			if (selector === '.workspace-branch[data-selected="true"] .project-toggle')
+				return ++reads > delay ? toggle : null;
 			throw new Error(`Unexpected selector: ${selector}`);
 		},
 		querySelectorAll(selector) {
-			if (selector === ".project-toggle") return reads > delay ? [toggle] : [];
+			if (selector === '.workspace-branch[data-selected="true"] .project-toggle') return reads > delay ? [toggle] : [];
 			if (selector === ".conversation-list button.conversation-link") return expanded ? [conversation] : [];
 			throw new Error(`Unexpected selector: ${selector}`);
 		},

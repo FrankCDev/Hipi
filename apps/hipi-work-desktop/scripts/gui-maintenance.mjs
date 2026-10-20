@@ -34,6 +34,19 @@ export function assertMaintenanceReopen({ first, reopened }) {
 	assert.equal(reopened.reopened, true);
 }
 
+export function assertMaintenanceProjects(workspaces, originalWorkspaceId) {
+	assert.equal(workspaces.nextCursor, null, "The two-project archive must fit in one page");
+	assert.equal(workspaces.items.length, 2);
+	assert.equal(new Set(workspaces.items.map((item) => item.workspaceId)).size, 2);
+	assert.deepEqual(
+		workspaces.items.map((item) => item.name).sort(),
+		[fixture.workspace, "GUI disclosure empty project"].sort(),
+	);
+	assert.equal(workspaces.items.find((item) => item.name === fixture.workspace).workspaceId, originalWorkspaceId);
+	for (const item of workspaces.items) assert.equal(item.registration, "ready");
+	return workspaces.items.find((item) => item.name === "GUI disclosure empty project").workspaceId;
+}
+
 export async function maintainElectronStore({
 	ownedProfileRoot,
 	ownedApplicationRoot,
@@ -85,9 +98,10 @@ export async function maintainElectronStore({
 		}
 	};
 	const backedUp = await execute(["backup", "--source", source, "--destination", backup]);
+	assert.equal(backedUp.workspaceCount, 2);
 	const verified = await execute(["verify", "--backup", backup]);
 	assert.equal(verified.verified, true);
-	assert.equal(verified.workspaceCount, 1);
+	assert.equal(verified.workspaceCount, 2);
 	assert.equal(verified.manifestDigest, backedUp.manifestDigest);
 	await execute(["restore", "--backup", backup, "--destination", archive]);
 	const archiveBefore = await inventory(archive);
@@ -95,6 +109,10 @@ export async function maintainElectronStore({
 	assert.equal(info.readOnly, true);
 	assert.equal(info.mode, "recovery_archive");
 	const { workspaceId, conversationId } = firstFlow.completedReceipt.scope;
+	const projects = await execute(["workspaces", "--archive", archive]);
+	const emptyWorkspaceId = assertMaintenanceProjects(projects, workspaceId);
+	const emptyConversations = await execute(["conversations", "--archive", archive, "--workspace", emptyWorkspaceId]);
+	assert.deepEqual(emptyConversations, { items: [], nextCursor: null }, "The empty project gained a conversation");
 	const scope = ["--archive", archive, "--workspace", workspaceId, "--conversation", conversationId];
 	const history = await execute(["history", ...scope]);
 	assert.deepEqual(

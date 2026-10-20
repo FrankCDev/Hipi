@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { LIMITS } from "@hipi/work-runtime/contracts";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
+import { smokeProfile } from "../src/smoke-profile.ts";
 import { fixture } from "./gui-flow.mjs";
-import { historyAnswer, historyFixture, seedLongHistory, verifyColdHistory } from "./gui-long-history-fixture.mjs";
+import {
+	historyAnswer,
+	historyFixture,
+	ownedHistoryDirectory,
+	seedLongHistory,
+	verifyColdHistory,
+} from "./gui-long-history-fixture.mjs";
+import { createGuiProfile } from "./smoke-packaged-gui.mjs";
 
 test("fixture contains actual multiline Markdown and one bounded original beyond preview", () => {
 	assert.match(historyAnswer(0), /\n\n\| Item \| Value \|\n/);
@@ -32,11 +41,61 @@ test("fixture operations require exited-process assertion before inspecting or c
 	}
 });
 
+test("history fixture rejects linked roots/children, non-directory children and profiles outside direct temporary parent", async () => {
+	const root = await createGuiProfile();
+	const target = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "history-fixture-target-")));
+	try {
+		const nested = realpathSync(await mkdtemp(join(target, "Hipi GUI profile-")));
+		await assert.rejects(ownedHistoryDirectory(nested));
+		assert.deepEqual(await readdir(nested), []);
+		const alias = join(root, "Hipi GUI profile-Linked");
+		await symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+		await assert.rejects(ownedHistoryDirectory(alias), /Profile root must be canonical/);
+		await rm(alias);
+		await symlink(target, join(root, "profile"), process.platform === "win32" ? "junction" : "dir");
+		await assert.rejects(ownedHistoryDirectory(root), /Fixture store escaped owned profile/);
+		await rm(join(root, "profile"));
+		await mkdir(join(root, "profile"), { mode: 0o700 });
+		const store = join(root, "profile/deterministic-store");
+		await symlink(target, store, process.platform === "win32" ? "junction" : "dir");
+		await assert.rejects(ownedHistoryDirectory(root), /Fixture store escaped owned profile/);
+		await rm(store);
+		await writeFile(store, "not a directory");
+		await assert.rejects(ownedHistoryDirectory(root));
+		assert.deepEqual(await readdir(target), [basename(nested)], "No store writes may follow linked ancestors");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(target, { recursive: true, force: true });
+	}
+});
+
+test(
+	"Windows owned case alias uses the same canonicalizer as native startup, not native realpath spelling",
+	{
+		skip: process.platform !== "win32",
+	},
+	async () => {
+		const root = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "Hipi GUI profile-Case")));
+		const alias = join(dirname(root), basename(root).replace("profile-Case", "profile-cASE"));
+		try {
+			assert.notEqual(alias, root);
+			assert.equal(realpathSync(alias), alias);
+			assert.equal(await realpath(alias), await realpath(root), "Both spellings must identify the owned directory");
+			assert.notEqual(await realpath(alias), alias, "Exercise the native/synchronous spelling disagreement");
+			const directory = await ownedHistoryDirectory(alias);
+			assert.equal(directory, join(alias, "profile/deterministic-store"));
+			assert.equal(smokeProfile([`--smoke-data-root=${alias}`], "deterministic").userData, join(alias, "profile"));
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	},
+);
+
 test(
 	"source fixture durably seeds 200 messages; cold verifier detects source-mode probe duplication",
 	{ timeout: 30000 },
 	async () => {
-		const root = await realpath(await mkdtemp(join(await realpath(tmpdir()), "Hipi GUI profile-")));
+		const root = await createGuiProfile();
 		let runtime;
 		let closed = true;
 		let assertions = 0;
@@ -46,6 +105,7 @@ test(
 		};
 		try {
 			const seed = await seedLongHistory({ ownedProfileRoot: root, assertAllOwnedProcessesExited });
+			assert.equal(smokeProfile([`--smoke-data-root=${root}`], "deterministic").userData, join(root, "profile"));
 			assert.equal(seed.persistedMessages, 200);
 			assert.equal(seed.long.messages.length, 200);
 			assert.equal(seed.coldReadPages, 7);
@@ -94,6 +154,7 @@ test(
 			assert.equal(result.persistedMessages, 202);
 			assert.equal(result.probeCount, 1);
 			assert.equal(result.controlMessages, 2);
+			assert.equal(smokeProfile([`--smoke-data-root=${root}`], "deterministic").userData, join(root, "profile"));
 			assert.equal(assertions, 3);
 			await assert.rejects(
 				verifyColdHistory({

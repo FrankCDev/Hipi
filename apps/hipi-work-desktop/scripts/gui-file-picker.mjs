@@ -4,11 +4,26 @@ import { execFile } from "node:child_process";
 import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { basename } from "node:path";
 import { promisify } from "node:util";
-import { maxPickerImageBytes, pickerXwdToPng } from "./gui-file-picker-image.mjs";
+import { maxPickerImageBytes, pickerOpenTarget, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { ownedFileDirectory } from "./gui-file-workbench-fixture.mjs";
 
 const execute = promisify(execFile);
 const titles = ["Allow Hipi Work to read and edit this folder", "允许 Hipi Work 读取和编辑此文件夹"];
+
+function numericOutput(stdout, keys) {
+	const entries = stdout
+		.trim()
+		.split("\n")
+		.map((line) => {
+			const match = /^([A-Z]+)=(\d+)$/.exec(line);
+			assert.ok(match, "Invalid native geometry output");
+			const value = Number(match[2]);
+			assert.ok(Number.isSafeInteger(value));
+			return [match[1], value];
+		});
+	assert.deepEqual(entries.map(([key]) => key).sort(), [...keys].sort(), "Unexpected native geometry fields");
+	return Object.fromEntries(entries);
+}
 
 function processIdentity(stat) {
 	const fields = stat
@@ -124,7 +139,6 @@ export async function chooseOwnedFileFolder(
 		assert.equal((await command(["getwindowfocus"])).stdout.trim(), window, "Native picker focus not confirmed");
 	};
 	const capture = async (stage) => {
-		if (!observe) return;
 		await assertFocused();
 		assert.deepEqual(await identity(context), original, "Owned native session changed before picker capture");
 		// Exact chooser only: never -root, -screen, ambient DISPLAY, or interactive selection.
@@ -135,7 +149,8 @@ export async function chooseOwnedFileFolder(
 			encoding: "buffer",
 		});
 		await assertFocused();
-		await observe(stage, pickerXwdToPng(stdout));
+		if (observe) await observe(stage, pickerXwdToPng(stdout));
+		return stdout;
 	};
 	const input = async (args) => {
 		await assertFocused();
@@ -148,15 +163,45 @@ export async function chooseOwnedFileFolder(
 	await input(["key", "--clearmodifiers", "ctrl+l"]);
 	await input(["key", "--clearmodifiers", "ctrl+a"]);
 	await input(["type", "--clearmodifiers", "--delay", "1", "--", directory]);
-	await capture("after-type");
-	for (let attempt = 0; attempt < 2; attempt++) {
-		await input(["key", "--clearmodifiers", "Return"]);
-		const closedDeadline = now() + 1500;
-		while (now() < closedDeadline) {
-			if (!(await find())) return { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true };
-			await pause(50);
-		}
+	const target = pickerOpenTarget(await capture("after-type"));
+	const geometry = async () => {
+		const value = numericOutput((await command(["getwindowgeometry", "--shell", window])).stdout, [
+			"WINDOW",
+			"X",
+			"Y",
+			"WIDTH",
+			"HEIGHT",
+			"SCREEN",
+		]);
+		assert.equal(value.WINDOW, Number(window));
+		assert.equal(value.SCREEN, 0);
+		assert.equal(value.WIDTH, target.width);
+		assert.equal(value.HEIGHT, target.height);
+		assert.ok(value.X + value.WIDTH <= 1600 && value.Y + value.HEIGHT <= 1000, "Chooser leaves the private display");
+		return value;
+	};
+	// xdotool translates geometry to root coordinates. Move is relative to the exact chooser;
+	// independently verify its root position and the window under the pointer before one click.
+	const before = await geometry();
+	await input(["mousemove", "--sync", "--window", window, String(target.x), String(target.y)]);
+	assert.deepEqual(await geometry(), before, "Native chooser moved before Open activation");
+	const pointer = numericOutput((await command(["getmouselocation", "--shell"])).stdout, [
+		"X",
+		"Y",
+		"SCREEN",
+		"WINDOW",
+	]);
+	assert.deepEqual(
+		pointer,
+		{ X: before.X + target.x, Y: before.Y + target.y, SCREEN: 0, WINDOW: Number(window) },
+		"Native pointer is not over the reviewed Open target",
+	);
+	await input(["click", "--clearmodifiers", "1"]);
+	const closedDeadline = now() + 3000;
+	while (now() < closedDeadline) {
+		if (!(await find())) return { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true };
+		await pause(50);
 	}
 	await capture("bounded-failure");
-	throw new Error("Native folder picker did not close after bounded confirmation");
+	throw new Error("Native folder picker did not close after single reviewed Open activation");
 }

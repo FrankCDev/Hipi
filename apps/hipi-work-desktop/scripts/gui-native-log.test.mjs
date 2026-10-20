@@ -32,16 +32,28 @@ test("Chromium timestamp envelopes preserve safe error text without exposing pat
 	assert.ok(!redactNativeLog("[4440:1019/private-user] unsafe", []).includes("private-user"));
 });
 
-test("only six exact credential-status marker lines survive sensitive-line redaction", () => {
-	for (const phase of [
-		"status-enter",
-		"availability-enter",
-		"availability-return",
-		"file-read-enter",
-		"file-read-return",
-		"status-return",
-	]) {
-		const marker = `[Hipi smoke credential-status] ${phase}`;
+test("only exact credential and lifecycle marker lines survive sensitive-line redaction", () => {
+	const markers = [
+		...[
+			"status-enter",
+			"availability-enter",
+			"availability-return",
+			"file-read-enter",
+			"file-read-return",
+			"status-return",
+			"async-ready-enter",
+			"async-ready-return",
+			"probe-encrypt-enter",
+			"probe-encrypt-return",
+			"probe-decrypt-enter",
+			"probe-decrypt-return",
+		].map((phase) => `[Hipi smoke credential-status] ${phase}`),
+		...["quit-request", "window-closed", "runtime-close-enter", "runtime-close-return", "app-exit-enter"].map(
+			(phase) => `[Hipi smoke host-lifecycle] ${phase}`,
+		),
+	];
+	assert.equal(markers.length, 17);
+	for (const marker of markers) {
 		assert.equal(redactNativeLog(marker, []), marker);
 		for (const line of [
 			` ${marker}`,
@@ -58,6 +70,7 @@ test("only six exact credential-status marker lines survive sensitive-line redac
 		}
 	}
 	assert.equal(redactNativeLog("[Hipi smoke credential-status] private-phase", []), "<redacted-sensitive-line>");
+	assert.equal(redactNativeLog("[Hipi smoke host-lifecycle] private-phase", []), "<redacted-sensitive-line>");
 });
 
 test("shared evidence writers redact failures, cleanup and renderer details without losing click diagnostics", async () => {

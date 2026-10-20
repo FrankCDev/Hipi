@@ -15,16 +15,25 @@ const workExperiencePhases = new Set([
 	"credential_close",
 	"restoration",
 ]);
-const credentialStatusMarkers = new Set(
-	[
+const smokeMarkers = new Set([
+	...[
 		"status-enter",
 		"availability-enter",
 		"availability-return",
 		"file-read-enter",
 		"file-read-return",
 		"status-return",
+		"async-ready-enter",
+		"async-ready-return",
+		"probe-encrypt-enter",
+		"probe-encrypt-return",
+		"probe-decrypt-enter",
+		"probe-decrypt-return",
 	].map((phase) => `[Hipi smoke credential-status] ${phase}`),
-);
+	...["quit-request", "window-closed", "runtime-close-enter", "runtime-close-return", "app-exit-enter"].map(
+		(phase) => `[Hipi smoke host-lifecycle] ${phase}`,
+	),
+]);
 const packageExitPhases = new Set([
 	"helper-start",
 	"start",
@@ -122,7 +131,7 @@ export function redactNativeLog(text, roots) {
 		.split(/\r\n|[\r\n]/)
 		.map((line) => {
 			// Only these complete fixed smoke markers may bypass sensitive-line redaction.
-			if (credentialStatusMarkers.has(line)) return line;
+			if (smokeMarkers.has(line)) return line;
 			// Normalize Chromium's timestamp/module envelope before treating slashes as private paths.
 			const envelope = line.match(
 				/^\[(?:\d+:){1,2}\d{4}\/\d{6}\.\d{3,6}:(INFO|WARNING|ERROR|FATAL|VERBOSE\d*):[A-Za-z0-9_./-]+(?::\d+|\(\d+\))\]\s*/,
@@ -130,7 +139,9 @@ export function redactNativeLog(text, roots) {
 			const prefix = envelope ? `[Chromium ${envelope[1]}] ` : "";
 			if (envelope) line = line.slice(envelope[0].length);
 			if (
-				/authorization|bearer|api[_-]?key|password|credential|token\s*[=:]|\b[A-Za-z_][A-Za-z0-9_]*\s*=/i.test(line)
+				/authorization|bearer|api[_-]?key|password|credential|host-lifecycle|token\s*[=:]|\b[A-Za-z_][A-Za-z0-9_]*\s*=/i.test(
+					line,
+				)
 			) {
 				const reason =
 					line.match(

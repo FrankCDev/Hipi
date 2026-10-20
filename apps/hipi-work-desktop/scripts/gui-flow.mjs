@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderedFonts } from "./gui-fonts.mjs";
+import { exerciseProjectDisclosure } from "./gui-project-disclosure.mjs";
 import { exerciseToolPacks } from "./gui-tool-packs.mjs";
 import { exerciseWorkExperience } from "./gui-work-experience.mjs";
 
@@ -561,7 +562,7 @@ export async function selectReopenedConversation(cdp) {
 			evaluate(
 				cdp,
 				`(() => {
-		const e = document.querySelector('.project-toggle');
+		const e = document.querySelector('.workspace-branch[data-selected="true"] .project-toggle');
 		if (!e || e.disabled || !e.getClientRects().length) return null;
 		const expanded = e.getAttribute('aria-expanded');
 		return expanded === 'true' || expanded === 'false' ? { expanded } : null;
@@ -569,7 +570,7 @@ export async function selectReopenedConversation(cdp) {
 			),
 		"reopened workspace toggle",
 	);
-	if (state.expanded === "false") await click(cdp, ".project-toggle");
+	if (state.expanded === "false") await click(cdp, '.workspace-branch[data-selected="true"] .project-toggle');
 	await click(cdp, ".conversation-list button.conversation-link", fixture.conversation);
 }
 export async function activityEvidence(cdp) {
@@ -678,8 +679,16 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			directory,
 			{ reopened: true },
 		);
+		const projectDisclosure = await exerciseProjectDisclosure(
+			cdp,
+			{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts },
+			directory,
+			fixture,
+			true,
+		);
 		return {
 			reopened: true,
+			projectDisclosure,
 			fonts,
 			activities,
 			controls,
@@ -796,8 +805,16 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		},
 		directory,
 	);
+	const projectDisclosure = await exerciseProjectDisclosure(
+		cdp,
+		{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts },
+		directory,
+		fixture,
+		false,
+	);
 	return {
 		...observed,
+		projectDisclosure,
 		fonts,
 		detailsGeometry,
 		activities,

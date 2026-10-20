@@ -2,7 +2,29 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
-import { assertMaintenanceReopen, maintainElectronStore } from "./gui-maintenance.mjs";
+import { fixture } from "./gui-flow.mjs";
+import { assertMaintenanceProjects, assertMaintenanceReopen, maintainElectronStore } from "./gui-maintenance.mjs";
+
+test("maintenance archive requires exactly the original and empty ready projects with distinct identities", () => {
+	const projects = {
+		items: [
+			{ name: fixture.workspace, workspaceId: "a", registration: "ready" },
+			{ name: "GUI disclosure empty project", workspaceId: "b", registration: "ready" },
+		],
+		nextCursor: null,
+	};
+	assert.equal(assertMaintenanceProjects(projects, "a"), "b");
+	for (const changed of [
+		{ ...projects, items: projects.items.slice(0, 1) },
+		{ ...projects, items: [...projects.items, projects.items[0]] },
+		{ ...projects, nextCursor: "more" },
+		{ ...projects, items: [projects.items[0], { ...projects.items[1], workspaceId: "a" }] },
+		{ ...projects, items: [projects.items[0], { ...projects.items[1], name: "unexpected" }] },
+		{ ...projects, items: [projects.items[0], { ...projects.items[1], registration: "reserved" }] },
+	])
+		assert.throws(() => assertMaintenanceProjects(changed, "a"));
+	assert.throws(() => assertMaintenanceProjects(projects, "different-original"));
+});
 
 test("between-runs callback waits for exit and rechecks closure before releasing owned profile", async () => {
 	const calls = [];

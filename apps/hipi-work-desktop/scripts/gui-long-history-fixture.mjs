@@ -1,7 +1,8 @@
 // Source-only fixture. This module is never included in the packaged application.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, realpath } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { lstat, mkdir, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -34,11 +35,13 @@ export function historyUser(n) {
 	return `HISTORY_USER_${marker(n)} 中文\n${"Bounded user text. ".repeat((n % 3) + 1)}`;
 }
 
-async function storeDirectory(ownedProfileRoot) {
+export async function ownedHistoryDirectory(ownedProfileRoot) {
 	// Caller retains its own mkdtemp identity. A report/JSON path never grants ownership.
-	const root = await realpath(ownedProfileRoot);
+	// Match createGuiProfile/smokeProfile exactly: the promise/native realpath variant
+	// may expand Windows short names or casing differently from this synchronous walk.
+	const root = realpathSync(ownedProfileRoot);
 	assert.equal(root, ownedProfileRoot, "Profile root must be canonical");
-	assert.equal(dirname(root), await realpath(tmpdir()));
+	assert.equal(dirname(root), realpathSync(tmpdir()));
 	assert.match(basename(root), /^Hipi GUI profile-[A-Za-z0-9]+$/);
 	const owner = await lstat(root);
 	assert.ok(owner.isDirectory() && !owner.isSymbolicLink());
@@ -51,7 +54,7 @@ async function storeDirectory(ownedProfileRoot) {
 		await mkdir(path, { mode: 0o700 }).catch((error) => {
 			if (error.code !== "EEXIST") throw error;
 		});
-		assert.equal(await realpath(path), path, "Fixture store escaped owned profile");
+		assert.equal(realpathSync(path), path, "Fixture store escaped owned profile");
 		assert.ok((await lstat(path)).isDirectory() && !(await lstat(path)).isSymbolicLink());
 	}
 	return join(root, "profile/deterministic-store");
@@ -106,7 +109,7 @@ async function assertText(runtime, conversationId, message, expected) {
 /** Seed only before native launch. Owns and closes each public runtime before returning. */
 export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcessesExited }) {
 	await assertAllOwnedProcessesExited();
-	const directory = await storeDirectory(ownedProfileRoot);
+	const directory = await ownedHistoryDirectory(ownedProfileRoot);
 	assert.deepEqual(await readdir(directory), [], "Never seed a nonempty store");
 	const start = performance.now();
 	let peakSampledRssBytes = process.memoryUsage().rss;
@@ -202,7 +205,7 @@ export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcesse
 /** Call only after both native launches and process-tree/listener closure have been confirmed. */
 export async function verifyColdHistory({ ownedProfileRoot, seed, gui, assertAllOwnedProcessesExited }) {
 	await assertAllOwnedProcessesExited();
-	const directory = await storeDirectory(ownedProfileRoot);
+	const directory = await ownedHistoryDirectory(ownedProfileRoot);
 	assert.ok(gui.persistedProbe?.userKey && gui.persistedProbe?.answerKey && gui.persistedProbe?.requestId);
 	const runtime = await openRuntime(directory, options());
 	try {

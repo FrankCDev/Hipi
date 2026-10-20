@@ -23,6 +23,7 @@ type TreeProps = {
 	search: string;
 	isExpanded: (id: string) => boolean;
 	onToggle: (id: string) => void;
+	onOpenProject: (id: string) => void;
 	onSelect: (conversation: Conversation) => void;
 	onDetails: (conversation: Conversation, returnFocus: HTMLButtonElement | null) => void;
 	onCreate: (workspaceId: string, title: string, model?: ModelReference) => Promise<void>;
@@ -47,6 +48,8 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const { t, locale } = usePreferences();
 	const regionId = useId();
 	const headingId = useId();
+	const disclosureId = useId();
+	const openId = useId();
 	const filterName = useId();
 	const expanded = props.isExpanded(workspace.workspaceId);
 	const [cursor, setCursor] = useState<string | undefined>();
@@ -106,19 +109,36 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 			>
 				<button
 					type="button"
-					id={headingId}
 					className="project-toggle"
 					aria-expanded={expanded}
 					aria-controls={regionId}
+					aria-labelledby={`${disclosureId} ${headingId}`}
+					title={expanded ? cl.collapseProject : cl.expandProject}
 					onClick={() => props.onToggle(workspace.workspaceId)}
 				>
+					<span id={disclosureId} className="sr-only">
+						{expanded ? cl.collapseProject : cl.expandProject}
+					</span>
 					<span className="project-chevron" data-expanded={expanded}>
 						<Icon name="chevron" size={12} />
+					</span>
+				</button>
+				<button
+					type="button"
+					className="project-open"
+					aria-labelledby={`${openId} ${headingId}`}
+					title={cl.openProject}
+					onClick={() => props.onOpenProject(workspace.workspaceId)}
+				>
+					<span id={openId} className="sr-only">
+						{cl.openProject}
 					</span>
 					<span className="project-icon">
 						<Icon name="folder" size={16} />
 					</span>
-					<span className="project-name">{workspace.name}</span>
+					<span id={headingId} className="project-name">
+						{workspace.name}
+					</span>
 					{conversations.isSuccess && (
 						<span className="subtle-count project-page-count">
 							<span className="sr-only">{cl.loaded}: </span>

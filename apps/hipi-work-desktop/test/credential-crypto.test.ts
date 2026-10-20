@@ -46,7 +46,11 @@ test("Darwin uses only asynchronous native methods and waits without blocking th
 		};
 	const ready = Promise.withResolvers<boolean>();
 	native.isAsyncEncryptionAvailable = () => ready.promise;
-	const crypto = createCredentialCrypto(native, "darwin");
+	const stages: string[] = [];
+	const crypto = createCredentialCrypto(native, "darwin", (stage) => {
+		stages.push(stage);
+		throw new Error("diagnostic writer failed");
+	});
 	let settled = false;
 	const available = Promise.resolve(crypto.isEncryptionAvailable()).then((value) => {
 		settled = true;
@@ -54,8 +58,17 @@ test("Darwin uses only asynchronous native methods and waits without blocking th
 	});
 	await new Promise((resolve) => setTimeout(resolve, 0));
 	assert.equal(settled, false);
+	assert.deepEqual(stages, ["async-ready-enter"]);
 	ready.resolve(true);
 	assert.equal(await available, true);
+	assert.deepEqual(stages, [
+		"async-ready-enter",
+		"async-ready-return",
+		"probe-encrypt-enter",
+		"probe-encrypt-return",
+		"probe-decrypt-enter",
+		"probe-decrypt-return",
+	]);
 	const encrypted = await crypto.encryptString("synthetic-secret");
 	assert.equal(await crypto.decryptString(encrypted), "synthetic-secret");
 });

@@ -19,7 +19,7 @@ import {
 	session,
 	utilityProcess,
 } from "electron";
-import { createCredentialCrypto } from "./credential-crypto.ts";
+import { type CredentialCryptoStage, createCredentialCrypto } from "./credential-crypto.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
 import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
 import { diagnosticMessages } from "./diagnostic-messages.ts";
@@ -176,28 +176,57 @@ async function start(mode: "production" | "deterministic") {
 	const text = hostMessages(app.getLocale());
 	diagnosticText = diagnosticMessages(app.getLocale());
 	// start is reached only after prepareDesktopLaunch validates the isolated smoke profile.
-	const credentialStages = new Set<CredentialStatusStage>([
+	const credentialStages = new Set<CredentialStatusStage | CredentialCryptoStage>([
 		"status-enter",
 		"availability-enter",
 		"availability-return",
 		"file-read-enter",
 		"file-read-return",
 		"status-return",
+		"async-ready-enter",
+		"async-ready-return",
+		"probe-encrypt-enter",
+		"probe-encrypt-return",
+		"probe-decrypt-enter",
+		"probe-decrypt-return",
 	]);
+	const smokeDiagnostics =
+		mode === "deterministic" && process.argv.some((argument) => argument.startsWith("--smoke-data-root="));
+	const observeCredential = smokeDiagnostics
+		? (stage: CredentialStatusStage | CredentialCryptoStage) => {
+				if (!credentialStages.delete(stage)) return;
+				// Flush at most twelve fixed lines. Both observers isolate write failures.
+				writeSync(2, `[Hipi smoke credential-status] ${stage}\n`);
+			}
+		: undefined;
 	const credentials = new CredentialStore(
 		join(app.getPath("userData"), "credentials", "providers.enc"),
-		createCredentialCrypto(safeStorage),
+		createCredentialCrypto(safeStorage, process.platform, observeCredential),
 		process.platform,
 		undefined,
-		mode === "deterministic" && process.argv.some((argument) => argument.startsWith("--smoke-data-root="))
-			? (stage) => {
-					if (!credentialStages.delete(stage)) return;
-					// Flush at most six fixed lines before a potentially blocking native call.
-					// CredentialStore isolates observer failures from operation results.
-					writeSync(2, `[Hipi smoke credential-status] ${stage}\n`);
-				}
-			: undefined,
+		observeCredential,
 	);
+	type LifecycleStage =
+		| "quit-request"
+		| "window-closed"
+		| "runtime-close-enter"
+		| "runtime-close-return"
+		| "app-exit-enter";
+	const lifecycleStages = new Set<LifecycleStage>([
+		"quit-request",
+		"window-closed",
+		"runtime-close-enter",
+		"runtime-close-return",
+		"app-exit-enter",
+	]);
+	const observeLifecycle = (stage: LifecycleStage) => {
+		if (!smokeDiagnostics || !lifecycleStages.delete(stage)) return;
+		try {
+			writeSync(2, `[Hipi smoke host-lifecycle] ${stage}\n`);
+		} catch {
+			// Diagnostic output failure must not prevent normal application shutdown.
+		}
+	};
 	const assets = resolve(root, "renderer");
 	protocol.handle("hipi-work", createRendererAssetHandler(assets));
 	session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -488,16 +517,25 @@ async function start(mode: "production" | "deterministic") {
 		},
 		() => {
 			clearRenderer();
-			return activeSupervisor.close();
+			observeLifecycle("runtime-close-enter");
+			return activeSupervisor.close().then((clean) => {
+				observeLifecycle("runtime-close-return");
+				return clean;
+			});
 		},
 	);
 	app.on("before-quit", (event) => {
+		observeLifecycle("quit-request");
 		event.preventDefault();
 		lifecycle.requestQuit();
 	});
 	window.once("closed", () => {
+		observeLifecycle("window-closed");
 		void lifecycle.windowClosed().then((clean) => {
-			if (!recoveringStartup) app.exit(clean ? 0 : 1);
+			if (!recoveringStartup) {
+				observeLifecycle("app-exit-enter");
+				app.exit(clean ? 0 : 1);
+			}
 		});
 	});
 	app.on("window-all-closed", () => {});

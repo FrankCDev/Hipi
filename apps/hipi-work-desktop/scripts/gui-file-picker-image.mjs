@@ -1,11 +1,12 @@
 // Source-only diagnostic encoder for this harness's 1600x1000x24 private Xvfb.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { crc32, deflateSync } from "node:zlib";
 
 export const maxPickerImageBytes = 1600 * 1000 * 4 + 4096 + 256 * 12;
 
 /** Accept only bounded XWD v7 TrueColor ZPixmap data, never arbitrary image formats. */
-export function pickerXwdToPng(bytes) {
+function pickerPixels(bytes) {
 	assert.ok(Buffer.isBuffer(bytes) && bytes.length >= 100 && bytes.length <= maxPickerImageBytes);
 	// XWDFile.h specifies 25 big-endian CARD32 fields, followed by name, colors, then pixels.
 	const field = (index) => bytes.readUInt32BE(index * 4);
@@ -47,6 +48,38 @@ export function pickerXwdToPng(bytes) {
 			rows[destination + 2] = pixel & 0xff;
 		}
 	}
+	return { width, height, rows };
+}
+
+/** Fixed harness-only Open target, observed in owned CI run 39366653690, artifact 12240260777.
+ * Fingerprint only four one-pixel button-border strips, not text, entry/caret or selection.
+ * Different GTK theme/layout fails closed; there is deliberately no coordinate fallback.
+ */
+export function pickerOpenTarget(bytes) {
+	const { width, height, rows } = pickerPixels(bytes);
+	assert.equal(width, 1124, "Unreviewed native chooser width");
+	assert.equal(height, 822, "Unreviewed native chooser height");
+	assert.equal(bytes.readUInt32BE(24 * 4), 0, "Native chooser border would change coordinate translation");
+	const border = [];
+	for (const [left, top, right, bottom] of [
+		[1040, 782, 1110, 783],
+		[1040, 815, 1110, 816],
+		[1032, 790, 1033, 808],
+		[1117, 790, 1118, 808],
+	]) {
+		for (let y = top; y < bottom; y++)
+			border.push(rows.subarray(y * (1 + width * 3) + 1 + left * 3, y * (1 + width * 3) + 1 + right * 3));
+	}
+	assert.equal(
+		createHash("sha256").update(Buffer.concat(border)).digest("hex"),
+		"7382b5ada3604ab5cffd2eb496673f9e99095fecd8cf81b51fcef931fc73ce6e",
+		"Unreviewed native Open-button presentation",
+	);
+	return { x: 1075, y: 799, width, height };
+}
+
+export function pickerXwdToPng(bytes) {
+	const { width, height, rows } = pickerPixels(bytes);
 	const chunk = (type, data) => {
 		const result = Buffer.alloc(data.length + 12);
 		result.writeUInt32BE(data.length);

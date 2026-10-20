@@ -12,19 +12,45 @@ type NativeStorage = Pick<
 	| "decryptStringAsync"
 >;
 const PROBE = "Hipi Work protected storage capability";
+export type CredentialCryptoStage =
+	| "async-ready-enter"
+	| "async-ready-return"
+	| "probe-encrypt-enter"
+	| "probe-encrypt-return"
+	| "probe-decrypt-enter"
+	| "probe-decrypt-return";
 
 /** Darwin keychain IO must not block the main thread. Other platform policies stay unchanged. */
-export function createCredentialCrypto(storage: NativeStorage, platform = process.platform): SafeStoragePort {
+export function createCredentialCrypto(
+	storage: NativeStorage,
+	platform = process.platform,
+	observeStage?: (stage: CredentialCryptoStage) => void,
+): SafeStoragePort {
 	if (platform !== "darwin") return storage;
+	const observe = (stage: CredentialCryptoStage) => {
+		try {
+			observeStage?.(stage);
+		} catch {
+			// Optional smoke observation must not change native operation outcomes.
+		}
+	};
 	return {
 		async isEncryptionAvailable() {
 			try {
-				if (!(await storage.isAsyncEncryptionAvailable())) return false;
+				observe("async-ready-enter");
+				const ready = await storage.isAsyncEncryptionAvailable();
+				observe("async-ready-return");
+				if (!ready) return false;
 				// Electron reports encryptor readiness even when its key provider failed.
 				// Prove usable crypto with public, ephemeral data; never persist or log it.
+				observe("probe-encrypt-enter");
 				const encrypted = await storage.encryptStringAsync(PROBE);
+				observe("probe-encrypt-return");
 				if (!encrypted.length || encrypted.equals(Buffer.from(PROBE))) return false;
-				return (await storage.decryptStringAsync(encrypted)).result === PROBE;
+				observe("probe-decrypt-enter");
+				const decrypted = await storage.decryptStringAsync(encrypted);
+				observe("probe-decrypt-return");
+				return decrypted.result === PROBE;
 			} catch {
 				return false;
 			}

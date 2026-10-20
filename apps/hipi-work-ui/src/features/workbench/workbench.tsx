@@ -343,10 +343,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							selectedConversation={selectedConversation}
 							search={search}
 							isExpanded={isExpanded}
-							onToggle={(id) => {
-								if (id !== selectedWorkspace) selectWorkspace(id);
-								else setProjectExpanded(id, !isExpanded(id));
-							}}
+							onToggle={(id) => setProjectExpanded(id, !isExpanded(id))}
+							onOpenProject={selectWorkspace}
 							onSelect={selectConversation}
 							onCreate={createConversation}
 							onDetails={(item, returnFocus) => {

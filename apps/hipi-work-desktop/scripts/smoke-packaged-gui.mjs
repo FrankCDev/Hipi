@@ -30,6 +30,18 @@ export function sourceProvenanceEvidence(provenance) {
 	assert.equal(hash(JSON.stringify(sourceSnapshot)), provenance.sourceSnapshotSha256);
 	return { sourceSnapshotSha256: provenance.sourceSnapshotSha256, sourceSnapshot };
 }
+export async function assertScenarioWorkspaceDatabases(storeRoot, scenario) {
+	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario));
+	const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+	assert.equal(workspaces.length, scenario === "baseline" ? 2 : 1, "Unexpected exact scenario workspace count");
+	for (const workspace of workspaces) {
+		for (const database of ["owner.sqlite", "workspace.sqlite"]) {
+			const path = join(storeRoot, workspace.name, database);
+			assert.equal(realpathSync(path), path, "Workspace database escaped owned profile");
+			assert.ok((await lstat(path)).isFile());
+		}
+	}
+}
 /** One lifecycle owns launch, evidence and cleanup for each independent private profile. */
 export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate, betweenRuns } = {}) {
 	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
@@ -282,13 +294,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 				assert.deepEqual(flow.toolPacks.scope, toolPackScope, "Restart changed tool-pack scope");
 			}
 			const storeRoot = join(profile, "profile/deterministic-store");
-			const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
-			assert.equal(workspaces.length, 1, "Expected exactly one scenario workspace");
-			for (const database of ["owner.sqlite", "workspace.sqlite"]) {
-				const path = join(storeRoot, workspaces[0].name, database);
-				assert.equal(realpathSync(path), path, "Workspace database escaped owned profile");
-				assert.ok((await lstat(path)).isFile());
-			}
+			await assertScenarioWorkspaceDatabases(storeRoot, scenario);
 			evidence.checks.push({ iteration, ownedWorkspaceDatabases: true });
 			evidence.checks.push({ iteration, flow });
 			assert.equal(evidence.errors.length, 0, "Renderer reported errors");
@@ -339,6 +345,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 		evidence.status = "passed";
 	} catch (error) {
 		evidence.status = "failed";
+		if (native) evidence.nativeProcessAtFailure = { exited: native.exited, closed: native.closed };
 		recordGuiFailure(evidence, "failure", error, [owned, profile]);
 		if (native && !native.closed && native.child.exitCode === null && native.child.signalCode === null) {
 			evidence.windowsDialogs = await readWindowsDialogs(windowsIdentity);

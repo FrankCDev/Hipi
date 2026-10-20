@@ -1274,11 +1274,11 @@
 	gap: 2px;
 	min-width: 0;
 }
-.project-toggle {
+.project-toggle,
+.project-open {
 	display: flex;
 	align-items: center;
 	gap: 7px;
-	flex: 1;
 	min-width: 0;
 	min-height: 36px;
 	padding: 6px;
@@ -1288,6 +1288,15 @@
 	font-size: 13px;
 	font-weight: 500;
 	text-align: start;
+}
+.project-toggle {
+	justify-content: center;
+	flex: 0 0 28px;
+	padding-inline: 4px;
+}
+.project-open {
+	flex: 1;
+	padding-inline: 4px;
 }
 .project-name {
 	flex: 1;
@@ -1415,14 +1424,14 @@
 }
 @media (hover: hover) and (pointer: fine) {
 	.sidebar .sidebar-preview-trigger,
-	.project-row > button:not(.project-toggle) {
+	.project-row > button:not(.project-toggle):not(.project-open) {
 		opacity: 0;
 	}
 	.sidebar-preview-row:hover .sidebar-preview-trigger,
 	.sidebar-preview-row:focus-within .sidebar-preview-trigger,
 	.sidebar .sidebar-preview-trigger[data-state="open"],
-	.project-row:hover > button:not(.project-toggle),
-	.project-row:focus-within > button:not(.project-toggle),
+	.project-row:hover > button:not(.project-toggle):not(.project-open),
+	.project-row:focus-within > button:not(.project-toggle):not(.project-open),
 	.project-row > button[data-state="open"] {
 		opacity: 1;
 	}

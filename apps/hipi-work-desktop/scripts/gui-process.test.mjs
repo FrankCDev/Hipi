@@ -16,8 +16,10 @@ test("native runner observes actual close before releasing a child", async () =>
 	try {
 		await until(() => child.output.includes("ready"), "child ready");
 		assert.equal(child.closed, false);
+		assert.equal(child.exited, false);
 		await child.terminate();
 		assert.equal(child.closed, true);
+		assert.equal(child.exited, true);
 		const result = await child.completion;
 		assert.ok(result.signal !== null || result.code !== 0);
 		assert.match(await readFile(fixture, "utf8"), /setInterval/);
@@ -84,6 +86,7 @@ test("exit-before-close waits without signaling on POSIX and Windows, independen
 			else if (observation === "exit-code") child.exitCode = 0;
 			else child.signalCode = "SIGTERM";
 			assert.equal(owned.closed, false);
+			assert.equal(owned.exited, observation === "exit-event");
 			let settled = false;
 			const stopping = owned.terminate().finally(() => {
 				settled = true;

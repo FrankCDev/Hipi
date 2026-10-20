@@ -125,6 +125,9 @@ export function startProcess(binary, args, options) {
 	return {
 		child,
 		completion,
+		get exited() {
+			return exited;
+		},
 		get closed() {
 			return closed;
 		},

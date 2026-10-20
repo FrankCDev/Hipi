@@ -10,7 +10,7 @@ import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { createPreviewClient } from "@hipi/work-runtime/previews/protocol";
 import { smokeProfile } from "../src/smoke-profile.ts";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
-import { maxPickerImageBytes, pickerXwdToPng } from "./gui-file-picker-image.mjs";
+import { maxPickerImageBytes, pickerOpenTarget, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { assertPdfPaint, documentPreviewState, pdfPreviewPaint } from "./gui-file-previews.mjs";
 import { fileWorkbenchState, validateFileWorkbenchEvidence } from "./gui-file-workbench.mjs";
@@ -210,6 +210,7 @@ test(
 );
 
 async function pickerHarness(run, identity = async () => ({ app: "100", xvfb: "200" }), options = {}) {
+	const { rawNative = false, ...pickerOptions } = options;
 	const ownedProfileRoot = await profile();
 	await ownedFileDirectory(ownedProfileRoot, { create: true });
 	let clock = 0;
@@ -217,13 +218,17 @@ async function pickerHarness(run, identity = async () => ({ app: "100", xvfb: "2
 		return await chooseOwnedFileFolder(
 			{ ownedProfileRoot, pid: 100, xvfbPid: 200, display: ":432", binary: "/owned/app" },
 			{
-				run,
+				run: (binary, args, commandOptions) => {
+					if (!rawNative && (binary === "xwd" || ["getwindowgeometry", "getmouselocation"].includes(args[0])))
+						return pickerNativeReply(binary, args);
+					return run(binary, args, commandOptions);
+				},
 				identity,
 				pause: async (ms) => {
 					clock += ms;
 				},
 				now: () => clock,
-				...options,
+				...pickerOptions,
 			},
 		);
 	} finally {
@@ -271,6 +276,52 @@ function syntheticXwd(order = 0, colors = 0) {
 	}
 	return bytes;
 }
+
+function syntheticChooserXwd() {
+	const source = syntheticXwd();
+	const header = source.readUInt32BE(0);
+	const bytes = Buffer.alloc(header + 1124 * 822 * 4, 255);
+	source.copy(bytes, 0, 0, header);
+	for (const [field, value] of [
+		[4, 1124],
+		[5, 822],
+		[12, 1124 * 4],
+		[20, 1124],
+		[21, 822],
+	])
+		bytes.writeUInt32BE(value, field * 4);
+	// Synthetic plain field plus the four observed border-color strips. No copied screenshot.
+	for (const [left, top, right, bottom, color] of [
+		[1040, 782, 1110, 783, 0xcdc7c2],
+		[1040, 815, 1110, 816, 0xbfb8b1],
+		[1032, 790, 1033, 808, 0xcdc7c2],
+		[1117, 790, 1118, 808, 0xcdc7c2],
+	])
+		for (let y = top; y < bottom; y++)
+			for (let x = left; x < right; x++) bytes.writeUInt32LE(color, header + (y * 1124 + x) * 4);
+	return bytes;
+}
+
+function pickerNativeReply(binary, args) {
+	if (binary === "xwd") return { stdout: syntheticChooserXwd() };
+	if (args[0] === "getwindowgeometry") return { stdout: "WINDOW=900\nX=10\nY=20\nWIDTH=1124\nHEIGHT=822\nSCREEN=0\n" };
+	if (args[0] === "getmouselocation") return { stdout: "X=1085\nY=819\nSCREEN=0\nWINDOW=900\n" };
+	return { stdout: "" };
+}
+
+test("native Open target requires reviewed dimensions and border pixels but ignores text and caret", () => {
+	const bytes = syntheticChooserXwd();
+	assert.deepEqual(pickerOpenTarget(bytes), { x: 1075, y: 799, width: 1124, height: 822 });
+	const header = bytes.readUInt32BE(0);
+	bytes.writeUInt32LE(0, header + (799 * 1124 + 1075) * 4);
+	assert.equal(pickerOpenTarget(bytes).x, 1075, "Text/highlight center is excluded from the fingerprint");
+	bytes.writeUInt32LE(0, header + (782 * 1124 + 1040) * 4);
+	assert.throws(() => pickerOpenTarget(bytes), /Open-button presentation/);
+	assert.throws(() => pickerOpenTarget(syntheticXwd()), /chooser width/);
+	const bordered = syntheticChooserXwd();
+	bordered.writeUInt32BE(1, 24 * 4);
+	assert.throws(() => pickerOpenTarget(bordered), /coordinate translation/);
+});
 
 test("native chooser diagnostic PNG preserves exact bounded XWD pixels without window metadata", () => {
 	for (const order of [0, 1])
@@ -356,25 +407,26 @@ test(
 						assert.equal(options.timeout, 5000);
 						assert.equal(options.encoding, "buffer");
 						assert.deepEqual(calls.slice(-4), ["search", "getwindowpid", "getwindowname", "getwindowfocus"]);
-						return { stdout: syntheticXwd() };
+						return { stdout: syntheticChooserXwd() };
 					}
 					assert.equal(binary, "xdotool");
 					calls.push(args[0]);
 					if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
 					if (args[0] === "getwindowpid") return { stdout: "100\n" };
 					if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
-					if (["key", "type"].includes(args[0])) inputs++;
-					return { stdout: "" };
+					if (["key", "type", "mousemove", "click"].includes(args[0])) inputs++;
+					return pickerNativeReply(binary, args);
 				},
 				undefined,
 				{
+					rawNative: true,
 					observe: async (stage, png) => {
-						assert.deepEqual(png, pickerXwdToPng(syntheticXwd()));
+						assert.deepEqual(png, pickerXwdToPng(syntheticChooserXwd()));
 						observations.push([stage, inputs]);
 					},
 				},
 			),
-			/Native folder picker did not close after bounded confirmation/,
+			/Native folder picker did not close after single reviewed Open activation/,
 		);
 		assert.deepEqual(observations, [
 			["before-input", 0],
@@ -413,6 +465,7 @@ test(
 					},
 					async () => ({ app: failure === "session" && focusChecked ? "101" : "100", xvfb: "200" }),
 					{
+						rawNative: true,
 						observe: async () => {
 							observations++;
 						},
@@ -446,8 +499,9 @@ test(
 			if (args[0] === "getwindowpid") return { stdout: "100\n" };
 			if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
 			if (args[0] === "getwindowfocus") return { stdout: "900\n" };
-			if (["key", "type"].includes(args[0])) {
-				assert.ok(!args.includes("--window"), "Use focused XTEST, not GTK-rejected XSendEvent");
+			if (["key", "type", "mousemove", "click"].includes(args[0])) {
+				if (args[0] !== "mousemove")
+					assert.ok(!args.includes("--window"), "Use focused XTEST, not GTK-rejected XSendEvent");
 				assert.deepEqual(
 					calls.slice(-5, -1).map((call) => call[0]),
 					["search", "getwindowpid", "getwindowname", "getwindowfocus"],
@@ -457,17 +511,22 @@ test(
 			if (args[0] === "type") {
 				assert.match(args.at(-1), /Hipi GUI profile-[A-Za-z0-9]+\/profile\/workbench-files$/);
 			}
-			if (args.at(-1) === "Return") closed = true;
+			if (args[0] === "mousemove") assert.deepEqual(args, ["mousemove", "--sync", "--window", "900", "1075", "799"]);
+			if (args[0] === "click") {
+				assert.deepEqual(args, ["click", "--clearmodifiers", "1"]);
+				closed = true;
+			}
 			return { stdout: "" };
 		});
 		assert.equal(result.nativePicker, true);
 		assert.equal(calls.filter((args) => args[0] === "type").length, 1);
-		assert.equal(calls.filter((args) => args.at(-1) === "Return").length, 1);
+		assert.equal(calls.filter((args) => args.at(-1) === "Return").length, 0);
+		assert.equal(calls.filter((args) => args[0] === "click").length, 1);
 	},
 );
 
 test(
-	"native candidate stops on PID, title or focus change before every text or key input",
+	"native candidate stops on PID, title or focus change before every keyboard or pointer input",
 	{ skip: process.platform !== "linux" },
 	async () => {
 		for (const mismatch of ["pid", "title", "focus"]) {
@@ -486,7 +545,7 @@ test(
 										: "Allow Hipi Work to read and edit this folder\n",
 							};
 						if (args[0] === "getwindowfocus") return { stdout: mismatch === "focus" && changed ? "901\n" : "900\n" };
-						if (["key", "type"].includes(args[0])) inputs++;
+						if (["key", "type", "mousemove", "click"].includes(args[0])) inputs++;
 						return { stdout: "" };
 					}),
 				);
@@ -497,7 +556,7 @@ test(
 );
 
 test(
-	"native candidate retains the two-confirmation bound when focused input does not close the picker",
+	"native candidate allows exactly one Open click and no Return fallback when the picker stays open",
 	{ skip: process.platform !== "linux" },
 	async () => {
 		let confirmations = 0;
@@ -506,12 +565,103 @@ test(
 				if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
 				if (args[0] === "getwindowpid") return { stdout: "100\n" };
 				if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
-				if (args.at(-1) === "Return") confirmations++;
+				assert.notEqual(args.at(-1), "Return");
+				if (args[0] === "click") confirmations++;
 				return { stdout: "" };
 			}),
-			/Native folder picker did not close after bounded confirmation/,
+			/Native folder picker did not close after single reviewed Open activation/,
 		);
-		assert.equal(confirmations, 2);
+		assert.equal(confirmations, 1);
+	},
+);
+
+test(
+	"native Open refuses geometry, border or translated pointer mismatch without clicking",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		for (const mismatch of [
+			"width",
+			"height",
+			"screen",
+			"outside",
+			"duplicate",
+			"malformed",
+			"moved",
+			"pointer-window",
+			"pointer-position",
+			"border",
+		]) {
+			let geometries = 0;
+			let moves = 0;
+			let clicks = 0;
+			await assert.rejects(
+				pickerHarness(
+					async (binary, args) => {
+						if (binary === "xwd") {
+							const bytes = syntheticChooserXwd();
+							if (mismatch === "border") bytes.writeUInt32LE(0, bytes.readUInt32BE(0) + (782 * 1124 + 1040) * 4);
+							return { stdout: bytes };
+						}
+						if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
+						if (args[0] === "getwindowpid") return { stdout: "100\n" };
+						if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
+						if (args[0] === "mousemove") moves++;
+						if (args[0] === "click") clicks++;
+						let { stdout } = pickerNativeReply(binary, args);
+						if (args[0] === "getwindowgeometry") {
+							geometries++;
+							if (mismatch === "width") stdout = stdout.replace("WIDTH=1124", "WIDTH=1125");
+							if (mismatch === "height") stdout = stdout.replace("HEIGHT=822", "HEIGHT=823");
+							if (mismatch === "screen") stdout = stdout.replace("SCREEN=0", "SCREEN=1");
+							if (mismatch === "outside") stdout = stdout.replace("X=10", "X=1000");
+							if (mismatch === "duplicate") stdout += "WINDOW=900\n";
+							if (mismatch === "malformed") stdout += "COMMAND=unexpected\n";
+							if (mismatch === "moved" && geometries === 2) stdout = stdout.replace("X=10", "X=11");
+						}
+						if (args[0] === "getmouselocation") {
+							if (mismatch === "pointer-window") stdout = stdout.replace("WINDOW=900", "WINDOW=901");
+							if (mismatch === "pointer-position") stdout = stdout.replace("X=1085", "X=1075");
+						}
+						return { stdout };
+					},
+					undefined,
+					{ rawNative: true },
+				),
+			);
+			assert.equal(moves, ["moved", "pointer-window", "pointer-position"].includes(mismatch) ? 1 : 0, mismatch);
+			assert.equal(clicks, 0, mismatch);
+		}
+	},
+);
+
+test(
+	"native Open rechecks app and Xvfb identity after the successful pointer probe",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		for (const changed of ["app", "xvfb"]) {
+			let pointerChecked = false;
+			let clicks = 0;
+			await assert.rejects(
+				pickerHarness(
+					async (binary, args) => {
+						if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
+						if (args[0] === "getwindowpid") return { stdout: "100\n" };
+						if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
+						if (args[0] === "getmouselocation") pointerChecked = true;
+						if (args[0] === "click") clicks++;
+						return pickerNativeReply(binary, args);
+					},
+					async () => ({
+						app: pointerChecked && changed === "app" ? "101" : "100",
+						xvfb: pointerChecked && changed === "xvfb" ? "201" : "200",
+					}),
+					{ rawNative: true },
+				),
+				/Owned native session changed/,
+			);
+			assert.equal(pointerChecked, true);
+			assert.equal(clicks, 0);
+		}
 	},
 );
 
