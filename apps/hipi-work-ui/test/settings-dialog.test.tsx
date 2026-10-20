@@ -88,7 +88,8 @@ test("settings is one accessible centered modal with stable category navigation 
 		assert.match(html, new RegExp(`<section[^>]*data-category="${category}"`));
 	}
 	assert.match(html, /data-category="appearance" aria-current="page"/);
-	assert.match(html, /<h2 tabindex="-1"[^>]*>Appearance &amp; language<\/h2>/);
+	assert.match(html, /<h2 class="settings-page-heading" tabindex="-1"[^>]*>Appearance &amp; language<\/h2>/);
+	assert.match(html, /type="search"[^>]*aria-label="Search settings"/);
 	assert.match(html, /<section class="settings-page-content" aria-labelledby=/);
 	assert.equal((html.match(/class="settings-form"/g) ?? []).length, 1);
 	assert.match(html, /data-slot="dialog-close"[\s\S]*>Close settings<\/span>/);
@@ -97,10 +98,10 @@ test("settings is one accessible centered modal with stable category navigation 
 
 test("appearance keeps full advanced settings behind progressive groups and save/cancel remain outside those groups", () => {
 	const html = render();
-	const firstDetails = html.indexOf('<details class="settings-advanced">');
+	const firstDetails = html.indexOf('<details class="settings-advanced"');
 	assert.ok(firstDetails > html.indexOf("settings-preferences"));
 	assert.ok(firstDetails > html.indexOf("Code font"));
-	assert.equal((html.match(/<details class="settings-advanced">/g) ?? []).length, 2);
+	assert.equal((html.match(/<details class="settings-advanced"/g) ?? []).length, 2);
 	for (const text of [
 		"Regional appearance",
 		"Sidebar",
@@ -175,7 +176,7 @@ test("Chinese labels and rejected appearance recovery remain available", () => {
 	assert.match(html, /分区外观/);
 	const invalid = render({ stored: "broken" });
 	assert.match(invalid, /已保存配置无效/);
-	assert.match(invalid, /<details class="settings-advanced" open="">/);
+	assert.match(invalid, /<details class="settings-advanced" data-setting="transfer" open="">/);
 	assert.match(invalid, /导出被拒绝的原始数据/);
 });
 

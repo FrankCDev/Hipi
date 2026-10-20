@@ -37,6 +37,36 @@
 	font-weight: 500;
 	color: var(--muted);
 }
+.settings-search {
+	position: relative;
+	display: flex;
+	align-items: center;
+	margin: 0 4px 20px;
+	color: var(--muted);
+}
+.settings-search > svg {
+	position: absolute;
+	left: 11px;
+	pointer-events: none;
+}
+.settings-search .settings-search-input {
+	height: 38px;
+	padding-inline: 34px 30px;
+	border-color: var(--line);
+	border-radius: 9px;
+	background: var(--surface);
+	font-size: 12px;
+	box-shadow: none;
+}
+.settings-search-input::-webkit-search-cancel-button {
+	display: none;
+}
+.settings-search > button {
+	position: absolute;
+	right: 4px;
+	width: 28px;
+	height: 28px;
+}
 .settings-page-nav {
 	display: grid;
 	gap: 6px;
@@ -109,6 +139,15 @@
 	font-size: 12px;
 	color: var(--muted);
 }
+.settings-preview-status {
+	display: inline-block;
+	margin-top: 10px;
+	padding: 3px 8px;
+	border-radius: 6px;
+	background: var(--brand-soft);
+	color: var(--text);
+	font-size: 11px;
+}
 .settings-page-content {
 	flex: 1;
 	min-width: 0;
@@ -141,6 +180,51 @@
 }
 .settings-section-heading h3 {
 	margin: 0;
+}
+.settings-search-results {
+	display: grid;
+	gap: 8px;
+}
+.settings-search-result {
+	justify-content: flex-start;
+	gap: 16px;
+	width: 100%;
+	height: auto;
+	padding: 17px 18px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--surface);
+	text-align: left;
+	white-space: normal;
+}
+.settings-search-result:hover {
+	background: var(--brand-soft);
+}
+.settings-search-value {
+	max-width: 30%;
+	font-size: 12px;
+	color: var(--muted);
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+.settings-search-empty {
+	display: grid;
+	justify-items: center;
+	gap: 12px;
+	padding: 58px 18px;
+	color: var(--muted);
+	font-size: 12px;
+	text-align: center;
+}
+.settings-search-empty strong {
+	color: var(--text);
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-page-content [data-setting]:focus-visible {
+	outline: 2px solid var(--brand);
+	outline-offset: -2px;
+	border-radius: 9px;
 }
 .settings-card,
 .settings-page-content .settings-preferences {
@@ -258,8 +342,18 @@
 .settings-page-content .settings-preferences > .field + .field {
 	border-top: 1px solid var(--line);
 }
-.settings-page-content .settings-preferences > .field > label {
+.settings-choice-copy {
+	display: grid;
+	gap: 5px;
+	min-width: 0;
+}
+.settings-choice-copy > label {
 	font-weight: 550;
+}
+.settings-choice-copy > p {
+	font-size: 12px;
+	line-height: 1.65;
+	color: var(--muted);
 }
 .settings-advanced {
 	border: 1px solid var(--line);
@@ -300,8 +394,26 @@
 	bottom: -28px;
 	justify-content: flex-end;
 	margin: 0 -2px;
-	padding: 14px 2px 2px;
+	padding: 14px 2px;
 	background: var(--canvas);
+}
+.settings-draft-status {
+	margin-right: auto;
+	align-self: center;
+	font-size: 11px;
+	color: var(--muted);
+}
+.settings-unsaved-dialog[data-slot="dialog-content"] {
+	width: min(440px, calc(100vw - 32px));
+	max-width: 440px;
+	border-radius: 16px;
+}
+.settings-unsaved-actions {
+	display: flex;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 8px;
 }
 @media (max-width: 760px) {
 	.unified-settings-dialog[data-slot="dialog-content"] {
@@ -359,6 +471,9 @@
 	.settings-page-brand {
 		padding: 0 6px 14px;
 	}
+	.settings-search {
+		margin-bottom: 10px;
+	}
 	.settings-page-nav {
 		display: flex;
 		gap: 4px;
@@ -384,6 +499,9 @@
 	}
 	.settings-page-content {
 		padding-inline: 16px;
+	}
+	.settings-draft-status {
+		flex-basis: 100%;
 	}
 	.unified-settings-dialog > [data-slot="dialog-close"] {
 		top: 10px;

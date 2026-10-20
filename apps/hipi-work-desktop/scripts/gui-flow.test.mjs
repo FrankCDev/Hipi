@@ -8,12 +8,15 @@ import {
 	activityEvidence,
 	appearanceChoice,
 	assertNoAlerts,
+	assertSettingsPreviewRetained,
+	assertTaskSetupUnsubmitted,
 	captureFailure,
 	click,
 	diagnosticTarget,
 	fixture,
 	hover,
 	inspectModal,
+	inspectTaskGoal,
 	modalBounds,
 	modalWheelPoint,
 	pressKey,
@@ -24,6 +27,95 @@ import {
 	settleFloatingAnimations,
 	waitForOverlayClosed,
 } from "./gui-flow.mjs";
+
+test("task goal safety uses native input and observes newline/composition before restoring the exact unsent draft", async () => {
+	let selected = false;
+	const goal = {
+		value: "",
+		getClientRects: () => [{}],
+		scrollIntoView() {},
+		getBoundingClientRect: () => ({ x: 0, y: 0, width: 100, height: 40 }),
+		contains: (node) => node === goal,
+	};
+	const dialog = {
+		querySelector: (selector) => (selector === ".task-create-confirm" ? { type: "button", disabled: false } : goal),
+	};
+	const document = {
+		querySelector: (selector) =>
+			selector === ".task-setup-dialog" ? dialog : selector === ".composer textarea" ? null : goal,
+		querySelectorAll: (selector) => (selector === ".task-setup-dialog .task-setup-input" ? [goal] : []),
+		elementFromPoint: () => goal,
+	};
+	const events = [];
+	const cdp = {
+		async request(method, params) {
+			if (method === "Runtime.evaluate")
+				return {
+					result: {
+						value: await runInNewContext(params.expression, {
+							document,
+							location: { href: "hipi-work://app/index.html" },
+							requestAnimationFrame: (callback) => callback(),
+						}),
+					},
+				};
+			events.push({ method, ...params });
+			if (method === "Input.insertText") goal.value += params.text;
+			if (method === "Input.dispatchKeyEvent" && params.type === "keyDown") {
+				if (params.key === "a") selected = true;
+				if (params.key === "Backspace" && selected) {
+					goal.value = "";
+					selected = false;
+				}
+				if (params.key === "Enter" && params.text) goal.value += "\n";
+			}
+		},
+	};
+	assert.deepEqual(await inspectTaskGoal(cdp), {
+		enterAddsNewlineOnly: true,
+		compositionKey229DoesNotCreate: true,
+		explicitCreateRequired: true,
+	});
+	assert.equal(goal.value, fixture.text);
+	assert.equal(
+		events.filter((event) => event.method === "Input.dispatchMouseEvent").length,
+		2,
+		"Only focus the goal; never click Create during keyboard safety acceptance",
+	);
+	assert.ok(events.some((event) => event.windowsVirtualKeyCode === 229));
+});
+
+test("dirty Settings guard rejects lost preview, category, draft and message continuity", () => {
+	const expected = { theme: "dark", draft: "retained", keys: ["message:one"] };
+	const valid = { ...expected, open: true, category: "appearance" };
+	assert.doesNotThrow(() => assertSettingsPreviewRetained(valid, expected));
+	for (const [key, value] of Object.entries({ open: false, category: "models", theme: "light", draft: "", keys: [] }))
+		assert.throws(() => assertSettingsPreviewRetained({ ...valid, [key]: value }, expected));
+});
+
+test("task goal keyboard safety rejects creation, submission, lost drafts and disabled-Create false positives", () => {
+	const valid = {
+		open: true,
+		goal: "Goal\n",
+		createType: "button",
+		createDisabled: false,
+		composer: false,
+		conversations: 0,
+		messages: 0,
+	};
+	assert.doesNotThrow(() => assertTaskSetupUnsubmitted(valid, "Goal\n"));
+	for (const [key, value] of Object.entries({
+		open: false,
+		goal: "Goal",
+		createType: "submit",
+		createDisabled: true,
+		composer: true,
+		conversations: 1,
+		messages: 1,
+	})) {
+		assert.throws(() => assertTaskSetupUnsubmitted({ ...valid, [key]: value }, "Goal\n"));
+	}
+});
 
 test("capture waits for finite floating entrances and two frames, without awaiting infinite busy indicators", async () => {
 	const events = [];
@@ -398,12 +490,15 @@ function renderer({ expanded = true, delay = 0, selected = false } = {}) {
 	const document = {
 		querySelector(selector) {
 			if (selector === ".toolbar-conversation") return selected ? { textContent: fixture.conversation } : null;
-			if (selector === '.workspace-branch[data-selected="true"] .project-toggle')
-				return ++reads > delay ? toggle : null;
 			throw new Error(`Unexpected selector: ${selector}`);
 		},
 		querySelectorAll(selector) {
-			if (selector === '.workspace-branch[data-selected="true"] .project-toggle') return reads > delay ? [toggle] : [];
+			if (selector === '.workspace-branch:is([data-current="true"],[data-contains-current="true"])')
+				return ++reads > delay
+					? [{ dataset: { current: "false", containsCurrent: "true" }, querySelector: () => toggle }]
+					: [];
+			if (selector === '.workspace-branch:is([data-current="true"],[data-contains-current="true"]) .project-toggle')
+				return reads > delay ? [toggle] : [];
 			if (selector === ".conversation-list button.conversation-link") return expanded ? [conversation] : [];
 			throw new Error(`Unexpected selector: ${selector}`);
 		},

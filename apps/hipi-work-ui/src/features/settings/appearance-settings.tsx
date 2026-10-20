@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { type Ref, useEffect, useId, useRef, useState } from "react";
 import {
 	type ConfigError,
 	defaultConfig,
@@ -80,21 +80,28 @@ export function AppearanceSettings() {
 
 function Choice({
 	label,
+	description,
+	settingId,
 	value,
 	options,
 	onChange,
 }: {
 	label: string;
+	description?: string;
+	settingId?: string;
 	value: string;
 	options: { value: string; label: string }[];
 	onChange: (value: string) => void;
 }) {
 	const id = useId();
 	return (
-		<div className="field">
-			<label htmlFor={id}>{label}</label>
+		<div className="field" data-setting={settingId}>
+			<div className="settings-choice-copy">
+				<label htmlFor={id}>{label}</label>
+				{description && <p id={`${id}-description`}>{description}</p>}
+			</div>
 			<Select value={value} onValueChange={onChange}>
-				<SelectTrigger id={id} className="w-full">
+				<SelectTrigger id={id} className="w-full" aria-describedby={description ? `${id}-description` : undefined}>
 					<SelectValue />
 				</SelectTrigger>
 				<SelectContent>
@@ -113,10 +120,14 @@ export function SettingsForm({
 	onSave,
 	onCancel,
 	onPreview,
+	onDirtyChange,
+	cancelRef,
 }: {
 	onSave: () => void;
 	onCancel: () => void;
 	onPreview?: () => void;
+	onDirtyChange?: (dirty: boolean) => void;
+	cancelRef?: Ref<HTMLButtonElement>;
 }) {
 	const theme = useThemeSettings();
 	useEffect(() => () => theme.cancel(), [theme.cancel]);
@@ -134,6 +145,8 @@ export function SettingsForm({
 		[],
 	);
 	const [draft, setDraft] = useState(theme.config);
+	const [savedDraft, setSavedDraft] = useState(theme.config);
+	const [jsonPending, setJsonPending] = useState(false);
 	const [error, setError] = useState<ConfigError>();
 	const [json, setJson] = useState("");
 	const [downloadFailed, setDownloadFailed] = useState(false);
@@ -142,25 +155,32 @@ export function SettingsForm({
 	const errorId = useId();
 	const input = useRef<HTMLTextAreaElement>(null);
 	const t = settingsLabels(theme.config.locale);
+	const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft) || jsonPending;
+	useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 	const fontOptions = Object.keys(fonts).map((value) => ({
 		value,
 		label: t(`settings.font.${value as keyof typeof fonts}`),
 	}));
-	const preview = (value: ThemeConfig) => {
+	const preview = (value: ThemeConfig, fromJson = false) => {
 		pendingFile.current += 1;
 		onPreview?.();
 		setDraft(value);
+		if (fromJson) setJsonPending(false);
 		const parsed = theme.preview(value);
 		setError(parsed.ok ? undefined : parsed.error);
 	};
 	const patchRegion = (region: Region, patch: Record<string, string>) => {
 		const next = { ...draft.regions[region], ...patch };
 		const cleaned = Object.fromEntries(Object.entries(next).filter(([, value]) => value !== ""));
-		preview({ ...draft, regions: { ...draft.regions, [region]: cleaned } });
+		const overrides = { ...draft.regions };
+		if (Object.keys(cleaned).length) overrides[region] = cleaned;
+		else delete overrides[region];
+		preview({ ...draft, regions: overrides });
 	};
 	const download = (text: string, filename: string) => {
 		pendingFile.current += 1;
 		setJson(text);
+		setJsonPending(false);
 		setDownloadFailed(false);
 		let url: string | undefined;
 		try {
@@ -189,9 +209,12 @@ export function SettingsForm({
 	};
 	return (
 		<div className="settings-form">
+			<h3>{t("settings.general")}</h3>
 			<div className="settings-grid settings-preferences">
 				<Choice
 					label={t("settings.mode")}
+					description={t("settings.modeDescription")}
+					settingId="theme"
 					value={draft.mode}
 					options={["light", "dark", "system"].map((value) => ({
 						value,
@@ -203,6 +226,8 @@ export function SettingsForm({
 				/>
 				<Choice
 					label={t("settings.locale")}
+					description={t("settings.localeDescription")}
+					settingId="language"
 					value={draft.locale}
 					options={[
 						{ value: "zh-CN", label: "简体中文" },
@@ -212,10 +237,15 @@ export function SettingsForm({
 						if (locale === "en" || locale === "zh-CN") preview({ ...draft, locale });
 					}}
 				/>
+			</div>
+			<h3>{t("settings.typography")}</h3>
+			<div className="settings-grid settings-preferences">
 				{(["uiFont", "codeFont"] as const).map((field) => (
 					<Choice
 						key={field}
 						label={t(`settings.${field}`)}
+						description={t(`settings.${field}Description`)}
+						settingId={field}
 						value={draft[field]}
 						options={fontOptions}
 						onChange={(value) => {
@@ -224,7 +254,7 @@ export function SettingsForm({
 					/>
 				))}
 			</div>
-			<details className="settings-advanced">
+			<details className="settings-advanced" data-setting="regions">
 				<summary>
 					{t("settings.regions")}
 					<span>{t("settings.regionsDescription")}</span>
@@ -277,7 +307,11 @@ export function SettingsForm({
 					{t(`settings.error.${error}`)}
 				</p>
 			)}
-			<details className="settings-advanced" open={theme.original !== undefined ? true : undefined}>
+			<details
+				className="settings-advanced"
+				data-setting="transfer"
+				open={theme.original !== undefined ? true : undefined}
+			>
 				<summary>
 					{t("settings.transfer")}
 					<span>{t("settings.transferDescription")}</span>
@@ -314,6 +348,8 @@ export function SettingsForm({
 							event.target.value = "";
 							const generation = ++pendingFile.current;
 							if (!file) return;
+							setJsonPending(true);
+							onPreview?.();
 							if (file.size > 16384) {
 								setError("format");
 								return;
@@ -324,7 +360,7 @@ export function SettingsForm({
 									if (generation !== pendingFile.current) return;
 									setJson(text);
 									const parsed = parseConfig(text);
-									if (parsed.ok) preview(parsed.value);
+									if (parsed.ok) preview(parsed.value, true);
 									else setError(parsed.error);
 								})
 								.catch(() => {
@@ -342,14 +378,17 @@ export function SettingsForm({
 						onChange={(event) => {
 							pendingFile.current += 1;
 							setJson(event.target.value);
+							setJsonPending(event.target.value.length > 0);
+							onPreview?.();
 						}}
 					/>
+					{jsonPending && <p className="settings-hint">{t("settings.jsonPending")}</p>}
 					{downloadFailed && <p role="alert">{t("settings.downloadFailed")}</p>}
 					<Button
 						variant="outline"
 						onClick={() => {
 							const parsed = parseConfig(json);
-							if (parsed.ok) preview(parsed.value);
+							if (parsed.ok) preview(parsed.value, true);
 							else setError(parsed.error);
 						}}
 					>
@@ -358,10 +397,22 @@ export function SettingsForm({
 				</div>
 			</details>
 			<div className="settings-actions settings-savebar">
-				<Button variant="outline" onClick={onCancel}>
+				<output className="settings-draft-status" aria-live="polite">
+					{t(dirty ? "settings.unsaved" : "settings.upToDate")}
+				</output>
+				<Button ref={cancelRef} className="settings-cancel" variant="outline" onClick={onCancel}>
 					{t("settings.cancel")}
 				</Button>
-				<Button disabled={!!error} onClick={onSave}>
+				<Button
+					className="settings-save"
+					disabled={!!error || jsonPending}
+					onClick={() => {
+						if (error || jsonPending) return;
+						pendingFile.current += 1;
+						onSave();
+						setSavedDraft(draft);
+					}}
+				>
 					{t("settings.save")}
 				</Button>
 			</div>

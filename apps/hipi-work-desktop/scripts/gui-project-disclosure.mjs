@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import { nativeEditorKey } from "./gui-work-experience.mjs";
 
+export function projectViewportReady(document, width) {
+	const shell = document.querySelector(".work-shell");
+	const sidebar = document.querySelector(".sidebar");
+	const toggle = document.querySelector(".navigation-toggle");
+	const narrow = width <= 720;
+	return (
+		document.defaultView.innerWidth === width &&
+		shell?.dataset.navigationMode === (narrow ? "narrow" : "desktop") &&
+		shell.dataset.navigationOpen === "false" &&
+		shell.dataset.navigationCollapsed === "false" &&
+		sidebar?.inert === narrow &&
+		toggle?.getAttribute("aria-expanded") === String(!narrow)
+	);
+}
+
 export function projectSelector(document, name) {
 	const branches = [...document.querySelectorAll(".workspace-tree > .workspace-branch")];
 	const matches = branches
@@ -8,6 +23,16 @@ export function projectSelector(document, name) {
 		.filter(({ node }) => node.querySelector(".project-name")?.textContent === name);
 	if (matches.length !== 1) return null;
 	return `.workspace-tree > .workspace-branch:nth-child(${matches[0].index + 1})`;
+}
+
+export function currentProject(document) {
+	const branches = [
+		...document.querySelectorAll('.workspace-branch:is([data-current="true"],[data-contains-current="true"])'),
+	];
+	if (branches.length !== 1) return null;
+	const branch = branches[0];
+	if (branch.dataset.current === "true" && branch.dataset.containsCurrent === "true") return null;
+	return branch.querySelector(".project-name")?.textContent ?? null;
 }
 
 export function assertDisclosureContinuity(actual, expected) {
@@ -32,7 +57,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		evaluate(
 			cdp,
 			`({
-		selected: document.querySelector('.workspace-branch[data-selected="true"] .project-name')?.textContent,
+		selected: (${currentProject.toString()})(document),
 		draft: document.querySelector('.composer textarea')?.value,
 		keys: [...document.querySelectorAll('[data-message-key^="message:"]')].map(e => e.dataset.messageKey),
 		navigationOpen: document.querySelector('.work-shell').dataset.navigationOpen,
@@ -47,7 +72,12 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			deviceScaleFactor: 1,
 			mobile: false,
 		});
-		await until(() => evaluate(cdp, `innerWidth === ${width}`), "project disclosure viewport");
+		// Chromium can update innerWidth before React commits its matchMedia state.
+		// Wait for the actual closed-drawer/expanded-desktop contract before input.
+		const ready = () => evaluate(cdp, `(${projectViewportReady.toString()})(document, ${width})`);
+		await until(ready, "project disclosure committed viewport");
+		await evaluate(cdp, "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+		assert.equal(await ready(), true, "Project navigation changed while settling the viewport");
 	}
 	assert.equal((await read()).draft, "", "Project acceptance starts with an empty composer");
 	const originalKeys = (await read()).keys;
@@ -59,7 +89,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			await click(cdp, creator);
 			await click(cdp, '[role="dialog"] input');
 			await cdp.request("Input.insertText", { text: second });
-			await click(cdp, '[role="dialog"] button[type="submit"]');
+			await click(cdp, '[role="dialog"] .task-create-confirm');
 			await locate(second);
 			await waitForOverlayClosed(cdp, creator);
 		}
@@ -153,7 +183,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			() =>
 				evaluate(
 					cdp,
-					`document.querySelector(${JSON.stringify(b)}).dataset.selected === 'true' && !document.querySelector('.composer textarea') && !document.querySelector('.toolbar-conversation')`,
+					`document.querySelector(${JSON.stringify(b)}).dataset.current === 'true' && document.querySelector(${JSON.stringify(b)}).dataset.containsCurrent === 'false' && (${currentProject.toString()})(document) === ${JSON.stringify(second)} && !document.querySelector('.composer textarea') && !document.querySelector('.toolbar-conversation')`,
 				),
 			"empty project explicitly opened",
 		);

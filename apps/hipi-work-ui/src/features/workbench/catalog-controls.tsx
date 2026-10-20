@@ -73,6 +73,8 @@ export function ConversationActions({
 	guard,
 	onPreview,
 	onMenuOpen,
+	onOverlayChange,
+	onReturnFocus,
 	triggerRef,
 }: {
 	conversation: Conversation;
@@ -80,6 +82,8 @@ export function ConversationActions({
 	guard: (action: () => void) => void;
 	onPreview?: () => void;
 	onMenuOpen?: () => void;
+	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
+	onReturnFocus?: () => void;
 	triggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
 	const { locale } = usePreferences();
@@ -97,11 +101,15 @@ export function ConversationActions({
 		<Dialog
 			open={action !== null}
 			onOpenChange={(open) => {
-				if (!open && !state.busy) setAction(null);
+				if (!open && !state.busy) {
+					setAction(null);
+					onOverlayChange?.("dialog", false);
+				}
 			}}
 		>
 			<DropdownMenu
 				onOpenChange={(open) => {
+					onOverlayChange?.("menu", open);
 					if (open) onMenuOpen?.();
 				}}
 			>
@@ -122,6 +130,10 @@ export function ConversationActions({
 					className="conversation-action-menu"
 					onCloseAutoFocus={(event) => {
 						if (action || previewSelected.current) event.preventDefault();
+						else if (onReturnFocus) {
+							event.preventDefault();
+							onReturnFocus();
+						}
 						previewSelected.current = false;
 					}}
 				>
@@ -134,6 +146,7 @@ export function ConversationActions({
 						<DropdownMenuItem
 							onSelect={() => {
 								previewSelected.current = true;
+								onOverlayChange?.("menu", false);
 								onPreview();
 							}}
 						>
@@ -145,6 +158,7 @@ export function ConversationActions({
 						disabled={disabled}
 						onSelect={() => {
 							setTitle(conversation.title);
+							onOverlayChange?.("dialog", true);
 							setAction("rename");
 						}}
 					>
@@ -154,7 +168,10 @@ export function ConversationActions({
 					<DropdownMenuSeparator />
 					<DropdownMenuItem
 						disabled={disabled}
-						onSelect={() => setAction(conversation.archivedAt === null ? "archive" : "restore")}
+						onSelect={() => {
+							onOverlayChange?.("dialog", true);
+							setAction(conversation.archivedAt === null ? "archive" : "restore");
+						}}
 					>
 						{conversation.archivedAt === null ? (
 							<Archive size={15} aria-hidden="true" />
@@ -170,7 +187,8 @@ export function ConversationActions({
 				closeDisabled={state.busy}
 				onCloseAutoFocus={(event) => {
 					event.preventDefault();
-					trigger.current?.focus();
+					if (onReturnFocus) onReturnFocus();
+					else trigger.current?.focus();
 				}}
 			>
 				<DialogTitle>{l[action ?? "rename"]}</DialogTitle>
@@ -225,6 +243,7 @@ export function ConversationActions({
 										void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
 									}
 									setAction(null);
+									onOverlayChange?.("dialog", false);
 								}
 							});
 						});

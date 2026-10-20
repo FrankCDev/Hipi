@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import {
 	type AppClient,
 	type Conversation,
+	type Method,
 	PROTOCOL_VERSION,
+	parseResult,
 	type Submit,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
@@ -24,6 +26,8 @@ import { CreateDialog } from "../src/features/workbench/create-dialog.tsx";
 import { FilePanel } from "../src/features/workbench/file-panel.tsx";
 import type { BrowserStorage } from "../src/features/workbench/local-persistence.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
+import { PreparedTaskEntry } from "../src/features/workbench/prepared-task-entry.tsx";
+import { PreparedTaskRecovery } from "../src/features/workbench/prepared-task-recovery.tsx";
 import { Workbench } from "../src/features/workbench/workbench.tsx";
 import { WorkbenchWelcome } from "../src/features/workbench/workbench-welcome.tsx";
 import { WorkspaceTree } from "../src/features/workbench/workspace-tree.tsx";
@@ -99,6 +103,18 @@ vi.mock("@tanstack/react-query", () => ({
 	},
 }));
 vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en", t: (key: string) => key }) }));
+vi.mock("../src/features/workbench/use-catalog-pages.ts", () => ({
+	useCatalogPages: () => ({
+		items: workspaces,
+		hasData: true,
+		hasMore: false,
+		canRestart: false,
+		isSuccess: true,
+		isPending: false,
+		isError: false,
+		isFetching: false,
+	}),
+}));
 vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => client,
 	useFiles: () => ({ files: fileFixture.files }),
@@ -449,7 +465,7 @@ test("explicit Open project keeps the dirty-file guard: cancel preserves work; c
 	assert.equal(opened.pane, undefined);
 	const welcome = element(opened.content, WorkbenchWelcome);
 	assert.equal(welcome.props.workspaceName, "Empty project");
-	assert.equal(element(welcome.props.action, CreateDialog).props.kind, "conversation");
+	assert.equal(element(welcome.props.action, PreparedTaskEntry).props.workspaceId, "empty");
 	const settings = element(opened.content, SettingsDialog);
 	assert.deepEqual(settings.props.workspace, { workspaceId: "empty", name: "Empty project" });
 	assert.equal(settings.props.conversation, undefined);
@@ -483,6 +499,7 @@ test("disclosure from home never selects a project or a task", () => {
 
 test("narrow navigation stays open while other and current project branches expand or collapse", () => {
 	const initial = drive();
+	assert.equal(initial.content.props["data-navigation-mode"], "narrow");
 	const toggle = elements(initial.content, Button).find((button) => button.props.className === "navigation-toggle");
 	assert.ok(toggle);
 	assert.equal(toggle.props["aria-expanded"], false);
@@ -500,4 +517,80 @@ test("narrow navigation stays open while other and current project branches expa
 		const main = elements(current.content, "div").find((node) => node.props.className === "main-shell");
 		assert.equal(main?.props.inert, true);
 	}
+});
+
+test.each([false, true])(
+	"prepared creation selects only after durable handoff or explicit conflict resolution (conflict=%s)",
+	async (conflict) => {
+		saveCommand(local, "catalog", null);
+		vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+		const goal = "Prepare a plan, do not execute it yet";
+		const target = { ...conversation, conversationId: "prepared", title: "Prepared conversation" };
+		local.write("task-draft.current", goal);
+		if (conflict) local.write("draft.current.prepared", "A later independently written draft");
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			assert.ok(["createConversation", "getConversation", "getConversationCommandResult"].includes(method));
+			return parseResult(
+				method,
+				method === "getConversationCommandResult" ? { method: "createConversation", result: target } : target,
+			);
+		});
+		const initial = drive();
+		const created = initial.tree.onCreate("current", target.title, { provider: "faux", modelId: "one" }, goal);
+		if (conflict) await assert.rejects(created, /UNCONFIRMED/);
+		else await created;
+		let current = drive();
+		if (conflict) {
+			assert.equal(current.tree.selectedConversation, "task");
+			assert.equal(current.tree.catalog.getSnapshot().handoffConflict, true);
+			assert.ok(current.tree.catalog.getSnapshot().pending);
+			assert.deepEqual(current.tree.catalog.getSnapshot().result, target);
+			element(current.content, PreparedTaskRecovery).props.onResolved();
+			assert.equal(
+				drive().tree.selectedConversation,
+				"task",
+				"A verified creation receipt alone cannot bypass draft handoff",
+			);
+			await current.tree.catalog.discardPreparedTask();
+			element(drive().content, PreparedTaskRecovery).props.onResolved();
+			current = drive();
+			assert.equal(local.read("draft.current.prepared"), "A later independently written draft");
+			assert.equal(local.read("task-draft.current"), goal);
+		} else {
+			assert.equal(local.read("draft.current.prepared"), goal);
+			assert.equal(local.read("task-draft.current"), "");
+		}
+		assert.equal(current.tree.selectedConversation, "prepared");
+		assert.equal(current.tree.catalog.getSnapshot().pending, null);
+		assert.equal(current.tree.catalog.getSnapshot().preparedTask, null);
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
+		assert.equal(
+			vi.mocked(client.call).mock.calls.some(([method]) => method === "submit"),
+			false,
+		);
+		assert.equal(local.read(`draft.${scope}`), draft);
+	},
+);
+
+test("home, sidebar and project actions share one prepared draft without mixing project scopes", () => {
+	local.write("conversation", "");
+	const home = () => element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props;
+	const sidebar = () => {
+		const create = elements(drive().content, CreateDialog).find((item) => item.props.kind === "conversation");
+		assert.ok(create);
+		return create.props;
+	};
+	home().onDraftChange("Written at project home");
+	assert.equal(sidebar().draft, "Written at project home");
+	sidebar().onDraftChange?.("Revised in sidebar setup, then cancelled");
+	assert.equal(home().draft, "Revised in sidebar setup, then cancelled");
+	assert.equal(drive().tree.preparedDraft?.("current"), home().draft);
+	drive().tree.onPreparedDraftChange?.("other", "Other project's goal");
+	assert.equal(home().draft, "Revised in sidebar setup, then cancelled");
+	assert.equal(drive().tree.preparedDraft?.("other"), "Other project's goal");
+	for (const state of [local, new LocalState("store", storage)]) {
+		assert.equal(state.read("task-draft.current"), home().draft);
+		assert.equal(state.read("task-draft.other"), "Other project's goal");
+	}
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 });

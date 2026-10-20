@@ -22,20 +22,31 @@ vi.mock("../src/features/workbench/conversation-pane.tsx", () => ({
 	),
 }));
 
-function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "next-page", search = "") {
+function renderTree(
+	expanded: boolean,
+	count = 1,
+	nextCursor: string | null = "next-page",
+	search = "",
+	selectedConversation = "conversation-id",
+) {
 	const cache = new QueryClient();
-	cache.setQueryData(["conversations", "workspace-id", "active", undefined], {
-		items: [
+	cache.setQueryData(["conversations", "workspace-id", "active", "pages"], {
+		pages: [
 			{
-				workspaceId: "workspace-id",
-				conversationId: "conversation-id",
-				title: "My conversation",
-				revision: 1,
-				createdAt: 1,
-				archivedAt: null,
+				items: [
+					{
+						workspaceId: "workspace-id",
+						conversationId: "conversation-id",
+						title: "My conversation",
+						revision: 1,
+						createdAt: 1,
+						archivedAt: null,
+					},
+				],
+				nextCursor,
 			},
 		],
-		nextCursor,
+		pageParams: [undefined],
 	});
 	const html = renderToStaticMarkup(
 		<QueryClientProvider client={cache}>
@@ -48,7 +59,7 @@ function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "n
 						name: `My project ${index}`,
 					}))}
 					selectedWorkspace="workspace-id"
-					selectedConversation="conversation-id"
+					selectedConversation={selectedConversation}
 					search={search}
 					isExpanded={() => expanded}
 					onToggle={() => {}}
@@ -64,9 +75,12 @@ function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "n
 	return html;
 }
 
-test("project and conversation share a selected row surface without nested action buttons", () => {
+test("current conversation and its containing project have distinct surfaces without nested action buttons", () => {
 	const html = renderTree(true);
-	assert.match(html, /class="sidebar-preview-row project-row" data-selected="true"/);
+	assert.match(
+		html,
+		/class="sidebar-preview-row project-row" data-selected="false" data-current="false" data-contains-current="true"/,
+	);
 	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
 	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
@@ -81,6 +95,17 @@ test("project and conversation share a selected row surface without nested actio
 		"one preview action per workspace and one menu per conversation",
 	);
 	assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*<button\b/);
+});
+
+test("project overview alone marks the project as current", () => {
+	const html = renderTree(true, 1, null, "", "");
+	assert.match(
+		html,
+		/class="sidebar-preview-row project-row" data-selected="true" data-current="true" data-contains-current="false"/,
+	);
+	assert.match(html, /class="project-open" aria-current="page"/);
+	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="false"/);
+	assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
 });
 
 test("collapsed projects retain their row preview entry and expansion semantics", () => {
@@ -120,7 +145,7 @@ test("a catalog page is rendered without the old lifetime slice and pagination r
 	assert.equal((html.match(/class="workspace-branch"/g) ?? []).length, 20);
 	assert.match(html, /My project 19/);
 	const expanded = renderTree(true);
-	assert.match(expanded, /下一页/);
+	assert.match(expanded, /加载更多/);
 	assert.match(expanded, /已归档会话|会话列表/);
 	assert.match(expanded, /会话操作: My conversation/);
 	assert.doesNotMatch(expanded, /重命名会话/);
@@ -129,11 +154,11 @@ test("a catalog page is rendered without the old lifetime slice and pagination r
 
 test("single-page conversation lists omit inert pagination without hiding their actions", () => {
 	const html = renderTree(true, 1, null);
-	assert.doesNotMatch(html, /第一页|下一页/);
+	assert.doesNotMatch(html, /第一页|加载更多/);
 	assert.match(html, /会话操作: My conversation/);
 });
 
-test("project filters are native radio groups and counts explicitly describe the displayed page", () => {
+test("project filters are native radio groups and counts explicitly describe the visible loaded items", () => {
 	const html = renderTree(true);
 	assert.match(html, /<fieldset class="conversation-filter-tabs"><legend class="sr-only">会话列表<\/legend>/);
 	assert.match(html, /type="radio"[^>]*aria-label="当前会话"[^>]*checked=""/);
@@ -142,18 +167,21 @@ test("project filters are native radio groups and counts explicitly describe the
 	assert.equal(names.length, 2);
 	assert.equal(names[0], names[1]);
 	assert.doesNotMatch(html, /project-page-summary|project-match-count/);
-	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">本页数量: <\/span>1<\/span>/);
+	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">已加载并显示: <\/span>1<\/span>/);
 	assert.match(html, /class="project-pagination"/);
 });
 
-test("search counts matches on the current page without replacing the loaded-page count", () => {
+test("search counts visible matches without replacing the loaded count or injecting the current conversation", () => {
 	const html = renderTree(true, 1, "next-page", "not on this page");
-	assert.match(html, /<button[^>]*class="[^"]*project-match-count[^>]*"[^>]*aria-label="本页匹配: 0"[^>]*>0<\/button>/);
+	assert.match(
+		html,
+		/<button[^>]*class="[^"]*project-match-count[^>]*"[^>]*aria-label="已显示条目中的匹配: 0"[^>]*>0<\/button>/,
+	);
 	assert.doesNotMatch(html, /project-page-summary/);
-	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">本页数量: <\/span>1<\/span>/);
+	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">已加载并显示: <\/span>1<\/span>/);
 	assert.match(html, /没有匹配的会话/);
 	assert.doesNotMatch(html, /class="conversation-link"/);
-	assert.match(html, /下一页/);
+	assert.match(html, /加载更多/);
 });
 
 test("selected conversation remains mounted when it is outside the displayed directory page", () => {
@@ -161,9 +189,9 @@ test("selected conversation remains mounted when it is outside the displayed dir
 	local.write("conversation", "selected-conversation");
 	local.write("draft.selected-workspace.selected-conversation", "keep this draft");
 	const cache = new QueryClient();
-	cache.setQueryData(["workspaces", undefined], {
-		items: [{ workspaceId: "other-workspace", name: "Other project" }],
-		nextCursor: "next",
+	cache.setQueryData(["workspaces", "pages"], {
+		pages: [{ items: [{ workspaceId: "other-workspace", name: "Other project" }], nextCursor: "next" }],
+		pageParams: [undefined],
 	});
 	cache.setQueryData(["workspace", "selected-workspace"], {
 		workspaceId: "selected-workspace",
@@ -186,14 +214,14 @@ test("selected conversation remains mounted when it is outside the displayed dir
 			</QueryClientProvider>,
 		);
 	assert.match(render(), /data-selected-conversation="selected-conversation"/);
-	assert.match(render(), /下一页/);
-	cache.setQueryData(["workspaces", undefined], { items: [], nextCursor: null });
+	assert.match(render(), /加载更多/);
+	cache.setQueryData(["workspaces", "pages"], { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] });
 	const empty = render();
 	assert.match(empty, /data-selected-conversation="selected-conversation"/);
-	assert.doesNotMatch(empty, /第一页|下一页/);
+	assert.doesNotMatch(empty, /第一页|加载更多/);
 	assert.match(empty, /aria-label="新建工作区"/);
 	assert.match(empty, /aria-label="工作台设置"/);
-	assert.match(empty, /<p class="sr-only"[^>]*>仅搜索已展开项目当前显示的会话页。<\/p>/);
+	assert.match(empty, /<p class="sr-only"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
 	assert.match(empty, /aria-label="搜索范围"/);
 	assert.equal(local.read("draft.selected-workspace.selected-conversation"), "keep this draft");
 	cache.clear();

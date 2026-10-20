@@ -171,6 +171,8 @@ test("unmount and timeout release waits; late results cannot clear original reco
 			const pending = Promise.withResolvers<unknown>();
 			f.handle(() => pending.promise);
 			const run = f.session.execute(create);
+			// Durable catalog admission now resolves before dispatch; exercise cancellation after dispatch.
+			await Promise.resolve();
 			if (cancel) {
 				f.session.dispose();
 				f.session.activate();

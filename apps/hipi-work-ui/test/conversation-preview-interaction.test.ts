@@ -124,3 +124,37 @@ test("the more menu cancels a pending hover, and its preview item pins with one 
 	assert.equal(preview.consumeFocusReturn(), true);
 	assert.equal(preview.consumeFocusReturn(), false);
 });
+
+test("an open menu continuously excludes hover, focus pinning and preview activation", (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const preview = new ConversationPreviewInteraction(() => {});
+	preview.enter();
+	preview.setOverlayOpen("menu", true);
+	preview.enter();
+	preview.pin();
+	preview.activate();
+	context.mock.timers.tick(1000);
+	assert.equal(preview.mode, "closed");
+	assert.equal(preview.consumeFocusReturn(), false);
+	preview.setOverlayOpen("menu", false);
+	preview.activate();
+	assert.equal(preview.mode, "pinned");
+});
+
+test("menu closure cannot release a dialog owner during rename or archive handoff", (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const preview = new ConversationPreviewInteraction(() => {});
+	preview.activate();
+	preview.setOverlayOpen("menu", true);
+	preview.setOverlayOpen("dialog", true);
+	preview.setOverlayOpen("menu", false);
+	preview.enter();
+	preview.pin();
+	context.mock.timers.tick(1000);
+	assert.equal(preview.mode, "closed");
+	assert.equal(preview.consumeFocusReturn(), false, "the dialog owns focus, not the previous pinned preview");
+	preview.setOverlayOpen("dialog", false);
+	preview.enter();
+	context.mock.timers.tick(350);
+	assert.equal(preview.mode, "hover");
+});

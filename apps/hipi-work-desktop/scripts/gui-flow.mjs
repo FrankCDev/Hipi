@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { renderedFonts } from "./gui-fonts.mjs";
 import { exerciseProjectDisclosure } from "./gui-project-disclosure.mjs";
 import { exerciseToolPacks } from "./gui-tool-packs.mjs";
-import { exerciseWorkExperience } from "./gui-work-experience.mjs";
+import { exerciseWorkExperience, nativeEditorKey } from "./gui-work-experience.mjs";
 
 export const fixture = {
 	workspace: "GUI 工作区",
@@ -126,6 +126,45 @@ async function fill(cdp, selector, value) {
 		"Native text input must match fixture text",
 	);
 }
+export function assertTaskSetupUnsubmitted(state, goal) {
+	assert.equal(state.open, true, "Goal keyboard input closed task setup");
+	assert.equal(state.goal, goal, "Goal keyboard input changed the intended draft");
+	assert.equal(state.createType, "button", "Task creation must be an explicit button action");
+	assert.equal(state.createDisabled, false, "Keyboard safety must be tested with Create enabled");
+	assert.equal(state.composer, false, "Goal keyboard input created a conversation");
+	assert.equal(state.conversations, 0, "Goal keyboard input persisted a conversation");
+	assert.equal(state.messages, 0, "Goal keyboard input submitted a task");
+}
+
+export async function inspectTaskGoal(cdp) {
+	const selector = ".task-setup-dialog .task-setup-input";
+	await fill(cdp, selector, fixture.text);
+	const read = async () => {
+		await evaluate(cdp, "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+		return evaluate(
+			cdp,
+			`(() => {
+		const dialog = document.querySelector('.task-setup-dialog');
+		const create = dialog?.querySelector('.task-create-confirm');
+		return { open: !!dialog, goal: dialog?.querySelector('.task-setup-input')?.value,
+			createType: create?.type, createDisabled: create?.disabled,
+			composer: !!document.querySelector('.composer textarea'),
+			conversations: document.querySelectorAll('.conversation-link').length,
+			messages: document.querySelectorAll('[data-message-key^="message:"]').length };
+	})()`,
+		);
+	};
+	assertTaskSetupUnsubmitted(await read(), fixture.text);
+	await nativeEditorKey(cdp, "Enter");
+	assertTaskSetupUnsubmitted(await read(), `${fixture.text}\n`);
+	await nativeEditorKey(cdp, "Enter", { composing: true });
+	assertTaskSetupUnsubmitted(await read(), `${fixture.text}\n`);
+	await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
+	await nativeEditorKey(cdp, "Backspace");
+	await cdp.request("Input.insertText", { text: fixture.text });
+	assertTaskSetupUnsubmitted(await read(), fixture.text);
+	return { enterAddsNewlineOnly: true, compositionKey229DoesNotCreate: true, explicitCreateRequired: true };
+}
 export async function pressKey(cdp, key) {
 	const code = { Escape: 27, Home: 36, Enter: 13 }[key];
 	assert.ok(code, "Unsupported smoke key");
@@ -179,6 +218,100 @@ export async function saveAppearance(cdp) {
 		() => evaluate(cdp, `!!document.querySelector('.settings-feedback')?.textContent.trim()`),
 		"appearance saved feedback",
 	);
+	assert.equal(
+		await evaluate(cdp, `!!document.querySelector('.unified-settings-dialog')`),
+		true,
+		"Saving appearance must leave Settings open",
+	);
+}
+
+export function assertSettingsPreviewRetained(actual, expected) {
+	assert.equal(actual.open, true, "Dirty navigation closed Settings without consent");
+	assert.equal(actual.category, "appearance", "Dirty navigation changed category without consent");
+	assert.equal(actual.theme, expected.theme, "Dirty navigation lost the appearance preview");
+	assert.equal(actual.draft, expected.draft, "Settings navigation changed the conversation draft");
+	assert.deepEqual(actual.keys, expected.keys, "Settings navigation changed execution messages");
+}
+
+export async function inspectSettingsGuard(cdp) {
+	const opener = ".sidebar-settings-trigger";
+	const original = (await appearanceChoice(cdp)).mode;
+	const resolved = await evaluate(cdp, "document.documentElement.dataset.theme");
+	const preview = resolved === "light" ? "Dark" : "Light";
+	const read = () =>
+		evaluate(
+			cdp,
+			`({open: !!document.querySelector('.unified-settings-dialog'),
+		category: document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category,
+		theme: document.documentElement.dataset.theme, draft: document.querySelector('.composer textarea').value,
+		keys: [...document.querySelectorAll('[data-message-key^="message:"]')].map(e => e.dataset.messageKey)})`,
+		);
+	await setAppearanceChoice(cdp, "theme", preview);
+	const expected = await read();
+	assert.equal(expected.theme, preview.toLowerCase());
+	const guard = async () => {
+		await until(() => evaluate(cdp, `!!document.querySelector('.settings-unsaved-dialog')`), "unsaved Settings guard");
+		assertSettingsPreviewRetained(await read(), expected);
+	};
+	const keep = async (selector) => {
+		await click(cdp, ".settings-unsaved-actions > button", "Keep editing");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!document.querySelector('.settings-unsaved-dialog') && document.activeElement === document.querySelector(${JSON.stringify(selector)})`,
+				),
+			"Keep editing restores exact initiating control",
+		);
+		assertSettingsPreviewRetained(await read(), expected);
+	};
+	const models = '.settings-page-nav button[data-category="models"]';
+	await click(cdp, models);
+	await guard();
+	await keep(models);
+	await fill(cdp, ".settings-search-input", "providers");
+	await click(cdp, '.settings-search-result[data-setting="providers"]');
+	await guard();
+	await keep('.settings-search-result[data-setting="providers"]');
+	await pressKey(cdp, "Escape");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`document.querySelector('.settings-search-input').value === '' && document.activeElement === document.querySelector('.settings-search-input')`,
+			),
+		"search Escape clears query without closing Settings",
+	);
+	assertSettingsPreviewRetained(await read(), expected);
+	await click(cdp, models);
+	await guard();
+	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`!document.querySelector('.settings-unsaved-dialog') && document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'models' && document.activeElement === document.querySelector('.settings-page-heading')`,
+			),
+		"discard switches category and focuses its heading",
+	);
+	assert.equal(await evaluate(cdp, "document.documentElement.dataset.theme"), resolved);
+	await click(cdp, '.settings-page-nav button[data-category="appearance"]');
+	assert.equal((await appearanceChoice(cdp)).mode, original);
+	await setAppearanceChoice(cdp, "theme", preview);
+	const control = (await appearanceChoice(cdp)).selector;
+	await pressKey(cdp, "Escape");
+	await guard();
+	await keep(control);
+	await pressKey(cdp, "Escape");
+	await guard();
+	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
+	await waitForOverlayClosed(cdp, opener);
+	assert.equal(await evaluate(cdp, "document.documentElement.dataset.theme"), resolved);
+	await openAppearance(cdp, opener);
+	assert.equal((await appearanceChoice(cdp)).mode, original);
+	const restored = await read();
+	assert.equal(restored.draft, expected.draft);
+	assert.deepEqual(restored.keys, expected.keys);
 }
 export async function setWorkbenchPreferences(cdp, locale, mode) {
 	await openAppearance(cdp);
@@ -245,6 +378,10 @@ async function inspectTheme(cdp, directory, reopened) {
 	await waitForSelectClosed(cdp, original.selector);
 	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
 	await click(cdp, ".settings-savebar button", "Cancel");
+	await until(
+		() => evaluate(cdp, `document.activeElement === document.querySelector('.settings-cancel')`),
+		"Cancel restores focus to its replacement form control",
+	);
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Cancel must restore the saved preference");
 	await until(
 		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(originalResolved)}`),
@@ -266,7 +403,9 @@ async function inspectTheme(cdp, directory, reopened) {
 	await openAppearance(cdp);
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
 	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
-	await dismissTo(cdp, settings);
+	await pressKey(cdp, "Escape");
+	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
+	await waitForOverlayClosed(cdp, settings);
 	await openAppearance(cdp);
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Closing settings must cancel unsaved preview");
 	await dismissTo(cdp, settings);
@@ -562,7 +701,9 @@ export async function selectReopenedConversation(cdp) {
 			evaluate(
 				cdp,
 				`(() => {
-		const e = document.querySelector('.workspace-branch[data-selected="true"] .project-toggle');
+		const branches = [...document.querySelectorAll('.workspace-branch:is([data-current="true"],[data-contains-current="true"])')];
+		if (branches.length !== 1 || (branches[0].dataset.current === 'true' && branches[0].dataset.containsCurrent === 'true')) return null;
+		const e = branches[0].querySelector('.project-toggle');
 		if (!e || e.disabled || !e.getClientRects().length) return null;
 		const expanded = e.getAttribute('aria-expanded');
 		return expanded === 'true' || expanded === 'false' ? { expanded } : null;
@@ -570,7 +711,8 @@ export async function selectReopenedConversation(cdp) {
 			),
 		"reopened workspace toggle",
 	);
-	if (state.expanded === "false") await click(cdp, '.workspace-branch[data-selected="true"] .project-toggle');
+	if (state.expanded === "false")
+		await click(cdp, '.workspace-branch:is([data-current="true"],[data-contains-current="true"]) .project-toggle');
 	await click(cdp, ".conversation-list button.conversation-link", fixture.conversation);
 }
 export async function activityEvidence(cdp) {
@@ -674,10 +816,11 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 				setAppearanceChoice,
 				saveAppearance,
 				inspectModal,
+				inspectSettingsGuard,
 				hover,
 			},
 			directory,
-			{ reopened: true },
+			{ reopened: true, expectedScope: scope },
 		);
 		const projectDisclosure = await exerciseProjectDisclosure(
 			cdp,
@@ -703,7 +846,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	await rememberCreateTrigger(cdp);
 	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
 	await fill(cdp, '[role="dialog"] input', fixture.workspace);
-	await click(cdp, '[role="dialog"] button[type="submit"]');
+	await click(cdp, '[role="dialog"] .task-create-confirm');
 	await until(
 		() =>
 			evaluate(cdp, `document.querySelector('.project-name')?.textContent === ${JSON.stringify(fixture.workspace)}`),
@@ -721,7 +864,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		"Creation must retain and focus the original primary action element",
 	);
 	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
-	await fill(cdp, '[role="dialog"] input', fixture.conversation);
+	await fill(cdp, ".task-setup-dialog .task-title-input", fixture.conversation);
 	await click(cdp, '[role="dialog"] [role="combobox"]');
 	await until(
 		() => evaluate(cdp, `document.querySelector('[role="option"]')?.textContent.includes('faux')`),
@@ -729,9 +872,35 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	await click(cdp, '[role="option"]');
 	await waitForSelectClosed(cdp, '[role="dialog"] [role="combobox"]');
-	await click(cdp, '[role="dialog"] button[type="submit"]');
+	const taskSetup = await inspectTaskGoal(cdp);
+	await click(cdp, ".task-setup-dialog button", "Cancel");
+	await waitForOverlayClosed(cdp, '.workspace-branch button[aria-label="New conversation"]');
+	assert.equal(
+		await evaluate(cdp, "document.querySelectorAll('.conversation-link').length"),
+		0,
+		"Cancelling task setup must not create a conversation",
+	);
+	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
+	await until(
+		() => evaluate(cdp, `document.querySelector('.task-setup-input')?.value === ${JSON.stringify(fixture.text)}`),
+		"cancelled project goal restored on reopen",
+	);
+	assert.equal(await evaluate(cdp, "document.querySelector('.task-title-input').value"), fixture.conversation);
+	taskSetup.cancelReopenRetainsGoal = true;
+	await capture(cdp, directory, "task-setup-ready");
+	await click(cdp, ".task-setup-dialog .task-create-confirm");
 	await until(() => evaluate(cdp, "!!document.querySelector('.composer textarea')"), "conversation composer");
 	await waitForOverlayClosed(cdp, '.workspace-branch button[aria-label="New conversation"]');
+	assert.equal(
+		await evaluate(cdp, "document.querySelector('.composer textarea').value"),
+		fixture.text,
+		"Explicit creation must retain the exact goal as an unsent draft",
+	);
+	assert.equal(
+		await evaluate(cdp, "document.querySelectorAll('[data-message-key^=\"message:\"]').length"),
+		0,
+		"Explicit creation must not submit the initial goal",
+	);
 	await evaluate(
 		cdp,
 		`(() => { window.__hipiGuiSmoke = { samples: [], running: false };
@@ -740,7 +909,6 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		if(a.at(-1)!==t && a.length<128)a.push(t);}};
 		window.__hipiGuiSmoke.observer=new MutationObserver(sample); window.__hipiGuiSmoke.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-busy']}); })()`,
 	);
-	await fill(cdp, ".composer textarea", fixture.text);
 	await click(cdp, '.composer button[type="submit"]');
 	await until(() => evaluate(cdp, "window.__hipiGuiSmoke.running"), "streaming DOM");
 	await capture(cdp, directory, "streaming");
@@ -801,9 +969,11 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			setAppearanceChoice,
 			saveAppearance,
 			inspectModal,
+			inspectSettingsGuard,
 			hover,
 		},
 		directory,
+		{ expectedScope: scope },
 	);
 	const projectDisclosure = await exerciseProjectDisclosure(
 		cdp,
@@ -814,6 +984,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	return {
 		...observed,
+		taskSetup,
 		projectDisclosure,
 		fonts,
 		detailsGeometry,

@@ -99,7 +99,7 @@ export function ConversationComposer({
 			)}
 			<ReceiptRecovery controller={controller} />
 			{activity && <div className="composer-context">{activity}</div>}
-			<div className="composer">
+			<div className="composer" data-has-draft={draft.length > 0} aria-busy={mutation.isPending}>
 				<form
 					id={`${inputId}-form`}
 					className="composer-form"

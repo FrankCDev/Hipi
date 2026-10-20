@@ -65,6 +65,7 @@ const uiTests = [
 	"activity-approval-presentation",
 	"file-canvas-presentation",
 	"work-experience-presentation",
+	"prepared-task-entry",
 	"dialog-placement",
 	"agent-permission-card",
 	"permission-presentation",
@@ -73,7 +74,9 @@ const uiTests = [
 	"file-workbench",
 	"appearance-settings",
 	"settings-dialog",
+	"settings-workflow",
 	"conversation-capabilities",
+	"conversation-capabilities-interaction",
 	"conversation-preview-card",
 	"tool-packs-panel-lifecycle",
 	"archived-conversation",
@@ -82,6 +85,8 @@ const uiTests = [
 	"input-group",
 	"workspace-tree",
 	"workspace-navigation-interaction",
+	"catalog-pages",
+	"sidebar-navigation-callbacks",
 	"message-markdown",
 	"conversation-preview",
 	"tool-activities",
@@ -92,6 +97,7 @@ uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
 uiTests.push("apps/hipi-work-ui/test/command-recovery.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-packs.test.ts");
 uiTests.push("apps/hipi-work-ui/test/artifact-navigation.test.ts");

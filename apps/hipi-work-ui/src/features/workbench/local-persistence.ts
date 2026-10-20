@@ -2,13 +2,23 @@ import { LIMITS, PROTOCOL_VERSION, parseRequest, type Submit } from "@hipi/work-
 import { validPanelWidth } from "./file-panel-controller.ts";
 
 export type BrowserStorage = Pick<Storage, "getItem" | "setItem" | "key" | "length">;
-export type SavedEntry =
-	| { kind: "value"; key: string; value: string }
-	| { kind: "pending"; key: string; input: Submit; confirmed: boolean };
+export type SavedValue = {
+	kind: "value";
+	key: string;
+	value: string;
+	revision?: string;
+	handoffRequestId?: string;
+};
+export type SavedEntry = SavedValue | { kind: "pending"; key: string; input: Submit; confirmed: boolean };
 
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
 const scope = "[a-zA-Z0-9_-]{1,128}\\.[a-zA-Z0-9_-]{1,128}";
 const draftKey = new RegExp(`^draft\\.${scope}$`);
+const taskDraftKey = /^task-draft\.[a-zA-Z0-9_-]{1,128}$/;
+
+export function validTaskDraft(key: string, value: string): boolean {
+	return taskDraftKey.test(key) && value.length <= LIMITS.text;
+}
 
 export function browserStorage(): BrowserStorage | undefined {
 	try {
@@ -30,7 +40,8 @@ export class LocalPersistence {
 		this.#prefix = `hipi.work.local.v1.${storeId}.`;
 	}
 	#parse(raw: string | null): SavedEntry | null {
-		if (!raw || raw.length > 32768) return null;
+		// A command embeds JSON text inside its value; bounded prepared input is escaped twice.
+		if (!raw || raw.length > 65536) return null;
 		try {
 			const entry: unknown = JSON.parse(raw);
 			if (
@@ -47,9 +58,21 @@ export class LocalPersistence {
 				return null;
 			if (entry.kind === "value" && "value" in entry && typeof entry.value === "string") {
 				if (
+					("revision" in entry &&
+						(typeof entry.revision !== "string" ||
+							!id.test(entry.revision) ||
+							(!draftKey.test(entry.key) && !taskDraftKey.test(entry.key)))) ||
+					("handoffRequestId" in entry &&
+						(typeof entry.handoffRequestId !== "string" ||
+							!id.test(entry.handoffRequestId) ||
+							!draftKey.test(entry.key)))
+				)
+					return null;
+				if (
 					(entry.key === "file-panel.open" && (entry.value === "true" || entry.value === "false")) ||
 					(entry.key === "file-panel.width" && validPanelWidth(entry.value)) ||
 					(draftKey.test(entry.key) && entry.value.length <= LIMITS.text) ||
+					validTaskDraft(entry.key, entry.value) ||
 					(/^command\.tool-packs\.(workspace\.[a-zA-Z0-9_-]{1,128}|conversation\.[a-zA-Z0-9_-]{1,128}\.[a-zA-Z0-9_-]{1,128})$/.test(
 						entry.key,
 					) &&
@@ -60,7 +83,15 @@ export class LocalPersistence {
 						(entry.value === "true" || entry.value === "false")) ||
 					((entry.key === "workspace" || entry.key === "conversation") && (entry.value === "" || id.test(entry.value)))
 				)
-					return { kind: "value", key: entry.key, value: entry.value };
+					return {
+						kind: "value",
+						key: entry.key,
+						value: entry.value,
+						...("revision" in entry && typeof entry.revision === "string" ? { revision: entry.revision } : {}),
+						...("handoffRequestId" in entry && typeof entry.handoffRequestId === "string"
+							? { handoffRequestId: entry.handoffRequestId }
+							: {}),
+					};
 			}
 			if (
 				entry.kind === "pending" &&
@@ -91,10 +122,16 @@ export class LocalPersistence {
 		}
 		return entries;
 	}
-	clearDraft(key: string, expected: string): boolean {
+	readValue(key: string): SavedValue | null {
+		const raw = this.#storage.getItem(`${this.#prefix}value.${key}`);
+		const entry = this.#parse(raw);
+		if (raw !== null && (entry?.kind !== "value" || entry.key !== key)) throw new Error("Invalid local state");
+		return entry?.kind === "value" ? entry : null;
+	}
+	clearDraft(key: string, expected: string, revision: string): boolean {
 		const entry = this.#parse(this.#storage.getItem(`${this.#prefix}value.${key}`));
 		if (entry?.kind !== "value" || entry.value !== expected) return false;
-		this.save({ kind: "value", key, value: "" });
+		this.save({ ...entry, value: "", revision });
 		return true;
 	}
 	matchesDraft(key: string, value: string | undefined): boolean {

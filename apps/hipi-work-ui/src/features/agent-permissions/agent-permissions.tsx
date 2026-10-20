@@ -1,6 +1,14 @@
 import type { ModelReference, Scope } from "@hipi/work-runtime/contracts";
 import { ShieldCheck } from "lucide-react";
-import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import {
+	type MouseEventHandler,
+	type ReactNode,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -18,6 +26,14 @@ type AgentPermissionsProps = {
 	archived: boolean;
 };
 
+type ContextAction = {
+	disabled: boolean;
+	onClick: MouseEventHandler<HTMLButtonElement>;
+	"aria-haspopup": "dialog";
+	"aria-expanded": boolean;
+	"aria-controls": string;
+};
+
 /** Keep the live session outside any sheet or section so alerts and recovery survive dismissal. */
 export function AgentPermissionManagement({
 	scope,
@@ -29,8 +45,8 @@ export function AgentPermissionManagement({
 	children,
 }: AgentPermissionsProps & {
 	detailsOpen: boolean;
-	onOpenDetails: () => void;
-	children: (view: { content: ReactNode; attention: ReactNode }) => ReactNode;
+	onOpenDetails: MouseEventHandler<HTMLButtonElement>;
+	children: (view: { content: ReactNode; attention: ReactNode; contextAction: ContextAction }) => ReactNode;
 }) {
 	const client = useAppClient();
 	const local = useLocalState();
@@ -42,6 +58,9 @@ export function AgentPermissionManagement({
 			new PermissionSession(client, { workspaceId: scope.workspaceId, conversationId: scope.conversationId }, local),
 	);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
+	const [contextOpen, setContextOpen] = useState(false);
+	const contextTrigger = useRef<HTMLButtonElement | null>(null);
+	const contextId = useId();
 	const [now, setNow] = useState(Date.now);
 	const [visible, setVisible] = useState(
 		() => typeof document === "undefined" || document.visibilityState !== "hidden",
@@ -89,11 +108,30 @@ export function AgentPermissionManagement({
 			void session.approvalHistory("pending");
 	}, [detailsOpen, connected, state.busy, state.failed, state.uncertain, state.approvalMode, session]);
 	const disabled = state.busy || state.failed || state.uncertain || !connected || !state.loaded;
+	const contextAction: ContextAction = {
+		disabled: disabled || archived || !model,
+		onClick: (event) => {
+			contextTrigger.current = event.currentTarget;
+			setContextOpen(true);
+		},
+		"aria-haspopup": "dialog",
+		"aria-expanded": contextOpen,
+		"aria-controls": contextId,
+	};
 	const pending = session.getPending();
 	const approval = state.approval;
 	const operation = state.operation;
 	const date = (value: number) =>
 		new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "medium" }).format(value);
+	const notices = (
+		<>
+			{state.operationLimitReached && <output>{l["permissions.operation.limit"]}</output>}
+			{state.failed && <p role="alert">{l["permissions.action.failed"]}</p>}
+			{state.uncertain && <p role="alert">{l["permissions.action.unknown"]}</p>}
+			{state.incompatible && <p role="alert">{l["permissions.action.incompatible"]}</p>}
+			{state.notFound && <p role="alert">{l["permissions.action.notFound"]}</p>}
+		</>
+	);
 	const content = (
 		<div className="permission-panel grid gap-4">
 			{state.unresolvedOperations.length > 0 && (
@@ -139,13 +177,9 @@ export function AgentPermissionManagement({
 				</output>
 			)}
 			<div className="flex flex-wrap items-center gap-2">
-				<ContextDialog
-					scope={boundScope}
-					model={model}
-					session={session}
-					disabled={disabled || archived}
-					disabledReason={archived ? l["permissions.archived"] : undefined}
-				/>
+				<Button variant="outline" size="sm" {...contextAction}>
+					{l["permissions.context.authorize"]}
+				</Button>
 				<Button
 					variant="ghost"
 					size="sm"
@@ -157,11 +191,7 @@ export function AgentPermissionManagement({
 			</div>
 			{archived && <output>{l["permissions.archived"]}</output>}
 			{state.busy && <output>{l["permissions.action.loading"]}</output>}
-			{state.operationLimitReached && <output>{l["permissions.operation.limit"]}</output>}
-			{state.failed && <p role="alert">{l["permissions.action.failed"]}</p>}
-			{state.uncertain && <p role="alert">{l["permissions.action.unknown"]}</p>}
-			{state.incompatible && <p role="alert">{l["permissions.action.incompatible"]}</p>}
-			{state.notFound && <p role="alert">{l["permissions.action.notFound"]}</p>}
+			{notices}
 			{pending && (
 				<details>
 					<summary>{l["permissions.action.original"]}</summary>
@@ -382,14 +412,39 @@ export function AgentPermissionManagement({
 					{l["permissions.status.pending"]} · {state.approvalMode === "pending" && state.nextCursor ? "1+" : "1"}
 				</Button>
 			)}
-			{state.operationLimitReached && <output>{l["permissions.operation.limit"]}</output>}
-			{state.failed && <p role="alert">{l["permissions.action.failed"]}</p>}
-			{state.uncertain && <p role="alert">{l["permissions.action.unknown"]}</p>}
-			{state.incompatible && <p role="alert">{l["permissions.action.incompatible"]}</p>}
-			{state.notFound && <p role="alert">{l["permissions.action.notFound"]}</p>}
+			{notices}
 		</div>
 	);
-	return children({ content, attention });
+	return (
+		<>
+			{children({ content, attention, contextAction })}
+			{/* This owner is never removed with a management sheet or section. Both entries share its draft. */}
+			<ContextDialog
+				scope={boundScope}
+				model={model}
+				session={session}
+				disabled={disabled || archived}
+				disabledReason={archived ? l["permissions.archived"] : undefined}
+				open={contextOpen}
+				onOpenChange={setContextOpen}
+				contentId={contextId}
+				status={
+					<div className="permission-attention" aria-live="polite">
+						{state.busy && <output>{l["permissions.action.loading"]}</output>}
+						{state.unresolvedOperations.length > 0 && <p role="alert">{l["permissions.operation.unknown"]}</p>}
+						{approval?.status === "pending" && <output>{l["permissions.status.pending"]}</output>}
+						{notices}
+					</div>
+				}
+				onCloseAutoFocus={(event) => {
+					if (contextTrigger.current?.isConnected) {
+						event.preventDefault();
+						contextTrigger.current.focus();
+					}
+				}}
+			/>
+		</>
+	);
 }
 
 export function AgentPermissions(props: AgentPermissionsProps) {

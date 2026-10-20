@@ -1,6 +1,13 @@
 import { type AppClient, AppError, type Conversation, type Workspace } from "@hipi/work-runtime/contracts";
-import { type CatalogCommand, readCommand, saveCommand } from "./command-recovery.ts";
+import type { CatalogCommand } from "./command-recovery.ts";
 import type { LocalState } from "./local-state.ts";
+import {
+	admitCatalog,
+	currentCatalogRecovery,
+	finishCatalog,
+	type PreparedTask,
+	readCatalogRecovery,
+} from "./prepared-task.ts";
 
 export type CatalogState = {
 	pending: CatalogCommand | null;
@@ -10,6 +17,8 @@ export type CatalogState = {
 	notFound: boolean;
 	result: Conversation | Workspace | null;
 	resultMethod: CatalogCommand["method"] | null;
+	preparedTask: PreparedTask | null;
+	handoffConflict: boolean;
 };
 /** Owns immutable directory commands. A lost reply is resolved by exact read-only lookup. */
 export class CatalogSession {
@@ -22,25 +31,17 @@ export class CatalogSession {
 	constructor(client: AppClient, local: LocalState) {
 		this.client = client;
 		this.local = local;
-		const saved = readCommand(local, "catalog");
-		const pending = saved.request;
-		const catalog =
-			pending &&
-			(pending.method === "createWorkspace" ||
-				pending.method === "createConversation" ||
-				pending.method === "renameConversation" ||
-				pending.method === "archiveConversation" ||
-				pending.method === "restoreConversation")
-				? pending
-				: null;
+		const saved = readCatalogRecovery(local.read("command.catalog"));
 		this.state = {
-			pending: catalog,
-			incompatible: saved.incompatible || (pending !== null && catalog === null),
+			pending: saved.request,
+			incompatible: saved.incompatible,
 			busy: false,
 			failed: false,
 			notFound: false,
 			result: null,
 			resultMethod: null,
+			preparedTask: saved.preparedTask,
+			handoffConflict: false,
 		};
 	}
 	getSnapshot = () => this.state;
@@ -78,7 +79,14 @@ export class CatalogSession {
 				}),
 			]);
 		} catch {
-			if (this.request === controller) this.publish({ failed: true });
+			if (this.request === controller) {
+				const recovery = readCatalogRecovery(this.local.read("command.catalog"));
+				this.publish({
+					failed: true,
+					incompatible: recovery.incompatible,
+					preparedTask: recovery.preparedTask,
+				});
+			}
 		} finally {
 			clearTimeout(timeout);
 			if (stopWaiting) controller.signal.removeEventListener("abort", stopWaiting);
@@ -88,7 +96,12 @@ export class CatalogSession {
 			}
 		}
 	}
-	private async finish(command: CatalogCommand, result: Workspace | Conversation, signal: AbortSignal) {
+	private async finish(
+		command: CatalogCommand,
+		result: Workspace | Conversation,
+		signal: AbortSignal,
+		discardPreparedTask = false,
+	) {
 		signal.throwIfAborted();
 		if (result.workspaceId !== command.params.workspaceId) throw new Error("SCOPE_MISMATCH");
 		if (command.method === "createWorkspace") {
@@ -117,10 +130,23 @@ export class CatalogSession {
 			if (result.workspaceId !== command.params.workspaceId || result.conversationId !== conversationId)
 				throw new Error("SCOPE_MISMATCH");
 		}
-		saveCommand(this.local, "catalog", null);
-		this.publish({ pending: null, result, resultMethod: command.method, notFound: false });
+		const completion = await finishCatalog(
+			this.local,
+			command,
+			"conversationId" in result ? result.conversationId : null,
+			signal,
+			discardPreparedTask,
+		);
+		signal.throwIfAborted();
+		this.publish({
+			pending: completion.handoffConflict ? command : null,
+			result,
+			resultMethod: command.method,
+			notFound: false,
+			...completion,
+		});
 	}
-	private async lookup(signal: AbortSignal) {
+	private async lookup(signal: AbortSignal, discardPreparedTask = false) {
 		const command = this.state.pending;
 		if (!command) return;
 		if (command.method === "createWorkspace") {
@@ -149,15 +175,22 @@ export class CatalogSession {
 			return;
 		}
 		if (receipt.method !== command.method) throw new Error("COMMAND_MISMATCH");
-		await this.finish(command, receipt.result, signal);
+		await this.finish(command, receipt.result, signal, discardPreparedTask);
 	}
 	check = () => this.run((signal) => this.lookup(signal));
-	execute = (command: CatalogCommand) => {
+	/** Explicitly keep the target's existing draft. Source input is not discarded or submitted. */
+	discardPreparedTask = () => {
+		if (!this.state.preparedTask?.conversationId) return Promise.resolve();
+		return this.run((signal) => this.lookup(signal, true));
+	};
+	execute = (command: CatalogCommand, options?: { preparedDraft?: string }) => {
 		if (this.state.pending || this.state.incompatible || this.state.busy) return Promise.resolve();
 		const captured = structuredClone(command);
+		const preparedDraft = options?.preparedDraft;
 		return this.run(async (signal) => {
-			saveCommand(this.local, "catalog", captured);
-			this.publish({ pending: captured });
+			const saved = await admitCatalog(this.local, captured, preparedDraft, signal);
+			this.publish({ pending: captured, preparedTask: saved.preparedTask, handoffConflict: false });
+			signal.throwIfAborted();
 			await this.send(captured, signal);
 		});
 	};
@@ -168,6 +201,9 @@ export class CatalogSession {
 		return this.run((signal) => this.send(command, signal));
 	};
 	private async send(command: CatalogCommand, signal: AbortSignal) {
+		// Recheck on explicit retry too: a stale session never dispatches a displaced recovery record.
+		signal.throwIfAborted();
+		currentCatalogRecovery(this.local, command);
 		try {
 			let result: Conversation | Workspace;
 			switch (command.method) {

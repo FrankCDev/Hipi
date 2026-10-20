@@ -13,7 +13,9 @@ export function workExperienceGeometry(document, viewport) {
 		input: ".composer textarea",
 		submit: '.composer button[type="submit"]',
 		model: ".model-status-trigger",
-		permissions: ".permission-controls button",
+		permissions: ".capabilities-trigger",
+		context: ".capability-context-trigger",
+		tools: ".capability-tools-trigger",
 	};
 	const regions = Object.fromEntries(
 		Object.entries(selectors).map(([name, selector]) => {
@@ -49,7 +51,7 @@ export function assertWorkExperienceGeometry(state) {
 				rect.y + rect.height <= state.height + 1,
 			`${name} escapes the visible viewport`,
 		);
-		if (["input", "submit", "model", "permissions"].includes(name)) {
+		if (["input", "submit", "model", "permissions", "context", "tools"].includes(name)) {
 			assert.equal(rect.disabled, false, `${name} must be actionable during draft layout acceptance`);
 			assert.equal(rect.hit, true, `${name} is covered`);
 		}
@@ -88,7 +90,7 @@ export async function nativeEditorKey(
 		});
 }
 
-export async function exerciseWorkExperience(cdp, helpers, directory, { reopened = false } = {}) {
+export async function exerciseWorkExperience(cdp, helpers, directory, { reopened = false, expectedScope } = {}) {
 	const {
 		evaluate,
 		click,
@@ -103,6 +105,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		setAppearanceChoice,
 		saveAppearance,
 		inspectModal,
+		inspectSettingsGuard,
 		hover,
 	} = helpers;
 	const settings = ".workbench-settings-trigger";
@@ -170,6 +173,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"settings heading receives initial focus",
 		);
 		assert.equal((await appearanceChoice(cdp)).mode, originalMode);
+		await inspectSettingsGuard(cdp);
 		await click(cdp, '.settings-page-nav button[data-category="models"]');
 		await until(
 			() =>
@@ -204,6 +208,53 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"Settings must retain the conversation DOM identity",
 		);
 		assert.deepEqual(await readKeys(), originalKeys);
+		assert.ok(expectedScope?.workspaceId && expectedScope?.conversationId, "Direct capabilities require receipt scope");
+		await click(cdp, ".capability-context-trigger");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`(() => {
+			const dialog = document.querySelector('.context-consent-dialog');
+			return dialog?.textContent.includes(${JSON.stringify(`${expectedScope.workspaceId} / ${expectedScope.conversationId}`)})
+				&& dialog.textContent.includes('faux-1') && dialog.textContent.includes('No authorized folders available.');
+		})()`,
+				),
+			"direct Context opens exact scoped consent without an authorized root",
+		);
+		assert.equal(
+			await evaluate(
+				cdp,
+				`[...document.querySelectorAll('.context-consent-dialog button')].find(e => e.textContent.trim() === 'Authorize model context')?.disabled`,
+			),
+			true,
+			"No-root Context must not authorize access",
+		);
+		await pressKey(cdp, "Escape");
+		await waitForOverlayClosed(cdp, ".capability-context-trigger");
+		await click(cdp, ".capability-tools-trigger");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`document.querySelector('.capabilities-section')?.dataset.section === 'tool-packs'
+			&& document.querySelector('.capabilities-navigation [aria-current="page"]')?.dataset.section === 'tool-packs'
+			&& document.querySelector('.capabilities-summary strong')?.textContent === document.querySelector('.toolbar-conversation')?.textContent`,
+				),
+			"direct Tools opens the existing conversation tool-pack section",
+		);
+		await pressKey(cdp, "Escape");
+		await waitForOverlayClosed(cdp, ".capability-tools-trigger");
+		assert.equal(
+			await readDraft(),
+			retainedDraft,
+			"Direct capability dialogs must not submit or replace the task draft",
+		);
+		assert.deepEqual(await readKeys(), originalKeys);
+		assert.equal(
+			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
+			true,
+		);
 		phase = "matrix";
 		for (const item of reopened
 			? layoutCases.filter((item) => item.locale === "en" && item.theme === "light")
@@ -429,6 +480,8 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			samples,
 			sidebarCollapse: true,
 			settingsCategories: true,
+			settingsDirtyNavigationGuard: true,
+			directCapabilitiesScopedAndFocusRestored: true,
 			settingsKeyboardNavigation: true,
 			nestedCredentialsEscapeFocus: true,
 			settingsRetainedDraftAndConversation: true,
@@ -464,8 +517,12 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 				let index = 0;
 				index < 3 && (await evaluate(cdp, `!!document.querySelector('[role="dialog"],[role="menu"]')`));
 				index++
-			)
-				await pressKey(cdp, "Escape");
+			) {
+				if (await evaluate(cdp, `!!document.querySelector('.settings-unsaved-dialog')`)) {
+					const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
+					await click(cdp, ".settings-unsaved-actions > button", english ? "Discard changes" : "放弃修改");
+				} else await pressKey(cdp, "Escape");
+			}
 			await resize(1440);
 			if (await evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationCollapsed==='true'`))
 				await click(cdp, ".navigation-toggle");

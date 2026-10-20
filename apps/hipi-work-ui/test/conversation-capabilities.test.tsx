@@ -40,13 +40,18 @@ vi.mock("../src/features/agent-permissions/agent-permissions.tsx", () => ({
 		children,
 	}: {
 		detailsOpen: boolean;
-		children: (view: { content: React.ReactNode; attention: React.ReactNode }) => React.ReactNode;
+		children: (view: {
+			content: React.ReactNode;
+			attention: React.ReactNode;
+			contextAction: { disabled: boolean; "aria-haspopup": "dialog" };
+		}) => React.ReactNode;
 	}) => {
 		fixture.permissionOwners++;
 		fixture.permissionVisible = detailsOpen;
 		return children({
 			content: <div>File management body</div>,
 			attention: detailsOpen ? null : <p role="alert">Pending file approval</p>,
+			contextAction: { disabled: false, "aria-haspopup": "dialog" },
 		});
 	},
 }));
@@ -85,7 +90,11 @@ test("the compact conversation entry names all capabilities and retains its stab
 	const html = render();
 	assert.match(html, /class="permission-controls capabilities-controls"/);
 	assert.match(html, /aria-label="Conversation capabilities"/);
-	assert.match(html, />Capabilities<\/button>/);
+	assert.match(html, />Capabilities<\/span>/);
+	assert.match(html, />File context<\/button>/);
+	assert.match(html, />Tools<\/button>/);
+	assert.match(html, /Allow this conversation to read selected live files/);
+	assert.doesNotMatch(html, /type="file"|Upload|selected tools/);
 	assert.match(html, /Pending file approval/);
 	assert.doesNotMatch(html, /File management body|Tool pack management body/);
 	assert.equal(fixture.permissionOwners, 1);
@@ -120,7 +129,9 @@ test("closing from tool packs suspends that surface without removing either mana
 	fixture.locale = "zh-CN";
 	const html = render();
 	assert.match(html, /aria-label="会话能力"/);
-	assert.match(html, />能力<\/button>/);
+	assert.match(html, />能力<\/span>/);
+	assert.match(html, />文件上下文<\/button>/);
+	assert.match(html, />工具<\/button>/);
 	assert.equal(fixture.permissionOwners, 1);
 	assert.equal(fixture.packOwners, 1);
 	assert.equal(fixture.permissionVisible, false);

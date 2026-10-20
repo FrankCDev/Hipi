@@ -1,0 +1,37 @@
+.capability-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+}
+
+.capability-actions > button {
+	min-height: 2rem;
+	border-radius: 999px;
+	font-size: 0.8125rem;
+	color: var(--muted);
+}
+
+.capability-actions > button:hover:not(:disabled),
+.capability-actions > button[aria-expanded="true"] {
+	background: var(--brand-soft);
+	color: var(--text);
+}
+
+.capability-actions > .capabilities-trigger {
+	padding-inline: 0.5rem;
+}
+
+.capability-actions > .capabilities-trigger > span {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.context-consent-dialog {
+	overscroll-behavior: contain;
+}

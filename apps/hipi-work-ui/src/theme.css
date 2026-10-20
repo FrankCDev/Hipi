@@ -231,7 +231,7 @@
 	min-width: 0;
 	padding: 16px 12px 12px;
 	background: var(--sidebar);
-	border-right: 1px solid var(--line);
+	border-right: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
 	overflow: hidden;
 }
 .sidebar-brand-row {
@@ -244,7 +244,7 @@
 .conversation-nav {
 	display: flex;
 	flex-direction: column;
-	margin-top: 24px;
+	margin-top: 20px;
 	flex: 1;
 	min-height: 0;
 	min-width: 0;
@@ -375,7 +375,7 @@
 	min-height: 56px;
 	flex-shrink: 0;
 	padding: 8px 20px;
-	border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+	border-bottom: 1px solid transparent;
 	gap: 12px;
 }
 .toolbar-path {
@@ -393,7 +393,45 @@
 }
 .toolbar-conversation {
 	color: var(--text);
-	font-weight: 600;
+	font-weight: 550;
+}
+.toolbar-context {
+	display: grid;
+	gap: 1px;
+	min-width: 0;
+	line-height: 1.45;
+}
+.toolbar-context > span {
+	font-size: 14px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.toolbar-project-title {
+	color: var(--text);
+	font-weight: 550;
+}
+.toolbar-project-link {
+	display: flex;
+	align-items: center;
+	justify-self: start;
+	gap: 5px;
+	max-width: 100%;
+	min-height: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted);
+	font-size: 11px;
+}
+.toolbar-project-link span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.toolbar-project-link:hover {
+	color: var(--text);
 }
 .toolbar-actions {
 	display: flex;
@@ -429,13 +467,14 @@
 .welcome {
 	display: flex;
 	flex-direction: column;
-	align-items: flex-start;
+	align-items: center;
 	justify-content: center;
 	width: min(100%, 880px);
 	margin: auto;
-	padding: 36px 48px;
+	padding: 36px 32px;
 	max-height: 100%;
 	overflow-y: auto;
+	text-align: center;
 }
 .welcome-mark {
 	margin-bottom: 28px;
@@ -462,6 +501,16 @@
 .welcome-action {
 	margin-top: 24px;
 }
+.welcome[data-project-ready="true"] .welcome-action {
+	width: 100%;
+	max-width: var(--reading-width);
+}
+.welcome[data-project-ready="true"] .welcome-mark {
+	margin-bottom: 20px;
+}
+.welcome[data-project-ready="true"] > p:not(.welcome-eyebrow) {
+	display: none;
+}
 .welcome-action > button {
 	background: var(--brand);
 	color: var(--on-brand);
@@ -481,6 +530,7 @@
 }
 .welcome-principles > div {
 	min-width: 0;
+	text-align: start;
 }
 .welcome-principles svg {
 	color: var(--muted);
@@ -508,6 +558,112 @@
 }
 .welcome-footnote svg {
 	margin-top: 2px;
+}
+.prepared-task-entry {
+	width: 100%;
+	text-align: start;
+}
+.prepared-task-composer {
+	padding: 18px 18px 14px;
+	border: 1px solid var(--line);
+	border-radius: 24px;
+	background: var(--raised);
+	box-shadow: 0 5px 24px var(--shadow);
+}
+.prepared-task-composer:focus-within {
+	border-color: color-mix(in srgb, var(--focus) 55%, var(--line));
+}
+.prepared-task-input {
+	width: 100%;
+	min-height: 112px;
+	max-height: 240px;
+	resize: vertical;
+	border: 0;
+	box-shadow: none;
+	background: transparent;
+	padding: 0;
+	font-size: 15px;
+	line-height: 1.75;
+}
+.prepared-task-input:focus-visible {
+	outline: none;
+	box-shadow: none;
+}
+.prepared-task-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin-top: 16px;
+}
+.prepared-task-footer > span {
+	font-size: 11px;
+	color: var(--muted);
+}
+.prepared-task-footer > button {
+	width: auto;
+	margin-inline-start: auto;
+	border-radius: 10px;
+	background: var(--brand);
+	color: var(--on-brand);
+	font-size: 12px;
+}
+.prepared-task-footer > button:hover {
+	background: var(--brand-hover);
+}
+.prepared-task-note {
+	margin: 10px 0 24px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 11px;
+}
+.task-setup-dialog {
+	width: min(560px, calc(100vw - 32px));
+	max-width: 560px;
+	border-radius: 18px;
+}
+.task-setup-dialog > [data-slot="dialog-description"] {
+	font-size: 12px;
+}
+.task-goal-field {
+	color: var(--text);
+}
+.task-goal-field > span {
+	font-size: 11px;
+	color: var(--muted);
+}
+.task-setup-input {
+	min-height: 100px;
+	max-height: 220px;
+	resize: vertical;
+	font-size: 14px;
+	line-height: 1.65;
+}
+.prepared-task-recovery {
+	max-width: var(--reading-width);
+	margin: 12px auto;
+}
+.prepared-task-recovery pre {
+	white-space: pre-wrap;
+	max-height: 180px;
+	overflow: auto;
+	font-family: var(--font-ui);
+}
+.catalog-refresh-status,
+.catalog-window-note {
+	display: block;
+	padding: 4px 8px;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.6;
+}
+.catalog-pagination {
+	margin-top: 6px;
+}
+.catalog-pagination [aria-disabled="true"] {
+	color: var(--muted);
+	cursor: default;
 }
 .conversation-panel {
 	display: flex;
@@ -648,8 +804,7 @@
 	font-weight: 650;
 }
 .message-assistant .message-avatar {
-	border: 0;
-	background: transparent;
+	display: none;
 }
 .message-author {
 	display: flex;
@@ -667,7 +822,12 @@
 	max-width: min(82%, 620px);
 }
 .message-user .message-author {
-	justify-content: flex-end;
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
 }
 .message-user :where(.message-avatar) {
 	display: none;
@@ -675,7 +835,7 @@
 .message-user :where(.message-text) {
 	background: var(--canvas);
 	border: 1px solid transparent;
-	border-radius: 16px 5px 16px 16px;
+	border-radius: 20px;
 	padding: 12px 16px;
 }
 .message-text {
@@ -834,16 +994,14 @@
 	max-width: var(--reading-width);
 	margin: auto;
 	border: 1px solid var(--line);
-	border-radius: 20px;
-	padding: 16px 16px 12px;
+	border-radius: 24px;
+	padding: 18px 16px 12px;
 	background: var(--raised);
-	box-shadow:
-		0 4px 20px var(--shadow),
-		0 1px 3px var(--shadow);
+	box-shadow: 0 3px 16px var(--shadow);
 }
 .composer:focus-within {
-	border-color: var(--focus);
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
+	border-color: color-mix(in srgb, var(--focus) 55%, var(--line));
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 12%, transparent);
 }
 .composer-input {
 	display: block;
@@ -931,6 +1089,7 @@
 	flex-shrink: 0;
 	font-size: 12px;
 	column-gap: 10px;
+	justify-content: space-between;
 }
 .conversation-tools [data-slot="button"] {
 	font-size: 12px;
@@ -939,6 +1098,7 @@
 .conversation-model-controls {
 	min-height: 32px;
 	flex-wrap: nowrap;
+	margin-inline-start: auto;
 }
 .conversation-model-controls[data-execution-state="paused"],
 .conversation-model-controls[data-execution-state="cancellation_pending"],
@@ -990,6 +1150,9 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
 		gap: 2px;
+	}
+	.conversation-model-controls {
+		margin-inline-start: 0;
 	}
 	.permission-controls {
 		min-height: 32px;
@@ -1129,7 +1292,7 @@
 		gap: 6px;
 	}
 	.toolbar-conversation {
-		display: none;
+		display: block;
 	}
 
 	.connection-bar {
@@ -1393,18 +1556,17 @@
 	background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 .sidebar-preview-row.conversation-preview-row[data-selected="true"] {
-	background: var(--brand-soft);
+	background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
 }
 .sidebar-preview-row.conversation-preview-row[data-selected="true"]::before {
-	content: "";
-	position: absolute;
-	left: 0;
-	top: 9px;
-	bottom: 9px;
-	width: 2px;
-	border-radius: 2px;
-	background: var(--brand);
-	pointer-events: none;
+	content: none;
+}
+.project-row[data-current="true"],
+.sidebar-preview-row:has(> [data-state="open"]) {
+	background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
+}
+.project-row[data-contains-current="true"] .project-icon {
+	color: var(--text);
 }
 .sidebar .sidebar-preview-row > button,
 .sidebar .sidebar-preview-row > button:hover {
@@ -1916,14 +2078,14 @@ dl.conversation-preview-summary {
 	width: 100%;
 	justify-content: flex-start;
 	min-height: 40px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 10px;
-	background: var(--raised);
+	background: transparent;
 	font-weight: 550;
-	box-shadow: 0 1px 3px var(--shadow);
+	box-shadow: none;
 }
 .workspace-create > button:hover {
-	background: var(--brand-soft);
+	background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .conversation-nav-item {
 	display: flex;

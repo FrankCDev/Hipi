@@ -1,11 +1,18 @@
 import type { Conversation, ReceiptView, Submit, Workspace } from "@hipi/work-runtime/contracts";
-import { type BrowserStorage, browserStorage, LocalPersistence, type SavedEntry } from "./local-persistence.ts";
+import {
+	type BrowserStorage,
+	browserStorage,
+	LocalPersistence,
+	type SavedEntry,
+	type SavedValue,
+	validTaskDraft,
+} from "./local-persistence.ts";
 
 export type NavigationIndex = { workspaces: Workspace[]; conversations: Conversation[] };
 /** Runtime facts stay in the core. Only a verified store identity enables local input restoration. */
 export class LocalState {
 	navigation: NavigationIndex = { workspaces: [], conversations: [] };
-	readonly #values = new Map<string, string>();
+	readonly #values = new Map<string, SavedValue>();
 	readonly #pending = new Map<string, Submit>();
 	readonly #unconfirmed = new Set<string>();
 	readonly #confirmed = new Set<string>();
@@ -27,7 +34,7 @@ export class LocalState {
 		try {
 			this.#persistence = new LocalPersistence(storeId, storage);
 			for (const entry of this.#persistence.load()) {
-				if (entry.kind === "value") this.#values.set(entry.key, entry.value);
+				if (entry.kind === "value") this.#values.set(entry.key, entry);
 				else {
 					this.#pending.set(entry.key, entry.input);
 					if (entry.confirmed) this.#confirmed.add(entry.input.requestId);
@@ -58,12 +65,43 @@ export class LocalState {
 		}
 	}
 	read(key: string): string | null {
-		return this.#values.get(key) ?? null;
+		return this.#values.get(key)?.value ?? null;
 	}
 	write(key: string, value: string): boolean {
 		if (!this.#active || !this.#leaseActive()) return false;
-		this.#values.set(key, value);
-		return this.#save({ kind: "value", key, value });
+		if (key.startsWith("task-draft.") && !validTaskDraft(key, value)) return false;
+		const previous = this.#values.get(key);
+		const entry: SavedValue = {
+			kind: "value",
+			key,
+			value,
+			...(key.startsWith("draft.") || key.startsWith("task-draft.") ? { revision: crypto.randomUUID() } : {}),
+			...(previous?.handoffRequestId ? { handoffRequestId: previous.handoffRequestId } : {}),
+		};
+		this.#values.set(key, entry);
+		return this.#save(entry);
+	}
+	/** Captures local edits, including a write that could not yet be persisted. */
+	valueSnapshot(key: string): SavedValue | null {
+		const entry = this.#values.get(key);
+		return entry ? { ...entry } : null;
+	}
+	/** Read authoritative browser recovery data while holding its admission lock. */
+	storedValue(key: string): SavedValue | null {
+		if (!this.#active || !this.#leaseActive()) throw new Error("Connection is closed");
+		try {
+			if (this.#persistence) return this.#persistence.readValue(key);
+			if (this.#requiresPersistence) throw new Error("Recovery storage is unavailable");
+			return this.valueSnapshot(key);
+		} catch (error) {
+			this.storageAvailable = false;
+			throw error;
+		}
+	}
+	/** Recovery writes become visible only after durability; ordinary editing remains memory-first. */
+	persistValue(entry: SavedValue): void {
+		if (!this.#save(entry)) throw new Error("RECOVERY_STORAGE_UNAVAILABLE");
+		this.#values.set(entry.key, { ...entry });
 	}
 	pending(key: string): Submit | null {
 		const value = this.#pending.get(key);
@@ -71,19 +109,28 @@ export class LocalState {
 	}
 	/** Serialize browser tabs' read/check/write admission; the network call follows only after this resolves. */
 	async rememberForSubmission(key: string, input: Submit): Promise<void> {
-		if (!this.#requiresPersistence) return this.remember(key, input);
+		return this.withAdmission(key, () => this.remember(key, input));
+	}
+	async withAdmission<T>(key: string, work: () => T): Promise<T> {
+		const admitted = () => {
+			if (!this.#active || !this.#leaseActive()) throw new Error("Connection is closed");
+			return work();
+		};
+		if (!this.#requiresPersistence) return admitted();
 		if (typeof navigator === "undefined" || !navigator.locks) {
 			this.storageAvailable = false;
 			throw new Error("Safe browser storage is unavailable");
 		}
-		await navigator.locks.request(`hipi.work.admission.${this.#storeId}.${key}`, () => this.remember(key, input));
+		return navigator.locks.request(`hipi.work.admission.${this.#storeId}.${key}`, admitted);
 	}
 	clearDraft(key: string, expected: string): boolean {
-		if (!this.#active || !this.#leaseActive() || this.#values.get(key) !== expected) return false;
-		this.#values.set(key, "");
+		const previous = this.#values.get(key);
+		if (!this.#active || !this.#leaseActive() || previous?.value !== expected) return false;
+		const revision = crypto.randomUUID();
+		this.#values.set(key, { ...previous, value: "", revision });
 		if (!this.#persistence) return !this.#requiresPersistence;
 		try {
-			return this.#persistence.clearDraft(key, expected);
+			return this.#persistence.clearDraft(key, expected, revision);
 		} catch {
 			this.storageAvailable = false;
 			return false;
@@ -107,7 +154,10 @@ export class LocalState {
 			if (input.requestId !== requestId) continue;
 			// The marker must never outlive a failed draft clear: reload must retry reconciliation first.
 			try {
-				if (this.#persistence && !this.#persistence.matchesDraft(`draft.${key}`, this.#values.get(`draft.${key}`))) {
+				if (
+					this.#persistence &&
+					!this.#persistence.matchesDraft(`draft.${key}`, this.#values.get(`draft.${key}`)?.value)
+				) {
 					this.storageAvailable = false;
 					continue;
 				}
@@ -124,9 +174,9 @@ export class LocalState {
 		return (
 			this.#unconfirmed.size > 0 ||
 			[...this.#values].some(
-				([key, value]) =>
-					(key.startsWith("draft.") && value.length > 0) ||
-					(key.startsWith("command.") && value !== JSON.stringify({ version: 2, request: null })),
+				([key, entry]) =>
+					((key.startsWith("draft.") || key.startsWith("task-draft.")) && entry.value.length > 0) ||
+					(key.startsWith("command.") && entry.value !== JSON.stringify({ version: 2, request: null })),
 			)
 		);
 	}

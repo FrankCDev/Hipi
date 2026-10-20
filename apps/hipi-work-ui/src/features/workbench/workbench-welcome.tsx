@@ -9,7 +9,7 @@ export function WorkbenchWelcome({ workspaceName, action }: { workspaceName?: st
 	const { t, locale } = usePreferences();
 	const l = workbenchLabels(locale);
 	return (
-		<section className="welcome">
+		<section className="welcome" data-project-ready={!!workspaceName}>
 			<div className="welcome-mark" aria-hidden="true">
 				<BrandMark size={42} />
 			</div>
@@ -17,28 +17,32 @@ export function WorkbenchWelcome({ workspaceName, action }: { workspaceName?: st
 				{workspaceName && <FolderOpen size={15} aria-hidden="true" />}
 				{workspaceName ?? l["workbench.welcomeEyebrow"]}
 			</p>
-			<h1>{t("work.emptyTitle")}</h1>
+			<h1>{workspaceName ? l["workbench.taskHeading"] : t("work.emptyTitle")}</h1>
 			<p>{l[workspaceName ? "workbench.workspaceBody" : "workbench.welcomeBody"]}</p>
 			<div className="welcome-action">{action}</div>
-			<div className="welcome-principles">
-				{(
-					[
-						["goal", Sparkles],
-						["context", ShieldCheck],
-						["result", Layers3],
-					] as const
-				).map(([kind, PrincipleIcon]) => (
-					<div key={kind}>
-						<PrincipleIcon size={19} aria-hidden="true" />
-						<h2>{l[`workbench.${kind}Title`]}</h2>
-						<p>{l[`workbench.${kind}Body`]}</p>
-					</div>
-				))}
-			</div>
-			<div className="welcome-footnote">
-				<Icon name="info" size={14} />
-				<span>{t("model.runtimeNote")}</span>
-			</div>
+			{!workspaceName && (
+				<div className="welcome-principles">
+					{(
+						[
+							["goal", Sparkles],
+							["context", ShieldCheck],
+							["result", Layers3],
+						] as const
+					).map(([kind, PrincipleIcon]) => (
+						<div key={kind}>
+							<PrincipleIcon size={19} aria-hidden="true" />
+							<h2>{l[`workbench.${kind}Title`]}</h2>
+							<p>{l[`workbench.${kind}Body`]}</p>
+						</div>
+					))}
+				</div>
+			)}
+			{!workspaceName && (
+				<div className="welcome-footnote">
+					<Icon name="info" size={14} />
+					<span>{t("model.runtimeNote")}</span>
+				</div>
+			)}
 		</section>
 	);
 }

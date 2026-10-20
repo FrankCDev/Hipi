@@ -8,6 +8,8 @@ import { ConversationPreviewInteraction, type PreviewMode } from "./conversation
 export type PreviewActions = (controls: {
 	onPreview: () => void;
 	onMenuOpen: () => void;
+	onOverlayChange: (owner: "menu" | "dialog", open: boolean) => void;
+	onReturnFocus: () => void;
 	triggerRef: RefObject<HTMLButtonElement | null>;
 }) => ReactNode;
 
@@ -15,6 +17,8 @@ export type PreviewActions = (controls: {
 export function SidebarPreviewRow({
 	className,
 	selected,
+	containsCurrent = false,
+	dialogOpen = false,
 	titleId,
 	children,
 	preview,
@@ -22,6 +26,8 @@ export function SidebarPreviewRow({
 }: {
 	className: string;
 	selected: boolean;
+	containsCurrent?: boolean;
+	dialogOpen?: boolean;
 	titleId: string;
 	children: ReactNode;
 	preview: (close: () => void, returnFocus: () => HTMLButtonElement | null) => ReactNode;
@@ -36,6 +42,12 @@ export function SidebarPreviewRow({
 	const card = useRef<HTMLDivElement>(null);
 	const restoringFocus = useRef(false);
 	useEffect(() => () => interaction.cancelPending(), [interaction]);
+	useEffect(() => interaction.setOverlayOpen("dialog", dialogOpen), [dialogOpen, interaction]);
+	const returnFocus = () => {
+		restoringFocus.current = true;
+		trigger.current?.focus();
+		restoringFocus.current = false;
+	};
 	return (
 		<Popover
 			open={mode !== "closed"}
@@ -48,8 +60,11 @@ export function SidebarPreviewRow({
 					ref={row}
 					className={`sidebar-preview-row ${className}`}
 					data-selected={selected}
+					data-current={selected}
+					data-contains-current={containsCurrent}
 					onPointerEnter={(event) => {
 						if (
+							!dialogOpen &&
 							event.pointerType === "mouse" &&
 							event.target instanceof Node &&
 							event.currentTarget.contains(event.target)
@@ -61,6 +76,7 @@ export function SidebarPreviewRow({
 					}}
 					onFocusCapture={(event) => {
 						if (
+							!dialogOpen &&
 							!restoringFocus.current &&
 							event.currentTarget.contains(event.target) &&
 							event.target.matches(":focus-visible")
@@ -94,6 +110,8 @@ export function SidebarPreviewRow({
 							},
 							triggerRef: trigger,
 							onMenuOpen: () => interaction.close("navigate"),
+							onOverlayChange: (owner, open) => interaction.setOverlayOpen(owner, open),
+							onReturnFocus: returnFocus,
 						})
 					) : (
 						<PopoverTrigger asChild>
@@ -135,11 +153,7 @@ export function SidebarPreviewRow({
 				}}
 				onCloseAutoFocus={(event) => {
 					event.preventDefault();
-					if (interaction.consumeFocusReturn()) {
-						restoringFocus.current = true;
-						trigger.current?.focus();
-						restoringFocus.current = false;
-					}
+					if (interaction.consumeFocusReturn()) returnFocus();
 				}}
 				onInteractOutside={(event) => {
 					if (event.target instanceof Node && row.current?.contains(event.target)) event.preventDefault();

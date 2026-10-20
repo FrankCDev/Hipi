@@ -17,6 +17,7 @@ import { ToolPacksDialog } from "../tool-packs/index.ts";
 import { artifactNavigation } from "./artifact-navigation.ts";
 import { CatalogRecovery, ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
+import { CatalogPagination } from "./catalog-pagination.tsx";
 import { CatalogSession } from "./catalog-session.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
 import { navigateConversation } from "./conversation-navigation.ts";
@@ -26,6 +27,9 @@ import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
 import { FilePanelController } from "./file-panel-controller.ts";
 import { filePanelLabels } from "./file-panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
+import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
+import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
+import { useCatalogPages } from "./use-catalog-pages.ts";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
 import { WorkspaceTree } from "./workspace-tree.tsx";
@@ -116,19 +120,22 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		};
 	}, [navigationOpen]);
 	const [search, setSearch] = useState("");
-	const [workspaceCursor, setWorkspaceCursor] = useState<string | undefined>();
+	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
+	const preparedDraft = (workspaceId: string) =>
+		preparedDrafts[workspaceId] ?? local.read(`task-draft.${workspaceId}`) ?? "";
+	const changePreparedDraft = (workspaceId: string, value: string) => {
+		local.write(`task-draft.${workspaceId}`, value);
+		setPreparedDrafts((current) => ({ ...current, [workspaceId]: value }));
+	};
+	const navigationList = useRef<HTMLDivElement>(null);
 	const cl = catalogLabels(locale);
 	const wl = workbenchLabels(locale);
 	const catalogBlocked = catalogState.busy || !!catalogState.pending || catalogState.incompatible;
-	const workspaces = useQuery({
-		queryKey: ["workspaces", workspaceCursor],
-		queryFn: ({ signal }) => client.call("listWorkspaces", workspaceCursor ? { cursor: workspaceCursor } : {}, signal),
-		retry: false,
+	const workspaces = useCatalogPages({
+		queryKey: ["workspaces"],
+		queryPage: (cursor, signal) => client.call("listWorkspaces", cursor ? { cursor } : {}, signal),
+		itemKey: (item) => item.workspaceId,
 	});
-	useEffect(() => {
-		if (workspaceCursor && workspaces.error instanceof AppError && workspaces.error.code === "CURSOR_STALE")
-			setWorkspaceCursor(undefined);
-	}, [workspaceCursor, workspaces.error]);
 	const selectedQuery = useQuery({
 		queryKey: ["conversation", selectedWorkspace, selectedConversation],
 		queryFn: ({ signal }) =>
@@ -179,12 +186,20 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		navigateConversation({ changesWorkspace: item.workspaceId !== selectedWorkspace, guard, select, onSelected });
 	};
 	const applyCatalogResult = () => {
-		const result = catalog.getSnapshot().result;
+		const state = catalog.getSnapshot();
+		if (state.pending || state.failed || state.incompatible || state.handoffConflict) return;
+		const result = state.result;
 		if (!result) return;
 		if ("conversationId" in result) {
 			cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
 			void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
-			if (catalog.getSnapshot().resultMethod === "createConversation") selectConversation(result);
+			if (state.resultMethod === "createConversation") {
+				setPreparedDrafts((current) => ({
+					...current,
+					[result.workspaceId]: local.read(`task-draft.${result.workspaceId}`) ?? "",
+				}));
+				selectConversation(result);
+			}
 		} else {
 			cache.setQueryData(["workspace", result.workspaceId], result);
 			void cache.invalidateQueries({ queryKey: ["workspaces"] });
@@ -201,19 +216,32 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			throw new Error("UNCONFIRMED");
 		applyCatalogResult();
 	};
-	const createConversation = async (workspaceId: string, title: string, model?: ModelReference) => {
-		await catalog.execute({
-			version: PROTOCOL_VERSION,
-			method: "createConversation",
-			params: { workspaceId, requestId: crypto.randomUUID(), title, ...(model ? { model } : {}) },
-		});
+	const createConversation = async (
+		workspaceId: string,
+		title: string,
+		model?: ModelReference,
+		initialDraft?: string,
+	) => {
+		await catalog.execute(
+			{
+				version: PROTOCOL_VERSION,
+				method: "createConversation",
+				params: { workspaceId, requestId: crypto.randomUUID(), title, ...(model ? { model } : {}) },
+			},
+			initialDraft === undefined ? undefined : { preparedDraft: initialDraft },
+		);
 		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
 			throw new Error("UNCONFIRMED");
 		applyCatalogResult();
 	};
 
 	return (
-		<div className="work-shell" data-navigation-open={navigationOpen} data-navigation-collapsed={navigationCollapsed}>
+		<div
+			className="work-shell"
+			data-navigation-mode={narrow ? "narrow" : "desktop"}
+			data-navigation-open={navigationOpen}
+			data-navigation-collapsed={navigationCollapsed}
+		>
 			<aside
 				className="sidebar"
 				id="work-navigation"
@@ -265,7 +293,10 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<CreateDialog
 								disabled={catalogBlocked}
 								kind="conversation"
-								onCreate={(title, model) => createConversation(selectedWorkspace, title, model)}
+								workspaceId={selectedWorkspace}
+								draft={preparedDraft(selectedWorkspace)}
+								onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
+								onCreate={(title, model, draft) => createConversation(selectedWorkspace, title, model, draft)}
 							/>
 						) : (
 							<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
@@ -315,28 +346,42 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
 						)}
 					</div>
-					<div className="navigation-list">
-						{workspaces.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
+					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
+						{workspaces.isPending && !workspaces.hasData && (
+							<output className="nav-feedback">{t("common.loading")}</output>
+						)}
+						{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
+							<output className="catalog-refresh-status">{t("common.loading")}</output>
+						)}
 						{workspaces.isError && (
 							<div className="nav-feedback" role="alert">
 								<p>
-									{t(
-										workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-											? "connection.storeMismatch"
-											: "nav.loadError",
-									)}
+									{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
+										? t("connection.storeMismatch")
+										: workspaces.staleCursor
+											? cl.staleList
+											: workspaces.isLoadMoreError
+												? cl.loadMoreFailed
+												: workspaces.hasData
+													? cl.refreshFailed
+													: t("nav.loadError")}
 								</p>
-								<Button variant="outline" size="sm" onClick={() => void workspaces.refetch()}>
+								<Button
+									variant="outline"
+									size="sm"
+									disabled={workspaces.isFetching}
+									onClick={() => void workspaces.retry()}
+								>
 									<Icon name="refresh" size={14} />
 									{t("nav.refresh")}
 								</Button>
 							</div>
 						)}
-						{workspaces.isSuccess && workspaces.data.items.length === 0 && (
+						{workspaces.isSuccess && workspaces.items.length === 0 && (
 							<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
 						)}
 						<WorkspaceTree
-							workspaces={workspaces.data?.items ?? []}
+							workspaces={workspaces.items}
 							catalog={catalog}
 							guard={guard}
 							selectedWorkspace={selectedWorkspace}
@@ -347,6 +392,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							onOpenProject={selectWorkspace}
 							onSelect={selectConversation}
 							onCreate={createConversation}
+							preparedDraft={preparedDraft}
+							onPreparedDraftChange={changePreparedDraft}
 							onDetails={(item, returnFocus) => {
 								selectConversation(item, () => {
 									detailsReturn.current = returnFocus;
@@ -354,28 +401,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 								});
 							}}
 						/>
-						{!!(workspaceCursor || workspaces.data?.nextCursor) && (
-							<div className="flex gap-1">
-								<Button
-									size="sm"
-									variant="ghost"
-									disabled={workspaces.isFetching || !workspaceCursor}
-									onClick={() => setWorkspaceCursor(undefined)}
-								>
-									{cl.first}
-								</Button>
-								<Button
-									size="sm"
-									variant="ghost"
-									disabled={workspaces.isFetching || !workspaces.data?.nextCursor}
-									onClick={() => {
-										if (workspaces.data?.nextCursor) setWorkspaceCursor(workspaces.data.nextCursor);
-									}}
-								>
-									{cl.next}
-								</Button>
-							</div>
-						)}
+						<CatalogPagination pages={workspaces} listRef={navigationList} />
 						<CatalogRecovery session={catalog} onResolved={applyCatalogResult} />
 					</div>
 				</section>
@@ -418,14 +444,26 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						>
 							<Icon name="panel" />
 						</Button>
-						<Icon name="folder" size={15} />
-						<span>{workspace?.name ?? t("app.workspace")}</span>
-						{selected && (
-							<>
-								<Icon name="chevron" size={12} />
-								<span className="toolbar-conversation">{selected.title}</span>
-							</>
-						)}
+						<div className="toolbar-context">
+							{selected ? (
+								<span className="toolbar-conversation" title={selected.title}>
+									{selected.title}
+								</span>
+							) : (
+								<span className="toolbar-project-title">{workspace?.name ?? "Hipi Work"}</span>
+							)}
+							{workspace && selected && (
+								<button
+									type="button"
+									className="toolbar-project-link"
+									aria-label={`${wl["workbench.projectHome"]}: ${workspace.name}`}
+									onClick={() => selectWorkspace(workspace.workspaceId)}
+								>
+									<Icon name="folder" size={12} />
+									<span>{workspace.name}</span>
+								</button>
+							)}
+						</div>
 					</div>
 					<div className="toolbar-actions">
 						<Button
@@ -475,6 +513,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						</Button>
 					</div>
 				</header>
+				<PreparedTaskRecovery session={catalog} onResolved={applyCatalogResult} />
 				{panelState.storageFailed && (
 					<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
 				)}
@@ -513,10 +552,13 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							workspaceName={workspace?.name}
 							action={
 								workspace ? (
-									<CreateDialog
-										kind="conversation"
+									<PreparedTaskEntry
+										key={workspace.workspaceId}
+										workspaceId={workspace.workspaceId}
+										draft={preparedDraft(workspace.workspaceId)}
+										onDraftChange={(value) => changePreparedDraft(workspace.workspaceId, value)}
 										disabled={catalogBlocked}
-										onCreate={(title, model) => createConversation(selectedWorkspace, title, model)}
+										onCreate={(title, model, draft) => createConversation(selectedWorkspace, title, model, draft)}
 									/>
 								) : (
 									<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />

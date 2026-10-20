@@ -5,6 +5,7 @@ export class ConversationPreviewInteraction {
 	mode: PreviewMode = "closed";
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private restoreFocus = false;
+	private readonly overlays = new Set<"menu" | "dialog">();
 	private readonly change: (mode: PreviewMode) => void;
 
 	constructor(change: (mode: PreviewMode) => void) {
@@ -18,8 +19,15 @@ export class ConversationPreviewInteraction {
 
 	enter() {
 		this.cancelPending();
-		if (this.mode !== "closed") return;
+		if (this.mode !== "closed" || this.overlays.size > 0) return;
 		this.timer = setTimeout(() => this.setMode("hover"), 350);
+	}
+
+	setOverlayOpen(owner: "menu" | "dialog", open: boolean) {
+		if (open) {
+			this.overlays.add(owner);
+			this.close("navigate");
+		} else this.overlays.delete(owner);
 	}
 
 	leave() {
@@ -29,11 +37,13 @@ export class ConversationPreviewInteraction {
 	}
 
 	pin() {
+		if (this.overlays.size > 0) return;
 		this.restoreFocus = true;
 		this.setMode("pinned");
 	}
 
 	activate() {
+		if (this.overlays.size > 0) return;
 		this.restoreFocus = true;
 		this.setMode(this.mode === "pinned" ? "closed" : "pinned");
 	}

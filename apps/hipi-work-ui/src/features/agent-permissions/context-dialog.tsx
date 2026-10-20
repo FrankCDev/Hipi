@@ -1,10 +1,10 @@
 import type { ModelReference, Scope } from "@hipi/work-runtime/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { useFiles } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { contextPaths } from "./context-paths.ts";
@@ -17,17 +17,26 @@ export function ContextDialog({
 	session,
 	disabled,
 	disabledReason,
+	open,
+	onOpenChange,
+	onCloseAutoFocus,
+	contentId,
+	status,
 }: {
 	scope: Scope;
 	model?: ModelReference;
 	session: PermissionSession;
 	disabled: boolean;
 	disabledReason?: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onCloseAutoFocus: (event: Event) => void;
+	contentId: string;
+	status: ReactNode;
 }) {
 	const { files } = useFiles();
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
-	const [open, setOpen] = useState(false);
 	const [rootId, setRootId] = useState("");
 	const [paths, setPaths] = useState("");
 	const [range, setRange] = useState("paths");
@@ -42,15 +51,16 @@ export function ContextDialog({
 		staleTime: 0,
 	});
 	return (
-		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger asChild>
-				<Button variant="outline" size="sm" disabled={disabled || !model}>
-					{l["permissions.context.authorize"]}
-				</Button>
-			</DialogTrigger>
-			<DialogContent closeLabel={l["permissions.action.close"]} className="max-h-[85vh] overflow-y-auto">
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent
+				id={contentId}
+				closeLabel={l["permissions.action.close"]}
+				className="context-consent-dialog max-h-[85vh] overflow-y-auto"
+				onCloseAutoFocus={onCloseAutoFocus}
+			>
 				<DialogTitle>{l["permissions.context.authorize"]}</DialogTitle>
 				<DialogDescription>{l["permissions.context.disclosure"]}</DialogDescription>
+				{status}
 				{disabledReason && <output>{disabledReason}</output>}
 				<p className="break-all">
 					{l["permissions.context.scope"]}: {scope.workspaceId} / {scope.conversationId}
@@ -127,7 +137,7 @@ export function ContextDialog({
 								disclosureVersion: 1,
 							})
 							.then(() => {
-								if (!session.getSnapshot().failed && !session.getSnapshot().uncertain) setOpen(false);
+								if (!session.getSnapshot().failed && !session.getSnapshot().uncertain) onOpenChange(false);
 							});
 					}}
 				>

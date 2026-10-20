@@ -1,6 +1,6 @@
 import type { Conversation, ModelReference } from "@hipi/work-runtime/contracts";
-import { Blocks, ChevronRight, ShieldCheck, SlidersHorizontal } from "lucide-react";
-import { useId, useState } from "react";
+import { Blocks, ChevronRight, FolderPlus, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { type MouseEvent, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -14,6 +14,7 @@ import {
 import { AgentPermissionManagement } from "../agent-permissions/agent-permissions.tsx";
 import { ToolPacksPanel } from "../tool-packs/index.ts";
 import { capabilityLabels } from "./labels.ts";
+import "./conversation-capabilities.css";
 
 type CapabilitySection = "files" | "tool-packs";
 
@@ -31,8 +32,11 @@ export function ConversationCapabilities({
 	const l = capabilityLabels(locale);
 	const [open, setOpen] = useState(false);
 	const [section, setSection] = useState<CapabilitySection>("files");
+	const trigger = useRef<HTMLButtonElement | null>(null);
 	const sectionId = useId();
-	const showFiles = () => {
+	const dialogId = useId();
+	const showFiles = (event: MouseEvent<HTMLButtonElement>) => {
+		if (!open) trigger.current = event.currentTarget;
 		setSection("files");
 		setOpen(true);
 	};
@@ -45,7 +49,7 @@ export function ConversationCapabilities({
 			detailsOpen={open && section === "files"}
 			onOpenDetails={showFiles}
 		>
-			{({ content: permissions, attention }) => (
+			{({ content: permissions, attention, contextAction }) => (
 				<ToolPacksPanel
 					workspaceId={conversation.workspaceId}
 					conversation={conversation}
@@ -54,22 +58,62 @@ export function ConversationCapabilities({
 					{(toolPacks) => (
 						<section className="permission-controls capabilities-controls" aria-label={l["capabilities.title"]}>
 							<Dialog open={open} onOpenChange={setOpen}>
-								<DialogTrigger asChild>
+								<div className="capability-actions">
 									<Button
 										variant="ghost"
 										size="sm"
-										className="capabilities-trigger"
-										aria-label={l["capabilities.title"]}
+										className="capability-context-trigger"
+										title={l["capabilities.contextHint"]}
+										{...contextAction}
 									>
-										<SlidersHorizontal size={15} aria-hidden="true" />
-										{l["capabilities.trigger"]}
+										<FolderPlus size={16} aria-hidden="true" />
+										{l["capabilities.contextAction"]}
 									</Button>
-								</DialogTrigger>
+									<Button
+										variant="ghost"
+										size="sm"
+										className="capability-tools-trigger"
+										aria-haspopup="dialog"
+										aria-expanded={open && section === "tool-packs"}
+										aria-controls={dialogId}
+										title={l["capabilities.toolsHint"]}
+										onClick={(event) => {
+											trigger.current = event.currentTarget;
+											setSection("tool-packs");
+											setOpen(true);
+										}}
+									>
+										<Blocks size={16} aria-hidden="true" />
+										{l["capabilities.toolsAction"]}
+									</Button>
+									<DialogTrigger asChild>
+										<Button
+											variant="ghost"
+											size="sm"
+											className="capabilities-trigger"
+											aria-label={l["capabilities.title"]}
+											title={l["capabilities.title"]}
+											onClick={(event) => {
+												trigger.current = event.currentTarget;
+											}}
+										>
+											<SlidersHorizontal size={16} aria-hidden="true" />
+											<span>{l["capabilities.trigger"]}</span>
+										</Button>
+									</DialogTrigger>
+								</div>
 								<DialogContent
+									id={dialogId}
 									placement="right"
 									className="capabilities-dialog"
 									closeLabel={l["capabilities.close"]}
 									onSubmit={(event) => event.stopPropagation()}
+									onCloseAutoFocus={(event) => {
+										if (trigger.current?.isConnected) {
+											event.preventDefault();
+											trigger.current.focus();
+										}
+									}}
 								>
 									<div className="capabilities-heading">
 										<DialogTitle>{l["capabilities.title"]}</DialogTitle>

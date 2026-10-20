@@ -84,13 +84,13 @@ export function ConversationPane({
 				}
 				controls={
 					<div className="conversation-tools">
-						<ConversationModelControls controller={controller} />
 						<ConversationCapabilities
 							key={`${conversation.workspaceId}/${conversation.conversationId}`}
 							conversation={conversation}
 							model={controller.model.data?.model}
 							connected={observation.connection === "connected"}
 						/>
+						<ConversationModelControls controller={controller} />
 					</div>
 				}
 			/>

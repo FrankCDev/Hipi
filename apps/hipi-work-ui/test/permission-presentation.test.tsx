@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { FileOperation } from "@hipi/work-runtime/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
@@ -28,6 +29,7 @@ const local = new LocalState();
 vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => ({}),
 	useLocalState: () => local,
+	useFiles: () => ({}),
 }));
 vi.mock("../src/features/agent-permissions/permission-session.ts", () => ({
 	MAX_UNRESOLVED_OPERATIONS: 64,
@@ -56,13 +58,15 @@ beforeEach(() => {
 });
 function render() {
 	return renderToStaticMarkup(
-		<PreferencesProvider>
-			<AgentPermissions
-				scope={{ workspaceId: "workspace", conversationId: "conversation" }}
-				connected
-				archived={false}
-			/>
-		</PreferencesProvider>,
+		<QueryClientProvider client={new QueryClient()}>
+			<PreferencesProvider>
+				<AgentPermissions
+					scope={{ workspaceId: "workspace", conversationId: "conversation" }}
+					connected
+					archived={false}
+				/>
+			</PreferencesProvider>
+		</QueryClientProvider>,
 	);
 }
 test("idle permissions expose a named dialog trigger without occupying the chat with audit controls", () => {
@@ -130,17 +134,19 @@ test("embedded permission attention remains reviewable while another capability 
 	fixture.state.approval = { status: "pending" };
 	fixture.state.uncertain = true;
 	const html = renderToStaticMarkup(
-		<PreferencesProvider>
-			<AgentPermissionManagement
-				scope={{ workspaceId: "workspace", conversationId: "conversation" }}
-				connected
-				archived={false}
-				detailsOpen={false}
-				onOpenDetails={() => {}}
-			>
-				{({ attention }) => <aside>{attention}</aside>}
-			</AgentPermissionManagement>
-		</PreferencesProvider>,
+		<QueryClientProvider client={new QueryClient()}>
+			<PreferencesProvider>
+				<AgentPermissionManagement
+					scope={{ workspaceId: "workspace", conversationId: "conversation" }}
+					connected
+					archived={false}
+					detailsOpen={false}
+					onOpenDetails={() => {}}
+				>
+					{({ attention }) => <aside>{attention}</aside>}
+				</AgentPermissionManagement>
+			</PreferencesProvider>
+		</QueryClientProvider>,
 	);
 	assert.match(html, /等待审批 · 1/);
 	assert.ok(html.includes(permissionLabels("zh")["permissions.action.unknown"]));
