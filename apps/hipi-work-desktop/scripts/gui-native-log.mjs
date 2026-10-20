@@ -4,13 +4,75 @@ import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
 export const nativeLogLimit = 1024 * 1024;
+const workExperiencePhases = new Set(["draft", "settings", "matrix", "sidebar", "composer", "files", "restoration"]);
 
 export function recordGuiFailure(evidence, field, error, roots) {
 	assert.ok(field === "failure" || field === "cleanupFailure");
-	evidence[field] = redactNativeLog(error instanceof Error ? error.message : "Unknown native failure", roots).slice(
-		0,
-		2000,
-	);
+	const message = error instanceof Error ? Object.getOwnPropertyDescriptor(error, "message")?.value : undefined;
+	evidence[field] = redactNativeLog(
+		typeof message === "string" ? message.slice(0, 4096) : "Unknown native failure",
+		roots,
+	).slice(0, 2000);
+	const causes = [];
+	const seen = new Set();
+	delete evidence[`${field}Phase`];
+	delete evidence[`${field}Causes`];
+	if (field === "cleanupFailure") {
+		delete evidence.cleanupFailureCommand;
+		if (error instanceof Error) {
+			const code = Object.getOwnPropertyDescriptor(error, "code")?.value;
+			const killed = Object.getOwnPropertyDescriptor(error, "killed")?.value;
+			const signal = Object.getOwnPropertyDescriptor(error, "signal")?.value;
+			const category =
+				code === "ETIMEDOUT"
+					? "timeout"
+					: code === null && killed === true && signal === "SIGTERM"
+						? "terminated"
+						: Number.isSafeInteger(code) && code !== 0
+							? "nonzero-exit"
+							: undefined;
+			if (category) {
+				const stderr = Object.getOwnPropertyDescriptor(error, "stderr")?.value;
+				const marker =
+					typeof stderr === "string"
+						? stderr
+								.slice(0, 4096)
+								.match(
+									/\b(?:PSSecurityException|CommandNotFoundException|CimException|UnauthorizedAccessException)\b/,
+								)?.[0]
+						: undefined;
+				evidence.cleanupFailureCommand = { category, ...(marker ? { powershellMarker: marker } : {}) };
+			}
+		}
+	}
+	function visit(value, depth) {
+		if (!(value instanceof Error) || depth > 3 || causes.length >= 6 || seen.has(value)) return;
+		seen.add(value);
+		// Own data properties only: do not invoke accessors or serialize stacks, stderr or arbitrary objects.
+		const phase = Object.getOwnPropertyDescriptor(value, "workExperiencePhase")?.value;
+		if (depth === 0) {
+			if (workExperiencePhases.has(phase)) evidence[`${field}Phase`] = phase;
+		} else {
+			const message = Object.getOwnPropertyDescriptor(value, "message")?.value;
+			causes.push({
+				message: redactNativeLog(
+					typeof message === "string" ? message.slice(0, 4096) : "Unknown native failure",
+					roots,
+				).slice(0, 500),
+				...(workExperiencePhases.has(phase) ? { phase } : {}),
+			});
+		}
+		if (depth === 3) return;
+		if (value instanceof AggregateError) {
+			const errors = Object.getOwnPropertyDescriptor(value, "errors")?.value;
+			if (Array.isArray(errors))
+				for (let index = 0; index < Math.min(errors.length, 6) && causes.length < 6; index++)
+					visit(Object.getOwnPropertyDescriptor(errors, String(index))?.value, depth + 1);
+		}
+		visit(Object.getOwnPropertyDescriptor(value, "cause")?.value, depth + 1);
+	}
+	visit(error, 0);
+	if (causes.length > 0) evidence[`${field}Causes`] = causes;
 }
 
 export function recordRendererError(evidence, iteration, method, params, roots) {

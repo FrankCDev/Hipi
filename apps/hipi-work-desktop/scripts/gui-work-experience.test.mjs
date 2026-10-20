@@ -126,3 +126,28 @@ test("Darwin cleanup supplies Cocoa editing commands on keydown only without cha
 		);
 	}
 });
+
+test("native Enter activates focused buttons with carriage return on keydown only", async () => {
+	const calls = [];
+	const cdp = { request: async (method, params) => calls.push({ method, ...params }) };
+	await nativeEditorKey(cdp, "Enter");
+	assert.deepEqual(calls, [
+		{
+			method: "Input.dispatchKeyEvent",
+			type: "keyDown",
+			key: "Enter",
+			code: "Enter",
+			windowsVirtualKeyCode: 13,
+			modifiers: 0,
+			text: "\r",
+		},
+		{
+			method: "Input.dispatchKeyEvent",
+			type: "keyUp",
+			key: "Enter",
+			code: "Enter",
+			windowsVirtualKeyCode: 13,
+			modifiers: 0,
+		},
+	]);
+});

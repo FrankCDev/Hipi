@@ -236,6 +236,8 @@ async function inspectTheme(cdp, directory, reopened) {
 	await openAppearance(cdp, ".sidebar-settings-trigger");
 	const original = await appearanceChoice(cdp);
 	resolvedTheme(original.mode, false);
+	await modalBounds(cdp, ".unified-settings-dialog", 30000, "center");
+	await capture(cdp, directory, reopened ? "settings-appearance-reopened" : "settings-appearance");
 	// A select is the nested overlay now. Escape must restore its actual combobox.
 	await click(cdp, original.selector);
 	await pressKey(cdp, "Escape");

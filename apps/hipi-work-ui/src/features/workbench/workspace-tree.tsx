@@ -6,6 +6,7 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
@@ -154,11 +155,24 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 							</label>
 						))}
 					</fieldset>
-					{conversations.isSuccess && (
-						<p className="project-page-summary">
-							<span>{props.search.trim() ? cl.pageMatches : cl.loaded}</span>
-							<span>{new Intl.NumberFormat(locale).format(visible.length)}</span>
-						</p>
+					{conversations.isSuccess && props.search.trim() && (
+						<TooltipProvider>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button
+										variant="ghost"
+										size="sm"
+										className="project-match-count"
+										aria-label={`${cl.pageMatches}: ${new Intl.NumberFormat(locale).format(visible.length)}`}
+									>
+										{new Intl.NumberFormat(locale).format(visible.length)}
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="right">
+									{cl.pageMatches}: {new Intl.NumberFormat(locale).format(visible.length)}
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
 					)}
 				</div>
 				{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}

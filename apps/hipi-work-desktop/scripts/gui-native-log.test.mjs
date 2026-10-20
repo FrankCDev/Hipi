@@ -97,6 +97,117 @@ test("file and stdout redaction removes unknown user paths and environment value
 	);
 });
 
+test("aggregate failure diagnostics retain bounded redacted causes and allowlisted work-experience phases", () => {
+	const acceptance = Object.assign(new Error("EACCES open C:\\Users\\private-user\\secret.log"), {
+		workExperiencePhase: "settings",
+		stack: "private-stack",
+		stderr: "private-stderr",
+	});
+	const restoration = Object.assign(new Error("Error: token=private-token"), {
+		workExperiencePhase: "restoration",
+	});
+	const error = new AggregateError([acceptance, restoration], "Work-experience acceptance and restoration failed");
+	const evidence = {};
+	recordGuiFailure(evidence, "failure", error, []);
+	assert.equal(evidence.failure, error.message);
+	assert.deepEqual(evidence.failureCauses, [
+		{ message: "EACCES open <absolute-path>", phase: "settings" },
+		{ message: "<redacted-sensitive-line> Error", phase: "restoration" },
+	]);
+	assert.ok(!JSON.stringify(evidence).includes("private"));
+	const original = new Error("Original operation failed", { cause: acceptance });
+	original.workExperiencePhase = "composer";
+	recordGuiFailure(evidence, "cleanupFailure", original, []);
+	assert.equal(evidence.cleanupFailure, original.message);
+	assert.equal(evidence.cleanupFailurePhase, "composer");
+	assert.deepEqual(evidence.cleanupFailureCauses, [evidence.failureCauses[0]]);
+	recordGuiFailure(evidence, "cleanupFailure", new Error("Later operation failed"), []);
+	assert.ok(!("cleanupFailurePhase" in evidence) && !("cleanupFailureCauses" in evidence));
+});
+
+test("failure cause diagnostics cap depth, count and text, ignore cycles, getters and unknown phases", () => {
+	let nested = new Error("outside-depth-bound");
+	for (let index = 0; index < 4; index++) nested = new Error(`level-${index}`, { cause: nested });
+	const evidence = {};
+	recordGuiFailure(evidence, "failure", nested, []);
+	assert.equal(evidence.failureCauses.length, 3);
+	assert.ok(!JSON.stringify(evidence).includes("outside-depth-bound"));
+	const cycle = new Error("cycle");
+	cycle.cause = cycle;
+	const getter = new Error("will-not-read");
+	for (const property of ["message", "cause", "workExperiencePhase"])
+		Object.defineProperty(getter, property, {
+			get() {
+				throw new Error("accessor must not run");
+			},
+		});
+	const oversized = Object.assign(new Error("a".repeat(5000)), { workExperiencePhase: "private-unknown-phase" });
+	recordGuiFailure(
+		evidence,
+		"failure",
+		new AggregateError([cycle, getter, oversized, ...Array.from({ length: 10 }, () => new Error("bounded"))], "root"),
+		[],
+	);
+	assert.equal(evidence.failureCauses.length, 6);
+	assert.deepEqual(evidence.failureCauses[1], { message: "Unknown native failure" });
+	assert.deepEqual(evidence.failureCauses[2], { message: "a".repeat(500) });
+	assert.ok(!JSON.stringify(evidence).includes("private"));
+	for (const error of [getter, Object.assign(new Error("will-not-read"), { message: { private: "object" } })]) {
+		recordGuiFailure(evidence, "failure", error, []);
+		assert.equal(evidence.failure, "Unknown native failure");
+		assert.ok(!("failureCauses" in evidence));
+	}
+	recordGuiFailure(evidence, "failure", oversized, []);
+	assert.equal(evidence.failure, "a".repeat(2000));
+	assert.ok(!("failurePhase" in evidence));
+});
+
+test("cleanup command diagnostics expose only fixed categories and bounded PowerShell markers", () => {
+	const evidence = {};
+	for (const marker of [
+		"PSSecurityException",
+		"CommandNotFoundException",
+		"CimException",
+		"UnauthorizedAccessException",
+	]) {
+		const error = Object.assign(new Error("command=private-command"), {
+			code: 1,
+			stderr: `C:\\Users\\private-user\\private-script.ps1 ${marker}: token=private-token`,
+		});
+		recordGuiFailure(evidence, "cleanupFailure", error, []);
+		assert.deepEqual(evidence.cleanupFailureCommand, { category: "nonzero-exit", powershellMarker: marker });
+		assert.ok(!JSON.stringify(evidence).includes("private"));
+	}
+	for (const [properties, category] of [
+		[{ code: "ETIMEDOUT" }, "timeout"],
+		[{ code: null, killed: true, signal: "SIGTERM" }, "terminated"],
+	]) {
+		recordGuiFailure(evidence, "cleanupFailure", Object.assign(new Error("command=private"), properties), []);
+		assert.deepEqual(evidence.cleanupFailureCommand, { category });
+	}
+	for (const code of [0, "unknown-private-code", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"]) {
+		recordGuiFailure(
+			evidence,
+			"cleanupFailure",
+			Object.assign(new Error("command=private"), { code, killed: true }),
+			[],
+		);
+		assert.ok(!("cleanupFailureCommand" in evidence));
+	}
+	const error = Object.assign(new Error("command=private"), { code: 1 });
+	for (const stderr of ["private-text UnknownPrivateException", `${"a".repeat(4096)} PSSecurityException`]) {
+		error.stderr = stderr;
+		recordGuiFailure(evidence, "cleanupFailure", error, []);
+		assert.deepEqual(evidence.cleanupFailureCommand, { category: "nonzero-exit" });
+	}
+	Object.defineProperty(error, "stderr", { get: () => assert.fail("stderr getter must not run") });
+	recordGuiFailure(evidence, "cleanupFailure", error, []);
+	assert.deepEqual(evidence.cleanupFailureCommand, { category: "nonzero-exit" });
+	const failure = {};
+	recordGuiFailure(failure, "failure", error, []);
+	assert.ok(!("cleanupFailureCommand" in failure));
+});
+
 test("native log reads only fixed owned files, bounds output and redacts sensitive lines", async () => {
 	const root = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "hipi-native-log-")));
 	try {

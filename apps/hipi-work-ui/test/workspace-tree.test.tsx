@@ -113,13 +113,15 @@ test("project filters are native radio groups and counts explicitly describe the
 	const names = [...html.matchAll(/type="radio"[^>]*name="([^"]+)"/g)].map((match) => match[1]);
 	assert.equal(names.length, 2);
 	assert.equal(names[0], names[1]);
-	assert.match(html, /class="project-page-summary"><span>本页数量<\/span><span>1<\/span>/);
+	assert.doesNotMatch(html, /project-page-summary|project-match-count/);
+	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">本页数量: <\/span>1<\/span>/);
 	assert.match(html, /class="project-pagination"/);
 });
 
 test("search counts matches on the current page without replacing the loaded-page count", () => {
 	const html = renderTree(true, 1, "next-page", "not on this page");
-	assert.match(html, /class="project-page-summary"><span>本页匹配<\/span><span>0<\/span>/);
+	assert.match(html, /<button[^>]*class="[^"]*project-match-count[^>]*"[^>]*aria-label="本页匹配: 0"[^>]*>0<\/button>/);
+	assert.doesNotMatch(html, /project-page-summary/);
 	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">本页数量: <\/span>1<\/span>/);
 	assert.match(html, /没有匹配的会话/);
 	assert.doesNotMatch(html, /class="conversation-link"/);

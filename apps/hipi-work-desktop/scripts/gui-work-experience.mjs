@@ -125,6 +125,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 	const samples = [];
 	let failure;
 	let result;
+	let phase = "draft";
 	async function resize(width) {
 		await cdp.request("Emulation.setDeviceMetricsOverride", {
 			width,
@@ -162,6 +163,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 		await click(cdp, ".composer textarea");
 		await cdp.request("Input.insertText", { text: retainedDraft });
+		phase = "settings";
 		await click(cdp, ".sidebar-settings-trigger");
 		await until(
 			() => evaluate(cdp, `document.activeElement === document.querySelector('.settings-page-header h2')`),
@@ -177,6 +179,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 				),
 			"actual model catalog in selected category",
 		);
+		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-models`);
 		assert.equal(
 			await evaluate(
 				cdp,
@@ -205,7 +208,8 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		await click(cdp, '.settings-page-nav button[data-category="models"]');
 		await nativeEditorKey(cdp, "Tab");
 		assert.equal(await evaluate(cdp, `document.activeElement?.dataset.category`), "runtime");
-		await pressKey(cdp, "Enter");
+		// Native button activation requires Enter's character event, not only a JS keydown.
+		await nativeEditorKey(cdp, "Enter");
 		await until(
 			() =>
 				evaluate(
@@ -225,6 +229,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"Settings must retain the conversation DOM identity",
 		);
 		assert.deepEqual(await readKeys(), originalKeys);
+		phase = "matrix";
 		for (const item of reopened
 			? layoutCases.filter((item) => item.locale === "en" && item.theme === "light")
 			: layoutCases) {
@@ -256,6 +261,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			await capture(cdp, directory, screenshot);
 			samples.push({ ...item, geometry, screenshot: `${screenshot}.png` });
 		}
+		phase = "sidebar";
 		await resize(1440);
 		await preferences("en", "light");
 		await click(cdp, ".composer textarea");
@@ -304,6 +310,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		assert.equal(await readDraft(), retainedDraft);
 		assert.deepEqual(await readKeys(), originalKeys);
 		await click(cdp, ".composer textarea");
+		phase = "composer";
 		await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
 		await cdp.request("Input.insertText", { text: retainedDraft });
 		await until(
@@ -347,6 +354,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			() => evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationCollapsed==='false'`),
 			"desktop sidebar restored",
 		);
+		phase = "files";
 		await click(cdp, files);
 		await until(
 			() =>
@@ -426,6 +434,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		};
 	} catch (error) {
 		failure = error;
+		if (error instanceof Error) error.workExperiencePhase = phase;
 		try {
 			await capture(cdp, directory, "work-experience-failure");
 		} catch {
@@ -458,6 +467,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation; delete window.__hipiGuiCredentialTrigger");
 			assert.deepEqual(await readKeys(), originalKeys);
 		} catch (restoreError) {
+			if (restoreError instanceof Error) restoreError.workExperiencePhase = "restoration";
 			failure = failure
 				? new AggregateError([failure, restoreError], "Work-experience acceptance and restoration failed")
 				: restoreError;

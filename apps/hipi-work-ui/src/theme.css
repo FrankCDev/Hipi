@@ -1357,15 +1357,13 @@
 	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 }
-.project-page-summary {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	max-width: 76px;
-	padding-right: 5px;
+.project-match-count {
+	flex-shrink: 0;
+	min-width: 28px;
+	height: 28px;
+	padding: 4px 6px;
 	color: var(--muted);
-	font-size: 10px;
-	line-height: 1.35;
+	font-size: 11px;
 	font-variant-numeric: tabular-nums;
 }
 .search-scope {
