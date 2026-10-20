@@ -38,6 +38,7 @@ import type { BrowserStorage } from "../../src/features/workbench/local-persiste
 import { LocalState } from "../../src/features/workbench/local-state.ts";
 import { ProjectFolderDialog } from "../../src/features/workbench/projects/folder.tsx";
 import { ConversationSearch } from "../../src/features/workbench/search/search.tsx";
+import { SidebarSectionHeading } from "../../src/features/workbench/sidebar/section.tsx";
 import { WorkspaceTree } from "../../src/features/workbench/sidebar/workspace-tree.tsx";
 import { Workbench } from "../../src/features/workbench/workbench.tsx";
 import { WorkbenchWelcome } from "../../src/features/workbench/workbench-welcome.tsx";
@@ -121,6 +122,11 @@ vi.mock("@tanstack/react-query", async () => ({
 	},
 }));
 vi.mock("../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en", t: (key: string) => key }) }));
+vi.mock("../../src/features/files/pdf-preview.tsx", () => ({
+	PdfPreview: () => {
+		throw new Error("This Workbench callback fixture must not render the browser PDF adapter");
+	},
+}));
 vi.mock("../../src/features/workbench/files/panel.tsx", async (original) => ({
 	...(await original<typeof import("../../src/features/workbench/files/panel.tsx")>()),
 	useWorkAreaWidth: () => measurement.width,
@@ -283,6 +289,10 @@ function element<C extends React.ElementType>(node: React.ReactNode, type: C) {
 	assert.ok(only);
 	return only;
 }
+function projectCreateDialog(node: React.ReactNode) {
+	// The independent create action is a heading slot, not a child of its disclosure button.
+	return element(element(node, SidebarSectionHeading).props.actions, CreateDialog);
+}
 function press(button: React.ReactElement<React.ComponentProps<typeof Button>>) {
 	assert.ok(button.props.onClick);
 	// The selected production handlers do not consume a mouse event.
@@ -440,7 +450,7 @@ test.each(["dirty", "saving", "unknown"] as const)(
 		const initial = drive();
 		await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
 		initial.editor.edit(state === "unknown" ? "" : "Unsaved file input");
-		let saving: Promise<void> | undefined;
+		let saving: ReturnType<typeof initial.editor.save> | undefined;
 		if (state !== "dirty") {
 			fileFixture.setMode(state);
 			saving = initial.editor.save();
@@ -506,7 +516,7 @@ test.each(["dirty", "saving", "unknown", "conflict"] as const)(
 		await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
 		const editor = initial.editor;
 		editor.edit("Unsaved file input");
-		let saving: Promise<void> | undefined;
+		let saving: ReturnType<typeof editor.save> | undefined;
 		if (state !== "dirty") {
 			fileFixture.setMode(state);
 			saving = editor.save();
@@ -1170,7 +1180,7 @@ test.each([false, true])(
 			attachProject: attach,
 		};
 		const initial = drive();
-		const creating = element(initial.content, CreateDialog).props.onCreate("Created project", {
+		const creating = projectCreateDialog(initial.content).props.onCreate("Created project", {
 			selectionId: "opaque-selection",
 			displayName: "Chosen folder",
 		});
@@ -1211,7 +1221,7 @@ test.each(["empty", "BUSY"] as const)(
 		const attach = vi.fn(() => binding.promise);
 		fileAuthority = { chooseRoot: async () => {}, revokeRoot: async () => {}, attachProject: attach };
 		const initial = drive();
-		const creating = element(initial.content, CreateDialog).props.onCreate("Created project", {
+		const creating = projectCreateDialog(initial.content).props.onCreate("Created project", {
 			selectionId: "opaque-selection",
 			displayName: "Chosen folder",
 		});

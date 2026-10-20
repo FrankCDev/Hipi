@@ -13,6 +13,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
+import { ThemeProvider } from "../../../src/app/theme/index.ts";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import {
@@ -187,17 +188,19 @@ test.each(["en", "zh-CN"])("pinned rows retain the same canonical selection and 
 	const local = new LocalState();
 	const presentation = new PresentationSession(client, local);
 	const html = renderToStaticMarkup(
-		<QueryClientProvider client={cache}>
-			<SidebarPreviewProvider disabled={false} navigationKey="pin-fixture">
-				<PinnedConversations
-					catalog={new CatalogSession(client, local)}
-					presentation={presentation}
-					selectedWorkspace="project"
-					selectedConversation="chat"
-					onSelect={() => {}}
-				/>
-			</SidebarPreviewProvider>
-		</QueryClientProvider>,
+		<ThemeProvider>
+			<QueryClientProvider client={cache}>
+				<SidebarPreviewProvider disabled={false} navigationKey="pin-fixture">
+					<PinnedConversations
+						catalog={new CatalogSession(client, local)}
+						presentation={presentation}
+						selectedWorkspace="project"
+						selectedConversation="chat"
+						onSelect={() => {}}
+					/>
+				</SidebarPreviewProvider>
+			</QueryClientProvider>
+		</ThemeProvider>,
 	);
 	assert.match(html, /class="pinned-conversations"/);
 	assert.match(html, /data-workspace-id="project" data-conversation-id="chat" aria-current="page"/);

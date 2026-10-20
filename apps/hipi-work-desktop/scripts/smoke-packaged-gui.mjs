@@ -6,6 +6,7 @@ import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
+import { sidebarWorkspaceIds } from "./gui/sidebar/manifest.mjs";
 import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
 import { fileFixture } from "./gui-file-fixture-data.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
@@ -23,7 +24,7 @@ import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function baselineResponseArguments(scenario) {
-	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
+	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario), "Unknown fixed GUI scenario");
 	return scenario === "baseline" ? ["--smoke-response=baseline-stream", "--smoke-scenario=baseline"] : [];
 }
 export async function createGuiProfile(temporaryParent = realpathSync(tmpdir())) {
@@ -36,13 +37,19 @@ export function sourceProvenanceEvidence(provenance) {
 	return { sourceSnapshotSha256: provenance.sourceSnapshotSha256, sourceSnapshot };
 }
 export async function assertScenarioWorkspaceDatabases(storeRoot, scenario, bindingWorkspaceId) {
-	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario));
+	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario));
 	const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
 	assert.equal(
 		workspaces.length,
-		scenario === "long-history" ? 1 : scenario === "file-workbench" ? 3 : 2,
+		scenario === "long-history" ? 1 : ["file-workbench", "sidebar"].includes(scenario) ? 3 : 2,
 		"Unexpected exact scenario workspace count",
 	);
+	if (scenario === "sidebar")
+		assert.deepEqual(
+			workspaces.map((workspace) => workspace.name).sort(),
+			[...sidebarWorkspaceIds].sort(),
+			"Sidebar must retain exact default and two project databases",
+		);
 	if (scenario === "file-workbench") {
 		assert.ok(
 			typeof bindingWorkspaceId === "string" && workspaces.some((workspace) => workspace.name === bindingWorkspaceId),
@@ -64,7 +71,7 @@ export async function assertScenarioWorkspaceDatabases(storeRoot, scenario, bind
 }
 /** One lifecycle owns launch, evidence and cleanup for each independent private profile. */
 export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate, betweenRuns } = {}) {
-	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
+	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario), "Unknown fixed GUI scenario");
 	assert.ok(betweenRuns === undefined || typeof betweenRuns === "function", "Invalid between-runs callback");
 	assert.ok(!betweenRuns || scenario === "baseline", "Maintenance hook requires the unchanged baseline GUI flow");
 	const reportScenario = betweenRuns ? "maintenance" : scenario;

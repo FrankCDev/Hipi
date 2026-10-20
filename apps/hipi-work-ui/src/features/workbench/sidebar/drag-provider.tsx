@@ -10,7 +10,6 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
-import { GripVertical } from "lucide-react";
 import {
 	createContext,
 	type KeyboardEvent,
@@ -28,7 +27,6 @@ import {
 import { createPortal } from "react-dom";
 import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, matchesBinding } from "../../../app/keybindings.ts";
 import { usePreferences } from "../../../app/preferences.tsx";
-import { Button } from "../../../components/ui/button.tsx";
 import {
 	insideSidebar,
 	type SidebarDragItem,
@@ -365,33 +363,4 @@ export function useSidebarSortable(
 			draggable.listeners.onPointerDown(event);
 		},
 	};
-}
-
-export function SidebarOrderSection({ action, children }: { action: SidebarOrderAction; children: ReactNode }) {
-	const { locale } = usePreferences();
-	const sortable = useSidebarSortable(action);
-	return (
-		<div
-			ref={(node) => {
-				sortable.ref.current = node;
-			}}
-			className="sidebar-order-section"
-			data-drag-source={sortable["data-drag-source"]}
-			data-drag-edge={sortable["data-drag-edge"]}
-			data-sidebar-section={action.item.id}
-		>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				className="sidebar-section-handle"
-				aria-label={sidebarOrderLabels(locale).arrangeLabel(action.item.label)}
-				aria-describedby={sortable.describedBy}
-				onPointerDown={sortable.onPointerDown}
-				onKeyDown={sortable.onKeyDown}
-			>
-				<GripVertical size={14} aria-hidden="true" />
-			</Button>
-			{children}
-		</div>
-	);
 }

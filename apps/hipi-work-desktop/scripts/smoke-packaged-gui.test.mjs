@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { smokeProfile } from "../src/smoke-profile.ts";
+import { sidebarWorkspaceIds } from "./gui/sidebar/manifest.mjs";
 import { fileFixture } from "./gui-file-fixture-data.mjs";
 import {
 	assertScenarioWorkspaceDatabases,
@@ -36,9 +37,31 @@ test("known stream response is opt-in only for the isolated baseline scenario", 
 		"--smoke-response=baseline-stream",
 		"--smoke-scenario=baseline",
 	]);
-	for (const scenario of ["long-history", "file-workbench"]) assert.deepEqual(baselineResponseArguments(scenario), []);
+	for (const scenario of ["long-history", "file-workbench", "sidebar"])
+		assert.deepEqual(baselineResponseArguments(scenario), []);
 	for (const scenario of [undefined, "normal", "production", "baseline-other"])
 		assert.throws(() => baselineResponseArguments(scenario), /Unknown fixed GUI scenario/);
+});
+
+test("sidebar accepts only exact default Chats and two project database identities", async () => {
+	const root = await createGuiProfile();
+	try {
+		for (const workspace of sidebarWorkspaceIds) {
+			await mkdir(join(root, workspace));
+			for (const file of ["owner.sqlite", "workspace.sqlite"]) await writeFile(join(root, workspace, file), "fixture");
+		}
+		await assertScenarioWorkspaceDatabases(root, "sidebar");
+		await rename(join(root, sidebarWorkspaceIds[1]), join(root, "same-visible-title-wrong-identity"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar"), /exact default/);
+		await rename(join(root, "same-visible-title-wrong-identity"), join(root, sidebarWorkspaceIds[1]));
+		await mkdir(join(root, "unexpected"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar"), /workspace count/);
+		await rm(join(root, "unexpected"), { recursive: true });
+		await rm(join(root, sidebarWorkspaceIds[1], "workspace.sqlite"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar"), /ENOENT/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("exact final counts are baseline two, file binding three, long history one, with every database required", async () => {

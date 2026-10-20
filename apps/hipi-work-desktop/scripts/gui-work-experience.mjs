@@ -47,6 +47,58 @@ export function directContextConsentEvidence(document, expectedScope, contextId,
 		authorize[0].disabled === true
 	);
 }
+
+/** Observe the retained row's real tab stops, including temporarily disabled query-backed Pin. */
+export function sidebarKeyboardEvidence(document, retained, index) {
+	const selector =
+		'[data-action="pin-conversation-direct"], [data-action="archive-conversation-direct"], .conversation-actions-trigger';
+	const labels = ["Pin conversation", "Archive conversation", "Conversation actions: GUI 会话"];
+	const selected = [...document.querySelectorAll('.conversation-link[aria-current="page"]')];
+	const row = selected.length === 1 ? selected[0].closest(".conversation-nav-item") : null;
+	const controls = row ? [...row.querySelectorAll(selector)] : [];
+	const active = document.activeElement;
+	const style = (node) => document.defaultView.getComputedStyle(node);
+	const describe = (node) =>
+		node
+			? {
+					role: node.getAttribute("role") || node.tagName.toLowerCase(),
+					label: node.getAttribute("aria-label"),
+					action: node.getAttribute("data-action"),
+					inRow: !!row?.contains(node),
+					disabled: node.disabled === true,
+					focusVisible: node.matches(":focus-visible"),
+					opacity: style(node).opacity,
+				}
+			: null;
+	const stable =
+		!!row &&
+		row === retained?.row &&
+		row.isConnected &&
+		selected[0] === retained.link &&
+		controls.length === 3 &&
+		new Set(controls).size === 3 &&
+		controls.every(
+			(node, position) =>
+				node === retained.controls[position] &&
+				node.tagName === "BUTTON" &&
+				node.getAttribute("aria-label") === labels[position] &&
+				!node.disabled &&
+				node.getAttribute("aria-disabled") !== "true" &&
+				node.tabIndex === 0 &&
+				node.getClientRects().length > 0 &&
+				style(node).visibility === "visible" &&
+				style(node).opacity === "1",
+		);
+	return {
+		valid:
+			!!stable &&
+			active === (index === -1 ? retained.link : controls[index]) &&
+			(index === -1 || active.matches(":focus-visible")),
+		index,
+		active: describe(active),
+		controls: controls.map(describe),
+	};
+}
 /** Read rendered geometry only; do not install UI state or replace runtime responses. */
 export function workExperienceGeometry(document, viewport) {
 	const selectors = {
@@ -388,18 +440,45 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"hover preview dismissed on pointer leave",
 		);
 		await click(cdp, ".conversation-link");
-		await nativeEditorKey(cdp, "Tab");
-		assert.ok(
-			await evaluate(
-				cdp,
-				`document.activeElement === document.querySelector('.conversation-nav-item .conversation-actions-trigger') && document.activeElement.matches(':focus-visible') && getComputedStyle(document.activeElement).opacity === '1'`,
-			),
-			"Sidebar actions must be keyboard discoverable",
+		await evaluate(
+			cdp,
+			`(() => {
+				const links = [...document.querySelectorAll('.conversation-link[aria-current="page"]')];
+				const link = links.length === 1 ? links[0] : null;
+				const row = link?.closest('.conversation-nav-item');
+				window.__hipiGuiKeyboardRow = {link, row, controls: row ? [...row.querySelectorAll('[data-action="pin-conversation-direct"], [data-action="archive-conversation-direct"], .conversation-actions-trigger')] : []};
+			})()`,
 		);
-		await pressKey(cdp, "Enter");
+		const keyboardTrace = [];
+		const keyboardEvidence = async (index) => {
+			const evidence = await evaluate(
+				cdp,
+				`(${sidebarKeyboardEvidence.toString()})(document,window.__hipiGuiKeyboardRow,${index})`,
+			);
+			keyboardTrace.push(evidence);
+			return evidence;
+		};
+		try {
+			await until(
+				async () => (await keyboardEvidence(-1)).valid,
+				"selected sidebar row has settled, enabled Pin, Archive and overflow actions",
+			);
+			for (let index = 0; index < 3; index++) {
+				await nativeEditorKey(cdp, "Tab");
+				assert.equal((await keyboardEvidence(index)).valid, true, "Sidebar native Tab order or identity changed");
+			}
+		} catch (error) {
+			throw new Error(`Sidebar keyboard trace: ${JSON.stringify(keyboardTrace)}`, { cause: error });
+		}
+		await nativeEditorKey(cdp, "Enter");
 		await until(() => evaluate(cdp, `!!document.querySelector('[role="menu"]')`), "sidebar keyboard action menu");
 		await pressKey(cdp, "Escape");
 		await waitForOverlayClosed(cdp, ".conversation-nav-item .conversation-actions-trigger");
+		assert.equal(
+			(await keyboardEvidence(2)).valid,
+			true,
+			`Sidebar Escape must restore the retained overflow: ${JSON.stringify(keyboardTrace)}`,
+		);
 		assert.equal(await readDraft(), retainedDraft);
 		assert.deepEqual(await readKeys(), originalKeys);
 		await click(cdp, ".composer textarea");
@@ -592,6 +671,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			await route.close(settings);
 			await cdp.request("Emulation.clearDeviceMetricsOverride");
 			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation");
+			await evaluate(cdp, "delete window.__hipiGuiKeyboardRow");
 			assert.deepEqual(await readKeys(), originalKeys);
 		} catch (restoreError) {
 			if (restoreError instanceof Error) restoreError.workExperiencePhase = "restoration";

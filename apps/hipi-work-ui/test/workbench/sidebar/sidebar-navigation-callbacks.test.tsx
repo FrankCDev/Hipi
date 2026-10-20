@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import type * as DndCore from "@dnd-kit/core";
 import { type AppClient, type Conversation, type Method, parseResult } from "@hipi/work-runtime/contracts";
+import type * as Motion from "framer-motion";
+import { motion } from "framer-motion";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -21,6 +23,7 @@ import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { PresentationSession } from "../../../src/features/workbench/sidebar/presentation-session.ts";
 import { SidebarPreviewCoordinator } from "../../../src/features/workbench/sidebar/preview-coordinator.ts";
 import { type PreviewActions, SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
+import * as SidebarSection from "../../../src/features/workbench/sidebar/section.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({
@@ -29,6 +32,12 @@ const hooks = vi.hoisted(() => ({
 	cursor: 0,
 	commits: [] as (() => void)[],
 	dragContext: { state: { source: false } },
+	sectionContext: null as { collapsed: boolean; heading: { current: HTMLButtonElement | null } } | null,
+	present: true,
+	releasePresence: vi.fn(),
+	motionContext: null as { collapsed: boolean; contentId: string; headingId: string } | null,
+	motionPreference: "system" as "system" | "on" | "off",
+	stores: [] as { subscribe: (changed: () => void) => () => void; read: () => unknown }[],
 }));
 // Bounded production-callback adapter. It checks owner handoff and explicit
 // focus callbacks, not browser focus order, portal mounting, or React DOM.
@@ -40,10 +49,20 @@ vi.mock("react", async () => {
 		const index = hooks.cursor++;
 		return { cells, index, previous: cells[index] };
 	}
+	function effect(callback: React.EffectCallback, deps?: React.DependencyList) {
+		const { cells, index, previous } = cell();
+		if (!previous || !deps || deps.some((value, offset) => !Object.is(value, previous.deps?.[offset]))) {
+			hooks.commits.push(() => {
+				previous?.cleanup?.();
+				const cleanup = callback();
+				cells[index] = { value: undefined, deps, cleanup: typeof cleanup === "function" ? cleanup : undefined };
+			});
+		}
+	}
 	return {
 		...actual,
-		useContext: () => hooks.dragContext,
-		useLayoutEffect: () => {},
+		useContext: () => hooks.motionContext ?? hooks.dragContext,
+		useLayoutEffect: effect,
 		useState: <T,>(initial: T | (() => T)) => {
 			const { cells, index, previous } = cell();
 			const current = previous ?? { value: typeof initial === "function" ? (initial as () => T)() : initial };
@@ -62,18 +81,20 @@ vi.mock("react", async () => {
 			return current.value;
 		},
 		useId: () => `${hooks.scope}-${hooks.cursor++}`,
-		useSyncExternalStore: (_subscribe: unknown, getSnapshot: () => unknown) => getSnapshot(),
-		useEffect: (effect: React.EffectCallback, deps: React.DependencyList) => {
-			const { cells, index, previous } = cell();
-			if (!previous || deps.some((value, offset) => !Object.is(value, previous.deps?.[offset]))) {
-				hooks.commits.push(() => {
-					previous?.cleanup?.();
-					const cleanup = effect();
-					cells[index] = { value: undefined, deps, cleanup: typeof cleanup === "function" ? cleanup : undefined };
-				});
-			}
+		useSyncExternalStore: (subscribe: (changed: () => void) => () => void, getSnapshot: () => unknown) => {
+			hooks.stores.push({ subscribe, read: getSnapshot });
+			return getSnapshot();
 		},
+		useEffect: effect,
 	};
+});
+vi.mock("framer-motion", async () => {
+	const actual = await vi.importActual<typeof Motion>("framer-motion");
+	return { ...actual, usePresence: () => [hooks.present, hooks.releasePresence] };
+});
+vi.mock("../../../src/features/workbench/sidebar/section.tsx", async () => {
+	const actual = await vi.importActual<typeof SidebarSection>("../../../src/features/workbench/sidebar/section.tsx");
+	return { ...actual, useSidebarSection: () => hooks.sectionContext };
 });
 // Only adapt hooks used by the sortable boundary. These navigation tests do not
 // simulate dnd-kit sensors, collision measurement, or the library components.
@@ -93,6 +114,9 @@ vi.mock("@dnd-kit/core", async () => {
 vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
+vi.mock("../../../src/app/theme/index.ts", () => ({
+	useThemeSettings: () => ({ config: { reducedMotion: hooks.motionPreference } }),
+}));
 vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => cache,
 }));
@@ -102,13 +126,127 @@ vi.mock("../../../src/features/workbench/sidebar/preview-provider.tsx", () => ({
 	useSidebarPreviewCoordinator: () => previewCoordinator,
 }));
 
-function drive<T>(scope: string, render: () => T) {
+function drive<T>(scope: string, render: () => T, beforeCommit?: () => void) {
 	hooks.scope = scope;
 	hooks.cursor = 0;
 	const output = render();
+	beforeCommit?.();
 	for (const commit of hooks.commits.splice(0)) commit();
 	return output;
 }
+
+test("collapse focus belongs to the exact active section descendant, including a preview dialog portal", () => {
+	const document = { body: {}, activeElement: null as unknown };
+	const focus = vi.fn();
+	const heading = { ownerDocument: document, focus };
+	let collapsed = false;
+	const render = (beforeCommit?: () => void) =>
+		drive(
+			"section-focus",
+			() =>
+				SidebarSection.SidebarOrderSection({
+					action: {
+						item: {
+							id: "projects",
+							group: "sections",
+							label: "Projects",
+							revision: "1",
+							disabled: false,
+							after: null,
+							move: vi.fn(),
+						},
+						up: undefined,
+						down: undefined,
+					},
+					collapsed,
+					children: null,
+				}),
+			beforeCommit,
+		);
+	const view = render();
+	Object.assign(view.props.value.heading, { current: heading });
+	const portal = { classList: { contains: (name: string) => name === "conversation-preview-card" } };
+	const owned = {
+		ownerDocument: document,
+		isConnected: true,
+		closest: (selector: string) =>
+			selector.includes("dialog") || selector.includes("data-sidebar-row-portal") ? portal : null,
+	};
+	document.activeElement = owned;
+	invoke(element(view, "div").props.onFocusCapture, [{ target: owned }]);
+	collapsed = true;
+	render(() => {
+		owned.isConnected = false;
+		document.activeElement = document.body;
+	});
+	assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
+});
+
+for (const departure of [
+	"blur-to-body",
+	"earlier-unmount",
+	"outside-focus",
+	"active-modal",
+	"trailing-action",
+] as const) {
+	test(`collapse does not steal focus after ${departure}`, () => {
+		const document = { body: {}, activeElement: null as unknown };
+		const focus = vi.fn();
+		let collapsed = false;
+		const render = () =>
+			drive("section-focus", () =>
+				SidebarSection.SidebarOrderSection({
+					action: {
+						item: {
+							id: "projects",
+							group: "sections",
+							label: "Projects",
+							revision: "1",
+							disabled: false,
+							after: null,
+							move: vi.fn(),
+						},
+						up: undefined,
+						down: undefined,
+					},
+					collapsed,
+					children: null,
+				}),
+			);
+		let view = render();
+		Object.assign(view.props.value.heading, { current: { ownerDocument: document, focus } });
+		const owned = {
+			ownerDocument: document,
+			isConnected: true,
+			closest: (selector: string) => {
+				if (departure === "trailing-action") return null;
+				if (selector.includes("data-sidebar-row-portal")) return {};
+				return departure === "active-modal" ? { classList: { contains: () => false } } : null;
+			},
+		};
+		document.activeElement = owned;
+		invoke(element(view, "div").props.onFocusCapture, [{ target: owned }]);
+		if (departure === "blur-to-body") invoke(element(view, "div").props.onBlurCapture, [{ relatedTarget: null }]);
+		if (departure === "earlier-unmount") {
+			owned.isConnected = false;
+			view = render();
+		}
+		if (departure !== "active-modal" && departure !== "trailing-action")
+			document.activeElement = departure === "outside-focus" ? {} : document.body;
+		collapsed = true;
+		render();
+		assert.equal(focus.mock.calls.length, 0);
+	});
+}
+function invoke(callback: unknown, args: unknown[]) {
+	assert.ok(typeof callback === "function");
+	return Reflect.apply(callback, undefined, args);
+}
+function requiredRef(value: unknown): object {
+	assert.ok(value && typeof value === "object");
+	return value;
+}
+
 function elements<C extends React.ElementType>(
 	node: React.ReactNode,
 	type: C,
@@ -130,9 +268,41 @@ beforeEach(() => {
 	hooks.cells.clear();
 	hooks.commits = [];
 	hooks.dragContext = { state: { source: false } };
+	hooks.sectionContext = null;
+	hooks.present = true;
+	hooks.motionContext = null;
+	hooks.motionPreference = "system";
+	hooks.stores = [];
 	previewCoordinator = new SidebarPreviewCoordinator();
 	vi.clearAllMocks();
 	vi.useFakeTimers();
+});
+
+test("section motion follows live system changes and explicit app preferences override both OS values", () => {
+	let matches = false;
+	const media = new EventTarget();
+	Object.defineProperty(media, "matches", { get: () => matches });
+	vi.stubGlobal("window", { matchMedia: () => media });
+	hooks.motionContext = { collapsed: false, contentId: "content", headingId: "heading" };
+	const render = () => drive("motion", () => SidebarSection.SidebarSectionContent({ children: "rows" }));
+	assert.deepEqual(element(render(), motion.div).props.transition, { duration: 0.3, ease: [0.19, 1, 0.22, 1] });
+	const store = hooks.stores.at(-1);
+	assert.ok(store);
+	const changed = vi.fn();
+	const unsubscribe = store.subscribe(changed);
+	matches = true;
+	media.dispatchEvent(new Event("change"));
+	assert.equal(changed.mock.calls.length, 1);
+	assert.equal(store.read(), true);
+	assert.deepEqual(element(render(), motion.div).props.transition, { duration: 0 });
+	hooks.motionPreference = "off";
+	assert.deepEqual(element(render(), motion.div).props.transition, { duration: 0.3, ease: [0.19, 1, 0.22, 1] });
+	matches = false;
+	hooks.motionPreference = "on";
+	assert.deepEqual(element(render(), motion.div).props.transition, { duration: 0 });
+	unsubscribe();
+	media.dispatchEvent(new Event("change"));
+	assert.equal(changed.mock.calls.length, 1, "Owned media subscription is removed on cleanup");
 });
 afterEach(() => {
 	for (const cells of hooks.cells.values()) for (const entry of cells) entry?.cleanup?.();
@@ -168,9 +338,7 @@ function rowAndActions() {
 	const focus = () => {
 		const row = element(renderRow(), "div");
 		assert.ok(row.props.onFocusCapture);
-		Reflect.apply(row.props.onFocusCapture, undefined, [
-			{ currentTarget: { contains: () => true }, target: { matches: () => true } },
-		]);
+		invoke(row.props.onFocusCapture, [{ currentTarget: { contains: () => true }, target: { matches: () => true } }]);
 	};
 	renderRow();
 	assert.ok(controls);
@@ -184,6 +352,7 @@ function rowAndActions() {
 }
 
 function renameActions(client: AppClient) {
+	let hidden = false;
 	const local = new LocalState();
 	const session = new CatalogSession(client, local);
 	const returned = vi.fn();
@@ -195,6 +364,7 @@ function renameActions(client: AppClient) {
 				session,
 				guard: (action) => action(),
 				onReturnFocus: returned,
+				hidden,
 			}),
 		);
 	const open = () => {
@@ -207,9 +377,20 @@ function renameActions(client: AppClient) {
 	const change = (value: string) => {
 		const input = element(render(), Input);
 		assert.ok(input.props.onChange);
-		Reflect.apply(input.props.onChange, undefined, [{ target: { value } }]);
+		invoke(input.props.onChange, [{ target: { value } }]);
 	};
-	return { local, session, source, returned, render, open, change };
+	return {
+		local,
+		session,
+		source,
+		returned,
+		render,
+		open,
+		change,
+		hide: (value = true) => {
+			hidden = value;
+		},
+	};
 }
 
 function renameButton(node: React.ReactNode, action: "save" | "cancel") {
@@ -222,7 +403,7 @@ function renameEnter(node: React.ReactNode, overrides: Partial<KeyboardEvent> = 
 	const input = element(node, Input);
 	assert.ok(input.props.onKeyDown);
 	const preventDefault = vi.fn();
-	Reflect.apply(input.props.onKeyDown, undefined, [
+	invoke(input.props.onKeyDown, [
 		{
 			preventDefault,
 			nativeEvent: {
@@ -262,7 +443,7 @@ test("Rename focuses and selects the current title, Cancel sends nothing and ret
 	assert.ok(input.props.ref && typeof input.props.ref === "object");
 	const focus = vi.fn();
 	const select = vi.fn();
-	Object.assign(input.props.ref, { current: { focus, select } });
+	Object.assign(requiredRef(input.props.ref), { current: { focus, select } });
 	const event = new Event("open", { cancelable: true });
 	element(ui.render(), DialogContent).props.onOpenAutoFocus?.(event);
 	assert.equal(event.defaultPrevented, true);
@@ -272,7 +453,7 @@ test("Rename focuses and selects the current title, Cancel sends nothing and ret
 	const cancel = renameButton(ui.render(), "cancel");
 	assert.equal(cancel.props.children, "Cancel");
 	assert.equal(renameButton(ui.render(), "save").props.children, "Save");
-	Reflect.apply(cancel.props.onClick, undefined, []);
+	invoke(cancel.props.onClick, []);
 	assert.equal(element(ui.render(), Dialog).props.open, false);
 	element(ui.render(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
 	assert.equal(ui.returned.mock.calls.length, 1);
@@ -294,14 +475,14 @@ test("Rename blocks empty titles, implicit form submission, repeated Enter and I
 	ui.change("中文标题");
 	let input = element(ui.render(), Input);
 	assert.ok(input.props.onCompositionStart);
-	Reflect.apply(input.props.onCompositionStart, undefined, []);
+	invoke(input.props.onCompositionStart, []);
 	assert.equal(renameEnter(ui.render()).mock.calls.length, 0, "IME keeps its native key behavior");
 	input = element(ui.render(), Input);
 	assert.ok(input.props.onCompositionEnd);
-	Reflect.apply(input.props.onCompositionEnd, undefined, [{ timeStamp: 1000 }]);
+	invoke(input.props.onCompositionEnd, [{ timeStamp: 1000 }]);
 	assert.equal(renameEnter(ui.render(), { timeStamp: 1050 }).mock.calls.length, 1);
 	assert.ok(input.props.onKeyUp);
-	Reflect.apply(input.props.onKeyUp, undefined, []);
+	invoke(input.props.onKeyUp, []);
 	renameEnter(ui.render(), { isComposing: true });
 	renameEnter(ui.render(), { keyCode: 229 });
 	assert.equal(renameEnter(ui.render(), { repeat: true }).mock.calls.length, 1);
@@ -309,16 +490,96 @@ test("Rename blocks empty titles, implicit form submission, repeated Enter and I
 	const form = element(ui.render(), "form");
 	assert.ok(form.props.onSubmit);
 	const preventDefault = vi.fn();
-	Reflect.apply(form.props.onSubmit, undefined, [{ preventDefault }]);
+	invoke(form.props.onSubmit, [{ preventDefault }]);
 	assert.equal(preventDefault.mock.calls.length, 1);
 	const escapeEvent = new Event("keydown", { cancelable: true });
 	Object.assign(escapeEvent, { isComposing: true, keyCode: 229 });
-	Reflect.apply(element(ui.render(), DialogContent).props.onEscapeKeyDown, undefined, [escapeEvent]);
+	invoke(element(ui.render(), DialogContent).props.onEscapeKeyDown, [escapeEvent]);
 	assert.equal(escapeEvent.defaultPrevented, true);
 	assert.equal(call.mock.calls.length, 0);
 	assert.equal(ui.local.read("command.catalog"), null);
 	assert.equal(element(ui.render(), Dialog).props.open, true);
 	ui.session.dispose();
+});
+
+test("external collapse closes menus but retains an unsaved rename until Cancel releases its Motion presence", () => {
+	const ui = renameActions({ call: vi.fn(), observe: vi.fn() });
+	element(ui.render(), DropdownMenu).props.onOpenChange?.(true);
+	assert.equal(element(ui.render(), DropdownMenu).props.open, true);
+	ui.open();
+	ui.change("Keep this unsaved title");
+	hooks.present = false;
+	ui.hide();
+	let view = ui.render();
+	assert.equal(element(view, DropdownMenu).props.open, false);
+	assert.equal(element(view, Dialog).props.open, true);
+	assert.equal(element(view, Input).props.value, "Keep this unsaved title");
+	assert.equal(hooks.releasePresence.mock.calls.length, 0);
+	hooks.present = true;
+	ui.hide(false);
+	view = ui.render();
+	assert.equal(element(view, Dialog).props.open, true, "Re-expanding does not replace the dialog owner or draft");
+	assert.equal(element(view, Input).props.value, "Keep this unsaved title");
+	hooks.present = false;
+	ui.hide();
+	invoke(renameButton(ui.render(), "cancel").props.onClick, []);
+	view = ui.render();
+	assert.equal(element(view, Dialog).props.open, false);
+	assert.equal(hooks.releasePresence.mock.calls.length, 1);
+	element(view, DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.deepEqual(ui.returned.mock.calls, [["dialog"]]);
+	ui.session.dispose();
+});
+
+test("failed rename retains its owned modal through collapse without releasing its immutable command", async () => {
+	const ui = renameActions({
+		call: async (method) => {
+			if (method === "getConversationCommandResult") return parseResult(method, null);
+			throw new Error("Lost response");
+		},
+		observe: vi.fn(),
+	});
+	ui.open();
+	ui.change("Unconfirmed retained title");
+	const settled = catalogSettled(ui.session);
+	invoke(renameButton(ui.render(), "save").props.onClick, []);
+	await settled;
+	hooks.present = false;
+	ui.hide();
+	assert.equal(element(ui.render(), Dialog).props.open, true);
+	assert.equal(element(ui.render(), Input).props.value, "Unconfirmed retained title");
+	assert.equal(hooks.releasePresence.mock.calls.length, 0);
+	const pending = ui.local.read("command.catalog");
+	invoke(renameButton(ui.render(), "cancel").props.onClick, []);
+	ui.render();
+	assert.equal(hooks.releasePresence.mock.calls.length, 1);
+	assert.equal(ui.local.read("command.catalog"), pending);
+	ui.session.dispose();
+});
+
+test("collapse retires previews immediately and only explicit dialog return can focus its surviving heading", () => {
+	const ui = rowAndActions();
+	ui.focus();
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	const body = {};
+	const doc = { body, activeElement: body as unknown };
+	const focus = vi.fn();
+	const heading = { ownerDocument: doc, focus } as unknown as HTMLButtonElement;
+	hooks.sectionContext = { collapsed: true, heading: { current: heading } };
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+	vi.advanceTimersByTime(400);
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+	const menuClose = new Event("close", { cancelable: true });
+	element(ui.renderActions(), DropdownMenuContent).props.onCloseAutoFocus?.(menuClose);
+	assert.equal(focus.mock.calls.length, 0, "Forced menu close cannot take a newer focus owner");
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
+	doc.activeElement = { closest: () => null };
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(focus.mock.calls.length, 1, "An already-focused outside control wins");
+	doc.activeElement = { closest: () => ({ className: "conversation-rename-dialog" }) };
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(focus.mock.calls.length, 1, "A newer rename dialog has a different focus owner");
 });
 
 test("Rename Enter saves once with immutable title and revision, guards pending dismissal and closes after confirmation", async () => {
@@ -343,8 +604,8 @@ test("Rename Enter saves once with immutable title and revision, guards pending 
 	const finished = catalogSettled(ui.session);
 	assert.equal(renameEnter(before).mock.calls.length, 1);
 	renameEnter(before);
-	Reflect.apply(saveBeforeDispatch.props.onClick, undefined, []);
-	Reflect.apply(cancelBeforeDispatch.props.onClick, undefined, []);
+	invoke(saveBeforeDispatch.props.onClick, []);
+	invoke(cancelBeforeDispatch.props.onClick, []);
 	element(before, Dialog).props.onOpenChange?.(false);
 	assert.equal(element(ui.render(), Dialog).props.open, true);
 	assert.equal(element(ui.render(), DialogContent).props.closeDisabled, true);
@@ -352,7 +613,7 @@ test("Rename Enter saves once with immutable title and revision, guards pending 
 	assert.equal(renameButton(ui.render(), "cancel").props.disabled, true);
 	assert.equal(renameButton(ui.render(), "save").props.disabled, true);
 	const escapeEvent = new Event("keydown", { cancelable: true });
-	Reflect.apply(element(ui.render(), DialogContent).props.onEscapeKeyDown, undefined, [escapeEvent]);
+	invoke(element(ui.render(), DialogContent).props.onEscapeKeyDown, [escapeEvent]);
 	assert.equal(escapeEvent.defaultPrevented, true);
 	ui.source.title = "Later UI label";
 	ui.source.revision = 9;
@@ -393,7 +654,7 @@ test("unknown Rename keeps its original request and input, disables Save, and Cl
 	const before = ui.render();
 	const save = renameButton(before, "save");
 	const finished = catalogSettled(ui.session);
-	Reflect.apply(save.props.onClick, undefined, []);
+	invoke(save.props.onClick, []);
 	await finished;
 	await Promise.resolve();
 	const saved = ui.local.read("command.catalog");
@@ -404,13 +665,13 @@ test("unknown Rename keeps its original request and input, disables Save, and Cl
 	assert.equal(element(ui.render(), Input).props.disabled, true);
 	assert.equal(renameButton(ui.render(), "save").props.disabled, true);
 	renameEnter(before);
-	Reflect.apply(save.props.onClick, undefined, []);
+	invoke(save.props.onClick, []);
 	const close = renameButton(ui.render(), "cancel");
 	assert.equal(close.props.children, "Close", "Closing an unknown request must not imply cancellation");
 	assert.equal(close.props.disabled, false);
-	Reflect.apply(close.props.onClick, undefined, []);
+	invoke(close.props.onClick, []);
 	assert.equal(element(ui.render(), Dialog).props.open, false);
-	Reflect.apply(save.props.onClick, undefined, []);
+	invoke(save.props.onClick, []);
 	await Promise.resolve();
 	assert.deepEqual(calls, ["renameConversation", "getConversationCommandResult"]);
 	assert.equal(ui.local.read("command.catalog"), saved);
@@ -423,7 +684,7 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 	const ui = rowAndActions();
 	const row = element(ui.renderRow(), "div");
 	assert.ok(row.props.ref && typeof row.props.ref === "object");
-	Object.assign(row.props.ref, {
+	Object.assign(requiredRef(row.props.ref), {
 		current: { getBoundingClientRect: () => ({ right: 275, top: 80 }) },
 	});
 	const trigger = elements(ui.renderActions(), Button).find(
@@ -431,7 +692,7 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 	);
 	assert.ok(trigger);
 	assert.ok(trigger.props.ref && typeof trigger.props.ref === "object");
-	Object.assign(trigger.props.ref, {
+	Object.assign(requiredRef(trigger.props.ref), {
 		current: { getBoundingClientRect: () => ({ right: 263, top: 84 }), focus: vi.fn() },
 	});
 	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
@@ -513,8 +774,10 @@ test("keyboard Tab enters an interactive card and returns through its exact sour
 	};
 	const next = { ...source, focus: vi.fn() };
 	const control = { ...source, focus: vi.fn() };
-	Object.assign(row.props.ref, { current: { contains: (node: unknown) => node === source || node === next } });
-	Object.assign(card.props.ref, {
+	Object.assign(requiredRef(row.props.ref), {
+		current: { contains: (node: unknown) => node === source || node === next },
+	});
+	Object.assign(requiredRef(card.props.ref), {
 		current: { querySelectorAll: () => [control], contains: (node: unknown) => node === control },
 	});
 	vi.stubGlobal("document", {
@@ -535,15 +798,15 @@ test("keyboard Tab enters an interactive card and returns through its exact sour
 		preventDefault: vi.fn(),
 	};
 	for (const modifier of ["altKey", "ctrlKey", "metaKey"] as const)
-		Reflect.apply(element(view, "div").props.onKeyDown, undefined, [{ ...tab, [modifier]: true }]);
+		invoke(element(view, "div").props.onKeyDown, [{ ...tab, [modifier]: true }]);
 	assert.equal(control.focus.mock.calls.length, 0);
 	assert.equal(tab.preventDefault.mock.calls.length, 0, "OS and app Tab chords retain their native behavior");
-	Reflect.apply(element(view, "div").props.onKeyDown, undefined, [tab]);
+	invoke(element(view, "div").props.onKeyDown, [tab]);
 	assert.equal(tab.preventDefault.mock.calls.length, 1);
 	assert.equal(control.focus.mock.calls.length, 1);
 	view = ui.renderRow();
 	const back = { ...tab, shiftKey: true, target: control, preventDefault: vi.fn() };
-	Reflect.apply(element(view, PopoverContent).props.onKeyDown, undefined, [back]);
+	invoke(element(view, PopoverContent).props.onKeyDown, [back]);
 	assert.equal(back.preventDefault.mock.calls.length, 1);
 	assert.equal(source.focus.mock.calls.length, 1);
 	assert.equal(
@@ -553,9 +816,9 @@ test("keyboard Tab enters an interactive card and returns through its exact sour
 	);
 	ui.focus();
 	view = ui.renderRow();
-	Reflect.apply(element(view, "div").props.onKeyDown, undefined, [tab]);
+	invoke(element(view, "div").props.onKeyDown, [tab]);
 	view = ui.renderRow();
-	Reflect.apply(element(view, PopoverContent).props.onKeyDown, undefined, [{ ...tab, target: control }]);
+	invoke(element(view, PopoverContent).props.onKeyDown, [{ ...tab, target: control }]);
 	assert.equal(next.focus.mock.calls.length, 1);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
 });
@@ -574,14 +837,14 @@ test("active dragging closes an open preview and action hover cannot reopen it o
 	const ui = rowAndActions();
 	const target = new Target();
 	const pointer = { pointerType: "mouse", target, currentTarget: target };
-	Reflect.apply(element(ui.renderRow(), "div").props.onPointerEnter, undefined, [pointer]);
+	invoke(element(ui.renderRow(), "div").props.onPointerEnter, [pointer]);
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, true);
 	hooks.dragContext.state.source = true;
 	ui.renderRow();
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
-	Reflect.apply(element(ui.renderRow(), "div").props.onPointerMove, undefined, [pointer]);
-	Reflect.apply(element(ui.renderRow(), "div").props.onPointerEnter, undefined, [pointer]);
+	invoke(element(ui.renderRow(), "div").props.onPointerMove, [pointer]);
+	invoke(element(ui.renderRow(), "div").props.onPointerEnter, [pointer]);
 	vi.advanceTimersByTime(500);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
 	hooks.dragContext.state.source = false;
@@ -611,21 +874,19 @@ test("reverse pointer travel uses the row corridor and stopping in the gap retai
 	rowNode.nodes = [source];
 	const cardNode = new Target();
 	cardNode.getBoundingClientRect = () => ({ left: 277, right: 597, top: 80, bottom: 220 });
-	Object.assign(row.props.ref, { current: rowNode });
-	Object.assign(card.props.ref, { current: cardNode });
+	Object.assign(requiredRef(row.props.ref), { current: rowNode });
+	Object.assign(requiredRef(card.props.ref), { current: cardNode });
 	vi.stubGlobal("document", {
 		activeElement: null,
 		body: {},
 		addEventListener: (name: string, handler: (event: unknown) => void) => events.set(name, handler),
 		removeEventListener: (name: string) => events.delete(name),
 	});
-	Reflect.apply(row.props.onPointerEnter, undefined, [
-		{ pointerType: "mouse", target: source, currentTarget: rowNode },
-	]);
+	invoke(row.props.onPointerEnter, [{ pointerType: "mouse", target: source, currentTarget: rowNode }]);
 	vi.advanceTimersByTime(200);
 	let view = ui.renderRow();
 	assert.equal(element(view, Popover).props.open, true);
-	Reflect.apply(element(view, PopoverContent).props.onPointerLeave, undefined, [{ clientX: 277, clientY: 200 }]);
+	invoke(element(view, PopoverContent).props.onPointerLeave, [{ clientX: 277, clientY: 200 }]);
 	view = ui.renderRow();
 	assert.ok(events.get("pointermove"));
 	events.get("pointermove")?.({ pointerType: "mouse", target: new Target(), clientX: 276, clientY: 155 });
@@ -708,20 +969,19 @@ function adjacentPreviews() {
 		const control = new Target(top);
 		cardNode.nodes = [control];
 		const view = render();
-		Object.assign(element(view, "div").props.ref, { current: rowNode });
-		Object.assign(element(view, PopoverContent).props.ref, { current: cardNode });
+		Object.assign(requiredRef(element(view, "div").props.ref), { current: rowNode });
+		Object.assign(requiredRef(element(view, PopoverContent).props.ref), { current: cardNode });
 		const event = { pointerType: "mouse", target: main, currentTarget: rowNode, clientX: 100, clientY: top + 18 };
 		return {
 			render,
 			control,
-			enter: () => Reflect.apply(element(render(), "div").props.onPointerEnter, undefined, [event]),
-			leave: () =>
-				Reflect.apply(element(render(), "div").props.onPointerLeave, undefined, [{ ...event, clientY: top + 36 }]),
+			enter: () => invoke(element(render(), "div").props.onPointerEnter, [event]),
+			leave: () => invoke(element(render(), "div").props.onPointerLeave, [{ ...event, clientY: top + 36 }]),
 			move: () => {
 				for (const listener of [...listeners]) listener(event);
-				Reflect.apply(element(render(), "div").props.onPointerMove, undefined, [event]);
+				invoke(element(render(), "div").props.onPointerMove, [event]);
 			},
-			focus: () => Reflect.apply(element(render(), "div").props.onFocusCapture, undefined, [event]),
+			focus: () => invoke(element(render(), "div").props.onFocusCapture, [event]),
 			open: () => element(render(), Popover).props.open,
 			overlay: (owner: "menu" | "dialog", open: boolean) => actions?.onOverlayChange(owner, open),
 			metadata: (value: string) => {
@@ -763,7 +1023,7 @@ test("only focused card controls protect a preview; destination keyboard focus c
 	assert.equal(b.open(), true);
 	a.focus();
 	document.activeElement = a.control;
-	Reflect.apply(element(a.render(), PopoverContent).props.onFocusCapture, undefined, []);
+	invoke(element(a.render(), PopoverContent).props.onFocusCapture, []);
 	b.move();
 	assert.equal(a.open(), true);
 	assert.equal(b.open(), false);
@@ -1009,7 +1269,7 @@ test("direct Archive follows the same immutable guard and unknown-request owner 
 		);
 	const direct = elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation");
 	assert.ok(direct?.props.onClick);
-	Reflect.apply(direct.props.onClick, undefined, []);
+	invoke(direct.props.onClick, []);
 	assert.equal(calls.length, 0);
 	source.revision = 8;
 	const settled = catalogSettled(session);
@@ -1021,7 +1281,7 @@ test("direct Archive follows the same immutable guard and unknown-request owner 
 		elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation")?.props.disabled,
 		true,
 	);
-	Reflect.apply(direct.props.onClick, undefined, []);
+	invoke(direct.props.onClick, []);
 	continueAction?.();
 	await Promise.resolve();
 	assert.deepEqual(
@@ -1082,14 +1342,14 @@ test("First page retains origin focus while busy and restores list focus when th
 	const first = element(render(), Button);
 	assert.equal(first.props.children, "First page");
 	assert.ok(first.props.onClick);
-	Reflect.apply(first.props.onClick, undefined, [{ currentTarget: button }]);
+	invoke(first.props.onClick, [{ currentTarget: button }]);
 	assert.equal(pages.restart.mock.calls.length, 1);
 	pages.isFetching = true;
 	const busy = element(render(), Button);
 	assert.equal(busy.props["aria-disabled"], true);
 	assert.equal(busy.props.disabled, undefined, "busy controls remain focusable");
 	assert.ok(busy.props.onClick);
-	Reflect.apply(busy.props.onClick, undefined, [{ currentTarget: button }]);
+	invoke(busy.props.onClick, [{ currentTarget: button }]);
 	assert.equal(pages.restart.mock.calls.length, 1);
 	pages.canRestart = false;
 	pages.windowed = false;
@@ -1128,6 +1388,6 @@ test("bounded pagination labels disclose eviction and an error blocks Load more 
 	const more = buttons.find((entry) => entry.props.children === "Load more");
 	assert.ok(more?.props.onClick);
 	assert.equal(more.props["aria-disabled"], true);
-	Reflect.apply(more.props.onClick, undefined, []);
+	invoke(more.props.onClick, []);
 	assert.equal(pages.loadMore.mock.calls.length, 0);
 });

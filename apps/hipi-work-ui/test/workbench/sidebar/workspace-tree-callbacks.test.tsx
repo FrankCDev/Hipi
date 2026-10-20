@@ -4,7 +4,11 @@ import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../../../src/components/ui/button.tsx";
-import { DropdownMenuContent, DropdownMenuRadioGroup } from "../../../src/components/ui/dropdown-menu.tsx";
+import {
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+} from "../../../src/components/ui/dropdown-menu.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
@@ -29,6 +33,7 @@ vi.mock("react", async () => {
 	const actual = await vi.importActual<typeof React>("react");
 	return {
 		...actual,
+		useContext: () => null,
 		useId: () => "branch-id",
 		useRef: (value: unknown) => {
 			const index = fixture.refIndex++;
@@ -81,6 +86,7 @@ function fixtureTree(defaultWorkspaceId?: string) {
 	const toggle = vi.fn();
 	const open = vi.fn();
 	const draft = vi.fn();
+	const manage = vi.fn();
 	const props = {
 		catalog: session,
 		guard: (action: () => void) => action(),
@@ -93,6 +99,7 @@ function fixtureTree(defaultWorkspaceId?: string) {
 		onOpenProject: open,
 		onSelect: vi.fn(),
 		onNewConversation: draft,
+		onManageProjectFolder: manage,
 	};
 	const render = (index = 0) => {
 		const children = only(WorkspaceTree(props), "ul").props.children;
@@ -102,7 +109,7 @@ function fixtureTree(defaultWorkspaceId?: string) {
 		for (const effect of fixture.effects.splice(0)) effect();
 		return result;
 	};
-	return { render, toggle, open, draft, session };
+	return { render, toggle, open, draft, manage, session };
 }
 beforeEach(() => {
 	fixture.filter = "active";
@@ -162,6 +169,7 @@ test("disclosure, project navigation and direct draft entry are three independen
 		onReturnFocus: vi.fn(),
 		active: false,
 		inlineActions: true,
+		hidden: false,
 	});
 	const draft = only(actions, Button);
 	assert.equal(draft.props.className, "project-new-conversation");
@@ -185,6 +193,7 @@ test("archive visibility is changed by the project menu and opens only that coll
 		onReturnFocus: vi.fn(),
 		active: false,
 		inlineActions: true,
+		hidden: false,
 	});
 	const children = only(actions, "div").props.children;
 	assert.ok(Array.isArray(children));
@@ -217,4 +226,31 @@ test("verified Recent is always readable, has no project navigation, and preserv
 	assert.equal(fixture.options?.enabled, true);
 	assert.equal(ui.toggle.mock.calls.length, 0);
 	assert.equal(fixture.call.mock.calls.length, 0);
+});
+
+test("project folder dialog returns through the explicit dialog owner, not a hidden row-menu callback", () => {
+	const ui = fixtureTree();
+	const row = only(ui.render(), SidebarPreviewRow);
+	const returned = vi.fn();
+	const actions = row.props.renderActions?.({
+		previewContent: null,
+		menuPosition: { sideOffset: 40, alignOffset: -4 },
+		triggerRef: { current: null },
+		onMenuOpen: vi.fn(),
+		onOverlayChange: vi.fn(),
+		onReturnFocus: returned,
+		active: false,
+		inlineActions: true,
+		hidden: true,
+	});
+	const children = only(actions, "div").props.children;
+	assert.ok(Array.isArray(children));
+	const menu = invoke(children[0]);
+	only(menu, DropdownMenuItem).props.onSelect?.(new Event("select"));
+	assert.equal(ui.manage.mock.calls.length, 1);
+	assert.equal(ui.manage.mock.calls[0]?.[0].workspaceId, "project");
+	const restore: unknown = ui.manage.mock.calls[0]?.[1];
+	assert.ok(typeof restore === "function");
+	restore();
+	assert.deepEqual(returned.mock.calls, [["dialog"]]);
 });

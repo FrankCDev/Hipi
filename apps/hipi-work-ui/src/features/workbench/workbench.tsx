@@ -41,7 +41,8 @@ import { filePanelLabels } from "./files/panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./projects/folder.tsx";
 import { ConversationSearch } from "./search/search.tsx";
-import { SidebarDragProvider, type SidebarOrderAction, SidebarOrderSection } from "./sidebar/drag-provider.tsx";
+import { SidebarDisclosureSession } from "./sidebar/disclosure-session.ts";
+import { SidebarDragProvider, type SidebarOrderAction } from "./sidebar/drag-provider.tsx";
 import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar/layout-session.ts";
 import { sidebarOrderLabels } from "./sidebar/order-labels.ts";
 import { PinRecovery, presentationKey } from "./sidebar/pin-conversation.tsx";
@@ -49,6 +50,9 @@ import { pinLabels } from "./sidebar/pin-labels.ts";
 import { PinnedConversations } from "./sidebar/pinned-conversations.tsx";
 import { PresentationSession } from "./sidebar/presentation-session.ts";
 import { SidebarPreviewProvider } from "./sidebar/preview-provider.tsx";
+import { visibleSidebarProjects } from "./sidebar/project-visibility.ts";
+import { SidebarOrderSection, SidebarSectionContent, SidebarSectionHeading } from "./sidebar/section.tsx";
+import { sidebarSectionLabels } from "./sidebar/section-labels.ts";
 import { WorkspaceTree } from "./sidebar/workspace-tree.tsx";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
@@ -100,6 +104,20 @@ export function Workbench({
 	const presentation = useMemo(() => new PresentationSession(client, local), [client, local]);
 	const layout = useMemo(() => new SidebarLayoutSession(local), [local]);
 	const layoutState = useSyncExternalStore(layout.subscribe, layout.getSnapshot, layout.getSnapshot);
+	const disclosure = useMemo(() => new SidebarDisclosureSession(local), [local]);
+	const disclosureState = useSyncExternalStore(disclosure.subscribe, disclosure.getSnapshot, disclosure.getSnapshot);
+	useEffect(() => {
+		disclosure.activate();
+		void disclosure.refresh();
+		const refresh = (event: StorageEvent) => {
+			if (event.key === null || event.key.endsWith(".value.sidebar.disclosure")) void disclosure.refresh();
+		};
+		window.addEventListener("storage", refresh);
+		return () => {
+			window.removeEventListener("storage", refresh);
+			disclosure.dispose();
+		};
+	}, [disclosure]);
 	const [pinnedVisible, setPinnedVisible] = useState(false);
 	const [orderAnnouncement, setOrderAnnouncement] = useState("");
 	useEffect(() => {
@@ -161,6 +179,7 @@ export function Workbench({
 	const { t, locale } = usePreferences();
 	const [selectedWorkspace, setSelectedWorkspace] = useState(() => local.read("workspace") ?? "");
 	const [selectedConversation, setSelectedConversation] = useState(() => local.read("conversation") ?? "");
+	const [sidebarSelection, setSidebarSelection] = useState<SidebarSection | null>(null);
 	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
 	const navigationRevision = useRef(0);
 	useEffect(() => {
@@ -181,6 +200,11 @@ export function Workbench({
 		return () => media.removeEventListener("change", update);
 	}, []);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+	const [projectFilters, setProjectFilters] = useState<Record<string, "active" | "archived">>({});
+	const [projectListExpanded, setProjectListExpanded] = useState(false);
+	useLayoutEffect(() => {
+		if (disclosureState.collapsed.projects) setProjectListExpanded(false);
+	}, [disclosureState.collapsed.projects]);
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [reopenFailure, setReopenFailure] = useState<"failed" | "limit" | null>(null);
 	const [pinLookupFailed, setPinLookupFailed] = useState(false);
@@ -267,6 +291,12 @@ export function Workbench({
 		.map((item) => item.workspaceId);
 	const projectOrder = mergeOrder(layoutState.projects, projectIds);
 	const orderedProjects = layout.orderedProjects(projectIds);
+	const visibleProjects = visibleSidebarProjects(
+		orderedProjects,
+		projectListExpanded,
+		selectedConversation && sidebarSelection === "projects" ? selectedWorkspace : "",
+		workspaces.hasMore,
+	);
 	const workspaceById = new Map(workspaces.items.map((item) => [item.workspaceId, item]));
 	const orderedWorkspaces = [
 		...orderedProjects.flatMap((id) => {
@@ -276,6 +306,12 @@ export function Workbench({
 		...workspaces.items.filter((item) => item.workspaceId === catalog.defaultWorkspaceId()),
 	];
 	const layoutBlocked = layoutState.busy || layoutState.incompatible || !!layoutState.pending;
+	const disclosureBlocked = disclosureState.busy || disclosureState.incompatible || !!disclosureState.pending;
+	const disclosureProps = (section: SidebarSection) => ({
+		collapsed: disclosureState.collapsed[section],
+		disabled: disclosureBlocked,
+		onCollapsedChange: (collapsed: boolean) => void disclosure.setCollapsed(section, collapsed),
+	});
 	const visibleSections = layoutState.sections.filter(
 		(id) => id === "projects" || (id === "pinned" ? pinnedVisible : !!catalog.defaultWorkspaceId()),
 	);
@@ -288,7 +324,7 @@ export function Workbench({
 				id,
 				group: "sections",
 				label: id === "pinned" ? pinLabels(locale).pinned : id === "recent" ? cl.recent : t("nav.workspaces"),
-				revision: `${layoutState.revision}:${layoutBlocked}`,
+				revision: `${layoutState.revision}:${layoutBlocked}:${disclosureState.revisions[id]}`,
 				disabled: layoutBlocked,
 				after: layoutState.sections[fullIndex + 1] ?? null,
 				move: (before) => {
@@ -306,10 +342,10 @@ export function Workbench({
 		};
 	};
 	const projectAction = (item: Workspace): SidebarOrderAction => {
-		const index = orderedProjects.indexOf(item.workspaceId);
+		const index = visibleProjects.indexOf(item.workspaceId);
 		const after = (id: string) => projectOrder[projectOrder.indexOf(id) + 1] ?? null;
 		const disabled = layoutBlocked || workspaces.isFetching || workspaces.isError;
-		const next = orderedProjects[index + 1];
+		const next = visibleProjects[index + 1];
 		return {
 			item: {
 				id: item.workspaceId,
@@ -327,7 +363,7 @@ export function Workbench({
 					});
 				},
 			},
-			up: index > 0 ? orderedProjects[index - 1] : undefined,
+			up: index > 0 ? visibleProjects[index - 1] : undefined,
 			down: next ? after(next) : undefined,
 		};
 	};
@@ -446,6 +482,7 @@ export function Workbench({
 		openSearch,
 	]);
 	const selectWorkspace = (id: string) => {
+		setSidebarSelection(null);
 		navigationRevision.current++;
 		session?.setWorkspace(id);
 		currentScope.current = { workspaceId: id, conversationId: "" };
@@ -460,6 +497,7 @@ export function Workbench({
 	};
 	const selectConversation = (item: Conversation, onSelected?: () => void) => {
 		const select = () => {
+			setSidebarSelection(null);
 			setSearchAnchor(undefined);
 			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
 			navigationRevision.current++;
@@ -479,6 +517,7 @@ export function Workbench({
 	const openNewConversation = (requestedWorkspaceId: string) => {
 		const workspaceId = requestedWorkspaceId === catalog.defaultWorkspaceId() ? "" : requestedWorkspaceId;
 		const open = () => {
+			setSidebarSelection(null);
 			setSearchAnchor(undefined);
 			navigationRevision.current++;
 			session?.setWorkspace(workspaceId);
@@ -640,11 +679,17 @@ export function Workbench({
 		isExpanded,
 		onToggle: (id: string) => setProjectExpanded(id, !isExpanded(id)),
 		onOpenProject: selectWorkspace,
-		onSelect: selectConversation,
+		onSelect: (item: Conversation) => {
+			selectConversation(item);
+			setSidebarSelection(item.workspaceId === catalog.defaultWorkspaceId() ? "recent" : "projects");
+		},
 		onNewConversation: openNewConversation,
 		defaultWorkspaceId: catalog.defaultWorkspaceId(),
 		onManageProjectFolder: manageProjectFolder,
 		projectOrder: projectAction,
+		filterFor: (id: string) => projectFilters[id] ?? "active",
+		onFilterChange: (id: string, filter: "active" | "archived") =>
+			setProjectFilters((current) => ({ ...current, [id]: filter })),
 	};
 
 	return (
@@ -746,64 +791,89 @@ export function Workbench({
 											presentation={presentation}
 											selectedWorkspace={selectedWorkspace}
 											selectedConversation={selectedConversation}
-											onSelect={selectConversation}
+											onSelect={(item) => {
+												selectConversation(item);
+												setSidebarSelection("pinned");
+											}}
 											sectionAction={sectionAction(section)}
 											onVisibleChange={setPinnedVisible}
+											collapsed={disclosureState.collapsed.pinned}
+											disclosureDisabled={disclosureBlocked}
+											onCollapsedChange={(collapsed) => void disclosure.setCollapsed("pinned", collapsed)}
 										/>
 									) : section === "recent" ? (
 										catalog.defaultWorkspaceId() ? (
-											<SidebarOrderSection key={section} action={sectionAction(section)}>
+											<SidebarOrderSection key={section} action={sectionAction(section)} {...disclosureProps(section)}>
 												<WorkspaceTree {...workspaceTreeProps} section="recent" />
 											</SidebarOrderSection>
 										) : null
 									) : (
-										<SidebarOrderSection key={section} action={sectionAction(section)}>
-											<div className="nav-section-heading">
-												<span>{t("nav.workspaces")}</span>
-												<CreateDialog
-													disabled={catalogBlocked}
-													kind="workspace"
-													compact
-													onCreate={createWorkspace}
-													chooseFolder={fileAuthority?.prepareProject}
-													forgetFolder={fileAuthority?.forgetProjectSelection}
+										<SidebarOrderSection key={section} action={sectionAction(section)} {...disclosureProps(section)}>
+											<SidebarSectionHeading
+												actions={
+													<CreateDialog
+														disabled={catalogBlocked}
+														kind="workspace"
+														compact
+														onCreate={createWorkspace}
+														chooseFolder={fileAuthority?.prepareProject}
+														forgetFolder={fileAuthority?.forgetProjectSelection}
+													/>
+												}
+											>
+												{t("nav.workspaces")}
+											</SidebarSectionHeading>
+											<SidebarSectionContent>
+												{workspaces.isPending && !workspaces.hasData && (
+													<output className="nav-feedback">{t("common.loading")}</output>
+												)}
+												{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
+													<output className="catalog-refresh-status">{t("common.loading")}</output>
+												)}
+												{workspaces.isError && (
+													<div className="nav-feedback" role="alert">
+														<p>
+															{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
+																? t("connection.storeMismatch")
+																: workspaces.staleCursor
+																	? cl.staleList
+																	: workspaces.isLoadMoreError
+																		? cl.loadMoreFailed
+																		: workspaces.hasData
+																			? cl.refreshFailed
+																			: t("nav.loadError")}
+														</p>
+														<Button
+															variant="outline"
+															size="sm"
+															disabled={workspaces.isFetching}
+															onClick={() => void workspaces.retry()}
+														>
+															<Icon name="refresh" size={14} />
+															{t("nav.refresh")}
+														</Button>
+													</div>
+												)}
+												{workspaces.isSuccess && workspaces.items.length === 0 && (
+													<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
+												)}
+												<WorkspaceTree
+													{...workspaceTreeProps}
+													workspaces={orderedWorkspaces.filter((item) => visibleProjects.includes(item.workspaceId))}
+													section="projects"
 												/>
-											</div>
-											{workspaces.isPending && !workspaces.hasData && (
-												<output className="nav-feedback">{t("common.loading")}</output>
-											)}
-											{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
-												<output className="catalog-refresh-status">{t("common.loading")}</output>
-											)}
-											{workspaces.isError && (
-												<div className="nav-feedback" role="alert">
-													<p>
-														{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-															? t("connection.storeMismatch")
-															: workspaces.staleCursor
-																? cl.staleList
-																: workspaces.isLoadMoreError
-																	? cl.loadMoreFailed
-																	: workspaces.hasData
-																		? cl.refreshFailed
-																		: t("nav.loadError")}
-													</p>
+												{!projectListExpanded && orderedProjects.length > visibleProjects.length && (
 													<Button
-														variant="outline"
+														variant="ghost"
 														size="sm"
-														disabled={workspaces.isFetching}
-														onClick={() => void workspaces.retry()}
+														className="sidebar-project-show-more"
+														onClick={() => setProjectListExpanded(true)}
 													>
-														<Icon name="refresh" size={14} />
-														{t("nav.refresh")}
+														{t("work.showMore")}
 													</Button>
-												</div>
-											)}
-											{workspaces.isSuccess && workspaces.items.length === 0 && (
-												<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
-											)}
-											<WorkspaceTree {...workspaceTreeProps} section="projects" />
-											<CatalogPagination pages={workspaces} listRef={navigationList} />
+												)}
+												<CatalogPagination pages={workspaces} listRef={navigationList} />
+											</SidebarSectionContent>
 										</SidebarOrderSection>
 									),
 								)}
@@ -812,6 +882,35 @@ export function Workbench({
 						<output className="sr-only" aria-live="polite">
 							{orderAnnouncement}
 						</output>
+						{(disclosureState.failed || disclosureState.stale || disclosureState.incompatible) && (
+							<section className="nav-feedback" aria-live="polite">
+								<p role="alert">
+									{
+										sidebarSectionLabels(locale)[
+											disclosureState.incompatible ? "incompatible" : disclosureState.stale ? "stale" : "failed"
+										]
+									}
+								</p>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={disclosureState.busy}
+									onClick={() => void disclosure.refresh()}
+								>
+									{sidebarSectionLabels(locale).refresh}
+								</Button>
+								{disclosureState.pending && (
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={disclosureState.busy}
+										onClick={() => void disclosure.retry()}
+									>
+										{sidebarSectionLabels(locale).retry}
+									</Button>
+								)}
+							</section>
+						)}
 						{(layoutState.failed || layoutState.stale || layoutState.incompatible) && (
 							<section className="nav-feedback" aria-live="polite">
 								<p role="alert">

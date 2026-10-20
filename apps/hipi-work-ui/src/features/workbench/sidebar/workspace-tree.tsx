@@ -26,6 +26,7 @@ import type { SidebarOrderAction } from "./drag-provider.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./preview-row.tsx";
 import { ProjectPreviewCard } from "./project-preview-card.tsx";
+import { SidebarSectionContent, SidebarSectionHeading, useSidebarSection } from "./section.tsx";
 import { SidebarTitle } from "./title.tsx";
 import "./layout.css";
 
@@ -45,6 +46,8 @@ type TreeProps = {
 	onManageProjectFolder?: (workspace: Workspace, restoreFocus?: () => void) => void;
 	section?: "projects" | "recent";
 	projectOrder?: (workspace: Workspace) => SidebarOrderAction;
+	filterFor?: (workspaceId: string) => "active" | "archived";
+	onFilterChange?: (workspaceId: string, filter: "active" | "archived") => void;
 };
 
 /** Each expanded branch shows a bounded catalog window, never execution streams. */
@@ -73,6 +76,7 @@ export function WorkspaceTree(props: TreeProps) {
 }
 
 function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Workspace }) {
+	const sectionCollapsed = useSidebarSection()?.collapsed ?? false;
 	const client = useAppClient();
 	const { t, locale } = usePreferences();
 	const regionId = useId();
@@ -85,6 +89,10 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const region = useRef<HTMLElement>(null);
 	const focusedRow = useRef<HTMLElement | null>(null);
 	useLayoutEffect(() => {
+		if (sectionCollapsed) {
+			focusedRow.current = null;
+			return;
+		}
 		const previous = focusedRow.current;
 		if (!previous || previous.isConnected || document.activeElement !== document.body) return;
 		focusedRow.current = null;
@@ -92,7 +100,12 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 		// Restore from the actual DOM commit, never an estimated number of animation frames.
 		region.current?.focus({ preventScroll: true });
 	});
-	const [filter, setFilter] = useState<"active" | "archived">("active");
+	const [localFilter, setLocalFilter] = useState<"active" | "archived">("active");
+	const filter = props.filterFor?.(workspace.workspaceId) ?? localFilter;
+	const setFilter = (value: "active" | "archived") => {
+		if (props.onFilterChange) props.onFilterChange(workspace.workspaceId, value);
+		else setLocalFilter(value);
+	};
 	const cl = catalogLabels(locale);
 	const conversations = useCatalogPages({
 		queryKey: ["conversations", workspace.workspaceId, filter],
@@ -107,6 +120,83 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	});
 	const containsCurrent = props.selectedWorkspace === workspace.workspaceId && !!props.selectedConversation;
 	const current = props.selectedWorkspace === workspace.workspaceId && !props.selectedConversation;
+	const conversationsContent = (
+		<section
+			ref={region}
+			id={regionId}
+			aria-labelledby={headingId}
+			hidden={!expanded}
+			className="project-conversations"
+			tabIndex={-1}
+			aria-busy={expanded && conversations.isFetching}
+			onFocusCapture={(event) => {
+				if (event.currentTarget.contains(event.target) && event.target.closest(".conversation-preview-row"))
+					focusedRow.current = event.target;
+			}}
+		>
+			{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
+			{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
+			{expanded && conversations.hasData && conversations.isFetching && !conversations.isLoadingMore && (
+				<output className="nav-feedback catalog-refresh-status">{cl.refreshing}</output>
+			)}
+			{expanded && conversations.isError && (
+				<div className="nav-feedback" role="alert">
+					<p>
+						{conversations.error instanceof AppError && conversations.error.code === "STORE_MISMATCH"
+							? t("connection.storeMismatch")
+							: conversations.staleCursor
+								? cl.staleList
+								: conversations.isLoadMoreError
+									? cl.loadMoreFailed
+									: conversations.hasData
+										? cl.refreshFailed
+										: t("nav.loadError")}
+					</p>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={conversations.isFetching}
+						onClick={() => void conversations.retry()}
+					>
+						<Icon name="refresh" size={14} />
+						{t("nav.refresh")}
+					</Button>
+				</div>
+			)}
+			{expanded && (
+				<ul className="conversation-list">
+					{conversations.items.map((conversation) => (
+						<li key={conversation.conversationId} className="conversation-nav-item">
+							<ConversationPreview
+								conversation={conversation}
+								workspaceName={recent ? undefined : workspace.name}
+								selected={
+									props.selectedWorkspace === workspace.workspaceId &&
+									props.selectedConversation === conversation.conversationId
+								}
+								onSelect={() => props.onSelect(conversation)}
+								renderActions={(controls) => (
+									<ConversationActions
+										conversation={conversation}
+										session={props.catalog}
+										presentation={props.presentation}
+										guard={props.guard}
+										{...controls}
+									/>
+								)}
+							/>
+						</li>
+					))}
+				</ul>
+			)}
+			{expanded && conversations.isSuccess && conversations.items.length === 0 && (
+				<div className="nav-feedback nav-empty-state">
+					<p>{filter === "archived" ? cl.emptyArchived : t("nav.empty")}</p>
+				</div>
+			)}
+			{expanded && <CatalogPagination pages={conversations} listRef={region} />}
+		</section>
+	);
 	return (
 		<li
 			className={`workspace-branch${recent ? " recent-conversations" : ""}`}
@@ -116,8 +206,12 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 		>
 			{recent ? (
 				<div className="recent-conversations-heading">
-					<h3 id={headingId}>{cl.recent}</h3>
-					<ProjectConversationMenu name={cl.recent} filter={filter} onFilterChange={setFilter} />
+					<SidebarSectionHeading
+						titleId={headingId}
+						actions={<ProjectConversationMenu name={cl.recent} filter={filter} onFilterChange={setFilter} />}
+					>
+						{cl.recent}
+					</SidebarSectionHeading>
 				</div>
 			) : (
 				<SidebarPreviewRow
@@ -148,7 +242,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 								controls={controls}
 								onManageFolder={
 									props.onManageProjectFolder
-										? () => props.onManageProjectFolder?.(workspace, controls.onReturnFocus)
+										? () => props.onManageProjectFolder?.(workspace, () => controls.onReturnFocus("dialog"))
 										: undefined
 								}
 								onFilterChange={(value) => {
@@ -208,81 +302,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 					)}
 				</SidebarPreviewRow>
 			)}
-			<section
-				ref={region}
-				id={regionId}
-				aria-labelledby={headingId}
-				hidden={!expanded}
-				className="project-conversations"
-				tabIndex={-1}
-				aria-busy={expanded && conversations.isFetching}
-				onFocusCapture={(event) => {
-					if (event.currentTarget.contains(event.target) && event.target.closest(".conversation-preview-row"))
-						focusedRow.current = event.target;
-				}}
-			>
-				{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
-				{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
-				{expanded && conversations.hasData && conversations.isFetching && !conversations.isLoadingMore && (
-					<output className="nav-feedback catalog-refresh-status">{cl.refreshing}</output>
-				)}
-				{expanded && conversations.isError && (
-					<div className="nav-feedback" role="alert">
-						<p>
-							{conversations.error instanceof AppError && conversations.error.code === "STORE_MISMATCH"
-								? t("connection.storeMismatch")
-								: conversations.staleCursor
-									? cl.staleList
-									: conversations.isLoadMoreError
-										? cl.loadMoreFailed
-										: conversations.hasData
-											? cl.refreshFailed
-											: t("nav.loadError")}
-						</p>
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={conversations.isFetching}
-							onClick={() => void conversations.retry()}
-						>
-							<Icon name="refresh" size={14} />
-							{t("nav.refresh")}
-						</Button>
-					</div>
-				)}
-				{expanded && (
-					<ul className="conversation-list">
-						{conversations.items.map((conversation) => (
-							<li key={conversation.conversationId} className="conversation-nav-item">
-								<ConversationPreview
-									conversation={conversation}
-									workspaceName={recent ? undefined : workspace.name}
-									selected={
-										props.selectedWorkspace === workspace.workspaceId &&
-										props.selectedConversation === conversation.conversationId
-									}
-									onSelect={() => props.onSelect(conversation)}
-									renderActions={(controls) => (
-										<ConversationActions
-											conversation={conversation}
-											session={props.catalog}
-											presentation={props.presentation}
-											guard={props.guard}
-											{...controls}
-										/>
-									)}
-								/>
-							</li>
-						))}
-					</ul>
-				)}
-				{expanded && conversations.isSuccess && conversations.items.length === 0 && (
-					<div className="nav-feedback nav-empty-state">
-						<p>{filter === "archived" ? cl.emptyArchived : t("nav.empty")}</p>
-					</div>
-				)}
-				{expanded && <CatalogPagination pages={conversations} listRef={region} />}
-			</section>
+			{recent ? <SidebarSectionContent>{conversationsContent}</SidebarSectionContent> : conversationsContent}
 		</li>
 	);
 }
@@ -302,9 +322,17 @@ function ProjectConversationMenu({
 }) {
 	const { locale } = usePreferences();
 	const cl = catalogLabels(locale);
+	const [open, setOpen] = useState(false);
+	useLayoutEffect(() => {
+		if (!controls?.hidden || !open) return;
+		setOpen(false);
+		controls.onOverlayChange("menu", false);
+	}, [controls, open]);
 	return (
 		<DropdownMenu
+			open={open && !controls?.hidden}
 			onOpenChange={(open) => {
+				setOpen(open);
 				controls?.onOverlayChange("menu", open);
 				if (open) controls?.onMenuOpen();
 			}}
@@ -327,6 +355,7 @@ function ProjectConversationMenu({
 				alignOffset={controls?.menuPosition.alignOffset}
 				collisionPadding={12}
 				className="project-action-menu"
+				data-sidebar-row-portal={controls ? "" : undefined}
 				onCloseAutoFocus={(event) => {
 					if (!controls) return;
 					event.preventDefault();

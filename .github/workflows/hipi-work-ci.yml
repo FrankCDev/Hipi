@@ -97,6 +97,20 @@ jobs:
         run: node apps/hipi-work-desktop/scripts/package-release.mjs --${{ matrix.arch }}
       - name: Smoke relocated package and platform-specific offline maintenance
         run: node apps/hipi-work-desktop/scripts/smoke-packaged.mjs
+      - name: Verify independent real packaged sidebar before other UI gates
+        id: sidebar
+        run: node --conditions=source apps/hipi-work-desktop/scripts/smoke-packaged-sidebar.mjs
+      - name: Retain sidebar evidence even when validation fails
+        if: ${{ always() && steps.sidebar.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-sidebar-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-sidebar/*.json
+            .artifacts/hipi-work/packages/gui-sidebar/*.png
+            .artifacts/hipi-work/packages/gui-sidebar/*.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify real packaged desktop deterministic UI and restart
         id: gui_smoke
         run: node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs

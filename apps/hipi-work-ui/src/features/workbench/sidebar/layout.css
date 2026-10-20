@@ -36,7 +36,7 @@
 
 .sidebar .nav-section-heading {
 	font-size: calc(var(--font-ui-size) - 1px);
-	font-weight: 430;
+	font-weight: inherit;
 	letter-spacing: 0;
 }
 
@@ -59,9 +59,9 @@
 	line-height: 1.5;
 }
 
-nav .workspace-tree {
+.sidebar .workspace-tree {
 	gap: 4px;
-	font-size: calc(var(--font-ui-size) - 1px);
+	font-size: var(--font-ui-size);
 }
 
 .workspace-tree .sidebar-preview-row {
@@ -105,7 +105,7 @@ nav .workspace-tree {
 }
 
 .workspace-tree .project-name {
-	font-weight: 430;
+	font-weight: inherit;
 }
 
 .workspace-tree .project-conversations {
@@ -413,24 +413,42 @@ nav .workspace-tree {
 	position: relative;
 }
 
-.sidebar-order-section > .sidebar-section-handle {
-	position: absolute;
-	inset-inline-start: 0;
-	top: 2px;
-	width: 18px;
-	height: 28px;
-	min-height: 28px;
-	padding: 0;
-	z-index: 1;
-	color: var(--muted);
-	cursor: grab;
+.sidebar-section-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+}
+
+.sidebar-section-heading h3 {
+	margin: 0;
+	font: inherit;
+}
+
+.sidebar-section-toggle {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
 	touch-action: none;
 }
 
-.sidebar-order-section > .nav-section-heading,
-.sidebar-order-section .pinned-conversations > .nav-section-heading,
-.sidebar-order-section .recent-conversations-heading {
-	padding-inline-start: 20px;
+.sidebar-section-toggle[aria-disabled="true"] {
+	cursor: default;
+}
+
+.sidebar-section-chevron {
+	display: inline-flex;
+	transform: rotate(-90deg);
+}
+
+.sidebar-section-chevron[data-expanded="true"] {
+	transform: rotate(0deg);
 }
 
 .sidebar-order-section .recent-conversations {

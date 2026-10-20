@@ -6,8 +6,110 @@ import {
 	directContextConsentEvidence,
 	layoutCases,
 	nativeEditorKey,
+	sidebarKeyboardEvidence,
 	workExperienceGeometry,
 } from "./gui-work-experience.mjs";
+
+test("sidebar keyboard observer requires settled exact tab order, labels, enabled controls and retained identities", () => {
+	const labels = ["Pin conversation", "Archive conversation", "Conversation actions: GUI 会话"];
+	const controls = labels.map((label) => ({
+		label,
+		tagName: "BUTTON",
+		disabled: false,
+		tabIndex: 0,
+		focusVisible: true,
+		opacity: "1",
+		getAttribute(name) {
+			return name === "aria-label" ? this.label : null;
+		},
+		matches() {
+			return this.focusVisible;
+		},
+		getClientRects: () => [{}],
+	}));
+	let actualControls = [...controls];
+	const row = {
+		isConnected: true,
+		querySelectorAll: () => actualControls,
+		contains: (node) => node === link || actualControls.includes(node),
+	};
+	const link = {
+		...controls[0],
+		tagName: "A",
+		label: "GUI 会话",
+		closest: () => row,
+	};
+	let selected = [link];
+	const document = {
+		activeElement: link,
+		querySelectorAll: () => selected,
+		defaultView: { getComputedStyle: (node) => ({ opacity: node.opacity, visibility: "visible" }) },
+	};
+	const retained = { row, link, controls: [...controls] };
+	const observe = (index) => sidebarKeyboardEvidence(document, retained, index);
+	assert.equal(observe(-1).valid, true);
+	controls[0].disabled = true;
+	assert.equal(observe(-1).valid, false, "Loading Pin must settle before native Tab, not be skipped");
+	controls[0].disabled = false;
+	for (let index = 0; index < 3; index++) {
+		document.activeElement = controls[index];
+		assert.equal(observe(index).valid, true);
+		assert.equal(observe((index + 1) % 3).valid, false, "Repeated/trapped or wrong-order focus must fail");
+	}
+	document.activeElement = controls[2];
+	for (const mutation of [
+		() => {
+			actualControls = [controls[1], controls[0], controls[2]];
+		},
+		() => {
+			actualControls = [controls[0], controls[0], controls[2]];
+		},
+		() => {
+			actualControls = [controls[0], controls[1], { ...controls[2] }];
+		},
+		() => {
+			selected = [link, link];
+		},
+		() => {
+			controls[0].label = "Reload pin state";
+		},
+		() => {
+			controls[1].disabled = true;
+		},
+		() => {
+			controls[1].tabIndex = -1;
+		},
+		() => {
+			controls[2].focusVisible = false;
+		},
+		() => {
+			controls[2].opacity = "0";
+		},
+		() => {
+			row.isConnected = false;
+		},
+		() => {
+			document.activeElement = { ...controls[2] };
+		},
+	]) {
+		mutation();
+		const evidence = observe(2);
+		assert.equal(evidence.valid, false);
+		assert.ok(evidence.active.role && evidence.active.label, "Failure trace retains actual focused role and label");
+		actualControls = [...controls];
+		selected = [link];
+		controls.forEach((control, index) => {
+			control.label = labels[index];
+			control.disabled = false;
+			control.tabIndex = 0;
+			control.focusVisible = true;
+			control.opacity = "1";
+		});
+		row.isConnected = true;
+		document.activeElement = controls[2];
+	}
+	assert.equal(observe(2).valid, true);
+});
 
 test("direct Context binds current receipt scope, retained owner, trigger dialog and exact model without raw visible IDs", () => {
 	const expected = { workspaceId: "work", conversationId: "chat" };

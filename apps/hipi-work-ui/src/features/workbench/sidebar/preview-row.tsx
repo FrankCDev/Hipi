@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover.tsx";
 import {
 	ConversationPreviewInteraction,
@@ -7,6 +7,7 @@ import {
 } from "./conversation-preview-interaction.ts";
 import { type SidebarOrderAction, useSidebarDragging, useSidebarSortable } from "./drag-provider.tsx";
 import { useSidebarPreviewCoordinator } from "./preview-provider.tsx";
+import { useSidebarSection } from "./section.tsx";
 
 const focusableSelector =
 	'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -21,10 +22,11 @@ export type PreviewActions = (controls: {
 	menuPosition: { sideOffset: number; alignOffset: number };
 	onMenuOpen: () => void;
 	onOverlayChange: (owner: "menu" | "dialog", open: boolean) => void;
-	onReturnFocus: () => void;
+	onReturnFocus: (reason?: "dialog") => void;
 	triggerRef: RefObject<HTMLButtonElement | null>;
 	inlineActions: boolean;
 	active: boolean;
+	hidden: boolean;
 }) => ReactNode;
 
 /** One hover/focus boundary for the label and its independent inline actions. */
@@ -52,6 +54,10 @@ export function SidebarPreviewRow({
 	orderAction?: SidebarOrderAction;
 }) {
 	const dragging = useSidebarDragging();
+	const section = useSidebarSection();
+	const hidden = section?.collapsed ?? false;
+	const sectionOwner = useRef(section);
+	sectionOwner.current = section;
 	const coordinator = useSidebarPreviewCoordinator();
 	const row = useRef<HTMLDivElement>(null);
 	const sortable = useSidebarSortable(orderAction, true, row);
@@ -76,6 +82,13 @@ export function SidebarPreviewRow({
 		interaction.resume();
 		return () => interaction.release();
 	}, [interaction]);
+	useLayoutEffect(() => {
+		if (!hidden) return;
+		setHovered(false);
+		setFocused(false);
+		corridor.current = null;
+		interaction.close("navigate");
+	}, [hidden, interaction]);
 	useEffect(() => {
 		if (!dragging) return;
 		setHovered(false);
@@ -129,12 +142,24 @@ export function SidebarPreviewRow({
 		document.addEventListener("pointermove", move, true);
 		return () => document.removeEventListener("pointermove", move, true);
 	}, [interaction, mode]);
-	const returnFocus = () => {
+	const returnFocus = (reason?: "dialog") => {
+		if (sectionOwner.current?.collapsed) {
+			const heading = sectionOwner.current.heading.current;
+			const active = heading?.ownerDocument.activeElement;
+			if (reason === "dialog" && heading && active === heading.ownerDocument.body)
+				heading.focus({ preventScroll: true });
+			return;
+		}
 		restoringFocus.current = true;
 		(trigger.current ?? row.current?.querySelector("button"))?.focus();
 		restoringFocus.current = false;
 	};
 	const returnPreviewFocus = () => {
+		if (sectionOwner.current?.collapsed) {
+			const heading = sectionOwner.current.heading.current;
+			if (heading?.ownerDocument.activeElement === heading?.ownerDocument.body) heading?.focus({ preventScroll: true });
+			return;
+		}
 		restoringFocus.current = true;
 		(source.current?.isConnected
 			? source.current
@@ -151,7 +176,7 @@ export function SidebarPreviewRow({
 	});
 	return (
 		<Popover
-			open={mode !== "closed"}
+			open={!hidden && mode !== "closed"}
 			onOpenChange={(open) => {
 				if (!open) interaction.close();
 			}}
@@ -178,6 +203,7 @@ export function SidebarPreviewRow({
 						if (event.pointerType !== "mouse" && event.currentTarget.contains(event.target as Node)) setFocused(true);
 						if (
 							!dragging &&
+							!hidden &&
 							!dialogOpen &&
 							event.pointerType === "mouse" &&
 							event.target instanceof Node &&
@@ -192,6 +218,7 @@ export function SidebarPreviewRow({
 					onPointerMove={(event) => {
 						if (
 							!dragging &&
+							!hidden &&
 							!dialogOpen &&
 							event.pointerType === "mouse" &&
 							event.target instanceof Element &&
@@ -212,6 +239,7 @@ export function SidebarPreviewRow({
 						if (event.currentTarget.contains(event.target)) setFocused(true);
 						if (
 							!dragging &&
+							!hidden &&
 							!dialogOpen &&
 							!restoringFocus.current &&
 							event.currentTarget.contains(event.target) &&
@@ -269,7 +297,7 @@ export function SidebarPreviewRow({
 					}}
 				>
 					{typeof children === "function"
-						? children({ hovered: hovered && !dragging, describedBy: sortable.describedBy })
+						? children({ hovered: hovered && !dragging && !hidden, describedBy: sortable.describedBy })
 						: children}
 					{renderActions?.({
 						previewContent: menuPreview ?? previewContent,
@@ -277,6 +305,7 @@ export function SidebarPreviewRow({
 						triggerRef: trigger,
 						inlineActions: true,
 						active: hovered || focused || mode !== "closed",
+						hidden,
 						onMenuOpen: () => {
 							if (row.current && trigger.current) {
 								const anchor = row.current.getBoundingClientRect();
@@ -296,6 +325,7 @@ export function SidebarPreviewRow({
 			<PopoverContent
 				ref={card}
 				className="conversation-preview-card"
+				data-sidebar-row-portal=""
 				side="right"
 				align="start"
 				sideOffset={2}

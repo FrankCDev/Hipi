@@ -8,11 +8,12 @@ import { CatalogPagination } from "../catalog/pagination.tsx";
 import type { CatalogSession } from "../catalog/session.ts";
 import { useCatalogPages } from "../catalog/use-pages.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
-import { type SidebarOrderAction, SidebarOrderSection } from "./drag-provider.tsx";
+import type { SidebarOrderAction } from "./drag-provider.tsx";
 import { sidebarOrderLabels } from "./order-labels.ts";
 import { pinLabels } from "./pin-labels.ts";
 import { pinnedOrderActions, pinnedScopeKey } from "./pinned-order-actions.ts";
 import type { PresentationSession } from "./presentation-session.ts";
+import { SidebarOrderSection, SidebarSectionContent, SidebarSectionHeading } from "./section.tsx";
 
 export function PinnedConversations({
 	catalog,
@@ -22,6 +23,9 @@ export function PinnedConversations({
 	onSelect,
 	sectionAction,
 	onVisibleChange,
+	collapsed,
+	disclosureDisabled,
+	onCollapsedChange,
 }: {
 	catalog: CatalogSession;
 	presentation: PresentationSession;
@@ -30,6 +34,9 @@ export function PinnedConversations({
 	onSelect: (conversation: Conversation) => void;
 	sectionAction?: SidebarOrderAction;
 	onVisibleChange?: (visible: boolean) => void;
+	collapsed?: boolean;
+	disclosureDisabled?: boolean;
+	onCollapsedChange?: (collapsed: boolean) => void;
 }) {
 	const client = useAppClient();
 	const { locale } = usePreferences();
@@ -59,6 +66,10 @@ export function PinnedConversations({
 		});
 	});
 	useLayoutEffect(() => {
+		if (collapsed) {
+			focused.current = null;
+			return;
+		}
 		const previous = focused.current;
 		if (!previous || previous.element.isConnected || document.activeElement !== document.body) return;
 		focused.current = null;
@@ -92,52 +103,63 @@ export function PinnedConversations({
 					};
 			}}
 		>
-			<h3 id={headingId} className="nav-section-heading">
-				{l.pinned}
-			</h3>
-			{pages.isPending && <output className="nav-feedback">{l.loading}</output>}
-			{pages.isError && (
-				<div className="nav-feedback" role="alert">
-					<p>{l.listError}</p>
-					<Button variant="ghost" size="sm" disabled={pages.isFetching} onClick={() => void pages.retry()}>
-						{l.reload}
-					</Button>
-				</div>
-			)}
-			<ul className="workspace-tree conversation-list">
-				{pages.items.map(({ conversation }) => (
-					<li
-						key={`${conversation.workspaceId}.${conversation.conversationId}`}
-						data-pinned-conversation=""
-						data-workspace-id={conversation.workspaceId}
-						data-conversation-id={conversation.conversationId}
-					>
-						<ConversationPreview
-							conversation={conversation}
-							resolveWorkspace
-							orderAction={actions.get(pinnedScopeKey(conversation))}
-							selected={
-								selectedWorkspace === conversation.workspaceId && selectedConversation === conversation.conversationId
-							}
-							onSelect={() => onSelect(conversation)}
-							renderActions={(controls) => (
-								<ConversationActions
-									conversation={conversation}
-									session={catalog}
-									presentation={presentation}
-									guard={(action) => action()}
-									{...controls}
-								/>
-							)}
-						/>
-					</li>
-				))}
-			</ul>
-			<CatalogPagination pages={pages} listRef={region} />
-			<output className="sr-only" aria-live="polite">
-				{announcement}
-			</output>
+			<SidebarSectionHeading titleId={headingId}>{l.pinned}</SidebarSectionHeading>
+			<SidebarSectionContent>
+				{pages.isPending && <output className="nav-feedback">{l.loading}</output>}
+				{pages.isError && (
+					<div className="nav-feedback" role="alert">
+						<p>{l.listError}</p>
+						<Button variant="ghost" size="sm" disabled={pages.isFetching} onClick={() => void pages.retry()}>
+							{l.reload}
+						</Button>
+					</div>
+				)}
+				<ul className="workspace-tree conversation-list">
+					{pages.items.map(({ conversation }) => (
+						<li
+							key={`${conversation.workspaceId}.${conversation.conversationId}`}
+							data-pinned-conversation=""
+							data-workspace-id={conversation.workspaceId}
+							data-conversation-id={conversation.conversationId}
+						>
+							<ConversationPreview
+								conversation={conversation}
+								resolveWorkspace
+								orderAction={actions.get(pinnedScopeKey(conversation))}
+								selected={
+									selectedWorkspace === conversation.workspaceId && selectedConversation === conversation.conversationId
+								}
+								onSelect={() => onSelect(conversation)}
+								renderActions={(controls) => (
+									<ConversationActions
+										conversation={conversation}
+										session={catalog}
+										presentation={presentation}
+										guard={(action) => action()}
+										{...controls}
+									/>
+								)}
+							/>
+						</li>
+					))}
+				</ul>
+				<CatalogPagination pages={pages} listRef={region} />
+				<output className="sr-only" aria-live="polite">
+					{announcement}
+				</output>
+			</SidebarSectionContent>
 		</section>
 	);
-	return sectionAction ? <SidebarOrderSection action={sectionAction}>{content}</SidebarOrderSection> : content;
+	return sectionAction ? (
+		<SidebarOrderSection
+			action={sectionAction}
+			collapsed={collapsed}
+			disabled={disclosureDisabled}
+			onCollapsedChange={onCollapsedChange}
+		>
+			{content}
+		</SidebarOrderSection>
+	) : (
+		content
+	);
 }

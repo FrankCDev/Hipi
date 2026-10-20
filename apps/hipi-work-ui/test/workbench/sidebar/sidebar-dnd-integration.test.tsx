@@ -5,12 +5,16 @@ import { test } from "vitest";
 import { PreferencesProvider } from "../../../src/app/preferences.tsx";
 import {
 	SidebarDragProvider,
-	SidebarOrderSection,
 	useSidebarDragging,
 	useSidebarSortable,
 } from "../../../src/features/workbench/sidebar/drag-provider.tsx";
+import {
+	SidebarOrderSection,
+	SidebarSectionContent,
+	SidebarSectionHeading,
+} from "../../../src/features/workbench/sidebar/section.tsx";
 
-// Real React 19 and installed dnd-kit composition, without module mocks.
+// Real React 19, installed dnd-kit and Motion composition, without module mocks.
 // Server rendering does not establish native geometry, focus, or pointer behavior.
 test("actual dnd-kit context and draggable hooks compose with React 19 without replacing navigation semantics", () => {
 	let calls = 0;
@@ -56,15 +60,19 @@ test("actual dnd-kit context and draggable hooks compose with React 19 without r
 						down: "recent",
 					}}
 				>
-					<Row />
+					<SidebarSectionHeading>Pinned</SidebarSectionHeading>
+					<SidebarSectionContent>
+						<Row />
+					</SidebarSectionContent>
 				</SidebarOrderSection>
 			</SidebarDragProvider>
 		</PreferencesProvider>,
 	);
 	assert.equal(calls, 0);
 	assert.match(html, /data-sidebar-dragging="false"/);
-	assert.match(html, /aria-label="调整Pinned的顺序"/);
+	assert.match(html, /class="sidebar-section-toggle" aria-expanded="true"/);
+	assert.match(html, /title="收起Pinned"/);
 	assert.match(html, /aria-describedby="DndDescribedBy-/);
-	assert.doesNotMatch(html, /private-canonical-scope|aria-pressed=|Move up|Move down|Space/);
+	assert.doesNotMatch(html, /private-canonical-scope|aria-pressed=|sidebar-section-grip|Move up|Move down|Space/);
 	assert.equal((html.match(/<button/g) ?? []).length, 2);
 });

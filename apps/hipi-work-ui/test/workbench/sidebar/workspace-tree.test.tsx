@@ -7,10 +7,24 @@ import { PreferencesProvider } from "../../../src/app/preferences.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { SidebarPreviewProvider } from "../../../src/features/workbench/sidebar/preview-provider.tsx";
+import { visibleSidebarProjects } from "../../../src/features/workbench/sidebar/project-visibility.ts";
 import { WorkspaceTree } from "../../../src/features/workbench/sidebar/workspace-tree.tsx";
 import { Workbench } from "../../../src/features/workbench/workbench.tsx";
 
 const local = new LocalState();
+
+test("project presentation caps at five, preserves an eligible active row and avoids hiding one last item", () => {
+	const ids = Array.from({ length: 8 }, (_, index) => `project-${index}`);
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 5), false, "", false), ids.slice(0, 5));
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 6), false, "", false), ids.slice(0, 6));
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 6), false, "", true), ids.slice(0, 5));
+	assert.deepEqual(visibleSidebarProjects(ids, false, ids[7], false), [...ids.slice(0, 5), ids[7]]);
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, ids[6], false), ids.slice(0, 7));
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, ids[6], true), [...ids.slice(0, 5), ids[6]]);
+	assert.deepEqual(visibleSidebarProjects(ids, true, "", true), ids);
+	assert.deepEqual(visibleSidebarProjects(ids, false, "unloaded-project", false), ids.slice(0, 5));
+	assert.equal(ids.length, 8, "Presentation never prunes the loaded canonical data");
+});
 vi.mock("../../../src/app/client-provider.tsx", () => ({
 	useAppClient: () => ({ call: vi.fn() }),
 	useLocalState: () => local,

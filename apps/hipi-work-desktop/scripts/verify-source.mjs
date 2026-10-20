@@ -63,6 +63,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-binding.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-pin.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-search.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-hover.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/journey.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/smoke-packaged-gui.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
@@ -148,6 +150,7 @@ const uiTests = [
 	"workbench/sidebar/sidebar-drag-provider",
 	"workbench/sidebar/sidebar-dnd-integration",
 	"workbench/sidebar/preview-provider",
+	"workbench/sidebar/sidebar-section",
 	"tool-packs-panel-lifecycle",
 	"workbench/conversation/archived-conversation",
 	"workbench/conversation/conversation-model-refresh",
@@ -180,6 +183,7 @@ uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/presentation-session.test
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-title-motion.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/search/conversation-search-controller.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-layout-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/disclosure-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-drag-controller.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-pointer-sensor.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/pinned-order-actions.test.ts");

@@ -1,7 +1,17 @@
 import { type Conversation, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePresence } from "framer-motion";
 import { Archive, ArchiveRestore, Ellipsis, Pencil } from "lucide-react";
-import { type ReactNode, type RefObject, useId, useRef, useState, useSyncExternalStore } from "react";
+import {
+	type ReactNode,
+	type RefObject,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog.tsx";
@@ -95,6 +105,7 @@ export function ConversationActions({
 	presentation,
 	inlineActions = false,
 	active = false,
+	hidden = false,
 }: {
 	conversation: Conversation;
 	session: CatalogSession;
@@ -103,17 +114,29 @@ export function ConversationActions({
 	menuPosition?: Parameters<PreviewActions>[0]["menuPosition"];
 	onMenuOpen?: () => void;
 	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
-	onReturnFocus?: () => void;
+	onReturnFocus?: (reason?: "dialog") => void;
 	triggerRef?: RefObject<HTMLButtonElement | null>;
 	presentation?: PresentationSession;
 	inlineActions?: boolean;
 	active?: boolean;
+	hidden?: boolean;
 }) {
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
 	const cache = useQueryClient();
 	const [renaming, setRenaming] = useState(false);
+	const [present, safeToRemove] = usePresence();
+	useEffect(() => {
+		// Only an active owned rename dialog may hold an exiting sidebar subtree.
+		// Its unsaved title and failed-command recovery must survive external collapse.
+		if (!present && !renaming) safeToRemove?.();
+	}, [present, renaming, safeToRemove]);
 	const [menuOpen, setMenuOpen] = useState(false);
+	useLayoutEffect(() => {
+		if (!hidden || !menuOpen) return;
+		setMenuOpen(false);
+		onOverlayChange?.("menu", false);
+	}, [hidden, menuOpen, onOverlayChange]);
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const presentationState = useSyncExternalStore(
@@ -242,6 +265,7 @@ export function ConversationActions({
 					</Button>
 				)}
 				<DropdownMenu
+					open={menuOpen && !hidden}
 					onOpenChange={(open) => {
 						setMenuOpen(open);
 						onOverlayChange?.("menu", open);
@@ -266,6 +290,7 @@ export function ConversationActions({
 						alignOffset={menuPosition?.alignOffset}
 						collisionPadding={12}
 						className="conversation-action-menu"
+						data-sidebar-row-portal={inlineActions ? "" : undefined}
 						onCloseAutoFocus={(event) => {
 							if (renaming) event.preventDefault();
 							else if (onReturnFocus) {
@@ -315,6 +340,7 @@ export function ConversationActions({
 			</div>
 			<DialogContent
 				className="conversation-rename-dialog"
+				data-sidebar-row-portal={inlineActions ? "" : undefined}
 				closeLabel={l.close}
 				closeDisabled={state.busy}
 				onOpenAutoFocus={(event) => {
@@ -327,7 +353,7 @@ export function ConversationActions({
 				}}
 				onCloseAutoFocus={(event) => {
 					event.preventDefault();
-					if (onReturnFocus) onReturnFocus();
+					if (onReturnFocus) onReturnFocus("dialog");
 					else trigger.current?.focus();
 				}}
 			>
