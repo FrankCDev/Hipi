@@ -41,6 +41,18 @@ export function useConversation(conversation: Conversation) {
 			),
 		refetchInterval: observation.connection === "connected" ? 2000 : false,
 	});
+	const connected = observation.connection === "connected";
+	const observedRunning = observation.snapshot?.running;
+	useEffect(() => {
+		if (!connected || observedRunning === undefined) return;
+		// Short executions can start and finish between periodic model queries. Re-read
+		// authoritative controls on live transitions; do not derive readiness from text
+		// or optimistically replace the model's richer paused/cancellation state.
+		void cache.invalidateQueries({
+			queryKey: ["conversation-model", conversation.workspaceId, conversation.conversationId],
+			exact: true,
+		});
+	}, [cache, conversation.workspaceId, conversation.conversationId, connected, observedRunning]);
 	const execution = useMutation({
 		mutationFn: async (action: "resume" | "cancel") => {
 			if (action === "resume") await client.call("continueWorkspace", { workspaceId: conversation.workspaceId });

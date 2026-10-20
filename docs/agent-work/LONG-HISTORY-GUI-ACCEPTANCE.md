@@ -38,7 +38,17 @@ The 4px tolerance is a layout-position assertion, not a performance budget. A fa
 
 Output is under `.artifacts/hipi-work/packages/gui-long-history/`: `packaged-long-history.json`, first/reopened prepend, oldest, expansion and isolation screenshots, plus bounded native logs. Successful intermediate observations are retained even if a later gate fails. Screenshots require visual inspection. Original-text expansion does not establish physical text selection, IME, clipboard, accessibility or all long-session resource behavior.
 
-Source verification on 2026-10-20 passed 10 focused helper/fixture tests and 21 existing flow/process tests. The fixture test genuinely seeded/cold-read 200 messages and exercised the cold verifier with source-only probe, corruption and duplicate cases. These are source/model tests, not native GUI evidence. The local execution workspace has no Xvfb executable, so this new native scenario has not been run there. Platform CI or a suitable native session must supply actual evidence before any GUI gate is marked passed.
+Source verification on 2026-10-20 passed 11 focused helper/fixture tests and 21 existing flow/process tests. The fixture test genuinely seeded/cold-read 200 messages and exercised the cold verifier with source-only probe, corruption and duplicate cases. These are source/model tests, not native GUI evidence. The local execution workspace has no Xvfb executable, so this scenario has not been run locally.
+
+The first [native CI run](https://github.com/FrankCDev/Hipi/actions/runs/39347936483), source `147d543e125215395ef1f2af7cc5847c352776b5`, failed on macOS ARM64, macOS Intel and Ubuntu 22.04 at `global Running and true GUI partial`. Verified artifacts show identical successful prepend geometry (Y=598), oldest traversal (170 distinct visible keys), and exact original expansion/collapse with stable row anchors. macOS measured row height 620.484375 → 2633.515625 at Y=-300; Ubuntu measured 669.484375 → 2682.515625 at Y=-277. All three report no renderer errors. The inspected macOS ARM64 failure screenshot shows the probe completed with the unchanged deterministic answer. These are partial native findings, not complete scenario passes: stream-away behavior, second launch and final cold verification were not reached.
+
+Source diagnosis found that global model controls only refreshed every 2000ms, with no refresh on live execution transitions. A short execution could finish before a refresh and never expose Running/Cancel. The repair invalidates the exact model-status query on connected authoritative running/terminal transitions and reconnection. It still reads the runtime's full execution state rather than deriving readiness from partial text or optimistic UI. Focused production-effect/real-query tests cover immediate transitions, no per-token refetch storm, stale-read cancellation and scope isolation. Native validation of this repair remains pending; the fixed response/rate and three-sample requirement are unchanged. Bounded passive start diagnostics now distinguish missing global status from missing partial text if the native condition fails again.
+
+Verified first-run artifact ZIP digests:
+
+- macOS ARM64, artifact 12231802728: `93508ed58dba1bca5b4a9ab0823e910b1ae33ab3130eb36a595bc8c2f842afe0`.
+- macOS Intel, artifact 12231364626: `a260c8e07745e6881472bd00434958e4242fc64ab0df528eb093c5248d222a13`.
+- Ubuntu 22.04, artifact 12232490975: `d90c5e6a1f8b2caa6323187ec4d8c3892370bf9c37a32e945de428c5efb1d5e1`.
 
 ```sh
 node --conditions=source --test \

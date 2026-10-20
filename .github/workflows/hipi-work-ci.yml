@@ -122,6 +122,29 @@ jobs:
             .artifacts/hipi-work/packages/gui-long-history/*.log
           if-no-files-found: error
           retention-days: 7
+      - name: Install native picker test driver from the Ubuntu package repository
+        id: picker_driver
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.gui_smoke.outcome == 'success' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xdotool
+          xdotool version
+          command -v Xvfb
+      - name: Verify real packaged Linux file workbench and native folder picker
+        id: file_workbench
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.gui_smoke.outcome == 'success' && steps.picker_driver.outcome == 'success' }}
+        run: node --conditions=source apps/hipi-work-desktop/scripts/smoke-packaged-file-workbench.mjs
+      - name: Retain file workbench evidence even when validation fails
+        if: ${{ always() && steps.file_workbench.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-file-workbench-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-file-workbench/*.json
+            .artifacts/hipi-work/packages/gui-file-workbench/*.png
+            .artifacts/hipi-work/packages/gui-file-workbench/*.log
+          if-no-files-found: error
+          retention-days: 7
       # This retains build evidence only. It does not create a release or publish updates.
       - name: Retain unsigned packages and integrity evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline

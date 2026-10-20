@@ -40,12 +40,20 @@ try {
     Write-Phase 'capture-identity'
     if ($request.mode -ne 'capture' -or $start.Ticks.ToString() -ne $request.startTicks -or $session -ne $request.session) { throw 'identity' }
     Write-Phase 'native-compile'
-    Add-Type -TypeDefinition @'
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
+    $references = @(
+        [Collections.Generic.HashSet[string]].Assembly.Location,
+        [Windows.Automation.AutomationElement].Assembly.Location,
+        [Windows.Automation.ControlType].Assembly.Location,
+        [Windows.Rect].Assembly.Location
+    )
+    Add-Type -ReferencedAssemblies $references -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Automation;
 public static class HipiOwnedDialogReader {
     delegate bool Callback(IntPtr hwnd, IntPtr value);
     [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint thread, Callback callback, IntPtr value);
@@ -55,6 +63,42 @@ public static class HipiOwnedDialogReader {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder value, int count);
     [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, UIntPtr count, StringBuilder value, uint flags, uint timeout, out UIntPtr result);
     static bool Owned(IntPtr hwnd, int pid) { uint owner; GetWindowThreadProcessId(hwnd, out owner); return owner == pid; }
+    static void Classify(string value, HashSet<string> codes) {
+        if (value.Length >= 2047) { codes.Add("TEXT_TRUNCATED"); value = value.Substring(0, 2047); }
+        if (value.Contains("A JavaScript error occurred in the main process")) codes.Add("ELECTRON_MAIN_JS_ERROR");
+        foreach (string code in new [] { "SyntaxError", "ReferenceError", "TypeError", "ERR_MODULE_NOT_FOUND", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ENOENT", "EACCES", "EPERM" })
+            if (value.Contains(code)) codes.Add(code);
+        if (value.Contains("Desktop startup failed. No command was replayed.") || value.Contains("\u684c\u9762\u5e94\u7528\u542f\u52a8\u5931\u8d25\u3002\u6ca1\u6709\u91cd\u653e\u4efb\u4f55\u547d\u4ee4\u3002")) codes.Add("HIPI_STARTUP_FAILED");
+    }
+    static bool AccessibleOwned(AutomationElement element, IntPtr dialog, int pid) {
+        if (!Owned(dialog, pid) || element.Current.ProcessId != pid) return false;
+        int native = element.Current.NativeWindowHandle;
+        return native == 0 || Owned(new IntPtr(native), pid);
+    }
+    // TaskDialog's DirectUI text is virtual: there is no Static HWND to send WM_GETTEXT to.
+    // Start at this already-verified dialog only. Never use RootElement or a global search.
+    static bool ReadAccessible(AutomationElement element, IntPtr dialog, int pid, int depth,
+        Stopwatch clock, HashSet<string> codes, ref int controls, ref int readable, ref bool limited) {
+        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16 || depth > 4) { limited = true; return false; }
+        controls++;
+        if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
+        if (element.Current.ControlType == ControlType.Text) {
+            if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
+            string value = element.Current.Name;
+            if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
+            Classify(value, codes);
+            readable++;
+            codes.Add("TASK_DIALOG_TEXT_OBSERVED");
+        }
+        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) { limited = true; return false; }
+        var child = TreeWalker.RawViewWalker.GetFirstChild(element);
+        while (child != null) {
+            if (!ReadAccessible(child, dialog, pid, depth + 1, clock, codes, ref controls, ref readable, ref limited)) return false;
+            if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) { limited = true; return false; }
+            child = TreeWalker.RawViewWalker.GetNextSibling(child);
+        }
+        return true;
+    }
     public static string[] Read(Process process) {
         var codes = new HashSet<string>();
         var clock = Stopwatch.StartNew();
@@ -74,29 +118,37 @@ public static class HipiOwnedDialogReader {
                 if (title.ToString() != "Hipi Work" && title.ToString() != "Error") { codes.Add("UNKNOWN_DIALOG"); return true; }
                 codes.Add("OWNED_ERROR_DIALOG");
                 int readable = 0;
+                bool taskDialog = false;
                 EnumChildWindows(hwnd, delegate(IntPtr child, IntPtr unused) {
                     if (clock.ElapsedMilliseconds >= 2000 || controls++ >= 16) { limited = true; return false; }
                     if (!Owned(child, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                     var childKind = new StringBuilder(64);
                     if (GetClassName(child, childKind, childKind.Capacity) == 0) { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }
+                    if (childKind.ToString() == "DirectUIHWND") taskDialog = true;
                     if (childKind.ToString() != "Static") return true;
                     var text = new StringBuilder(2048); UIntPtr length;
                     // WM_GETTEXT only; never broadcast or wait without a timeout.
                     if (SendMessageTimeout(child, 13, (UIntPtr)2048, text, 0x22, 100, out length) == IntPtr.Zero) { codes.Add("TEXT_UNAVAILABLE"); return true; }
                     if (!Owned(child, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                     readable++;
-                    string value = text.ToString();
-                    if (value.Length >= 2047) codes.Add("TEXT_TRUNCATED");
-                    if (value.Contains("A JavaScript error occurred in the main process")) codes.Add("ELECTRON_MAIN_JS_ERROR");
-                    foreach (string code in new [] { "SyntaxError", "ReferenceError", "TypeError", "ERR_MODULE_NOT_FOUND", "ERR_UNSUPPORTED_ESM_URL_SCHEME", "ENOENT", "EACCES", "EPERM" })
-                        if (value.Contains(code)) codes.Add(code);
-                    if (value.Contains("Desktop startup failed. No command was replayed.") || value.Contains("\u684c\u9762\u5e94\u7528\u542f\u52a8\u5931\u8d25\u3002\u6ca1\u6709\u91cd\u653e\u4efb\u4f55\u547d\u4ee4\u3002")) codes.Add("HIPI_STARTUP_FAILED");
+                    Classify(text.ToString(), codes);
                     return true;
                 }, IntPtr.Zero);
+                // Different representation, not a retry after any denied or failed native read.
+                if (taskDialog && !limited && !codes.Contains("TEXT_UNAVAILABLE") &&
+                    !codes.Contains("IDENTITY_CHANGED") && !codes.Contains("ENUMERATION_UNAVAILABLE")) {
+                    try {
+                        if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
+                        var dialog = AutomationElement.FromHandle(hwnd);
+                        if (!ReadAccessible(dialog, hwnd, process.Id, 0, clock, codes, ref controls, ref readable, ref limited)) return false;
+                        if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
+                    } catch { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }
+                }
                 if (readable == 0) codes.Add("TEXT_UNAVAILABLE");
                 return true;
             }, IntPtr.Zero);
             if (!enumerated && !limited) codes.Add("ENUMERATION_UNAVAILABLE");
+            if (codes.Contains("IDENTITY_CHANGED") || codes.Contains("ENUMERATION_UNAVAILABLE")) break;
         }
         if (limited) codes.Add("LIMIT_REACHED");
         if (codes.Count == 0) codes.Add("NO_MATCHING_DIALOG_OBSERVED");

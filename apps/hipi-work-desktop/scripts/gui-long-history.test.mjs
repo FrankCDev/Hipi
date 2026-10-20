@@ -1,14 +1,47 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import {
 	addPartial,
 	anchored,
 	assertLongHistoryAcceptance,
 	executionState,
+	observeExecution,
 	prependEvidence,
 	viewport,
 } from "./gui-long-history.mjs";
+
+test("execution-start diagnostics distinguish missing status from missing partial, stay bounded and dispose", () => {
+	let callback;
+	let stopped = false;
+	let state = { executionState: "ready", running: false, partial: null };
+	const observer = runInNewContext(`(${observeExecution.toString()})(document,read)`, {
+		document: { body: {} },
+		read: () => state,
+		performance: { now: () => 100 },
+		MutationObserver: class {
+			constructor(take) {
+				callback = take;
+			}
+			observe() {}
+			disconnect() {
+				stopped = true;
+			}
+		},
+	});
+	for (let n = 0; n < 140; n++) {
+		state = { executionState: n > 70 ? "running" : "ready", running: n > 70, partial: "private-fixture".repeat(n + 1) };
+		callback();
+	}
+	const result = observer.stop();
+	assert.equal(stopped, true);
+	assert.equal(result.samples.length, 128);
+	assert.equal(result.runningSeen, true);
+	assert.equal(result.partialSeen, true);
+	assert.ok(result.samples.some((sample) => sample.state === "ready" && sample.partialUnits > 0));
+	assert.ok(!JSON.stringify(result).includes("private-fixture"));
+});
 
 const snap = (top, index = 0, scrollTop = 300) => ({ scrollTop, rows: [{ key: "message:a", top, index }] });
 test("prepend uses last observed old-index wheel baseline, never requested wheel delta", () => {

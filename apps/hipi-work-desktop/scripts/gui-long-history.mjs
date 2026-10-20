@@ -74,6 +74,35 @@ export function addPartial(samples, observation) {
 	return samples.size;
 }
 
+/** Keep start-time diagnostics even when a brief execution never satisfies both predicates. */
+export function observeExecution(document, read) {
+	const started = performance.now();
+	const samples = [];
+	let previous;
+	let runningSeen = false;
+	let partialSeen = false;
+	const take = () => {
+		const value = read(document);
+		if (!value) return;
+		runningSeen ||= value.running;
+		partialSeen ||= typeof value.partial === "string" && value.partial.trim().length > 0;
+		const current = { state: value.executionState, partialUnits: value.partial?.length ?? 0 };
+		if (previous?.state === current.state && previous?.partialUnits === current.partialUnits) return;
+		previous = current;
+		if (samples.length === 128) samples.shift();
+		samples.push({ ...current, elapsedMs: Math.round(performance.now() - started) });
+	};
+	const observer = new MutationObserver(take);
+	observer.observe(document.body, { childList: true, characterData: true, subtree: true, attributes: true });
+	take();
+	return {
+		stop() {
+			observer.disconnect();
+			return { runningSeen, partialSeen, samples };
+		},
+	};
+}
+
 // Bounded passive observations only. The owning scenario removes every observer in finally.
 export function observePrepend(document, read, key) {
 	const host = document.querySelector(".message-scroll");
@@ -345,11 +374,24 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 		await click(cdp, ".composer textarea");
 		await cdp.request("Input.insertText", { text: seed.probe });
 		assert.equal(await evaluate(cdp, "document.querySelector('.composer textarea').value"), seed.probe);
-		await click(cdp, '.composer button[type="submit"]');
-		await until(async () => {
-			const v = await read();
-			return v.running && !!v.partial;
-		}, "global Running and true GUI partial");
+		await evaluate(
+			cdp,
+			`(()=>{const executionState=${executionState.toString()};globalThis.__hipiExecutionObservation=(${observeExecution.toString()})(document,${viewport.toString()});})()`,
+		);
+		try {
+			await click(cdp, '.composer button[type="submit"]');
+			await until(async () => {
+				const v = await read();
+				return v.running && !!v.partial;
+			}, "global Running and true GUI partial");
+		} finally {
+			record({
+				streamStart: await evaluate(
+					cdp,
+					"(()=>{const o=globalThis.__hipiExecutionObservation;const result=o.stop();delete globalThis.__hipiExecutionObservation;return result;})()",
+				),
+			});
+		}
 		await wheel(-200);
 		const reading = await read();
 		assert.ok(

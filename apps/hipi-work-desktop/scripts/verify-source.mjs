@@ -36,6 +36,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/font-assets.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
@@ -62,6 +63,7 @@ const uiTests = [
 	"file-workbench",
 	"appearance-settings",
 	"archived-conversation",
+	"conversation-model-refresh",
 	"document-preview",
 	"input-group",
 	"workspace-tree",
