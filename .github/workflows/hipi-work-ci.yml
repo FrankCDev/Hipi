@@ -108,6 +108,20 @@ jobs:
             .artifacts/hipi-work/packages/gui-smoke/*.log
           if-no-files-found: error
           retention-days: 7
+      - name: Verify real packaged long conversation and cold history
+        id: long_history
+        run: node --conditions=source apps/hipi-work-desktop/scripts/smoke-packaged-long-history.mjs
+      - name: Retain long conversation evidence even when validation fails
+        if: ${{ always() && steps.long_history.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-long-history-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-long-history/*.json
+            .artifacts/hipi-work/packages/gui-long-history/*.png
+            .artifacts/hipi-work/packages/gui-long-history/*.log
+          if-no-files-found: error
+          retention-days: 7
       # This retains build evidence only. It does not create a release or publish updates.
       - name: Retain unsigned packages and integrity evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline

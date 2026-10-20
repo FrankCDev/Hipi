@@ -30,13 +30,26 @@ timeout, completion and close terminate the worker before reusing its slot.
 If termination itself rejects, the pool fails closed, retains the unconfirmed
 slot and reports a close error instead of claiming successful cleanup.
 
-ZIP preflight uses yauzl lazy entries and sequential stream consumption. It
+ZIP validation uses yauzl lazy entries and sequential stream consumption. It
 checks declared sizes and actual inflated bytes: 32 MiB total, 8 MiB per entry,
 2,048 entries and maximum compression ratio 100 per entry. It rejects encrypted,
 duplicate (case-insensitive), traversal, symlink and macro/OLE entries. Every
 entry is scanned for DTD/entity declarations, including arbitrary-extension
 parts; XML/relationship files additionally receive strict UTF-8 checks. Libraries
-then receive exactly the same private bytes. No archive extraction touches disk.
+never receive the original archive. The validator verifies each entry's CRC and
+returns a private, uncompressed STORE ZIP containing only the inspected entries.
+Local and central names, sizes, checksums and entry counts are generated from
+that inspected content. Original local headers, extra fields, data descriptors,
+comments and uninspected entries are not forwarded. This prevents a downstream
+reader from trusting different ZIP metadata and allocating or parsing content
+that validation never approved. Valid streaming data descriptors and ZIP64 input
+are normalized rather than rejected. No archive extraction touches disk.
+
+Generated UTF-8 names are capped at 65,535 bytes each and 8 MiB combined. The
+normalized archive is bounded by 32 MiB payload, twice the name budget, 76 bytes
+per entry and a 22-byte trailer. Final concatenation temporarily holds the entry
+buffers and the new archive together; these native buffers are additional to V8
+heap usage, not covered by a worker heap limit or a process-wide RSS guarantee.
 
 Each job has a 5 second wall-clock timeout and V8 resource limits (128 MiB old
 generation, 16 MiB young generation, 4 MiB stack). These limits and worker threads
@@ -65,5 +78,10 @@ in that worker bundle and verify it after relocating outside the checkout.
 checks real worker parsing, plain-text/cached/string behavior, byte snapshots,
 malicious archives, streaming budgets, bounded admission, cancellation, forced
 timeout, close and termination-failure cleanup. It does not read user documents
-or contact real services. Desktop relocation and cross-platform acceptance are
-separate checks; passing these unit tests is not release certification.
+or contact real services. `test/office-zip-normalization.test.ts` covers conflicting
+local sizes and entry counts, CRC/symlink rejection, UTF-8 name budgets, generated
+metadata, input ownership and real worker compatibility for compressed XLSX,
+Unicode, streaming descriptors and ZIP64 DOCX. Allocation attacks use tiny
+synthetic payloads and trap the forged allocation before it occurs. Desktop
+relocation and cross-platform acceptance are separate checks; passing these unit
+tests is not release certification.

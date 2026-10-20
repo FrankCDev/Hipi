@@ -25,6 +25,7 @@ const codes = new Set([
 	"ENUMERATION_UNAVAILABLE",
 ]);
 const reasons = new Set([
+	"utility-import",
 	"request",
 	"process-lookup",
 	"process-handle",

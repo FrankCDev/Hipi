@@ -1,13 +1,18 @@
 $ErrorActionPreference = 'Stop'
+# Do not search installed/user modules when the first Utility cmdlet is invoked.
+# The helper deliberately receives a minimal environment, not the caller's profile.
+$PSModuleAutoLoadingPreference = 'None'
 function Write-Phase([string]$value) {
     $script:phase = $value
     # Fixed internal constants only; emit before each potentially blocking operation.
     [Console]::Out.WriteLine('{"phase":"' + $value + '"}')
     [Console]::Out.Flush()
 }
-Write-Phase 'request'
 # No policy override, foreground change, click, close, screenshot, or broad process scan.
 try {
+    Write-Phase 'utility-import'
+    Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1')) -ErrorAction Stop
+    Write-Phase 'request'
     $request = $env:HIPI_WINDOW_REQUEST | ConvertFrom-Json
     Write-Phase 'process-lookup'
     $process = [Diagnostics.Process]::GetProcessById([int]$request.pid)
@@ -106,7 +111,8 @@ public static class HipiOwnedDialogReader {
     @{ status='observed'; codes=@($codes) } | ConvertTo-Json -Compress
 } catch {
     # Never serialize exceptions, command lines, paths, window titles or raw text.
-    @{ status='unknown'; reason=$phase } | ConvertTo-Json -Compress
+    # This must also work when Utility (including ConvertTo-Json) failed to load.
+    [Console]::Out.WriteLine('{"status":"unknown","reason":"' + $script:phase + '"}')
 } finally {
     if ($null -ne $process) { $process.Dispose() }
 }

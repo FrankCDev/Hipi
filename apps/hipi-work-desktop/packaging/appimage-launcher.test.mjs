@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import verification from "./verify-appimage.cjs";
+import linuxSandbox from "./verify-linux-sandbox.cjs";
 
 const launcher = await readFile(new URL("./AppRun", import.meta.url));
-const listing = ["AppRun", "hipi-work.desktop"].map((name) => `Path = ${name}\nFolder = -\nMode = ${name === "AppRun" ? "-rwxr-xr-x" : "-rw-r--r--"}\nUser ID = 0\nGroup ID = 0`).join("\n\n");
+const listing = ["AppRun", "hipi-work.desktop", ...linuxSandbox.portableExecutables].map((name) => `Path = ${name}\nFolder = -\nMode = ${name === "hipi-work.desktop" ? "-rw-r--r--" : "-rwxr-xr-x"}\nUser ID = 0\nGroup ID = 0`).join("\n\n");
 const readEntry = (name) => name === "AppRun" ? launcher : Buffer.from(verification.expectedDesktop("0.0.1"));
 
 test("unreviewed reader and mirror overrides fail before package execution on every platform", () => {
@@ -30,6 +31,57 @@ test("AppImage verifier requires full reviewed content, regular modes, root owne
 	}
 	for (const target of ["AppRun", "hipi-work.desktop"]) {
 		assert.throws(() => verification.assertLauncherEntries(listing, (name) => name === target ? Buffer.concat([readEntry(name), Buffer.from("\n--no-sandbox\n")]) : readEntry(name), "0.0.1"));
+	}
+});
+
+test("AppImage portable executables reject special bits, writable files, links and ambiguous metadata", () => {
+	for (const name of linuxSandbox.portableExecutables) {
+		const entry = `Path = ${name}\nFolder = -\nMode = -rwxr-xr-x\nUser ID = 0\nGroup ID = 0`;
+		for (const altered of [
+			...["-rwsr-xr-x", "-rwxr-sr-x", "-rwxr-xr-t", "-rwxrwxrwx", "-rw-r--r--", "lrwxrwxrwx", "drwxr-xr-x"].map((mode) => entry.replace("-rwxr-xr-x", mode)),
+			entry.replace("User ID = 0", "User ID = 1000"),
+			entry.replace("Group ID = 0", "Group ID = 1000"),
+			entry.replace("Folder = -", "Folder = +"),
+			`${entry}\nMode = -rwsr-xr-x`,
+			`${entry}\nUser ID = 1000`,
+			`${entry}\nGroup ID = 1000`,
+			`${entry}\nFolder = +`,
+			`${entry}\nPath = ${name}`,
+			`${entry}\n\n${entry}`,
+			"",
+		]) {
+			assert.throws(() => verification.assertLauncherEntries(listing.replace(entry, altered), readEntry, "0.0.1"));
+		}
+	}
+});
+
+test("portable executable mode policy never accepts a privileged helper", () => {
+	linuxSandbox.assertPortableExecutableStat("fixture", { isFile: () => true, mode: 0o100755 });
+	// Synthetic metadata only: never create a setuid/setgid/sticky test executable.
+	for (const mode of [0o104755, 0o102755, 0o101755, 0o100777, 0o100775, 0o100644]) {
+		assert.throws(() => linuxSandbox.assertPortableExecutableStat("fixture", { isFile: () => true, mode }));
+	}
+	assert.throws(() => linuxSandbox.assertPortableExecutableStat("fixture", { isFile: () => false, mode: 0o120755 }));
+});
+
+test("Linux post-pack inspection rejects missing files, directories, symlinks and unsafe modes without repair", { skip: process.platform !== "linux" }, async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-portable-sandbox-"));
+	try {
+		for (const name of linuxSandbox.portableExecutables) await writeFile(join(directory, name), "inert fixture", { mode: 0o755 });
+		linuxSandbox.verifyLinuxSandboxFiles(directory);
+		const helper = join(directory, "chrome-sandbox");
+		await chmod(helper, 0o644);
+		assert.throws(() => linuxSandbox.verifyLinuxSandboxFiles(directory), /mode 0755/);
+		assert.equal((await lstat(helper)).mode & 0o7777, 0o644);
+		await rm(helper);
+		assert.throws(() => linuxSandbox.verifyLinuxSandboxFiles(directory), /ENOENT/);
+		await mkdir(helper);
+		assert.throws(() => linuxSandbox.verifyLinuxSandboxFiles(directory), /regular file/);
+		await rm(helper, { recursive: true });
+		await symlink(join(directory, "hipi-work"), helper);
+		assert.throws(() => linuxSandbox.verifyLinuxSandboxFiles(directory), /regular file/);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
 	}
 });
 

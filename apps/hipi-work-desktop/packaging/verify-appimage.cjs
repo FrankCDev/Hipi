@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
+const { portableExecutables } = require("./verify-linux-sandbox.cjs");
 
 function assertToolEnvironment(environment) {
 	for (const key of Object.keys(environment)) {
@@ -20,13 +21,17 @@ function assertLauncherEntries(listing, readEntry, version) {
 	for (const [name, mode, expected] of [
 		["AppRun", "-rwxr-xr-x", readFileSync(path.join(__dirname, "AppRun"))],
 		["hipi-work.desktop", "-rw-r--r--", Buffer.from(expectedDesktop(version))],
+		...portableExecutables.map((name) => [name, "-rwxr-xr-x", null]),
 	]) {
 		const entries = sections.filter((section) => section.split(/\r?\n/).includes(`Path = ${name}`));
 		assert.equal(entries.length, 1, `Unique regular AppImage entry required: ${name}`);
 		const lines = entries[0].split(/\r?\n/);
-		for (const field of [`Mode = ${mode}`, "Folder = -", "User ID = 0", "Group ID = 0"])
-			assert(lines.includes(field), `Unsafe AppImage metadata: ${name}: ${field}`);
-		assert.deepEqual(readEntry(name), expected, `Unreviewed AppImage launcher/desktop: ${name}`);
+		for (const field of [`Path = ${name}`, `Mode = ${mode}`, "Folder = -", "User ID = 0", "Group ID = 0"]) {
+			const key = field.slice(0, field.indexOf(" = ") + 3);
+			assert.deepEqual(lines.filter((line) => line.startsWith(key)), [field], `Unsafe AppImage metadata: ${name}: ${field}`);
+		}
+		if (expected !== null)
+			assert.deepEqual(readEntry(name), expected, `Unreviewed AppImage launcher/desktop: ${name}`);
 	}
 }
 
@@ -35,7 +40,7 @@ function verifyAppImage(archive, version, reader) {
 	const options = { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } };
 	const listing = execFileSync(reader, ["l", "-slt", archive], options).toString("utf8");
 	assertLauncherEntries(listing, (name) => execFileSync(reader, ["x", "-so", archive, name], options), version);
-	console.log("Verified actual AppImage launcher/desktop exact bytes, modes and ownership; no sandbox fallback.");
+	console.log("Verified actual AppImage launcher/desktop bytes and portable executable modes/ownership; no sandbox fallback.");
 }
 
 module.exports = { assertLauncherEntries, assertToolEnvironment, expectedDesktop, verifyAppImage };

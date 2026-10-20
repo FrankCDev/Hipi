@@ -34,6 +34,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-fonts.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-windows-dialogs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/font-assets.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
@@ -42,6 +44,7 @@ nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
 nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
 nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
+nodeTests.push("packages/work-runtime/test/office-zip-normalization.test.ts");
 const storageTests = [
 	"packages/chord/test/sqlite-readonly.test.ts",
 	"packages/chord/test/sqlite/node.test.ts",

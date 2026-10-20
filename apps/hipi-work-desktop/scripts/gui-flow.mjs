@@ -123,7 +123,7 @@ async function waitForSelectClosed(cdp, selector) {
 		"select closed and original combobox focus restored",
 	);
 }
-async function selectEnglish(cdp) {
+export async function selectEnglish(cdp) {
 	await click(cdp, 'button[aria-label="Workbench settings"], button[aria-label="工作台设置"]');
 	await until(
 		() => evaluate(cdp, `!!document.querySelector('.workbench-settings[role="dialog"]')`),

@@ -16,8 +16,8 @@ import { inspectOfficeZip } from "./zip-budget.ts";
 export async function parseDocumentBytes(format: DocumentFormat, bytes: Uint8Array): Promise<DocumentPreview> {
 	if (bytes.byteLength > DOCUMENT_LIMITS.inputBytes) throw new DocumentPreviewError("DOCUMENT_LIMIT");
 	if (bytes.byteLength === 0) throw new DocumentPreviewError("INVALID_DOCUMENT");
-	const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	if (format !== "csv") await inspectOfficeZip(buffer, format);
+	const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const buffer = format === "csv" ? input : await inspectOfficeZip(input, format);
 	if (format === "docx") {
 		// extractRawText does not invoke HTML/image conversion or external resource loading.
 		const result = await mammoth.extractRawText({ buffer });
@@ -85,7 +85,8 @@ export async function parseDocumentBytes(format: DocumentFormat, bytes: Uint8Arr
 		if (invalid) throw new DocumentPreviewError("INVALID_DOCUMENT");
 		sheets.push({ name: "CSV", rows });
 	} else {
-		// Library allocation is bounded by the ZIP preflight, worker heap and timeout.
+		// Parse only the validated, size-bounded STORE archive, never original ZIP headers.
+		// Worker heap limits do not cap native buffers or constitute an OS sandbox.
 		// Restrict parsed rows/sheets as well as the projected grid; no recalculation occurs.
 		const workbook = XLSX.read(buffer, {
 			type: "buffer",

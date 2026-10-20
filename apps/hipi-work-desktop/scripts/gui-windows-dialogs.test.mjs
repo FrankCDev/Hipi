@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,7 +12,14 @@ const input = { pid: 123, binary: "C:\\owned\\Hipi Work.exe", spawnedAt: 123456 
 const confirmed = { status: "confirmed", pid: 123, startTicks: "123456789", session: 1 };
 
 test("identity failures preserve only fixed diagnostic phases without weakening unknown", async () => {
-	for (const reason of ["process-image", "spawn-window", "session-mismatch", "image-mismatch", "native-compile"]) {
+	for (const reason of [
+		"utility-import",
+		"process-image",
+		"spawn-window",
+		"session-mismatch",
+		"image-mismatch",
+		"native-compile",
+	]) {
 		const identity = await captureWindowsIdentity(input, {
 			platform: "win32",
 			run: async () => ({ stdout: JSON.stringify({ status: "unknown", reason, path: "private" }) }),
@@ -57,6 +65,7 @@ test("identity failures preserve only fixed diagnostic phases without weakening 
 
 test("bounded JSONL progress survives timeout without leaking output or proving identity", async () => {
 	for (const [stdout, lastPhase] of [
+		['{"phase":"utility-import"}\n', "utility-import"],
 		['{"phase":"request"}\n{"phase":"process-image"}\n', "process-image"],
 		['{"phase":"process-handle"}\n{"phase":"private-path"}\nsecret\n{"phase":"process-image"}', "process-handle"],
 		['{"phase":"process-image","secret":"private"}\n', "helper-start"],
@@ -92,6 +101,19 @@ test("bounded JSONL progress survives timeout without leaking output or proving 
 	}
 });
 
+test("helper loads only its installed Utility module before parsing and can report an import failure", async () => {
+	const script = await readFile(new URL("./gui-windows-dialogs.ps1", import.meta.url), "utf8");
+	const explicitImport =
+		"Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1')) -ErrorAction Stop";
+	assert.match(script, /\$PSModuleAutoLoadingPreference = 'None'/);
+	assert.ok(script.indexOf("$PSModuleAutoLoadingPreference = 'None'") < script.indexOf(explicitImport));
+	assert.ok(script.indexOf(explicitImport) > 0);
+	assert.ok(script.indexOf(explicitImport) < script.indexOf("| ConvertFrom-Json"));
+	const failure = script.slice(script.indexOf("} catch {"), script.indexOf("} finally {"));
+	assert.match(failure, /\[Console\]::Out\.WriteLine\('\{"status":"unknown","reason":"' \+ \$script:phase \+ '"\}'\)/);
+	assert.doesNotMatch(failure, /\|\s*ConvertTo-Json/);
+});
+
 test("owned-window query binds PID and fixed script, strips raw fields, and never falls back after refusal", async () => {
 	const calls = [];
 	const run = async (command, args, options) => {
@@ -106,6 +128,12 @@ test("owned-window query binds PID and fixed script, strips raw fields, and neve
 	assert.equal(JSON.parse(calls[0].options.env.HIPI_WINDOW_REQUEST).pid, 123);
 	assert.equal(calls[0].options.maxBuffer, 16384);
 	assert.equal(calls[0].options.timeout, 10000);
+	assert.ok(
+		Object.keys(calls[0].options.env).every((key) =>
+			/^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|HIPI_WINDOW_REQUEST)$/i.test(key),
+		),
+		"The helper must not inherit profile, module-discovery or unrelated private environment values",
+	);
 	const evidence = await readWindowsDialogs(identity, {
 		platform: "win32",
 		run: async () => ({
@@ -167,6 +195,38 @@ test("untrusted output, excessive text, platform mismatch and unknown codes cann
 		{ status: "not-applicable" },
 	);
 });
+
+test(
+	"Windows helper parses requests without profile or module search environment",
+	{ skip: process.platform !== "win32", timeout: 15000 },
+	async () => {
+		const binary = join(
+			process.env.SystemRoot ?? process.env.SYSTEMROOT,
+			"System32/WindowsPowerShell/v1.0/powershell.exe",
+		);
+		const execute = promisify(execFile);
+		let phases;
+		const identity = await captureWindowsIdentity(input, {
+			run: async (_command, args, options) => {
+				const result = await execute(binary, args, {
+					...options,
+					env: { ...options.env, HIPI_WINDOW_REQUEST: "{invalid-private-request" },
+				});
+				phases = result.stdout
+					.trim()
+					.split(/\r?\n/)
+					.map((line) => JSON.parse(line));
+				return result;
+			},
+		});
+		assert.deepEqual(identity, { status: "unknown", reason: "request" });
+		assert.deepEqual(phases, [
+			{ phase: "utility-import" },
+			{ phase: "request" },
+			{ status: "unknown", reason: "request" },
+		]);
+	},
+);
 
 test(
 	"Windows native query verifies process identity and observes only fixed error codes",
