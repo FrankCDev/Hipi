@@ -523,3 +523,85 @@ test("production Markdown limit rejection cannot edit or schedule a save when on
 	await vi.advanceTimersByTimeAsync(10000);
 	assert.equal(saves.mock.calls.length, 0);
 });
+
+test.each([false, true])(
+	"reopen focuses the actual Markdown content after commit and captures live scroll (readonly=%s)",
+	(readOnly) => {
+		const frames = new Map<number, () => void>();
+		let sequence = 0;
+		vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {
+			frames.set(++sequence, callback);
+			return sequence;
+		});
+		vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+		const memory: EditorViewMemory = {};
+		const handled = vi.fn();
+		let focusRequest: number | undefined;
+		const render = () =>
+			MarkdownEditor({
+				text: "# disk",
+				onChange: vi.fn(),
+				label: "Source",
+				readOnly,
+				memory,
+				focusRequest,
+				onFocusHandled: handled,
+			});
+		mountMarkdown(render);
+		assert.equal(frames.size, 0);
+		const editor = views.at(-1);
+		assert.ok(editor);
+		const content = (editor as View & { contentDOM: { focus: ReturnType<typeof vi.fn> } }).contentDOM;
+		editor.scrollDOM.scrollTop = 180;
+		editor.scrollDOM.scrollLeft = 7;
+		assert.deepEqual(memory.captureView?.(), { scrollTop: 180, scrollLeft: 7 });
+		focusRequest = 1;
+		mountMarkdown(render);
+		assert.equal(content.focus.mock.calls.length, 0);
+		for (const callback of frames.values()) callback();
+		frames.clear();
+		assert.deepEqual(content.focus.mock.calls, [[{ preventScroll: true }]]);
+		assert.deepEqual(handled.mock.calls, [[1]]);
+		focusRequest = 2;
+		mountMarkdown(render);
+		focusRequest = undefined;
+		mountMarkdown(render);
+		assert.equal(frames.size, 0);
+		resetHooks();
+		assert.equal(memory.captureView, undefined);
+		vi.unstubAllGlobals();
+	},
+);
+
+test.each(["preview", "diff"] as const)(
+	"reopen %s focuses the visible surface, not an absent source editor",
+	async (mode) => {
+		const frames = new Map<number, () => void>();
+		let sequence = 0;
+		vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {
+			frames.set(++sequence, callback);
+			return sequence;
+		});
+		vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+		const tab = await open();
+		tab.view.mode = mode;
+		const focus = vi.fn();
+		const handled = vi.fn();
+		const tree = drive(
+			() => FileBuffer({ tab, guard: (action) => action(), retry: vi.fn(), focusRequest: 3, onFocusHandled: handled }),
+			(node) => {
+				const surface = elements(node, "div").find((item) => item.props.className === "file-editor-surface");
+				assert.ok(surface);
+				assert.equal(surface.props.tabIndex, -1);
+				(surface.props.ref as React.RefObject<unknown>).current = { focus };
+			},
+		);
+		assert.equal(elements(tree, CodeEditor).length, 0);
+		assert.equal(focus.mock.calls.length, 0);
+		for (const callback of frames.values()) callback();
+		assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
+		assert.deepEqual(handled.mock.calls, [[3]]);
+		resetHooks();
+		vi.unstubAllGlobals();
+	},
+);

@@ -18,6 +18,8 @@ import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
 import { ComposerKeyboard } from "./composer-keyboard.ts";
+import { PinConversationItem } from "./pin-conversation.tsx";
+import type { PresentationSession } from "./presentation-session.ts";
 import type { PreviewActions } from "./sidebar-preview-row.tsx";
 import "./conversation-rename.css";
 
@@ -87,6 +89,7 @@ export function ConversationActions({
 	onOverlayChange,
 	onReturnFocus,
 	triggerRef,
+	presentation,
 }: {
 	conversation: Conversation;
 	session: CatalogSession;
@@ -97,11 +100,13 @@ export function ConversationActions({
 	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus?: () => void;
 	triggerRef?: RefObject<HTMLButtonElement | null>;
+	presentation?: PresentationSession;
 }) {
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
 	const cache = useQueryClient();
 	const [renaming, setRenaming] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const titleId = useId();
@@ -142,6 +147,12 @@ export function ConversationActions({
 				) {
 					cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
 					void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
+					if (presentation) {
+						void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
+						void cache.invalidateQueries({
+							queryKey: ["conversation-presentation", result.workspaceId, result.conversationId],
+						});
+					}
 					if (command.method === "renameConversation") {
 						closeRename();
 					}
@@ -172,6 +183,7 @@ export function ConversationActions({
 		>
 			<DropdownMenu
 				onOpenChange={(open) => {
+					setMenuOpen(open);
 					onOverlayChange?.("menu", open);
 					if (open) onMenuOpen?.();
 				}}
@@ -204,6 +216,14 @@ export function ConversationActions({
 				>
 					<DropdownMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</DropdownMenuLabel>
 					<DropdownMenuSeparator />
+					{presentation && (
+						<PinConversationItem
+							conversation={conversation}
+							session={presentation}
+							open={menuOpen}
+							disabled={disabled}
+						/>
+					)}
 					<DropdownMenuItem
 						disabled={renameDisabled}
 						onSelect={() => {

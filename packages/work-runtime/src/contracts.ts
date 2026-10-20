@@ -92,6 +92,20 @@ export type ConversationCommandResult = {
 	method: "createConversation" | "renameConversation" | "archiveConversation" | "restoreConversation";
 	result: Conversation;
 };
+/** Catalog-owned presentation, independent of conversation/execution revisions. */
+export type ConversationPresentation = Scope & { revision: number; pinned: boolean };
+export type PinnedConversation = { conversation: Conversation; presentation: ConversationPresentation };
+export type SetConversationPinned = Scope & {
+	requestId: string;
+	expectedPresentationRevision: number;
+	pinned: boolean;
+};
+/** An immutable first result, not the conversation's current presentation. */
+export type PresentationCommandResult = {
+	method: "setConversationPinned";
+	params: SetConversationPinned;
+	result: ConversationPresentation;
+};
 export const AGENT_LIMITS = {
 	contexts: 64,
 	activeContexts: 32,
@@ -243,6 +257,13 @@ export type Methods = ToolPackMethods &
 			result: Conversation;
 		};
 		getConversation: { params: Scope; result: Conversation };
+		getConversationPresentation: { params: Scope; result: ConversationPresentation };
+		listPinnedConversations: { params: { cursor?: string }; result: Page<PinnedConversation> };
+		setConversationPinned: { params: SetConversationPinned; result: ConversationPresentation };
+		getPresentationCommandResult: {
+			params: { requestId: string };
+			result: PresentationCommandResult | null;
+		};
 		renameConversation: { params: ConversationMutation & { title: string }; result: Conversation };
 		archiveConversation: { params: ConversationMutation; result: Conversation };
 		restoreConversation: { params: ConversationMutation; result: Conversation };
@@ -407,6 +428,7 @@ export function parseRequest(value: unknown): Request {
 			request = { version: PROTOCOL_VERSION, method: r.method, params: {} };
 			break;
 		case "listWorkspaces":
+		case "listPinnedConversations":
 			request = {
 				version: PROTOCOL_VERSION,
 				method: r.method,
@@ -486,6 +508,22 @@ export function parseRequest(value: unknown): Request {
 				},
 			};
 			break;
+		case "getPresentationCommandResult":
+			request = { version: PROTOCOL_VERSION, method: r.method, params: { requestId: id(p.requestId) } };
+			break;
+		case "setConversationPinned":
+			if (typeof p.pinned !== "boolean") throw new AppError("INVALID_REQUEST");
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: {
+					...parseScope(p),
+					requestId: id(p.requestId),
+					expectedPresentationRevision: integer(p.expectedPresentationRevision),
+					pinned: p.pinned,
+				},
+			};
+			break;
 		case "submit":
 			request = {
 				version: PROTOCOL_VERSION,
@@ -505,6 +543,7 @@ export function parseRequest(value: unknown): Request {
 		case "getConversationModel":
 		case "cancelExecution":
 		case "getConversation":
+		case "getConversationPresentation":
 		case "listActiveAgentContexts":
 			request = { version: PROTOCOL_VERSION, method: r.method, params: parseScope(p) };
 			break;
@@ -1110,6 +1149,12 @@ export function parseConversation(value: unknown): Conversation {
 		archivedAt: p.archivedAt === null ? null : integer(p.archivedAt),
 	};
 }
+export function parseConversationPresentation(value: unknown): ConversationPresentation {
+	const p = object(value);
+	fields(p, ["workspaceId", "conversationId", "revision", "pinned"]);
+	if (typeof p.pinned !== "boolean" || (p.pinned && p.revision === 0)) throw new AppError("INVALID_REQUEST");
+	return { ...parseScope(p), revision: integer(p.revision), pinned: p.pinned };
+}
 function parsePage<T>(value: unknown, max: number, parse: (value: unknown) => T, key: (item: T) => string): Page<T> {
 	const p = object(value);
 	fields(p, ["items", "nextCursor"]);
@@ -1190,6 +1235,47 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		fields(p, ["items", "nextCursor"]);
 		if (!Array.isArray(p.items) || p.items.length > AGENT_LIMITS.approvalPage) throw new AppError("INVALID_REQUEST");
 		result = { items: Array.from(p.items, parseToolApproval), nextCursor: cursor(p.nextCursor) };
+	} else if (method === "getConversationPresentation" || method === "setConversationPinned") {
+		result = parseConversationPresentation(value);
+	} else if (method === "getPresentationCommandResult") {
+		if (value === null) result = null;
+		else {
+			const p = object(value);
+			fields(p, ["method", "params", "result"]);
+			if (p.method !== "setConversationPinned") throw new AppError("INVALID_REQUEST");
+			const request = parseRequest({ version: PROTOCOL_VERSION, method: p.method, params: p.params });
+			if (request.method !== "setConversationPinned") throw new AppError("INVALID_REQUEST");
+			const presentation = parseConversationPresentation(p.result);
+			if (
+				presentation.workspaceId !== request.params.workspaceId ||
+				presentation.conversationId !== request.params.conversationId ||
+				presentation.pinned !== request.params.pinned ||
+				presentation.revision < request.params.expectedPresentationRevision ||
+				presentation.revision > request.params.expectedPresentationRevision + 1
+			)
+				throw new AppError("INVALID_REQUEST");
+			result = { method: p.method, params: request.params, result: presentation };
+		}
+	} else if (method === "listPinnedConversations") {
+		result = parsePage(
+			value,
+			LIMITS.directoryPage,
+			(raw) => {
+				const p = object(raw);
+				fields(p, ["conversation", "presentation"]);
+				const conversation = parseConversation(p.conversation);
+				const presentation = parseConversationPresentation(p.presentation);
+				if (
+					conversation.workspaceId !== presentation.workspaceId ||
+					conversation.conversationId !== presentation.conversationId ||
+					conversation.archivedAt !== null ||
+					!presentation.pinned
+				)
+					throw new AppError("INVALID_REQUEST");
+				return { conversation, presentation };
+			},
+			(item) => JSON.stringify([item.conversation.workspaceId, item.conversation.conversationId]),
+		);
 	} else if (method === "getConversationCommandResult") {
 		if (value === null) result = null;
 		else {

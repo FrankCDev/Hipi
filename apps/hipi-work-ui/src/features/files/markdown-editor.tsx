@@ -40,6 +40,8 @@ export function MarkdownEditor({
 	readOnly,
 	memory,
 	onSave,
+	focusRequest,
+	onFocusHandled,
 	bindings = DEFAULT_EDITOR_KEYBINDINGS,
 }: {
 	text: string;
@@ -48,6 +50,8 @@ export function MarkdownEditor({
 	readOnly: boolean;
 	memory?: EditorViewMemory;
 	onSave?: () => void;
+	focusRequest?: number;
+	onFocusHandled?: (request: number) => void;
 	bindings?: FileEditorKeybindings;
 }) {
 	const { locale } = usePreferences();
@@ -187,6 +191,27 @@ export function MarkdownEditor({
 		const editor = view.current;
 		if (editor && markdownFileText(editor.state) !== text) editor.dispatch(replaceMarkdownText(editor.state, text));
 	}, [text]);
+	useEffect(() => {
+		const editor = view.current;
+		if (focusRequest === undefined || !editor) return;
+		const frame = requestAnimationFrame(() => {
+			if (view.current !== editor) return;
+			editor.contentDOM.focus({ preventScroll: true });
+			onFocusHandled?.(focusRequest);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [focusRequest, onFocusHandled]);
+	useEffect(() => {
+		if (!memory) return;
+		const capture = () => ({
+			scrollTop: view.current?.scrollDOM.scrollTop ?? memory.scrollTop ?? 0,
+			scrollLeft: view.current?.scrollDOM.scrollLeft ?? memory.scrollLeft ?? 0,
+		});
+		memory.captureView = capture;
+		return () => {
+			if (memory.captureView === capture) delete memory.captureView;
+		};
+	}, [memory]);
 	return (
 		<>
 			{limitExceeded && <p role="alert">{fileLabels(locale).inputLimit}</p>}

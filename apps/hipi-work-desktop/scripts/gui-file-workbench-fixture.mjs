@@ -85,6 +85,26 @@ export async function changeOwnedFixture(ownedProfileRoot) {
 	assert.equal((await readOwnedFixture(ownedProfileRoot)).toString("utf8"), fileFixture.external);
 }
 
+/** One known closed, clean synthetic file only; native UI must subsequently restore its expected bytes. */
+export async function changeClosedSecondFixture(ownedProfileRoot) {
+	assert.equal(
+		(await readOwnedFixture(ownedProfileRoot, fileFixture.secondName)).toString("utf8"),
+		fileFixture.secondClosed,
+	);
+	assert.ok(Buffer.byteLength(fileFixture.secondReopened) > Buffer.byteLength(fileFixture.secondClosed));
+	await writeFile(
+		join(await ownedFileDirectory(ownedProfileRoot), fileFixture.secondName),
+		fileFixture.secondReopened,
+		{
+			flag: "r+",
+		},
+	);
+	assert.equal(
+		(await readOwnedFixture(ownedProfileRoot, fileFixture.secondName)).toString("utf8"),
+		fileFixture.secondReopened,
+	);
+}
+
 function runtimeOptions() {
 	const models = createModels({ authContext: { env: async () => undefined, fileExists: async () => false } });
 	models.setProvider(fauxProvider({ models: [{ id: "faux-1" }] }).provider);

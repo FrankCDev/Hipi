@@ -162,7 +162,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		}, "explicit consent recorded");
 		await click(cdp, `${disclosure.selector} button`, "Authorize live access");
 		await waitCard("binding", "Active");
-		activeGeometry = await inspectModal(cdp, dialog, "right");
+		activeGeometry = await inspectModal(cdp, dialog, "center");
 		await capture(cdp, directory, "tool-packs-active");
 		await closeToolPacks(cdp, helpers, true);
 		await open();
@@ -189,7 +189,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 	await click(cdp, `${panel} button`, "Binding history");
 	await waitCard("binding", "Revoked");
 	await assertNoAlerts(cdp);
-	const retainedGeometry = await inspectModal(cdp, dialog, "right");
+	const retainedGeometry = await inspectModal(cdp, dialog, "center");
 	await capture(cdp, directory, reopened ? "tool-packs-reopened" : "tool-packs-uninstalled");
 	await closeToolPacks(cdp, helpers);
 	return {

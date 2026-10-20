@@ -66,9 +66,10 @@ test("unknown or invalid legacy creation dates are omitted rather than fabricate
 
 test("the informational preview has no duplicate actions, identifiers or decorative status", () => {
 	const html = renderPreview({ archivedAt: Date.parse("2026-10-20T00:00:00.000Z") });
-	assert.doesNotMatch(
-		html,
-		/preview-status|preview-identifiers|conversation-preview-actions|<details|project-one|conversation-one/,
-	);
+	assert.doesNotMatch(html, /preview-status|preview-identifiers|conversation-preview-actions|<details/);
+	const preview = html.match(/<aside>([\s\S]*?)<\/aside>/)?.[1];
+	assert.ok(preview);
+	assert.doesNotMatch(preview, /project-one|conversation-one/);
+	assert.doesNotMatch(html.replace(/<[^>]*>/g, ""), /project-one|conversation-one/);
 	assert.equal((html.match(/<button /g) ?? []).length, 1, "Only the conversation navigation itself is actionable");
 });

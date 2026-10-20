@@ -5,6 +5,10 @@ async function denied(): Promise<never> {
 }
 /** Existing fixtures explicitly deny features outside their scenario. */
 export const deniedFeatureReads = {
+	getConversationPresentation: denied,
+	listPinnedConversations: denied,
+	setConversationPinned: denied,
+	getPresentationCommandResult: denied,
 	listCustomProviders: denied,
 	saveCustomProvider: denied,
 	removeCustomProvider: denied,

@@ -94,10 +94,14 @@ test("preview transport admission is bounded and close cancels every pending par
 test("desktop files and previews share grants; revoke blocks cached handles and store mismatch", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-desktop-previews-"));
 	const rejectFeatureRead = async () => {
-		throw new Error("Previews must not read tool packs, activities, or provider settings");
+		throw new Error("Previews must not access presentation metadata, tool packs, activities, or provider settings");
 	};
 	const runtime = new WorkRuntime({
 		storeId: "store",
+		getConversationPresentation: rejectFeatureRead,
+		listPinnedConversations: rejectFeatureRead,
+		setConversationPinned: rejectFeatureRead,
+		getPresentationCommandResult: rejectFeatureRead,
 		listCustomProviders: rejectFeatureRead,
 		saveCustomProvider: rejectFeatureRead,
 		removeCustomProvider: rejectFeatureRead,

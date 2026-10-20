@@ -623,3 +623,117 @@ test("close cancels its continuation when the same root loses write authority du
 		root.writable = true;
 	}
 });
+
+test("empty tab strip keeps a reachable reopen action, reopens through current authority and hands focus to exact buffer", async () => {
+	const tab = await open("closed.txt");
+	const before = drive();
+	assert.ok(before.tabs);
+	before.tabs.props.close([tab.id]);
+	await flush();
+	const empty = drive();
+	assert.ok(empty.tabs);
+	assert.equal(empty.tabs.props.tabs.length, 0);
+	assert.equal(empty.tabs.props.canReopen, true);
+	empty.tabs.props.reopen?.();
+	await flush();
+	await flush();
+	const restored = drive();
+	assert.ok(restored.buffer);
+	assert.notEqual(restored.buffer.props.tab.id, tab.id);
+	assert.equal(restored.buffer.props.focusRequest, session.snapshot().focusSequence);
+	restored.buffer.props.onFocusHandled?.(restored.buffer.props.focusRequest as number);
+	assert.equal(session.snapshot().focusId, undefined);
+	assert.equal(vi.mocked(port.files.listRoots).mock.calls.length, 1);
+});
+
+test("hidden successful reopen defers editor focus until visible and stale focus acknowledgment cannot consume newer request", async () => {
+	const tab = await open("hidden.txt");
+	await session.close([tab.id]);
+	visible = false;
+	drive();
+	const result = await session.reopen("w");
+	assert.ok(result);
+	assert.equal(drive().buffer?.props.focusRequest, undefined);
+	visible = true;
+	const shown = drive();
+	assert.equal(shown.buffer?.props.focusRequest, result.request);
+	session.consumeFocus(result.id, result.request - 1);
+	assert.equal(session.snapshot().focusId, result.id);
+	shown.buffer?.props.onFocusHandled?.(result.request);
+	assert.equal(session.snapshot().focusId, undefined);
+});
+
+test("hidden preview reopen retains its pending and successful handle until panel reveal", async () => {
+	const pending = Promise.withResolvers<PreviewHandle>();
+	let deferred = false;
+	const released: string[] = [];
+	const previews: PreviewClient = {
+		open: () =>
+			deferred
+				? pending.promise
+				: Promise.resolve({
+						id: "first",
+						revision: "a".repeat(64),
+						kind: "docx",
+						summary: { bytes: 4, pages: 1, truncated: false },
+					}),
+		readPage: async (id, page) => ({
+			id,
+			revision: "a".repeat(64),
+			page,
+			content: { kind: "document", format: "docx", text: "page", truncated: false, limitations: [] },
+		}),
+		readBytes: async () => {
+			throw Error("unexpected");
+		},
+		close: async (id) => {
+			released.push(id);
+		},
+	};
+	session.dispose();
+	session = new FileWorkspaceSession(port.files, previews);
+	session.setWorkspace("w");
+	await session.openPreview({ workspaceId: "w", rootId: "r", path: "doc.docx" }, true);
+	const tab = session.snapshot().tabs[0];
+	assert.ok(tab);
+	await session.close([tab.id]);
+	visible = false;
+	drive();
+	deferred = true;
+	const reopening = session.reopen("w");
+	drive();
+	const restored = session.snapshot().tabs[0];
+	assert.ok(restored?.kind === "preview");
+	assert.equal(restored.preview.snapshot().loading, true);
+	pending.resolve({
+		id: "restored",
+		revision: "a".repeat(64),
+		kind: "docx",
+		summary: { bytes: 4, pages: 1, truncated: false },
+	});
+	assert.ok(await reopening);
+	drive();
+	assert.equal(restored.preview.snapshot().handle?.id, "restored");
+	assert.deepEqual(released, ["first"]);
+	vi.stubGlobal("requestAnimationFrame", () => 1);
+	vi.stubGlobal("cancelAnimationFrame", () => {});
+	visible = true;
+	drive();
+	assert.equal(restored.preview.snapshot().handle?.id, "restored");
+});
+
+test("inactive tab context menu exposes the shared reopen command and blocks it while closing", async () => {
+	const tab = await open("menu.txt");
+	const reopen = vi.fn();
+	const render = (closing: boolean) =>
+		FileTabContextMenu({ id: tab.id, session, close: () => {}, closing, reopen, canReopen: true, children: null });
+	const item = elements(render(false), ContextMenu.Item).find((node) => node.props.children === "Reopen closed file");
+	assert.ok(item?.props.onSelect);
+	assert.equal(item.props.disabled, false);
+	Reflect.apply(item.props.onSelect, undefined, [{}]);
+	assert.equal(reopen.mock.calls.length, 1);
+	const disabled = elements(render(true), ContextMenu.Item).find(
+		(node) => node.props.children === "Reopen closed file",
+	);
+	assert.equal(disabled?.props.disabled, true);
+});

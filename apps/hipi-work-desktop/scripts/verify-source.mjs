@@ -38,6 +38,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-work-experience.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-settings-route.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-disclosure.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-binding.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-pin.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/smoke-packaged-gui.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
@@ -51,6 +52,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-editor-escape.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-reopen.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
@@ -59,6 +61,8 @@ nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/custom-providers.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folder-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folders.test.ts");
+nodeTests.push("packages/work-runtime/test/conversation-presentation.test.ts");
+nodeTests.push("packages/work-runtime/test/presentation-backup.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/project-folders.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
@@ -115,6 +119,7 @@ const uiTests = [
 	"input-group",
 	"shared-control-primitives",
 	"workspace-tree",
+	"pin-interactions",
 	"workspace-navigation-interaction",
 	"catalog-pages",
 	"sidebar-navigation-callbacks",
@@ -135,6 +140,7 @@ uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
 uiTests.push("apps/hipi-work-ui/test/project-folder-change.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/presentation-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-context-send.test.ts");

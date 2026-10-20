@@ -4,7 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { AppError } from "./contracts.ts";
+import { AppError, type Conversation, type Params } from "./contracts.ts";
+import type { PresentationFailpoint } from "./conversation-presentation.ts";
 import { WorkRuntime } from "./core.ts";
 import {
 	assertConfigurableModels,
@@ -29,6 +30,7 @@ export type RuntimeOptions = Pick<
 	models: Models;
 	onDiagnostic?: (diagnostic: { category: "storage"; phase: "storage-open" }) => void;
 	catalogFailpoint?: (point: "after_reserve" | "after_directory" | "after_storage" | "before_ready") => Promise<void>;
+	presentationFailpoint?: (point: PresentationFailpoint) => void | Promise<void>;
 };
 /**
  * Local filesystem adapter. A dedicated SQLite lock transaction guards the actual workspace directory.
@@ -41,7 +43,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 	try {
 		await mkdir(directory, { recursive: true, mode: 0o700 });
 		root = await realpath(directory);
-		catalog = await StoreCatalog.open(root);
+		catalog = await StoreCatalog.open(root, options.presentationFailpoint);
 	} catch (error) {
 		try {
 			options.onDiagnostic?.({ category: "storage", phase: "storage-open" });
@@ -59,6 +61,10 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 	}
 	const runtime = new WorkRuntime({
 		storeId: catalog.storeId,
+		getConversationPresentation: (input) => catalog.getConversationPresentation(input),
+		listPinnedConversations: (input) => catalog.listPinnedConversations(input),
+		setConversationPinned: (input) => catalog.setConversationPinned(input),
+		getPresentationCommandResult: (input) => catalog.getPresentationCommandResult(input),
 		listCustomProviders: async () => catalog.listCustomProviders(),
 		listBuiltInProviders: async () => builtInProviderCatalog(),
 		getBuiltInProviderModels: async ({ vendorId }) => builtInProviderModels(vendorId),
@@ -182,6 +188,41 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 				}
 				let closed = false;
 				let closing: Promise<void> | undefined;
+				// Keep pre-Restore fencing inside the same ordered lifecycle transition as Archive.
+				// This queue owns no execution and does not alter PI's immutable command payloads.
+				let archiveTransition: Promise<unknown> = Promise.resolve();
+				const changeArchive = (
+					method: "archiveConversation" | "restoreConversation",
+					input: Params<"archiveConversation">,
+				) => {
+					const operation = archiveTransition.then(async () => {
+						if (method === "restoreConversation")
+							catalog.recordConversationArchive(await port.getConversation(input));
+						let result: Conversation;
+						try {
+							result = await port[method](input);
+						} catch (error) {
+							// PI may have committed before an interrupted reply. Inspect, never replay.
+							if (method === "archiveConversation") {
+								try {
+									const receipt = await port.getConversationCommandResult(input);
+									if (
+										receipt?.method === "archiveConversation" &&
+										receipt.result.conversationId === input.conversationId
+									)
+										catalog.recordConversationArchive(receipt.result);
+								} catch {
+									// Preserve the original unknown outcome; reads and pre-Restore repair the fence.
+								}
+							}
+							throw error;
+						}
+						if (method === "archiveConversation") await catalog.finishConversationArchive(result);
+						return result;
+					});
+					archiveTransition = operation.catch(() => undefined);
+					return operation;
+				};
 				return {
 					installToolPack: (input) => port.installToolPack(input),
 					setToolPackEnabled: (input) => port.setToolPackEnabled(input),
@@ -194,8 +235,8 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 					createConversation: (input) => port.createConversation(input),
 					getConversation: (input) => port.getConversation(input),
 					renameConversation: (input) => port.renameConversation(input),
-					archiveConversation: (input) => port.archiveConversation(input),
-					restoreConversation: (input) => port.restoreConversation(input),
+					archiveConversation: (input) => changeArchive("archiveConversation", input),
+					restoreConversation: (input) => changeArchive("restoreConversation", input),
 					getConversationCommandResult: (input) => port.getConversationCommandResult(input),
 					listActiveAgentContexts: (input) => port.listActiveAgentContexts(input),
 					listPendingToolApprovals: (input) => port.listPendingToolApprovals(input),

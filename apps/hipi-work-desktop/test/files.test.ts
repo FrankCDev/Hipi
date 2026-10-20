@@ -14,10 +14,14 @@ import { decode, encode } from "../src/protocol.ts";
 
 function catalog() {
 	const rejectFeatureRead = async () => {
-		throw new Error("Files must not read tool packs, activities, or provider settings");
+		throw new Error("Files must not access presentation metadata, tool packs, activities, or provider settings");
 	};
 	return new WorkRuntime({
 		storeId: "store",
+		getConversationPresentation: rejectFeatureRead,
+		listPinnedConversations: rejectFeatureRead,
+		setConversationPinned: rejectFeatureRead,
+		getPresentationCommandResult: rejectFeatureRead,
 		listCustomProviders: rejectFeatureRead,
 		saveCustomProvider: rejectFeatureRead,
 		removeCustomProvider: rejectFeatureRead,

@@ -12,7 +12,6 @@ import { useFileSearch } from "./file-search.tsx";
 import { BoundedTextDocument } from "./pierre-document.ts";
 import { fileLanguage, PIERRE_CSS, pierreTheme } from "./pierre-theme.ts";
 
-const createEditor: EditorFactory<undefined, undefined> = (type, options) => new Editor(type, options);
 const options = {
 	preferredHighlighter: "shiki-js",
 	disableFileHeader: true,
@@ -66,6 +65,8 @@ function PierreSurface({
 	memory,
 	onChange,
 	onSave,
+	focusRequest,
+	onFocusHandled,
 	bindings = DEFAULT_EDITOR_KEYBINDINGS,
 	current,
 }: CodeEditorProps & { initialText: string; current: () => boolean }) {
@@ -84,6 +85,67 @@ function PierreSurface({
 	const handle = useRef<CodeViewHandle<undefined, undefined>>(null);
 	const scroll = useRef<HTMLDivElement>(null);
 	const section = useRef<HTMLElement>(null);
+	const focus = useRef({
+		request: focusRequest,
+		handled: undefined as number | undefined,
+		active: true,
+		current,
+		onFocusHandled,
+	});
+	focus.current.request = focusRequest;
+	focus.current.current = current;
+	focus.current.onFocusHandled = onFocusHandled;
+	const focusFrame = useRef<number | undefined>(undefined);
+	const focusPending = () => {
+		const pending = focus.current;
+		if (!pending.active || !pending.current() || pending.request === undefined || pending.handled === pending.request)
+			return;
+		const editor = handle.current?.getEditor("document");
+		if (editor) editor.focus({ preventScroll: true });
+		else if (readOnly && section.current) section.current.focus({ preventScroll: true });
+		else return;
+		pending.handled = pending.request;
+		pending.onFocusHandled?.(pending.request);
+	};
+	const scheduleFocus = () => {
+		if (focus.current.request === undefined || !focus.current.active || focusFrame.current !== undefined) return;
+		focusFrame.current = requestAnimationFrame(() => {
+			focusFrame.current = undefined;
+			focusPending();
+		});
+	};
+	const pendingFocus = useRef(scheduleFocus);
+	pendingFocus.current = scheduleFocus;
+	const createEditor = useMemo<EditorFactory<undefined, undefined>>(
+		() => (type, options) => {
+			const editor = new Editor(type, options);
+			// CodeView attaches this editor synchronously after the factory returns.
+			// One deferred attempt handles lazy mount without polling or retaining a DOM handle.
+			queueMicrotask(() => pendingFocus.current());
+			return editor;
+		},
+		[],
+	);
+	useEffect(() => {
+		focus.current.active = true;
+		if (focusRequest !== undefined) pendingFocus.current();
+		return () => {
+			focus.current.active = false;
+			if (focusFrame.current !== undefined) cancelAnimationFrame(focusFrame.current);
+			focusFrame.current = undefined;
+		};
+	}, [focusRequest]);
+	useEffect(() => {
+		if (!memory) return;
+		const capture = () => ({
+			scrollTop: scroll.current?.scrollTop ?? memory.scrollTop ?? 0,
+			scrollLeft: scroll.current?.scrollLeft ?? memory.scrollLeft ?? 0,
+		});
+		memory.captureView = capture;
+		return () => {
+			if (memory.captureView === capture) delete memory.captureView;
+		};
+	}, [memory]);
 	const navigationRevision = useRef(0);
 	const [limit, setLimit] = useState(false);
 	const [initialState] = useState(() => {
@@ -192,7 +254,10 @@ function PierreSurface({
 	useEffect(() => {
 		const document = initialState.document;
 		if (document instanceof BoundedTextDocument) document.setLimitListener(setLimit);
-		if (scroll.current) scroll.current.scrollTop = memory?.scrollTop ?? 0;
+		if (scroll.current) {
+			scroll.current.scrollTop = memory?.scrollTop ?? 0;
+			scroll.current.scrollLeft = memory?.scrollLeft ?? 0;
+		}
 		return () => {
 			if (document instanceof BoundedTextDocument) document.setLimitListener(undefined);
 		};

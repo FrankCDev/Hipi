@@ -26,12 +26,18 @@ export function FileTabContextMenu({
 	close,
 	closing,
 	children,
+	reopen,
+	canReopen = false,
+	reopening = false,
 }: {
 	id: string;
 	session: FileWorkspaceSession;
 	close: (ids: string[]) => void;
 	closing: boolean;
 	children: ReactNode;
+	reopen?: () => void;
+	canReopen?: boolean;
+	reopening?: boolean;
 }) {
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
@@ -44,6 +50,13 @@ export function FileTabContextMenu({
 					collisionPadding={6}
 					aria-label={l["tabs.actions"]}
 				>
+					<ContextMenu.Item
+						className="ui-menu-row file-tab-context-item"
+						disabled={!canReopen || closing || reopening}
+						onSelect={reopen}
+					>
+						{l["tabs.reopen"]}
+					</ContextMenu.Item>
 					{(
 						[
 							["close", "tabs.close"],

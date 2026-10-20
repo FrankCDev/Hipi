@@ -367,9 +367,9 @@ test("pack cursors fence membership and reject another store while active bindin
 });
 
 for (const previousVersion of [1, 2, 3, 5]) {
-	test(`catalog ${previousVersion} upgrades to durable version 6 before runtime admission and retains identity/data`, async () => {
+	test(`catalog ${previousVersion} upgrades to durable version 7 before runtime admission and retains identity/data`, async () => {
 		// Catalog identity stores the canonical root, including macOS /private/var temporary paths.
-		const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-catalog-v6-")));
+		const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-catalog-v7-")));
 		let runtime = await openTestRuntime(directory);
 		try {
 			await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
@@ -384,6 +384,9 @@ for (const previousVersion of [1, 2, 3, 5]) {
 			const workspaceBefore = await readFile(workspacePath);
 			const database = new DatabaseSync(join(directory, "catalog.sqlite"));
 			try {
+				database.exec(
+					"DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands",
+				);
 				database.exec("DROP TABLE project_folders");
 				if (previousVersion < 5) database.exec("DROP TABLE custom_providers; DROP TABLE provider_commands");
 				database.prepare("UPDATE identity SET version=?").run(previousVersion);
@@ -401,10 +404,16 @@ for (const previousVersion of [1, 2, 3, 5]) {
 			const upgraded = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
 			try {
 				const row = upgraded.prepare("SELECT version,store_id,root FROM identity WHERE singleton=1").get();
-				assert.deepEqual({ ...row }, { version: 6, store_id: identity.storeId, root: directory });
+				assert.deepEqual({ ...row }, { version: 7, store_id: identity.storeId, root: directory });
 				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM custom_providers").get()?.count, 0);
 				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM provider_commands").get()?.count, 0);
 				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM project_folders").get()?.count, 0);
+				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM conversation_presentations").get()?.count, 0);
+				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM presentation_commands").get()?.count, 0);
+				assert.deepEqual(
+					{ ...upgraded.prepare("SELECT * FROM presentation_state").get() },
+					{ singleton: 1, generation: 0, next_ordinal: 0 },
+				);
 				assert.equal(
 					upgraded.prepare("SELECT name FROM workspaces WHERE workspace_id='work'").get()?.name,
 					"Preserved",
@@ -424,7 +433,7 @@ for (const previousVersion of [1, 2, 3, 5]) {
 			assert.deepEqual(await runtime.call("handshake", {}), identity);
 			await runtime.close();
 			// Version 4 is reserved for non-executing recovery archives; future schemas also stay untouched.
-			for (const rejectedVersion of [4, 7, 999]) {
+			for (const rejectedVersion of [4, 8, 999]) {
 				const incompatible = new DatabaseSync(join(directory, "catalog.sqlite"));
 				try {
 					incompatible.prepare("UPDATE identity SET version=?").run(rejectedVersion);
@@ -449,62 +458,75 @@ for (const previousVersion of [1, 2, 3, 5]) {
 }
 
 for (const previousVersion of [2, 5])
-	test(`catalog safety-fence write failure preserves version ${previousVersion} and releases the owner lock`, async () => {
-		const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-v6-failure-"));
-		let runtime = await openTestRuntime(directory);
-		try {
-			await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
-			const identity = await runtime.call("handshake", {});
-			await runtime.close();
-			const workspacePath = join(directory, "work", "workspace.sqlite");
-			const workspaceBefore = await readFile(workspacePath);
-			const database = new DatabaseSync(join(directory, "catalog.sqlite"));
+	for (const blockedVersion of [6, 7])
+		test(`catalog safety-fence ${blockedVersion} write failure preserves version ${previousVersion} and releases the owner lock`, async () => {
+			const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-v7-failure-"));
+			let runtime = await openTestRuntime(directory);
 			try {
-				database.exec("DROP TABLE project_folders");
-				if (previousVersion < 5) database.exec("DROP TABLE custom_providers; DROP TABLE provider_commands");
-				database.prepare("UPDATE identity SET version=?").run(previousVersion);
-				database.exec(
-					"CREATE TRIGGER reject_safety_fence BEFORE UPDATE OF version ON identity WHEN NEW.version=6 BEGIN SELECT RAISE(ABORT,'injected fence write failure'); END",
-				);
+				await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
+				const identity = await runtime.call("handshake", {});
+				await runtime.close();
+				const workspacePath = join(directory, "work", "workspace.sqlite");
+				const workspaceBefore = await readFile(workspacePath);
+				const database = new DatabaseSync(join(directory, "catalog.sqlite"));
+				try {
+					database.exec(
+						"DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands",
+					);
+					database.exec("DROP TABLE project_folders");
+					if (previousVersion < 5) database.exec("DROP TABLE custom_providers; DROP TABLE provider_commands");
+					database.prepare("UPDATE identity SET version=?").run(previousVersion);
+					database.exec(
+						`CREATE TRIGGER reject_safety_fence BEFORE UPDATE OF version ON identity WHEN NEW.version=${blockedVersion} BEGIN SELECT RAISE(ABORT,'injected fence write failure'); END`,
+					);
+				} finally {
+					database.close();
+				}
+				await assert.rejects(openTestRuntime(directory), /injected fence write failure/);
+				assert.deepEqual(await readFile(workspacePath), workspaceBefore);
+				const failed = new DatabaseSync(join(directory, "catalog.sqlite"));
+				try {
+					assert.equal(failed.prepare("SELECT version FROM identity").get()?.version, previousVersion);
+					assert.equal(failed.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
+					assert.equal(
+						failed
+							.prepare(
+								"SELECT count(*) AS count FROM sqlite_schema WHERE name IN ('custom_providers','provider_commands')",
+							)
+							.get()?.count,
+						previousVersion === 5 ? 2 : 0,
+					);
+					assert.equal(
+						failed.prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name='project_folders'").get()
+							?.count,
+						0,
+					);
+					assert.equal(
+						failed
+							.prepare(
+								"SELECT count(*) AS count FROM sqlite_schema WHERE name IN ('conversation_presentations','presentation_state','presentation_commands')",
+							)
+							.get()?.count,
+						0,
+					);
+					failed.exec("DROP TRIGGER reject_safety_fence");
+				} finally {
+					failed.close();
+				}
+				runtime = await openTestRuntime(directory);
+				assert.deepEqual(await runtime.call("handshake", {}), identity);
+				await runtime.close();
+				const successful = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
+				try {
+					assert.equal(successful.prepare("SELECT version FROM identity").get()?.version, 7);
+					assert.equal(successful.prepare("SELECT count(*) AS count FROM custom_providers").get()?.count, 0);
+					assert.equal(successful.prepare("SELECT count(*) AS count FROM provider_commands").get()?.count, 0);
+					assert.equal(successful.prepare("SELECT count(*) AS count FROM project_folders").get()?.count, 0);
+				} finally {
+					successful.close();
+				}
 			} finally {
-				database.close();
+				await runtime.close();
+				await rm(directory, { recursive: true, force: true });
 			}
-			await assert.rejects(openTestRuntime(directory), /injected fence write failure/);
-			assert.deepEqual(await readFile(workspacePath), workspaceBefore);
-			const failed = new DatabaseSync(join(directory, "catalog.sqlite"));
-			try {
-				assert.equal(failed.prepare("SELECT version FROM identity").get()?.version, previousVersion);
-				assert.equal(failed.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
-				assert.equal(
-					failed
-						.prepare(
-							"SELECT count(*) AS count FROM sqlite_schema WHERE name IN ('custom_providers','provider_commands')",
-						)
-						.get()?.count,
-					previousVersion === 5 ? 2 : 0,
-				);
-				assert.equal(
-					failed.prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name='project_folders'").get()?.count,
-					0,
-				);
-				failed.exec("DROP TRIGGER reject_safety_fence");
-			} finally {
-				failed.close();
-			}
-			runtime = await openTestRuntime(directory);
-			assert.deepEqual(await runtime.call("handshake", {}), identity);
-			await runtime.close();
-			const successful = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
-			try {
-				assert.equal(successful.prepare("SELECT version FROM identity").get()?.version, 6);
-				assert.equal(successful.prepare("SELECT count(*) AS count FROM custom_providers").get()?.count, 0);
-				assert.equal(successful.prepare("SELECT count(*) AS count FROM provider_commands").get()?.count, 0);
-				assert.equal(successful.prepare("SELECT count(*) AS count FROM project_folders").get()?.count, 0);
-			} finally {
-				successful.close();
-			}
-		} finally {
-			await runtime.close();
-			await rm(directory, { recursive: true, force: true });
-		}
-	});
+		});

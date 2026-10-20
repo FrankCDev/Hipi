@@ -511,7 +511,21 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 		if (reason === "valid" || reason === "center")
 			assert.equal((await modalBounds(cdp, ".dialog", 1, reason === "center" ? "center" : "right")).ready, true);
 		else await assert.rejects(modalBounds(cdp, ".dialog", 1), /modal viewport and reachable Close/);
+		if (reason === "center")
+			await assert.rejects(
+				modalBounds(cdp, ".conversation-options-dialog[data-section=files]", 1, "right"),
+				/modal viewport and reachable Close/,
+			);
 	}
+});
+
+test("actual capability dialogs require center while receipt details retains explicit right placement", async () => {
+	const source = await readFile(new URL("./gui-flow.mjs", import.meta.url), "utf8");
+	assert.match(source, /inspectModal\(cdp, "\.conversation-options-dialog\[data-section=files\]", "center"\)/);
+	assert.equal([...source.matchAll(/inspectModal\(cdp, "\.workbench-detail-dialog", "right"\)/g)].length, 2);
+	const tools = await readFile(new URL("./gui-tool-packs.mjs", import.meta.url), "utf8");
+	assert.equal([...tools.matchAll(/inspectModal\(cdp, dialog, "center"\)/g)].length, 2);
+	await assert.rejects(inspectModal({}, ".dialog"), /Explicit modal placement required/);
 });
 
 test("overflowing modal scrolls through real wheel input and rechecks Close reachability", async () => {
@@ -543,7 +557,7 @@ test("overflowing modal scrolls through real wheel input and rechecks Close reac
 			};
 		},
 	};
-	assert.equal((await inspectModal(cdp, ".dialog")).scrolledToBottom, true);
+	assert.equal((await inspectModal(cdp, ".dialog", "right")).scrolledToBottom, true);
 	assert.ok(reads >= 3);
 });
 

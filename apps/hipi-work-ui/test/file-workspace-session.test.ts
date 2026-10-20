@@ -595,3 +595,321 @@ test("batch close retains a later target reloaded while the first target is savi
 		[second.id],
 	);
 });
+
+test("reopen reads current authorized bytes and restores only safe view state at its original position", async () => {
+	const f = fixture();
+	await f.owner.open(target, true, { pinned: true });
+	const first = active(f.owner);
+	first.view.mode = "preview";
+	first.view.captureView = () => ({ scrollTop: 42, scrollLeft: 3 });
+	first.view.search = { query: "secret", caseSensitive: false, wholeWord: false, regex: false };
+	await f.owner.open({ ...target, path: "second.txt" }, true, { pinned: true });
+	await f.owner.close([first.id]);
+	f.files.readText = async () => text("changed disk", "d");
+	const result = await f.owner.reopen("workspace");
+	assert.ok(result);
+	const restored = active(f.owner);
+	assert.equal(restored.editor.snapshot().document?.text, "changed disk");
+	assert.notEqual(restored.editor, first.editor);
+	assert.deepEqual(restored.view, { mode: "preview", scrollTop: 42, scrollLeft: 3 });
+	assert.equal(f.owner.snapshot().tabs[0]?.id, restored.id);
+	assert.equal(f.owner.snapshot().focusId, restored.id);
+	f.owner.consumeFocus(restored.id, result.request);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+	assert.equal(f.owner.canReopen("workspace"), false);
+});
+
+test("only completed user closes enter history; explicit discard never resurrects draft", async () => {
+	const f = fixture({
+		saveText: async () => {
+			throw new FileServiceError("VERSION_CONFLICT");
+		},
+	});
+	await f.owner.open(target, true);
+	const tab = active(f.owner);
+	tab.editor.edit("discard this secret");
+	assert.deepEqual(await f.owner.close([tab.id]), [tab.id]);
+	assert.equal(f.owner.canReopen("workspace"), false);
+	f.owner.discardClosed([tab.id]);
+	assert.equal(f.owner.canReopen("workspace"), true);
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).editor.snapshot().document?.text, "original");
+	f.owner.discard([active(f.owner).id]);
+	assert.equal(f.owner.canReopen("workspace"), false);
+	await f.owner.open(target, true);
+	await f.owner.open({ ...target, path: "replacement.txt" }, true);
+	assert.equal(f.owner.canReopen("workspace"), false);
+});
+
+test("batch closes preserve original indices and reopen last completed first", async () => {
+	const f = fixture();
+	for (const path of ["a", "b", "c"]) await f.owner.open({ ...target, path }, true, { pinned: true });
+	const tabs = f.owner.snapshot().tabs;
+	assert.ok(tabs[0] && tabs[1]);
+	await f.owner.close([tabs[0].id, tabs[1].id]);
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).target.path, "b");
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).target.path, "a");
+	assert.deepEqual(
+		f.owner.snapshot().tabs.map((tab) => tab.target.path),
+		["a", "c", "b"],
+	);
+});
+
+test("closed history has a global25 budget partitioned by workspace and dies with runtime", async () => {
+	const f = fixture({ listRoots: async (workspaceId) => [{ workspaceId, rootId: "root", writable: true }] });
+	for (let i = 0; i < 27; i++) {
+		const workspaceId = i % 2 ? "other" : "workspace";
+		f.owner.setWorkspace(workspaceId);
+		await f.owner.open({ ...target, workspaceId, path: String(i) }, true);
+		await f.owner.close([active(f.owner).id]);
+	}
+	let count = 0;
+	for (const workspaceId of ["workspace", "other"]) {
+		f.owner.setWorkspace(workspaceId);
+		while (f.owner.canReopen(workspaceId)) {
+			await f.owner.reopen(workspaceId);
+			f.owner.discard([active(f.owner).id]);
+			count++;
+		}
+	}
+	assert.equal(count, 25);
+	await f.owner.open({ ...target, workspaceId: "other" }, true);
+	await f.owner.close([active(f.owner).id]);
+	f.owner.dispose();
+	f.owner.activate();
+	assert.equal(f.owner.canReopen("other"), false);
+});
+
+test("reopen denied or missing files retain one retryable tab and descriptor without permission creation", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	f.files.listRoots = async () => [];
+	assert.equal(await f.owner.reopen("workspace"), undefined);
+	const failed = active(f.owner);
+	assert.equal(failed.editor.snapshot().error, "UNAUTHORIZED");
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(await f.owner.reopen("workspace"), undefined);
+	assert.equal(active(f.owner).id, failed.id);
+	f.files.listRoots = async () => [{ workspaceId: "workspace", rootId: "root", writable: false }];
+	f.files.readText = async () => {
+		throw new FileServiceError("NOT_FOUND");
+	};
+	assert.equal(await f.owner.reopen("workspace"), undefined);
+	f.files.readText = async () => text("returned");
+	assert.ok(await f.owner.reopen("workspace"));
+	assert.equal(active(f.owner).id, failed.id);
+	assert.equal(active(f.owner).editor.snapshot().document?.writable, false);
+});
+
+test("reopen reuses existing dirty target and refuses capacity without evicting any tab", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	for (let i = 0; i < 16; i++) await f.owner.open({ ...target, path: `p${i}` }, true, { pinned: true });
+	assert.equal(await f.owner.reopen("workspace"), undefined);
+	assert.equal(f.owner.snapshot().tabs.length, 16);
+	assert.equal(f.owner.snapshot().limitReached, true);
+	f.owner.discard([active(f.owner).id]);
+	await f.owner.open(target, true, { pinned: true });
+	const tab = active(f.owner);
+	tab.editor.edit("keep dirty");
+	assert.ok(await f.owner.reopen("workspace"));
+	assert.equal(active(f.owner).editor, tab.editor);
+	assert.equal(tab.editor.snapshot().document?.text, "keep dirty");
+	assert.equal(f.saved.length, 0);
+});
+
+test("reopen duplicate, stale authority, navigation and close never consume stale history or focus", async () => {
+	const pending = Promise.withResolvers<FileText>();
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	f.files.readText = () => pending.promise;
+	let current = true;
+	const opening = f.owner.reopen("workspace", () => current);
+	assert.equal(await f.owner.reopen("workspace"), undefined);
+	current = false;
+	pending.resolve(text("latest"));
+	await opening;
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+	assert.equal(f.owner.snapshot().reopenPending, false);
+	assert.ok(await f.owner.reopen("workspace"));
+	await f.owner.close([active(f.owner).id]);
+	const next = Promise.withResolvers<FileText>();
+	f.files.readText = () => next.promise;
+	const navigating = f.owner.reopen("workspace");
+	f.owner.setWorkspace("other");
+	next.resolve(text("late"));
+	await navigating;
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+	f.owner.setWorkspace("workspace");
+	f.owner.discard(f.owner.snapshot().tabs.map((tab) => tab.id));
+	const last = Promise.withResolvers<FileText>();
+	f.files.readText = () => last.promise;
+	const closing = f.owner.reopen("workspace");
+	f.owner.discard([active(f.owner).id]);
+	last.resolve(text("late"));
+	await closing;
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+});
+
+test("reopened previews release old handles and acquire fresh ones; failed handles never consume history", async () => {
+	const f = fixture();
+	let opens = 0;
+	const released: string[] = [];
+	let fail = false;
+	const previews: PreviewClient = {
+		open: async () => ({
+			id: `handle-${++opens}`,
+			revision: "a".repeat(64),
+			kind: "docx",
+			summary: { bytes: 4, pages: 1, truncated: false },
+		}),
+		readPage: async (id, page) => {
+			if (fail) throw new FileServiceError("IO_ERROR");
+			return {
+				id,
+				revision: "a".repeat(64),
+				page,
+				content: { kind: "document", format: "docx", text: "fresh", truncated: false, limitations: [] },
+			};
+		},
+		readBytes: async () => {
+			throw Error("unexpected");
+		},
+		close: async (id) => {
+			released.push(id);
+		},
+	};
+	const owner = new FileWorkspaceSession(f.files, previews);
+	owners.push(owner);
+	owner.setWorkspace("workspace");
+	await owner.openPreview(target, true);
+	const tab = owner.snapshot().tabs[0];
+	assert.ok(tab);
+	await owner.close([tab.id]);
+	assert.deepEqual(released, ["handle-1"]);
+	fail = true;
+	assert.equal(await owner.reopen("workspace"), undefined);
+	assert.equal(owner.canReopen("workspace"), true);
+	assert.deepEqual(released, ["handle-1", "handle-2"]);
+	fail = false;
+	const failed = owner.snapshot().tabs[0];
+	assert.ok(failed);
+	await owner.retryPreview(failed.id);
+	const restored = owner.snapshot().tabs[0];
+	assert.ok(restored?.kind === "preview");
+	assert.equal(restored.preview.snapshot().handle?.id, "handle-3");
+	assert.equal(owner.canReopen("workspace"), false);
+});
+
+test("reopen cancellation during read preserves descriptor and a later selection cannot receive stale focus", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	await f.owner.open({ ...target, path: "other.txt" }, true, { pinned: true });
+	const other = active(f.owner);
+	const pending = Promise.withResolvers<FileText>();
+	f.files.readText = () => pending.promise;
+	const reopening = f.owner.reopen("workspace");
+	f.owner.select(other.id);
+	pending.resolve(text("late"));
+	assert.equal(await reopening, undefined);
+	assert.equal(f.owner.snapshot().activeId, other.id);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().reopenPending, false);
+});
+
+test("opening a new tab while reopen is pending cancels stale activation and consumption", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	const pending = Promise.withResolvers<FileText>();
+	f.files.readText = (file) => (file.path === target.path ? pending.promise : Promise.resolve(text("new selection")));
+	const reopening = f.owner.reopen("workspace");
+	await f.owner.open({ ...target, path: "new.txt" }, true, { pinned: true });
+	const selected = active(f.owner);
+	pending.resolve(text("late"));
+	assert.equal(await reopening, undefined);
+	assert.equal(f.owner.snapshot().activeId, selected.id);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().reopenPending, false);
+});
+
+test("observed root retirement and same-ID replacement fence a late reopen", async () => {
+	const f = fixture();
+	const root = { workspaceId: "workspace", rootId: "root", writable: true };
+	f.owner.observeRoots("workspace", [root]);
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	const pending = Promise.withResolvers<FileText>();
+	f.files.readText = () => pending.promise;
+	const reopening = f.owner.reopen("workspace");
+	f.owner.observeRoots("workspace", []);
+	f.owner.observeRoots("workspace", [root]);
+	pending.resolve(text("late"));
+	assert.equal(await reopening, undefined);
+	assert.equal(f.owner.canReopen("workspace"), true);
+	assert.equal(f.owner.snapshot().focusId, undefined);
+});
+
+test("closing a failed reopen does not duplicate retained history or skip the preceding file", async () => {
+	const f = fixture();
+	for (const path of ["older.txt", target.path]) {
+		await f.owner.open({ ...target, path }, true);
+		await f.owner.close([active(f.owner).id]);
+	}
+	f.files.readText = async () => {
+		throw new FileServiceError("NOT_FOUND");
+	};
+	await f.owner.reopen("workspace");
+	await f.owner.close([active(f.owner).id]);
+	f.files.readText = async () => text("returned");
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).target.path, target.path);
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).target.path, "older.txt");
+	assert.equal(f.owner.canReopen("workspace"), false);
+});
+
+test("first root observation during reopen is not mistaken for authority retirement", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	const pending = Promise.withResolvers<FileText>();
+	f.files.readText = () => pending.promise;
+	const reopening = f.owner.reopen("workspace");
+	f.owner.observeRoots("workspace", [{ workspaceId: "workspace", rootId: "root", writable: true }]);
+	pending.resolve(text("loaded"));
+	assert.ok(await reopening);
+	assert.equal(f.owner.canReopen("workspace"), false);
+});
+
+test("explicit Retry of a failed reopened tab consumes only its own descriptor, not a newer close", async () => {
+	const f = fixture();
+	await f.owner.open(target, true);
+	await f.owner.close([active(f.owner).id]);
+	f.files.readText = async () => {
+		throw new FileServiceError("IO_ERROR");
+	};
+	await f.owner.reopen("workspace");
+	const failed = active(f.owner);
+	f.owner.pin(failed.id);
+	f.files.readText = async () => text("latest");
+	await f.owner.open({ ...target, path: "newer.txt" }, true, { pinned: true });
+	await f.owner.close([active(f.owner).id]);
+	await f.owner.retry(failed.id);
+	assert.equal(active(f.owner).id, failed.id);
+	assert.equal(f.owner.snapshot().focusId, failed.id);
+	await f.owner.reopen("workspace");
+	assert.equal(active(f.owner).target.path, "newer.txt");
+	assert.equal(f.owner.canReopen("workspace"), false);
+});

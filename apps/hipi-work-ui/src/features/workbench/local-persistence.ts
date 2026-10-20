@@ -105,6 +105,7 @@ export class LocalPersistence {
 						entry.value.length <= 30000) ||
 					(entry.key === "default-chat-workspace" && entry.value.length <= 2000) ||
 					(entry.key === "new-chat-model" && validModelPreference(entry.value)) ||
+					(entry.key === "command.presentation" && entry.value.length <= 4096) ||
 					(/^workspace-expanded\.[a-zA-Z0-9_-]{1,128}$/.test(entry.key) &&
 						(entry.value === "true" || entry.value === "false")) ||
 					((entry.key === "workspace" || entry.key === "conversation") && (entry.value === "" || id.test(entry.value)))

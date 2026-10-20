@@ -49,6 +49,20 @@ export function FileWorkbench({
 	);
 	const tabs = state.tabs.filter((tab) => tab.target.workspaceId === workspaceId);
 	const active = tabs.find((tab) => tab.id === state.activeId) ?? tabs[0];
+	const focusRequest = visible && active?.id === state.focusId ? state.focusSequence : undefined;
+	const previewPanel = useRef<HTMLElement>(null);
+	useEffect(() => {
+		if (!session || !active || focusRequest === undefined) return;
+		if (active.kind === "preview") {
+			const frame = requestAnimationFrame(() => {
+				const current = session.snapshot();
+				if (current.focusId !== active.id || current.focusSequence !== focusRequest || !previewPanel.current) return;
+				previewPanel.current.focus({ preventScroll: true });
+				session.consumeFocus(active.id, focusRequest);
+			});
+			return () => cancelAnimationFrame(frame);
+		}
+	}, [session, active, focusRequest]);
 	const [treeOpen, setTreeOpen] = useState(session?.layout.treeOpen ?? true);
 	const [treeWidth, setTreeWidth] = useState(session?.layout.treeWidth ?? 240);
 	const treeToggle = useRef<HTMLButtonElement>(null);
@@ -99,6 +113,7 @@ export function FileWorkbench({
 	const currentRoots = useRef(roots.data);
 	currentRoots.current = roots.data;
 	if (roots.data) {
+		session?.observeRoots(workspaceId, roots.data);
 		const ids = new Set(roots.data.filter((root) => root.workspaceId === workspaceId).map((root) => root.rootId));
 		for (const [id, lifetime] of authorityLease.roots) {
 			if (!ids.has(id)) {
@@ -119,9 +134,11 @@ export function FileWorkbench({
 		setRootId(projectRoot?.workspaceId === workspaceId ? projectRoot.rootId : undefined);
 	}, [workspaceId, projectRoot]);
 	useEffect(() => {
-		if (!visible) session?.suspendPreviews();
-		else if (session && active?.kind === "preview") session.resumePreview(active.id);
-	}, [session, visible, active?.id, active?.kind]);
+		if (!visible) {
+			if (!state.reopenPending && !state.focusId && !session?.snapshot().reopenPending && !session?.snapshot().focusId)
+				session?.suspendPreviews();
+		} else if (session && active?.kind === "preview") session.resumePreview(active.id);
+	}, [session, visible, active?.id, active?.kind, state.reopenPending, state.focusId]);
 	useEffect(() => () => session?.suspendPreviews(), [session]);
 	useEffect(() => {
 		authorityLease.active = true;
@@ -254,13 +271,17 @@ export function FileWorkbench({
 						return false;
 					}
 					committed = true;
-					session.discard(affected().map((tab) => tab.id));
+					session.discardClosed(affected().map((tab) => tab.id));
 					return true;
 				},
 				paths: tabs.map((tab) => tab.target.path),
 			};
 		};
 		if (affected().length) decide(prepare());
+	};
+	const reopen = async () => {
+		if (!session || authorityLease.closing || currentDecision.current || accessOpen || !visible) return;
+		await session.reopen(workspaceId, () => authorityLease.active && currentAuthorityLease.current === authorityLease);
 	};
 	const pinFromInteraction = (event: SyntheticEvent) => {
 		if (
@@ -372,6 +393,11 @@ export function FileWorkbench({
 						</div>
 					</header>
 					{state.limitReached && <output className="file-workspace-notice">{l["tabs.limit"]}</output>}
+					{state.reopenError && (
+						<p role="alert" className="file-workspace-notice">
+							{l["tabs.reopenFailed"]}
+						</p>
+					)}
 					<FileSplitView
 						treeOpen={treeOpen}
 						width={treeWidth}
@@ -386,17 +412,22 @@ export function FileWorkbench({
 						}}
 						content={
 							<>
-								{session && tabs.length > 0 && (
+								{session && (
 									<FileTabs
 										tabs={tabs}
 										activeId={active?.id}
 										session={session}
 										close={(ids) => void close(ids)}
 										closing={closing}
+										reopen={() => void reopen()}
+										canReopen={session.canReopen(workspaceId)}
+										reopening={state.reopenPending}
 									/>
 								)}
 								{active ? (
 									<section
+										ref={previewPanel}
+										tabIndex={-1}
 										className="file-tab-panel"
 										id={`file-tab-content-${active.id}`}
 										role="tabpanel"
@@ -408,6 +439,8 @@ export function FileWorkbench({
 											<FileBuffer
 												key={active.id}
 												tab={active}
+												focusRequest={focusRequest}
+												onFocusHandled={(request) => session?.consumeFocus(active.id, request)}
 												retry={() => void session?.retry(active.id)}
 												guard={(action) => {
 													const editor = active.editor;
@@ -448,7 +481,11 @@ export function FileWorkbench({
 												}}
 											/>
 										) : (
-											<DocumentPreviewPane session={active.preview} onClose={() => void close([active.id])} />
+											<DocumentPreviewPane
+												session={active.preview}
+												onClose={() => void close([active.id])}
+												onRetry={() => void session?.retryPreview(active.id)}
+											/>
 										)}
 									</section>
 								) : roots.data?.length === 0 ? (

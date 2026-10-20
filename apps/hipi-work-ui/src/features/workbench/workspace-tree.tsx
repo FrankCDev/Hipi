@@ -21,6 +21,7 @@ import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
 import type { CatalogSession } from "./catalog-session.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
+import type { PresentationSession } from "./presentation-session.ts";
 import { projectFolderLabels } from "./project-folder-labels.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
@@ -28,6 +29,7 @@ import "./sidebar.css";
 
 type TreeProps = {
 	catalog: CatalogSession;
+	presentation?: PresentationSession;
 	guard: (action: () => void) => void;
 	workspaces: Workspace[];
 	defaultWorkspaceId?: string | null;
@@ -240,6 +242,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 										<ConversationActions
 											conversation={conversation}
 											session={props.catalog}
+											presentation={props.presentation}
 											guard={props.guard}
 											{...controls}
 										/>

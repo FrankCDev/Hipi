@@ -90,7 +90,15 @@ function ImagePreview({
 }
 
 /** Dispatch only on the service's validated format, never on extension or an arbitrary URL. */
-export function DocumentPreviewPane({ session, onClose }: { session: PreviewSession; onClose?: () => void }) {
+export function DocumentPreviewPane({
+	session,
+	onClose,
+	onRetry,
+}: {
+	session: PreviewSession;
+	onClose?: () => void;
+	onRetry?: () => void;
+}) {
 	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
 	const { files } = useFiles();
 	const roots = useQuery({
@@ -132,7 +140,8 @@ export function DocumentPreviewPane({ session, onClose }: { session: PreviewSess
 						size="sm"
 						variant="outline"
 						onClick={() => {
-							if (state.target) void session.open(state.target);
+							if (onRetry) onRetry();
+							else if (state.target) void session.open(state.target);
 						}}
 					>
 						{l["preview.retry"]}

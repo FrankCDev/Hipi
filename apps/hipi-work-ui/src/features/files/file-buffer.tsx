@@ -1,5 +1,5 @@
 import { Ellipsis, FileText, TriangleAlert } from "lucide-react";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
@@ -21,10 +21,14 @@ export function FileBuffer({
 	tab,
 	guard,
 	retry,
+	focusRequest,
+	onFocusHandled,
 }: {
 	tab: EditorTab;
 	guard: (action: () => void) => void;
 	retry: () => void;
+	focusRequest?: number;
+	onFocusHandled?: (request: number) => void;
 }) {
 	const session = tab.editor;
 	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
@@ -38,8 +42,19 @@ export function FileBuffer({
 		tab.view.mode = next;
 		setMode(next);
 	};
+	const surface = useRef<HTMLDivElement>(null);
 	const [adopt, setAdopt] = useState(false);
 	const document = state.document;
+	useEffect(() => {
+		if (focusRequest === undefined || !document || mode === "source" || !surface.current) return;
+		const element = surface.current;
+		const frame = requestAnimationFrame(() => {
+			if (surface.current !== element) return;
+			element.focus({ preventScroll: true });
+			onFocusHandled?.(focusRequest);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [focusRequest, onFocusHandled, mode, document]);
 	const artifactReference = tab.reference ?? document?.artifactReference;
 	const error =
 		state.unknown !== undefined
@@ -196,7 +211,7 @@ export function FileBuffer({
 							</DialogContent>
 						</Dialog>
 					)}
-					<div className="file-editor-surface">
+					<div className="file-editor-surface" ref={surface} tabIndex={mode === "source" ? undefined : -1}>
 						{mode === "diff" ? (
 							<>
 								<p className="small-copy file-baseline-note">{state.disk ? l.disk : l.baseline}</p>
@@ -218,6 +233,8 @@ export function FileBuffer({
 								onChange={(text) => session.edit(text)}
 								readOnly={!document.writable}
 								memory={tab.view}
+								focusRequest={focusRequest}
+								onFocusHandled={onFocusHandled}
 								onSave={() => void session.save()}
 								label={l.editor}
 							/>

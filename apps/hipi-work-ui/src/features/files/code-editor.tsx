@@ -11,6 +11,8 @@ export type CodeEditorProps = {
 	readOnly: boolean;
 	memory?: EditorViewMemory;
 	onSave?: () => void;
+	focusRequest?: number;
+	onFocusHandled?: (request: number) => void;
 	bindings?: FileEditorKeybindings;
 };
 

@@ -57,6 +57,8 @@ export function ConversationPreview({
 			<button
 				type="button"
 				className="conversation-link"
+				data-workspace-id={conversation.workspaceId}
+				data-conversation-id={conversation.conversationId}
 				aria-current={selected ? "page" : undefined}
 				onClick={onSelect}
 			>

@@ -250,7 +250,7 @@ test("cold restart performs only read controls and validates retained uninstalle
 		async assertNoAlerts() {},
 		async inspectModal(_cdp, selector, placement) {
 			assert.equal(selector, dialog);
-			assert.equal(placement, "right");
+			assert.equal(placement, "center");
 			return { titleReachable: true, closeReachable: true, scrolledToBottom: true };
 		},
 		async capture(_cdp, _directory, name) {

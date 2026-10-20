@@ -18,12 +18,18 @@ export function FileTabs({
 	session,
 	close,
 	closing,
+	reopen,
+	canReopen = false,
+	reopening = false,
 }: {
 	tabs: readonly WorkspaceFileTab[];
 	activeId?: string;
 	session: FileWorkspaceSession;
 	close: (ids: string[]) => void;
 	closing: boolean;
+	reopen?: () => void;
+	canReopen?: boolean;
+	reopening?: boolean;
 }) {
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
@@ -36,7 +42,16 @@ export function FileTabs({
 					const active = tab.id === activeId;
 					const state = tab.kind === "editor" ? tab.editor.snapshot() : undefined;
 					return (
-						<FileTabContextMenu key={tab.id} id={tab.id} session={session} close={close} closing={closing}>
+						<FileTabContextMenu
+							key={tab.id}
+							id={tab.id}
+							session={session}
+							close={close}
+							closing={closing}
+							reopen={reopen}
+							canReopen={canReopen}
+							reopening={reopening}
+						>
 							<div className="file-tab" data-active={active} data-preview={!tab.pinned} role="presentation">
 								<button
 									type="button"
@@ -132,6 +147,9 @@ export function FileTabs({
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end">
+					<DropdownMenuItem disabled={!canReopen || closing || reopening} onSelect={reopen}>
+						{l["tabs.reopen"]}
+					</DropdownMenuItem>
 					<DropdownMenuItem disabled={!activeId || closing} onSelect={() => activeId && close([activeId])}>
 						{l["tabs.close"]}
 					</DropdownMenuItem>

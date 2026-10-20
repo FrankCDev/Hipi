@@ -1,4 +1,4 @@
-import type { FileTarget } from "@hipi/work-runtime/files";
+import type { FileRoot, FileTarget } from "@hipi/work-runtime/files";
 import type { FileClient } from "@hipi/work-runtime/files/protocol";
 import type { PreviewClient } from "@hipi/work-runtime/previews/protocol";
 import { type ArtifactReference, EditorSession } from "./editor-session.ts";
@@ -8,6 +8,7 @@ import { PreviewSession } from "./preview-session.ts";
 
 export const FILE_WORKSPACE_LIMIT = 16;
 export const FILE_AUTOSAVE_DELAY = 3000;
+export const FILE_CLOSED_TAB_LIMIT = 25;
 type TabIdentity = { id: string; target: FileTarget; pinned: boolean };
 export type EditorTab = TabIdentity & {
 	kind: "editor";
@@ -21,6 +22,17 @@ export type FileWorkspaceSnapshot = {
 	tabs: readonly WorkspaceFileTab[];
 	activeId?: string;
 	limitReached: boolean;
+	reopenPending?: boolean;
+	reopenError?: string;
+	focusId?: string;
+	focusSequence?: number;
+};
+type ClosedTab = {
+	target: FileTarget;
+	kind: WorkspaceFileTab["kind"];
+	index: number;
+	pinned: boolean;
+	view?: Pick<EditorViewMemory, "mode" | "scrollTop" | "scrollLeft" | "markdownPreview">;
 };
 type TabResources = { unsubscribe: () => void; timer?: ReturnType<typeof setTimeout> };
 
@@ -38,6 +50,12 @@ export class FileWorkspaceSession {
 	private resources = new Map<string, TabResources>();
 	private sequence = 0;
 	private closeSequence = 0;
+	private reopenSequence = 0;
+	private history: ClosedTab[] = [];
+	private restoredEntries = new Map<string, ClosedTab>();
+	private observedRoots = new Map<string, { writable: boolean }>();
+	private observedRootRevision = 0;
+	private closingPositions = new Map<string, number>();
 	private workspaceId = "";
 	private activeByWorkspace = new Map<string, string>();
 	private closed = false;
@@ -80,7 +98,13 @@ export class FileWorkspaceSession {
 		this.closed = false;
 	}
 	setWorkspace(workspaceId: string) {
-		if (this.workspaceId !== workspaceId) this.closeSequence++;
+		if (this.workspaceId !== workspaceId) {
+			this.closeSequence++;
+			this.reopenSequence++;
+			this.observedRoots.clear();
+			this.observedRootRevision = 0;
+			this.state = { ...this.state, reopenPending: false, reopenError: undefined, focusId: undefined };
+		}
 		this.workspaceId = workspaceId;
 		const activeId = this.activeByWorkspace.get(workspaceId);
 		this.publish({
@@ -93,8 +117,12 @@ export class FileWorkspaceSession {
 	select(id: string) {
 		const tab = this.state.tabs.find((item) => item.id === id);
 		if (!tab) return;
+		if (this.state.reopenPending) {
+			this.reopenSequence++;
+			this.state = { ...this.state, reopenPending: false };
+		}
 		this.activeByWorkspace.set(tab.target.workspaceId, id);
-		this.publish({ ...this.state, activeId: id });
+		this.publish({ ...this.state, activeId: id, focusId: undefined });
 	}
 	pin(id: string) {
 		if (!this.state.tabs.some((tab) => tab.id === id && !tab.pinned)) return;
@@ -112,6 +140,8 @@ export class FileWorkspaceSession {
 		this.publish({ ...this.state, tabs });
 	}
 	private release(tab: WorkspaceFileTab) {
+		this.closingPositions.delete(tab.id);
+		this.restoredEntries.delete(tab.id);
 		const resource = this.resources.get(tab.id);
 		clearTimeout(resource?.timer);
 		resource?.unsubscribe();
@@ -132,11 +162,156 @@ export class FileWorkspaceSession {
 			? this.state.activeId
 			: remaining[Math.min(Math.max(oldIndex, 0), remaining.length - 1)]?.id;
 		if (activeId) this.activeByWorkspace.set(this.workspaceId, activeId);
-		this.publish({ tabs, activeId, limitReached: false });
+		this.publish({ ...this.state, tabs, activeId, limitReached: false, focusId: undefined });
 	}
 	/** Used only after an explicit discard decision. IDs never get reused, even after clear. */
 	discard(ids: readonly string[]) {
 		this.remove(new Set(ids));
+	}
+	/** Explicit user close/discard only. Authority revocation and replacement never enter history. */
+	discardClosed(ids: readonly string[]) {
+		const tabs = this.state.tabs.filter((tab) => ids.includes(tab.id));
+		const positions = new Map(tabs.map((tab) => [tab.id, this.closingPositions.get(tab.id) ?? this.tabIndex(tab)]));
+		for (const tab of tabs) this.remember(tab, positions.get(tab.id) ?? 0);
+		this.remove(new Set(ids));
+	}
+	private tabIndex(tab: WorkspaceFileTab) {
+		return this.state.tabs.filter((item) => item.target.workspaceId === tab.target.workspaceId).indexOf(tab);
+	}
+	private remember(tab: WorkspaceFileTab, index: number) {
+		const retained = this.restoredEntries.get(tab.id);
+		if (retained && this.history.includes(retained)) return;
+		const view: ClosedTab["view"] = tab.kind === "editor" ? { mode: tab.view.mode } : undefined;
+		if (view && tab.kind === "editor") {
+			const position = tab.view.captureView?.() ?? tab.view;
+			for (const key of ["scrollTop", "scrollLeft"] as const)
+				if (Number.isFinite(position[key]) && (position[key] ?? -1) >= 0) view[key] = position[key];
+			const preview = tab.view.markdownPreview;
+			if (preview && Number.isFinite(preview.scrollTop) && Number.isFinite(preview.scrollLeft))
+				view.markdownPreview = {
+					scrollTop: Math.max(0, preview.scrollTop),
+					scrollLeft: Math.max(0, preview.scrollLeft),
+				};
+		}
+		this.history.push({ target: { ...tab.target }, kind: tab.kind, index, pinned: tab.pinned, view });
+		if (this.history.length > FILE_CLOSED_TAB_LIMIT) this.history.shift();
+	}
+	canReopen(workspaceId: string) {
+		return !this.closed && this.history.some((entry) => entry.target.workspaceId === workspaceId);
+	}
+	/** Observed UI authority is an invalidation fence, never a source of file grants. */
+	observeRoots(workspaceId: string, roots: readonly FileRoot[]) {
+		if (workspaceId !== this.workspaceId) return;
+		for (const [id, lifetime] of this.observedRoots)
+			if (
+				!roots.some(
+					(root) => root.workspaceId === workspaceId && root.rootId === id && root.writable === lifetime.writable,
+				)
+			) {
+				this.observedRoots.delete(id);
+				this.observedRootRevision++;
+			}
+		for (const root of roots)
+			if (root.workspaceId === workspaceId && !this.observedRoots.has(root.rootId))
+				this.observedRoots.set(root.rootId, { writable: root.writable });
+	}
+	/** Reopen descriptors contain presentation only. The existing adapters authorize fresh bytes. */
+	async reopen(workspaceId: string, isCurrent: () => boolean = () => true) {
+		const entry = this.history.findLast((item) => item.target.workspaceId === workspaceId);
+		if (!entry) return;
+		return this.restoreClosed(entry, isCurrent);
+	}
+	private async restoreClosed(entry: ClosedTab, isCurrent: () => boolean = () => true) {
+		const workspaceId = entry.target.workspaceId;
+		if (this.closed || this.state.reopenPending || workspaceId !== this.workspaceId || !isCurrent()) return;
+		const request = ++this.reopenSequence;
+		const rootLifetime = this.observedRoots.get(entry.target.rootId);
+		const rootRevision = this.observedRootRevision;
+		const current = () =>
+			!this.closed &&
+			this.reopenSequence === request &&
+			this.workspaceId === workspaceId &&
+			(rootLifetime
+				? this.observedRoots.get(entry.target.rootId) === rootLifetime
+				: this.observedRootRevision === rootRevision) &&
+			isCurrent();
+		let tab = this.state.tabs.find((item) => item.kind === entry.kind && sameFileTarget(item.target, entry.target));
+		if (!tab) {
+			if (this.state.tabs.length >= FILE_WORKSPACE_LIMIT) {
+				this.publish({ ...this.state, limitReached: true });
+				return;
+			}
+			if (entry.kind === "preview" && !this.previews) {
+				this.publish({ ...this.state, reopenError: "UNAVAILABLE" });
+				return;
+			}
+			tab =
+				entry.kind === "editor"
+					? {
+							id: `file-${++this.sequence}`,
+							kind: "editor",
+							target: { ...entry.target },
+							pinned: entry.pinned,
+							editor: new EditorSession(this.files),
+							view: {
+								...entry.view,
+								...(entry.view?.markdownPreview ? { markdownPreview: { ...entry.view.markdownPreview } } : {}),
+							},
+						}
+					: {
+							id: `file-${++this.sequence}`,
+							kind: "preview",
+							target: { ...entry.target },
+							pinned: entry.pinned,
+							preview: new PreviewSession(this.previews as PreviewClient),
+						};
+			if (!this.append(tab, true)) {
+				this.release(tab);
+				return;
+			}
+			const id = tab.id;
+			const tabs = this.state.tabs.filter((item) => item.id !== id);
+			const workspaceTabs = tabs.filter((item) => item.target.workspaceId === workspaceId);
+			const before = workspaceTabs[Math.max(0, entry.index)];
+			const last = workspaceTabs.at(-1);
+			const index = before ? tabs.indexOf(before) : last ? tabs.indexOf(last) + 1 : tabs.length;
+			tabs.splice(index, 0, tab);
+			this.publish({ ...this.state, tabs });
+		}
+		const restored = tab;
+		this.restoredEntries.set(restored.id, entry);
+		this.select(restored.id);
+		this.publish({ ...this.state, reopenPending: true, reopenError: undefined, focusId: undefined });
+		try {
+			if (restored.kind === "editor") {
+				const state = restored.editor.snapshot();
+				if (!state.document && !state.operation && !restored.editor.protected)
+					await restored.editor.open(restored.target, undefined);
+			} else if (!restored.preview.snapshot().handle && !restored.preview.snapshot().loading) {
+				await restored.preview.open(restored.target);
+			}
+			if (!current() || !this.state.tabs.some((item) => item.id === restored.id)) return;
+			const loaded =
+				restored.kind === "editor"
+					? !!restored.editor.snapshot().document
+					: !!restored.preview.snapshot().handle && !restored.preview.snapshot().error;
+			if (!loaded) {
+				this.publish({ ...this.state, reopenError: "READ_FAILED" });
+				return;
+			}
+			this.history = this.history.filter((item) => item !== entry);
+			this.restoredEntries.delete(restored.id);
+			this.state = { ...this.state, reopenPending: false };
+			this.select(restored.id);
+			this.publish({ ...this.state, focusId: restored.id, focusSequence: request });
+			return { id: restored.id, request };
+		} finally {
+			if (this.reopenSequence === request) this.publish({ ...this.state, reopenPending: false });
+		}
+	}
+	consumeFocus(id: string, request: number) {
+		if (this.state.focusId === id && this.state.focusSequence === request)
+			this.publish({ ...this.state, focusId: undefined });
 	}
 	private changed(id: string) {
 		const tab = this.state.tabs.find((item) => item.id === id);
@@ -164,15 +339,19 @@ export class FileWorkspaceSession {
 		}
 		this.publish();
 	}
-	private append(tab: WorkspaceFileTab) {
+	private append(tab: WorkspaceFileTab, retainExisting = false) {
 		if (this.closed) return false;
+		if (!retainExisting && this.state.reopenPending) {
+			this.reopenSequence++;
+			this.state = { ...this.state, reopenPending: false };
+		}
 		const transient = this.state.tabs.find(
 			(item) =>
 				item.target.workspaceId === tab.target.workspaceId &&
 				!item.pinned &&
 				(item.kind !== "editor" || !item.editor.protected),
 		);
-		if (transient) this.remove(new Set([transient.id]));
+		if (transient && !retainExisting) this.remove(new Set([transient.id]));
 		if (this.state.tabs.length >= FILE_WORKSPACE_LIMIT) {
 			this.publish({ ...this.state, limitReached: true });
 			return false;
@@ -180,7 +359,13 @@ export class FileWorkspaceSession {
 		const session = tab.kind === "editor" ? tab.editor : tab.preview;
 		this.resources.set(tab.id, { unsubscribe: session.subscribe(() => this.changed(tab.id)) });
 		this.activeByWorkspace.set(tab.target.workspaceId, tab.id);
-		this.publish({ tabs: [...this.state.tabs, tab], activeId: tab.id, limitReached: false });
+		this.publish({
+			...this.state,
+			tabs: [...this.state.tabs, tab],
+			activeId: tab.id,
+			limitReached: false,
+			focusId: undefined,
+		});
 		return true;
 	}
 	async open(
@@ -227,7 +412,19 @@ export class FileWorkspaceSession {
 		if (!tab || tab.kind !== "editor") return;
 		const state = tab.editor.snapshot();
 		if (state.document || state.operation || tab.editor.protected) return;
+		const retained = this.restoredEntries.get(id);
+		if (retained && this.history.includes(retained)) {
+			await this.restoreClosed(retained);
+			return;
+		}
 		await tab.editor.open(tab.target, undefined, tab.reference);
+	}
+	async retryPreview(id: string) {
+		const tab = this.state.tabs.find((item) => item.id === id);
+		if (this.closed || tab?.kind !== "preview" || tab.preview.snapshot().loading) return;
+		const retained = this.restoredEntries.get(id);
+		if (retained && this.history.includes(retained)) await this.restoreClosed(retained);
+		else await tab.preview.open(tab.target);
 	}
 	async openPreview(target: FileTarget, pinned = false) {
 		if (this.closed || !this.previews) return;
@@ -262,10 +459,11 @@ export class FileWorkspaceSession {
 			.filter((tab) => ids.includes(tab.id))
 			.map((tab) => ({
 				tab,
+				index: this.tabIndex(tab),
 				documentTarget: tab.kind === "editor" ? tab.editor.snapshot().document?.target : undefined,
 			}));
 		const blocked = new Map<string, () => boolean>();
-		for (const { tab, documentTarget } of requested) {
+		for (const { tab, documentTarget, index } of requested) {
 			const current = () => {
 				const document = tab.kind === "editor" ? tab.editor.snapshot().document : undefined;
 				return (
@@ -309,9 +507,11 @@ export class FileWorkspaceSession {
 				if (saved && writes === 2 && tab.editor.protected) continue;
 				if (tab.editor.protected) {
 					blocked.set(tab.id, current);
+					this.closingPositions.set(tab.id, index);
 					continue;
 				}
 			}
+			this.remember(tab, index);
 			this.remove(new Set([tab.id]));
 		}
 		if (this.closed || intent !== this.closeSequence) return [];
@@ -330,6 +530,11 @@ export class FileWorkspaceSession {
 	}
 	dispose() {
 		this.closeSequence++;
+		this.reopenSequence++;
+		this.history = [];
+		this.restoredEntries.clear();
+		this.observedRoots.clear();
+		this.closingPositions.clear();
 		for (const tab of this.state.tabs) this.release(tab);
 		this.state = { tabs: [], limitReached: false };
 		this.activeByWorkspace.clear();

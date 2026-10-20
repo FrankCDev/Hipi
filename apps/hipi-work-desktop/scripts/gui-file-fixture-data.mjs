@@ -17,5 +17,6 @@ export const fileFixture = Object.freeze({
 	secondInitial: "SECOND_BASELINE\nIndependent 中文 buffer",
 	secondSaved: "SECOND_AUTOSAVED\nBackground 中文 save",
 	secondClosed: "SECOND_CLOSE_SAVED\nConditional 中文 close",
+	secondReopened: "SECOND_REOPEN_EXTERNAL\nFresh closed-file reread 中文 acceptance content",
 	csv: "label,value\n中文,42\nfixture,read-only",
 });

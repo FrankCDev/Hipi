@@ -18,6 +18,7 @@ import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import type { FileAuthority } from "../src/app/file-client.ts";
+import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS } from "../src/app/keybindings.ts";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog } from "../src/components/ui/dialog.tsx";
 import { InputGroupInput } from "../src/components/ui/input-group.tsx";
@@ -185,6 +186,9 @@ const catalogCommand: CatalogCommand = {
 const cache = {
 	setQueryData: vi.fn(),
 	invalidateQueries: vi.fn(async (_filters: { queryKey: readonly unknown[] }) => {}),
+	fetchQuery: vi.fn(async ({ queryFn }: { queryFn: (context: { signal: AbortSignal }) => Promise<unknown> }) =>
+		queryFn({ signal: new AbortController().signal }),
+	),
 };
 const disconnect = vi.fn();
 const client: AppClient = {
@@ -216,6 +220,12 @@ function createFileFixture() {
 				method: request.method,
 				target: fileRequestTarget(request),
 			};
+			if (request.method === "listRoots")
+				return {
+					...response,
+					ok: true,
+					result: [{ workspaceId: request.params.workspaceId, rootId: "root", writable: true }],
+				};
 			let result: FileText;
 			if (request.method === "readText") result = content("Original file");
 			else if (request.method === "saveText") {
@@ -271,11 +281,11 @@ function press(button: React.ReactElement<React.ComponentProps<typeof Button>>) 
 	// The selected production handlers do not consume a mouse event.
 	Reflect.apply(button.props.onClick, undefined, []);
 }
-function drive() {
+function drive(keybindings?: AppKeybindings) {
 	for (let attempt = 0; attempt < 5; attempt++) {
 		hooks.cursor = 0;
 		hooks.changed = false;
-		const content = Workbench({ disconnect });
+		const content = Workbench({ disconnect, keybindings });
 		for (const commit of hooks.commits.splice(0)) commit();
 		if (hooks.changed) continue;
 		const tree = element(content, WorkspaceTree);
@@ -327,17 +337,18 @@ function assertPreserved(current: ReturnType<typeof drive>, initial: ReturnType<
 	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
 }
 
+let windowEvents: EventTarget;
 beforeEach(() => {
 	measurement.width = 1000;
 	hooks.cells = [];
 	hooks.commits = [];
 	vi.clearAllMocks();
-	const events = new EventTarget();
+	windowEvents = new EventTarget();
 	vi.stubGlobal("window", {
 		innerWidth: 390,
 		matchMedia: () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }),
-		addEventListener: events.addEventListener.bind(events),
-		removeEventListener: events.removeEventListener.bind(events),
+		addEventListener: windowEvents.addEventListener.bind(windowEvents),
+		removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
 	});
 	storage = new MemoryStorage();
 	local = new LocalState("store", storage);
@@ -1318,3 +1329,163 @@ test.each(["empty", "BUSY"] as const)(
 		}
 	},
 );
+
+function appKey(overrides: Partial<KeyboardEvent> = {}) {
+	const event = new Event("keydown", { cancelable: true });
+	Object.assign(event, {
+		key: "t",
+		ctrlKey: true,
+		metaKey: false,
+		shiftKey: true,
+		altKey: false,
+		isComposing: false,
+		keyCode: 84,
+		repeat: false,
+		...overrides,
+	});
+	windowEvents.dispatchEvent(event);
+	return event;
+}
+
+test("global Reopen works with the IDE hidden and no tabs, preserves the task and reveals only an authorized result", async () => {
+	vi.stubGlobal("navigator", { platform: "Linux" });
+	vi.stubGlobal("document", { querySelector: () => null });
+	const initial = drive();
+	initial.file.controller.setOpen(false);
+	await initial.session.open({ workspaceId: "current", rootId: "root", path: "closed.txt" }, true);
+	const id = initial.session.snapshot().activeId;
+	assert.ok(id);
+	assert.deepEqual(await initial.session.close([id]), []);
+	assert.equal(initial.session.snapshot().tabs.length, 0);
+	const event = appKey();
+	assert.equal(event.defaultPrevented, true);
+	await vi.waitFor(() => assert.equal(initial.file.controller.snapshot().open, true));
+	const current = drive();
+	assert.equal(current.tree.selectedConversation, "task");
+	assert.equal(current.pane?.key, initial.pane?.key);
+	assert.equal(local.read(`draft.${scope}`), draft);
+	assert.ok(current.session.snapshot().focusId);
+	assert.equal(current.editor.snapshot().document?.text, "Original file");
+	assert.deepEqual(
+		fileFixture.calls.map((request) => request.method),
+		["readText", "listRoots", "readText"],
+	);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+});
+
+test.each(["ime", "229", "repeat", "overlay", "settings"] as const)(
+	"global Reopen ignores %s ownership without reading or opening a file",
+	async (kind) => {
+		vi.stubGlobal("navigator", { platform: "Linux" });
+		vi.stubGlobal("document", { querySelector: () => (kind === "overlay" ? {} : null) });
+		const initial = drive();
+		await initial.session.open({ workspaceId: "current", rootId: "root", path: "closed.txt" }, true);
+		const id = initial.session.snapshot().activeId;
+		assert.ok(id);
+		await initial.session.close([id]);
+		if (kind === "settings") {
+			element(initial.content, SettingsDialog).props.onOpenChange(true);
+			drive();
+		}
+		const event = appKey({
+			isComposing: kind === "ime",
+			keyCode: kind === "229" ? 229 : 84,
+			repeat: kind === "repeat",
+		});
+		assert.equal(event.defaultPrevented, false);
+		assert.equal(initial.session.snapshot().tabs.length, 0);
+		assert.equal(fileFixture.calls.length, 1);
+	},
+);
+
+test.each(["away", "away-back", "retired"] as const)(
+	"late global Reopen cannot reveal or focus after %s navigation",
+	async (kind) => {
+		vi.stubGlobal("navigator", { platform: "Linux" });
+		vi.stubGlobal("document", { querySelector: () => null });
+		const initial = drive();
+		initial.file.controller.setOpen(false);
+		vi.spyOn(initial.session, "canReopen").mockReturnValue(true);
+		const pending = Promise.withResolvers<{ id: string; request: number }>();
+		let owns: (() => boolean) | undefined;
+		vi.spyOn(initial.session, "reopen").mockImplementation((_workspaceId, current) => {
+			owns = current;
+			return pending.promise;
+		});
+		assert.equal(appKey().defaultPrevented, true);
+		assert.equal(owns?.(), true);
+		if (kind === "retired") for (const cell of hooks.cells) cell?.cleanup?.();
+		else {
+			initial.tree.onOpenProject("other");
+			if (kind === "away-back") drive().tree.onSelect(conversation);
+		}
+		assert.equal(owns?.(), false);
+		pending.resolve({ id: "restored", request: 1 });
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.equal(initial.file.controller.snapshot().open, false);
+	},
+);
+
+test("hidden Reopen reports the real 16-tab capacity refusal and preserves the closed descriptor", async () => {
+	vi.stubGlobal("navigator", { platform: "Linux" });
+	vi.stubGlobal("document", { querySelector: () => null });
+	const initial = drive();
+	initial.file.controller.setOpen(false);
+	await initial.session.open({ workspaceId: "current", rootId: "root", path: "closed.txt" }, true);
+	const id = initial.session.snapshot().activeId;
+	assert.ok(id);
+	await initial.session.close([id]);
+	for (let index = 0; index < 16; index++)
+		await initial.session.open({ workspaceId: "current", rootId: "root", path: `${index}.txt` }, true, {
+			pinned: true,
+		});
+	const requests = fileFixture.calls.length;
+	appKey();
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(initial.file.controller.snapshot().open, false);
+	assert.equal(initial.session.snapshot().limitReached, true);
+	assert.equal(initial.session.canReopen("current"), true);
+	assert.equal(fileFixture.calls.length, requests);
+	await vi.waitFor(() =>
+		assert.ok(elements(drive().content, "p").some((item) => String(item.props.children).includes("16-file limit"))),
+	);
+});
+
+test("app bindings are configurable, while pin is unbound by default and keeps execution identity when explicitly bound", async () => {
+	saveCommand(local, "catalog", null);
+	vi.stubGlobal("navigator", {
+		platform: "Linux",
+		locks: { request: async (_key: string, work: () => unknown) => work() },
+	});
+	vi.stubGlobal("document", { querySelector: () => null });
+	let pinned = false;
+	let revision = 0;
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+		if (method === "setConversationPinned") {
+			assert.ok(params && typeof params === "object" && "pinned" in params);
+			pinned = Boolean(params.pinned);
+			revision++;
+		} else assert.equal(method, "getConversationPresentation");
+		return parseResult(method, { workspaceId: "current", conversationId: "task", pinned, revision });
+	});
+	const initial = drive();
+	assert.equal(DEFAULT_APP_KEYBINDINGS.pinConversation, "");
+	assert.equal(appKey({ key: "p", shiftKey: false, altKey: true }).defaultPrevented, false);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+	const bindings = { ...DEFAULT_APP_KEYBINDINGS, pinConversation: "Mod-Alt-p" };
+	drive(bindings);
+	assert.equal(appKey({ key: "p", shiftKey: false, altKey: true }).defaultPrevented, true);
+	await vi.waitFor(() => assert.equal(initial.tree.presentation?.getSnapshot().result?.pinned, true));
+	const current = drive(bindings);
+	assert.equal(current.tree.selectedConversation, initial.tree.selectedConversation);
+	assert.equal(current.pane?.key, initial.pane?.key);
+	assert.equal(local.read(`draft.${scope}`), draft);
+	assert.deepEqual(local.pending(scope), pending);
+	assert.deepEqual(
+		vi.mocked(client.call).mock.calls.map(([method]) => method),
+		["getConversationPresentation", "setConversationPinned", "getConversationPresentation"],
+	);
+	assert.equal(vi.mocked(client.observe).mock.calls.length, 0);
+});

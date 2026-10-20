@@ -1,0 +1,33 @@
+const en = {
+	pinned: "Pinned",
+	pin: "Pin conversation",
+	unpin: "Unpin conversation",
+	loading: "Loading pin status…",
+	loadError: "Could not load pin status",
+	reload: "Reload pin status",
+	pending: "Pin change is unconfirmed. The original request is saved.",
+	failed: "Could not verify the pin change.",
+	rejected: "This conversation changed. Reload its current state before pinning again.",
+	incompatible: "An incompatible pin request is preserved and cannot be replayed.",
+	check: "Check pin change",
+	retry: "Retry original pin change",
+	notFound: "No result was found. Only the unchanged saved request can be retried.",
+	listError: "Could not load pinned conversations.",
+} as const;
+const zh: Record<keyof typeof en, string> = {
+	pinned: "已固定",
+	pin: "固定会话",
+	unpin: "取消固定会话",
+	loading: "正在读取固定状态…",
+	loadError: "无法读取固定状态",
+	reload: "重新读取固定状态",
+	pending: "固定操作结果尚未确认，原始请求已保留。",
+	failed: "未能核实固定操作结果。",
+	rejected: "此会话已发生变化，请重新读取当前状态后再操作。",
+	incompatible: "不兼容的固定请求已保留，无法安全重放。",
+	check: "核对固定操作",
+	retry: "重试原固定操作",
+	notFound: "尚未查到结果，只能重试已保留的同一请求。",
+	listError: "无法读取已固定会话。",
+};
+export const pinLabels = (locale: string) => (locale === "en" ? en : zh);

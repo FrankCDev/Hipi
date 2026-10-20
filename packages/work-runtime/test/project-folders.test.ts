@@ -291,7 +291,7 @@ test("AppClient has no absolute-path project command and public DTO rejects leak
 	}
 });
 
-test("a missing schema6 project directory is not silently rebuilt as an empty binding catalog", async () => {
+test("a missing project directory is not silently rebuilt as an empty binding catalog", async () => {
 	const app = await fixture();
 	try {
 		await app.projects.bind("one", app.folder, null);
@@ -307,7 +307,7 @@ test("a missing schema6 project directory is not silently rebuilt as an empty bi
 		await assert.rejects(openTestRuntime(join(app.directory, "store")), { code: "STORE_MISMATCH" });
 		const inspected = new DatabaseSync(join(app.directory, "store", "catalog.sqlite"), { readOnly: true });
 		try {
-			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 6);
+			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 7);
 			assert.equal(inspected.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders'").get(), undefined);
 		} finally {
 			inspected.close();

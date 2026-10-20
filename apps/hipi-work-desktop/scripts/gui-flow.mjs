@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { exerciseConversationPin } from "./gui-conversation-pin.mjs";
 import { renderedFonts } from "./gui-fonts.mjs";
 import { exerciseProjectDisclosure } from "./gui-project-disclosure.mjs";
 import { createSettingsHarness } from "./gui-settings-route.mjs";
@@ -380,7 +381,8 @@ export async function modalBounds(cdp, selector, milliseconds = 30000, placement
 		milliseconds,
 	);
 }
-export async function inspectModal(cdp, selector, placement = "right") {
+export async function inspectModal(cdp, selector, placement) {
+	assert.ok(["center", "right"].includes(placement), "Explicit modal placement required");
 	const before = await modalBounds(cdp, selector, 30000, placement);
 	const overflow = before.scrollHeight > before.clientHeight + 1;
 	if (overflow) {
@@ -461,7 +463,7 @@ async function inspectControls(cdp) {
 		"Permission dialog must contain Refresh permissions",
 	);
 	await assertNoAlerts(cdp);
-	const permissionGeometry = await inspectModal(cdp, ".conversation-options-dialog[data-section=files]");
+	const permissionGeometry = await inspectModal(cdp, ".conversation-options-dialog[data-section=files]", "center");
 	await click(cdp, '.conversation-options-dialog[data-section="files"] button[data-slot="dialog-close"]');
 	await waitForOverlayClosed(cdp, ".capabilities-trigger");
 	await click(cdp, ".capabilities-trigger");
@@ -755,9 +757,10 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		await click(cdp, 'button[aria-label="Conversation details"]');
 		const scope = await receiptScope(cdp);
 		await assertDefaultChatScope(cdp, scope, true);
-		await inspectModal(cdp, ".workbench-detail-dialog");
+		await inspectModal(cdp, ".workbench-detail-dialog", "right");
 		await click(cdp, ".workbench-detail-dialog button", "Close");
 		await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
+		const conversationPin = await exerciseConversationPin(cdp, directory, scope, fixture.conversation, true);
 		const activities = await inspectActivities(cdp, directory, true);
 		const controls = await inspectControls(cdp);
 		const theme = await inspectTheme(cdp, directory, true);
@@ -801,6 +804,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		);
 		return {
 			reopened: true,
+			conversationPin,
 			projectDisclosure,
 			fonts,
 			activities,
@@ -875,7 +879,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		),
 		"Completed conversation must display user text",
 	);
-	const detailsGeometry = await inspectModal(cdp, ".workbench-detail-dialog");
+	const detailsGeometry = await inspectModal(cdp, ".workbench-detail-dialog", "right");
 	const scope = await receiptScope(cdp);
 	const streamIdentity = await until(async () => {
 		const evidence = await evaluate(cdp, `(${committedStreamEvidence.toString()})(document,window.__hipiGuiSmoke)`);
@@ -935,11 +939,13 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		false,
 		scope,
 	);
+	const conversationPin = await exerciseConversationPin(cdp, directory, scope, fixture.conversation, false);
 	return {
 		...observed,
 		streamIdentity,
 		initialChat,
 		projectDisclosure,
+		conversationPin,
 		fonts,
 		detailsGeometry,
 		activities,

@@ -10,6 +10,7 @@ import { Settings, SquarePen, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import type { ProjectFolderSelection } from "../../app/file-client.ts";
+import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, matchesBinding } from "../../app/keybindings.ts";
 import { usePreferences } from "../../app/preferences.tsx";
 import { BrandMark } from "../../components/brand-mark.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -33,15 +34,25 @@ import { FILE_PANEL, FilePanelController, panelLayout } from "./file-panel-contr
 import { filePanelLabels } from "./file-panel-labels.ts";
 import type { StagedProjectConsent } from "./initial-context.ts";
 import { ModelSettings } from "./model-settings.tsx";
+import { PinRecovery, presentationKey } from "./pin-conversation.tsx";
+import { pinLabels } from "./pin-labels.ts";
+import { PinnedConversations } from "./pinned-conversations.tsx";
 import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
 import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
+import { PresentationSession } from "./presentation-session.ts";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./project-folder.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
 import { WorkspaceTree } from "./workspace-tree.tsx";
 
-export function Workbench({ disconnect }: { disconnect: () => void }) {
+export function Workbench({
+	disconnect,
+	keybindings = DEFAULT_APP_KEYBINDINGS,
+}: {
+	disconnect: () => void;
+	keybindings?: AppKeybindings;
+}) {
 	const client = useAppClient();
 	const { files, fileAuthority, previews } = useFiles();
 	const session = useMemo(() => (files ? new FileWorkspaceSession(files, previews) : undefined), [files, previews]);
@@ -76,6 +87,21 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		catalog.activate();
 		return () => catalog.dispose();
 	}, [catalog]);
+	const presentation = useMemo(() => new PresentationSession(client, local), [client, local]);
+	const presentationState = useSyncExternalStore(
+		presentation.subscribe,
+		presentation.getSnapshot,
+		presentation.getSnapshot,
+	);
+	useEffect(() => {
+		presentation.activate();
+		return () => presentation.dispose();
+	}, [presentation]);
+	useEffect(() => {
+		if (presentationState.busy || (!presentationState.result && !presentationState.rejected)) return;
+		void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
+		void cache.invalidateQueries({ queryKey: ["conversation-presentation"] });
+	}, [presentationState.busy, presentationState.result, presentationState.rejected, cache]);
 	const panel = useMemo(() => new FilePanelController(local), [local]);
 	const panelState = useSyncExternalStore(panel.subscribe, panel.snapshot, panel.snapshot);
 	const panelTrigger = useRef<HTMLButtonElement>(null);
@@ -115,6 +141,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, []);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [detailsOpen, setDetailsOpen] = useState(false);
+	const [reopenFailure, setReopenFailure] = useState<"failed" | "limit" | null>(null);
+	const [pinLookupFailed, setPinLookupFailed] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [folderProject, setFolderProject] = useState<Workspace>();
 	const [folderCreationFailed, setFolderCreationFailed] = useState(false);
@@ -217,6 +245,93 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, [local, session]);
 	const selected = selectedQuery.data;
 	const workspace = workspaceQuery.data;
+	useEffect(() => {
+		const command = (event: KeyboardEvent) => {
+			if (
+				event.defaultPrevented ||
+				event.repeat ||
+				event.isComposing ||
+				event.keyCode === 229 ||
+				settingsOpen ||
+				detailsOpen ||
+				folderProject ||
+				leave ||
+				document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
+			)
+				return;
+			const origin = navigationRevision.current;
+			const scope = { ...currentScope.current };
+			const current = () =>
+				connectionLease.active &&
+				currentConnection.current === connectionLease &&
+				navigationRevision.current === origin &&
+				currentScope.current.workspaceId === scope.workspaceId &&
+				currentScope.current.conversationId === scope.conversationId;
+			if (matchesBinding(event, keybindings.reopenClosedFile)) {
+				if (!session?.canReopen(scope.workspaceId)) return;
+				event.preventDefault();
+				setReopenFailure(null);
+				void session.reopen(scope.workspaceId, current).then(
+					(result) => {
+						if (!current()) return;
+						if (result) panel.setOpen(true);
+						else {
+							const state = session.snapshot();
+							setReopenFailure(state.limitReached ? "limit" : state.reopenError ? "failed" : null);
+						}
+					},
+					() => {
+						if (current()) setReopenFailure("failed");
+					},
+				);
+			} else if (matchesBinding(event, keybindings.pinConversation)) {
+				const state = presentation.getSnapshot();
+				if (!selected || selected.archivedAt !== null || state.busy || state.pending || state.incompatible) return;
+				event.preventDefault();
+				setPinLookupFailed(false);
+				void cache
+					.fetchQuery({
+						queryKey: presentationKey(scope),
+						queryFn: ({ signal }) => client.call("getConversationPresentation", scope, signal),
+						staleTime: 0,
+					})
+					.then(
+						(value) => {
+							if (
+								!current() ||
+								value.workspaceId !== scope.workspaceId ||
+								value.conversationId !== scope.conversationId
+							)
+								return;
+							void presentation.execute({
+								...scope,
+								requestId: crypto.randomUUID(),
+								expectedPresentationRevision: value.revision,
+								pinned: !value.pinned,
+							});
+						},
+						() => {
+							if (current()) setPinLookupFailed(true);
+						},
+					);
+			}
+		};
+		window.addEventListener("keydown", command);
+		return () => window.removeEventListener("keydown", command);
+	}, [
+		client,
+		cache,
+		connectionLease,
+		session,
+		presentation,
+		panel,
+		selected,
+		settingsOpen,
+		detailsOpen,
+		folderProject,
+		leave,
+		keybindings,
+	]);
 	const selectWorkspace = (id: string) => {
 		navigationRevision.current++;
 		session?.setWorkspace(id);
@@ -294,6 +409,8 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		if ("conversationId" in result) {
 			cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
 			void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
+			void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
+			void cache.invalidateQueries({ queryKey: presentationKey(result) });
 			if (state.resultMethod === "createConversation") {
 				setPreparedDrafts((current) => ({
 					...current,
@@ -512,18 +629,26 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							{cl.searchScope}
 						</p>
 					</div>
-					<div className="nav-section-heading">
-						<span>{t("nav.workspaces")}</span>
-						<CreateDialog
-							disabled={catalogBlocked}
-							kind="workspace"
-							compact
-							onCreate={createWorkspace}
-							chooseFolder={fileAuthority?.prepareProject}
-							forgetFolder={fileAuthority?.forgetProjectSelection}
-						/>
-					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
+						<PinnedConversations
+							catalog={catalog}
+							presentation={presentation}
+							selectedWorkspace={selectedWorkspace}
+							selectedConversation={selectedConversation}
+							search={search}
+							onSelect={selectConversation}
+						/>
+						<div className="nav-section-heading">
+							<span>{t("nav.workspaces")}</span>
+							<CreateDialog
+								disabled={catalogBlocked}
+								kind="workspace"
+								compact
+								onCreate={createWorkspace}
+								chooseFolder={fileAuthority?.prepareProject}
+								forgetFolder={fileAuthority?.forgetProjectSelection}
+							/>
+						</div>
 						{workspaces.isPending && !workspaces.hasData && (
 							<output className="nav-feedback">{t("common.loading")}</output>
 						)}
@@ -560,6 +685,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						<WorkspaceTree
 							workspaces={workspaces.items}
 							catalog={catalog}
+							presentation={presentation}
 							guard={(action) => action()}
 							selectedWorkspace={selectedWorkspace}
 							selectedConversation={selectedConversation}
@@ -574,6 +700,12 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						/>
 						<CatalogPagination pages={workspaces} listRef={navigationList} />
 						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
+						<PinRecovery session={presentation} />
+						{pinLookupFailed && (
+							<p className="nav-feedback" role="alert">
+								{pinLabels(locale).loadError}
+							</p>
+						)}
 					</div>
 				</section>
 				<div className="sidebar-footer">
@@ -650,7 +782,14 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<Icon name="folder" size={15} />
 							{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
 						</Button>
-						{selected && <ConversationActions conversation={selected} session={catalog} guard={(action) => action()} />}
+						{selected && (
+							<ConversationActions
+								conversation={selected}
+								session={catalog}
+								presentation={presentation}
+								guard={(action) => action()}
+							/>
+						)}
 						{selected && (
 							<Button
 								ref={detailsTrigger}
@@ -669,6 +808,11 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					</div>
 				</header>
 				<PreparedTaskRecovery session={catalog} onResolve={resolveCatalog} />
+				{reopenFailure && (
+					<p className="file-panel-storage" role="alert">
+						{fileLabels(locale)[reopenFailure === "limit" ? "tabs.limit" : "tabs.reopenFailed"]}
+					</p>
+				)}
 				{panelState.storageFailed && (
 					<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
 				)}

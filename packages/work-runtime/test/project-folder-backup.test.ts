@@ -26,6 +26,10 @@ async function fixture() {
 	const projectPath = join(parent, "offline project");
 	const db = new DatabaseSync(catalogPath);
 	try {
+		// Keep the schema6 compatibility fixture independent of later catalog migrations.
+		db.exec(
+			"DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; UPDATE identity SET version=6",
+		);
 		db.prepare("INSERT INTO project_folders VALUES ('work','binding-current',3,?,?,?,'Offline project',0)").run(
 			projectPath,
 			"18446744073709551615",

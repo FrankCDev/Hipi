@@ -25,6 +25,12 @@ export function MarkdownPreview({ text, memory }: { text: string; memory: Editor
 			aria-label={fileLabels(locale)["view.preview"]}
 			// biome-ignore lint/a11y/noNoninteractiveTabindex: The preview is an independently keyboard-scrollable document.
 			tabIndex={0}
+			onScroll={(event) => {
+				memory.markdownPreview = {
+					scrollTop: event.currentTarget.scrollTop,
+					scrollLeft: event.currentTarget.scrollLeft,
+				};
+			}}
 		>
 			<MessageMarkdown source={text} />
 		</section>

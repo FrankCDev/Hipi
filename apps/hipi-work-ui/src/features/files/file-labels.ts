@@ -21,6 +21,9 @@ const en = {
 	"tree.noMatches": "No matching loaded files",
 	"tabs.title": "Open files",
 	"tabs.close": "Close file",
+	"tabs.reopen": "Reopen closed file",
+	"tabs.reopenFailed":
+		"Could not reopen the file. Check folder access and try again. Closed file history is preserved.",
 	"tabs.closeOthers": "Close other files",
 	"tabs.closeRight": "Close files to the right",
 	"tabs.actions": "File tab actions",
@@ -143,6 +146,8 @@ const zh: Record<keyof typeof en, string> = {
 	"tree.noMatches": "没有匹配的已加载文件",
 	"tabs.title": "已打开的文件",
 	"tabs.close": "关闭文件",
+	"tabs.reopen": "重新打开关闭的文件",
+	"tabs.reopenFailed": "无法重新打开文件。请检查文件夹访问权限后重试。关闭记录已保留。",
 	"tabs.closeOthers": "关闭其他文件",
 	"tabs.closeRight": "关闭右侧文件",
 	"tabs.actions": "文件标签操作",

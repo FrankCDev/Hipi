@@ -9,6 +9,7 @@ import { readToolActivities, readToolActivityText } from "./activities/storage.t
 import { readAgentCommandResult } from "./agent-tools/authorization-store.ts";
 import {
 	AppError,
+	type Conversation,
 	CUSTOM_PROVIDER_LIMITS,
 	LIMITS,
 	type Params,
@@ -19,6 +20,12 @@ import {
 	type Workspace,
 } from "./contracts.ts";
 import { commandKey, DIRECTORY_LIMITS, directoryDigest } from "./conversation-directory.ts";
+import {
+	ConversationPresentations,
+	PRESENTATION_SCHEMA,
+	type PresentationFailpoint,
+	validatePresentationStore,
+} from "./conversation-presentation.ts";
 import { previewToolPack } from "./extensions/lifecycle.ts";
 import {
 	readActiveToolPackBindings,
@@ -78,15 +85,31 @@ export class StoreCatalog {
 	readonly #root: string;
 	readonly #owner: StoreOwnerLease;
 	readonly #database: DatabaseSync;
+	readonly #presentations: ConversationPresentations;
 	#closed = false;
 	#projection: Promise<unknown> = Promise.resolve();
-	private constructor(root: string, owner: StoreOwnerLease, database: DatabaseSync, storeId: string) {
+	private constructor(
+		root: string,
+		owner: StoreOwnerLease,
+		database: DatabaseSync,
+		storeId: string,
+		failpoint?: (point: PresentationFailpoint) => void | Promise<void>,
+	) {
 		this.#root = root;
 		this.#owner = owner;
 		this.#database = database;
 		this.storeId = storeId;
+		this.#presentations = new ConversationPresentations(
+			database,
+			storeId,
+			(scope) => this.getConversation(scope),
+			failpoint,
+		);
 	}
-	static async open(root: string): Promise<StoreCatalog> {
+	static async open(
+		root: string,
+		failpoint?: (point: PresentationFailpoint) => void | Promise<void>,
+	): Promise<StoreCatalog> {
 		const catalogPath = join(root, "catalog.sqlite");
 		await checkDatabasePath(catalogPath);
 		const owner = await StoreOwnerLease.acquire(root);
@@ -117,14 +140,28 @@ export class StoreCatalog {
 						row.version !== 2 &&
 						row.version !== 3 &&
 						row.version !== 5 &&
-						row.version !== 6
+						row.version !== 6 &&
+						row.version !== 7
 					)
 						throw new AppError("STORE_MISMATCH");
 					if (
-						row?.version === 6 &&
+						(row?.version === 6 || row?.version === 7) &&
 						!database.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders' AND type='table'").get()
 					)
 						throw new AppError("STORE_MISMATCH");
+					if (row?.version === 7) {
+						for (const name of ["conversation_presentations", "presentation_state", "presentation_commands"]) {
+							if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'").get(name))
+								throw new AppError("STORE_MISMATCH");
+						}
+						if (
+							!database
+								.prepare("SELECT 1 FROM sqlite_schema WHERE name='presentation_pin_order' AND type='index'")
+								.get()
+						)
+							throw new AppError("STORE_MISMATCH");
+						validatePresentationStore(database);
+					}
 				}
 				try {
 					database.close();
@@ -161,11 +198,12 @@ export class StoreCatalog {
 					identity.version !== 2 &&
 					identity.version !== 3 &&
 					identity.version !== 5 &&
-					identity.version !== 6) ||
+					identity.version !== 6 &&
+					identity.version !== 7) ||
 				identity.root !== root
 			)
 				throw new AppError("STORE_MISMATCH");
-			// Version 6 adds local project associations; older runtimes cannot silently omit their revocation state.
+			// Version 7 adds presentation metadata and permanent pin receipts, independent of PI execution.
 			// Version 4 remains reserved for non-executing recovery archives.
 			// Schema and version move together under the existing exclusive root owner.
 			database.exec("BEGIN IMMEDIATE");
@@ -173,7 +211,11 @@ export class StoreCatalog {
 				database.exec(
 					"CREATE TABLE IF NOT EXISTS conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX IF NOT EXISTS conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE IF NOT EXISTS directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL); CREATE TABLE IF NOT EXISTS project_folders (workspace_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, revision INTEGER NOT NULL, canonical_path TEXT, device TEXT, inode TEXT, display_name TEXT, revoked INTEGER NOT NULL CHECK(revoked IN (0,1))); UPDATE identity SET version=6 WHERE singleton=1 AND version IN (1,2,3,5)",
 				);
-				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 6)
+				database.exec(PRESENTATION_SCHEMA);
+				database.exec(
+					"INSERT OR IGNORE INTO presentation_state VALUES (1,0,0); UPDATE identity SET version=7 WHERE singleton=1 AND version=6",
+				);
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 7)
 					throw new AppError("STORE_MISMATCH");
 				database.exec("COMMIT");
 			} catch (error) {
@@ -184,7 +226,7 @@ export class StoreCatalog {
 				protocolVersion: PROTOCOL_VERSION,
 				storeId: identity.store_id,
 			});
-			const catalog = new StoreCatalog(root, owner, database, storeId);
+			const catalog = new StoreCatalog(root, owner, database, storeId, failpoint);
 			catalog.listCustomProviders();
 			await catalog.#recover();
 			return catalog;
@@ -199,6 +241,28 @@ export class StoreCatalog {
 			owner.close();
 			throw error;
 		}
+	}
+	getConversationPresentation(
+		input: Params<"getConversationPresentation">,
+	): Promise<Result<"getConversationPresentation">> {
+		return this.#presentations.get(input);
+	}
+	listPinnedConversations(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">> {
+		return this.#presentations.list(input);
+	}
+	setConversationPinned(input: Params<"setConversationPinned">): Promise<Result<"setConversationPinned">> {
+		return this.#presentations.set(input);
+	}
+	async getPresentationCommandResult(
+		input: Params<"getPresentationCommandResult">,
+	): Promise<Result<"getPresentationCommandResult">> {
+		return this.#presentations.command(input.requestId);
+	}
+	recordConversationArchive(conversation: Conversation): void {
+		this.#presentations.recordArchive(conversation);
+	}
+	finishConversationArchive(conversation: Conversation): Promise<void> {
+		return this.#presentations.finishArchive(conversation);
 	}
 	/** Local host capability only. AppClient has no path-bearing catalog command. */
 	readProjectFolder(workspaceId: string): ProjectFolderRecord | null {

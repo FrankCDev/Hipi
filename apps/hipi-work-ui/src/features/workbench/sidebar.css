@@ -3,6 +3,21 @@
 	gap: 4px;
 }
 
+.pinned-conversations {
+	margin-bottom: 12px;
+}
+
+.pinned-conversations .conversation-link {
+	padding: 0;
+	min-height: 36px;
+	font: inherit;
+}
+
+.pin-recovery {
+	display: grid;
+	gap: 6px;
+}
+
 .sidebar .brand-home {
 	flex: 1;
 	min-width: 0;

@@ -5,6 +5,7 @@ import { exerciseNarrowEditorEscape } from "./gui-file-editor-escape.mjs";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { documentPreviewState, exerciseDocumentPreviews } from "./gui-file-previews.mjs";
+import { exerciseFileReopen } from "./gui-file-reopen.mjs";
 import { changeOwnedFixture, fileFixture, fileFixtureNames, readOwnedFixture } from "./gui-file-workbench-fixture.mjs";
 import { assertNoAlerts, capture, click, evaluate, pressKey, selectEnglish, until } from "./gui-flow.mjs";
 import { assertBindingEvidence, exerciseProjectBinding } from "./gui-project-binding.mjs";
@@ -834,6 +835,15 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, previous
 	await selectTab(cdp, primaryId);
 	await expectEditor(cdp, fileFixture.draft, { dirty: true, id: primaryId });
 	record({ workspaceTabRetention: true, conditionalCloseSaved: true });
+	const reopenJourney = await exerciseFileReopen({
+		cdp,
+		directory,
+		nativeContext,
+		primaryId,
+		closedId: secondId,
+		helpers: { state, expectEditor, replaceEditor, selectTab, savedBytes, hideFiles, fileAction, fileShadowTarget },
+	});
+	record({ reopenJourney });
 
 	await hideFiles(cdp);
 	await showFiles(cdp);
@@ -975,6 +985,7 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, previous
 	return {
 		projectBinding,
 		reopened: false,
+		reopenJourney,
 		listedAndOpened: true,
 		editorTreeSplit: true,
 		dockDragFull: true,

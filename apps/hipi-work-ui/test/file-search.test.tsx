@@ -6,6 +6,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 import { defaultConfig } from "../src/app/theme/config.ts";
 import { Input } from "../src/components/ui/input.tsx";
 import { DEFAULT_EDITOR_KEYBINDINGS } from "../src/features/files/editor-keybindings.ts";
+import type { EditorViewMemory } from "../src/features/files/editor-view-memory.ts";
 import { useFileSearch } from "../src/features/files/file-search.tsx";
 import { PierreCodeEditor } from "../src/features/files/pierre-editor.tsx";
 
@@ -359,3 +360,81 @@ test.each([false, true])(
 		assert.equal(onSave.mock.calls.length, 0);
 	},
 );
+
+// Source-level focus contract; actual native mount/portal focus is separately gated.
+test.each([false, true])("reopen focus request targets the current Pierre surface once (readonly=%s)", (readOnly) => {
+	const frames: (() => void)[] = [];
+	vi.stubGlobal("requestAnimationFrame", (callback: () => void) => frames.push(callback));
+	vi.stubGlobal("cancelAnimationFrame", vi.fn());
+	const editorFocus = vi.fn();
+	const sectionFocus = vi.fn();
+	const handled = vi.fn();
+	const props = {
+		text: "current disk",
+		name: "file.txt",
+		label: "Editor",
+		readOnly,
+		onChange: vi.fn(),
+		focusRequest: undefined as number | undefined,
+		onFocusHandled: handled,
+	};
+	const render = () => {
+		const surface = PierreCodeEditor(props);
+		return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+	};
+	const tree = drive(render);
+	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+	(code.props.ref as React.RefObject<unknown>).current = {
+		getEditor: () => (readOnly ? undefined : { focus: editorFocus }),
+	};
+	(element(tree, (item) => item.type === "section").props.ref as React.RefObject<unknown>).current = {
+		focus: sectionFocus,
+	};
+	assert.equal(frames.length, 0);
+	props.focusRequest = 17;
+	drive(render);
+	assert.equal(handled.mock.calls.length, 0);
+	frames.shift()?.();
+	assert.deepEqual((readOnly ? sectionFocus : editorFocus).mock.calls, [[{ preventScroll: true }]]);
+	assert.deepEqual(handled.mock.calls, [[17]]);
+	drive(render);
+	assert.equal(frames.length, 0);
+	props.focusRequest = 18;
+	drive(render);
+	props.focusRequest = undefined;
+	drive(render);
+	frames.shift()?.();
+	assert.deepEqual(handled.mock.calls, [[17]]);
+	assert.equal(props.onChange.mock.calls.length, 0);
+});
+
+test("Pierre exposes live scroll capture without retaining editor bytes", () => {
+	const memory: EditorViewMemory = {};
+	const props = { text: "disk", name: "file.txt", label: "Editor", readOnly: false, onChange: vi.fn(), memory };
+	const tree = drive(() => {
+		const surface = PierreCodeEditor(props);
+		return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+	});
+	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+	(code.props.containerRef as React.RefObject<unknown>).current = { scrollTop: 142, scrollLeft: 37 };
+	assert.deepEqual(memory.captureView?.(), { scrollTop: 142, scrollLeft: 37 });
+});
+
+test("Pierre mount restores both safe scroll coordinates before a reopen focus handoff", () => {
+	const memory: EditorViewMemory = { scrollTop: 142, scrollLeft: 37 };
+	const surface = PierreCodeEditor({
+		text: "current disk",
+		name: "file.txt",
+		label: "Editor",
+		readOnly: false,
+		onChange: vi.fn(),
+		memory,
+	});
+	const tree = (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+	const viewport = { scrollTop: 0, scrollLeft: 0 };
+	(code.props.containerRef as React.RefObject<unknown>).current = viewport;
+	for (const effect of hooks.pending.splice(0)) effect();
+	assert.deepEqual(viewport, { scrollTop: 142, scrollLeft: 37 });
+	assert.deepEqual(memory.captureView?.(), viewport);
+});

@@ -71,6 +71,14 @@ export interface WorkspacePort {
 	close(): Promise<void>;
 }
 export type RuntimePorts = {
+	getConversationPresentation(
+		input: Params<"getConversationPresentation">,
+	): Promise<Result<"getConversationPresentation">>;
+	listPinnedConversations(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">>;
+	setConversationPinned(input: Params<"setConversationPinned">): Promise<Result<"setConversationPinned">>;
+	getPresentationCommandResult(
+		input: Params<"getPresentationCommandResult">,
+	): Promise<Result<"getPresentationCommandResult">>;
 	listCustomProviders(): Promise<Result<"listCustomProviders">>;
 	saveCustomProvider(input: Params<"saveCustomProvider">): Promise<Result<"saveCustomProvider">>;
 	removeCustomProvider(input: Params<"removeCustomProvider">): Promise<Result<"removeCustomProvider">>;
@@ -196,6 +204,12 @@ export class WorkRuntime implements AppClient {
 		if (this.#closed) throw new AppError("CLOSED");
 		if (request.method === "handshake") return { protocolVersion: PROTOCOL_VERSION, storeId: this.#ports.storeId };
 		if (request.expectedStoreId !== this.#ports.storeId) throw new AppError("STORE_MISMATCH");
+		if (request.method === "getConversationPresentation")
+			return this.#ports.getConversationPresentation(request.params);
+		if (request.method === "listPinnedConversations") return this.#ports.listPinnedConversations(request.params);
+		if (request.method === "setConversationPinned") return this.#ports.setConversationPinned(request.params);
+		if (request.method === "getPresentationCommandResult")
+			return this.#ports.getPresentationCommandResult(request.params);
 		if (request.method === "listCustomProviders") return this.#ports.listCustomProviders();
 		if (request.method === "saveCustomProvider") return this.#ports.saveCustomProvider(request.params);
 		if (request.method === "removeCustomProvider") return this.#ports.removeCustomProvider(request.params);
