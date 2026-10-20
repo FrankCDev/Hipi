@@ -152,7 +152,12 @@ public static class HipiOwnedDialogReader {
                     if (!Owned(child, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                     var childKind = new StringBuilder(64);
                     if (GetClassName(child, childKind, childKind.Capacity) == 0) { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }
-                    if (childKind.ToString() == "DirectUIHWND") { taskDialog = true; codes.Add("DIRECTUI_CONTROL_OBSERVED"); }
+                    if (childKind.ToString() == "DirectUIHWND") {
+                        taskDialog = true; codes.Add("DIRECTUI_CONTROL_OBSERVED");
+                        // TaskDialog text is virtual. Select UIA now, preserving the remaining shared budget.
+                        // Enumerating the rest of this native subtree cannot read its text and can exhaust all 16 controls.
+                        return false;
+                    }
                     if (childKind.ToString() == "SysLink") codes.Add("SYSLINK_CONTROL_OBSERVED");
                     if (childKind.ToString() != "Static") return true;
                     codes.Add("STATIC_CONTROL_OBSERVED");

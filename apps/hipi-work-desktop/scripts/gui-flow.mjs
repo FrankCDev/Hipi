@@ -48,6 +48,16 @@ export async function evaluate(cdp, expression) {
 	if (result.exceptionDetails) throw new Error("Renderer evaluation failed");
 	return result.result.value;
 }
+export async function rememberCreateTrigger(cdp) {
+	assert.equal(
+		await evaluate(
+			cdp,
+			`(() => { window.__hipiGuiCreateTrigger = document.querySelector('.conversation-nav .workspace-create button[aria-label="New workspace"]'); return !!window.__hipiGuiCreateTrigger; })()`,
+		),
+		true,
+		"Workspace creation requires its original primary trigger",
+	);
+}
 export async function until(check, label, milliseconds = 30000) {
 	const deadline = Date.now() + milliseconds;
 	while (Date.now() < deadline) {
@@ -589,10 +599,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		};
 	}
 	await capture(cdp, directory, "initial");
-	await evaluate(
-		cdp,
-		`window.__hipiGuiCreateTrigger = document.querySelector('.conversation-nav .workspace-create button[aria-label="New workspace"]')`,
-	);
+	await rememberCreateTrigger(cdp);
 	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
 	await fill(cdp, '[role="dialog"] input', fixture.workspace);
 	await click(cdp, '[role="dialog"] button[type="submit"]');

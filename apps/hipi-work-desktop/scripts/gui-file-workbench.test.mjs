@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -21,7 +22,7 @@ import {
 } from "./gui-file-workbench-fixture.mjs";
 
 async function profile() {
-	return realpath(await mkdtemp(join(await realpath(tmpdir()), "Hipi GUI profile-")));
+	return realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "Hipi GUI profile-")));
 }
 
 test("seeded file fixture passes the real native launch boundary without expanding its root allowlist", async () => {

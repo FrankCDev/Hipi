@@ -105,3 +105,21 @@ test("editor harness sends native Shift+Enter and composition key229 without Jav
 	await assert.rejects(nativeEditorKey(cdp, "Delete"), /Unsupported work-experience key/);
 	assert.equal(calls.length, 2);
 });
+
+test("Darwin cleanup supplies Cocoa editing commands on keydown only without changing other platforms", async () => {
+	for (const platform of ["darwin", "linux", "win32"]) {
+		const calls = [];
+		const cdp = { request: async (_method, params) => calls.push(params) };
+		await nativeEditorKey(cdp, "a", { platform, modifiers: platform === "darwin" ? 4 : 2 });
+		await nativeEditorKey(cdp, "Backspace", { platform });
+		assert.deepEqual(
+			calls.map((item) => item.commands),
+			platform === "darwin"
+				? [["selectAll"], undefined, ["deleteBackward"], undefined]
+				: [undefined, undefined, undefined, undefined],
+		);
+		assert.ok(
+			calls.filter((item) => item.type === "keyUp").every((item) => !("commands" in item) && !("text" in item)),
+		);
+	}
+});

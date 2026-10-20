@@ -56,9 +56,22 @@ export function assertWorkExperienceGeometry(state) {
 	assert.ok(submit.y + submit.height <= composer.y + composer.height + 1, "Send control escapes composer");
 }
 
-export async function nativeEditorKey(cdp, key, { modifiers = 0, composing = false } = {}) {
+export async function nativeEditorKey(
+	cdp,
+	key,
+	{ modifiers = 0, composing = false, platform = process.platform } = {},
+) {
 	const codes = { Enter: 13, Backspace: 8, a: 65, Tab: 9 };
 	assert.ok(codes[key], "Unsupported work-experience key");
+	// CDP does not translate Cocoa editing bindings; supply their native Chromium command on keydown only.
+	const command =
+		platform === "darwin" && !composing
+			? key === "a" && modifiers === 4
+				? "selectAll"
+				: key === "Backspace" && modifiers === 0
+					? "deleteBackward"
+					: undefined
+			: undefined;
 	for (const type of ["keyDown", "keyUp"])
 		await cdp.request("Input.dispatchKeyEvent", {
 			type,
@@ -66,7 +79,8 @@ export async function nativeEditorKey(cdp, key, { modifiers = 0, composing = fal
 			code: key === "a" ? "KeyA" : key,
 			windowsVirtualKeyCode: composing ? 229 : codes[key],
 			modifiers,
-			...(key === "Enter" && !composing ? { text: "\r" } : {}),
+			...(type === "keyDown" && key === "Enter" && !composing ? { text: "\r" } : {}),
+			...(type === "keyDown" && command ? { commands: [command] } : {}),
 		});
 }
 

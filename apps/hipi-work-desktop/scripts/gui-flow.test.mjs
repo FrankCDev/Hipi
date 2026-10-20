@@ -17,10 +17,34 @@ import {
 	modalWheelPoint,
 	pressKey,
 	receiptScope,
+	rememberCreateTrigger,
 	resolvedTheme,
 	selectReopenedConversation,
 	waitForOverlayClosed,
 } from "./gui-flow.mjs";
+
+test("retained creation trigger never crosses CDP's return-by-value serialization boundary", async () => {
+	const trigger = {};
+	trigger.self = trigger;
+	const window = {};
+	let present = true;
+	const cdp = {
+		async request(method, params) {
+			assert.equal(method, "Runtime.evaluate");
+			assert.equal(params.returnByValue, true);
+			const value = runInNewContext(params.expression, {
+				window,
+				document: { querySelector: () => (present ? trigger : null) },
+			});
+			// DOM nodes cannot be serialized by value. The retained object must stay in the renderer.
+			return { result: { value: JSON.parse(JSON.stringify(value)) } };
+		},
+	};
+	await rememberCreateTrigger(cdp);
+	assert.equal(window.__hipiGuiCreateTrigger, trigger);
+	present = false;
+	await assert.rejects(rememberCreateTrigger(cdp), /requires its original primary trigger/);
+});
 
 test("focus timeout identifies only allowlisted targets, never dynamic titles or input values", async () => {
 	assert.equal(diagnosticTarget('button[aria-label="Model status"]'), "Model status");

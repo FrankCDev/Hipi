@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { cp, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, statfs, writeFile } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -20,6 +21,15 @@ import { captureWindowsIdentity, readWindowsDialogs } from "./gui-windows-dialog
 import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export async function createGuiProfile(temporaryParent = realpathSync(tmpdir())) {
+	// Match smokeProfile's exact canonicalizer, including Windows path spelling.
+	return realpathSync(await mkdtemp(join(temporaryParent, "Hipi GUI profile-")));
+}
+export function sourceProvenanceEvidence(provenance) {
+	const sourceSnapshot = provenance.sourceSnapshot.map(({ file, sha256 }) => ({ file, sha256 }));
+	assert.equal(hash(JSON.stringify(sourceSnapshot)), provenance.sourceSnapshotSha256);
+	return { sourceSnapshotSha256: provenance.sourceSnapshotSha256, sourceSnapshot };
+}
 /** One lifecycle owns launch, evidence and cleanup for each independent private profile. */
 export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate, betweenRuns } = {}) {
 	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
@@ -37,7 +47,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 	const provenance = JSON.parse(provenanceBytes.toString("utf8"));
 	assert.equal(provenance.platform, process.platform);
 	assert.equal(provenance.architecture, process.arch);
-	assert.equal(hash(JSON.stringify(provenance.sourceSnapshot)), provenance.sourceSnapshotSha256);
+	const sourceEvidence = sourceProvenanceEvidence(provenance);
 	await assertSourceSnapshot(root, provenance.sourceSnapshot);
 	// Do not run against a pre-isolation package, which would silently ignore the testing flag.
 	for (const name of ["smoke-profile.ts", "main.ts", "provider-mode.ts"]) {
@@ -72,7 +82,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 		}
 		return bytes;
 	}
-	const temporaryParent = await realpath(tmpdir());
+	const temporaryParent = realpathSync(tmpdir());
 	const delta = relative(root, temporaryParent);
 	assert.ok(delta.startsWith("..") || isAbsolute(delta));
 	const fs = await statfs(temporaryParent);
@@ -80,8 +90,8 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 		fs.bavail * fs.bsize > (await size(sourceApp)) * 2 + 512 * 1024 * 1024,
 		"Insufficient GUI smoke disk reserve",
 	);
-	const owned = await realpath(await mkdtemp(join(temporaryParent, "Hipi GUI 中文 验证-")));
-	const profile = await realpath(await mkdtemp(join(temporaryParent, "Hipi GUI profile-")));
+	const owned = realpathSync(await mkdtemp(join(temporaryParent, "Hipi GUI 中文 验证-")));
+	const profile = await createGuiProfile(temporaryParent);
 	const appDirectory = join(owned, key === "mac" ? "真实 应用.app" : "真实 应用");
 	const artifacts = join(owned, "evidence");
 	const nativeLogs = join(owned, "native-diagnostics");
@@ -95,7 +105,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 		hostNode: process.version,
 		electron: provenance.electron,
 		startedAt: new Date().toISOString(),
-		sourceSnapshotSha256: provenance.sourceSnapshotSha256,
+		...sourceEvidence,
 		releaseProvenanceSha256: hash(provenanceBytes),
 		harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
 		visualReview: "not_run; screenshots require inspection",
@@ -219,12 +229,12 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			browser = await Cdp.connect(connection.browser, connection.port, "browser");
 			const target = await until(() => pageTarget(connection.port), "packaged application target");
 			const catalog = join(profile, "profile/deterministic-store/catalog.sqlite");
-			assert.equal(await realpath(catalog), catalog, "Runtime store escaped owned profile");
+			assert.equal(realpathSync(catalog), catalog, "Runtime store escaped owned profile");
 			assert.ok((await lstat(catalog)).isFile(), "No actual runtime database in smoke profile");
 			const storeOwner = join(profile, "profile/deterministic-store/store-owner.sqlite");
-			assert.equal(await realpath(storeOwner), storeOwner, "Store owner database escaped owned profile");
+			assert.equal(realpathSync(storeOwner), storeOwner, "Store owner database escaped owned profile");
 			assert.ok((await lstat(storeOwner)).isFile());
-			assert.equal(await realpath(portFile), portFile, "Debugging endpoint escaped owned session");
+			assert.equal(realpathSync(portFile), portFile, "Debugging endpoint escaped owned session");
 			evidence.checks.push({ iteration, ownedRuntimeDatabase: true, ownedSessionEndpoint: true });
 			page = await Cdp.connect(target, connection.port);
 			assert.ok((await evaluate(page, "navigator.userAgent")).includes(`Electron/${provenance.electron}`));
@@ -276,7 +286,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			assert.equal(workspaces.length, 1, "Expected exactly one scenario workspace");
 			for (const database of ["owner.sqlite", "workspace.sqlite"]) {
 				const path = join(storeRoot, workspaces[0].name, database);
-				assert.equal(await realpath(path), path, "Workspace database escaped owned profile");
+				assert.equal(realpathSync(path), path, "Workspace database escaped owned profile");
 				assert.ok((await lstat(path)).isFile());
 			}
 			evidence.checks.push({ iteration, ownedWorkspaceDatabases: true });

@@ -1,7 +1,8 @@
 // Source-only synthetic inputs; never bundled in the production application.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
@@ -38,9 +39,11 @@ export const fileFixtureNames = Object.freeze([
 
 /** Only caller-created private mkdtemp profiles are accepted; JSON evidence is not authority. */
 export async function ownedFileDirectory(ownedProfileRoot, { create = false } = {}) {
-	const root = await realpath(ownedProfileRoot);
+	// Match smokeProfile's canonicalizer exactly. On Windows, the promise/native variant
+	// can expand short path names or casing differently from the synchronous path walk.
+	const root = realpathSync(ownedProfileRoot);
 	assert.equal(root, ownedProfileRoot, "File profile must be canonical");
-	assert.equal(dirname(root), await realpath(tmpdir()), "File profile must be a direct temporary child");
+	assert.equal(dirname(root), realpathSync(tmpdir()), "File profile must be a direct temporary child");
 	assert.match(basename(root), /^Hipi GUI profile-[A-Za-z0-9]+$/);
 	const info = await lstat(root);
 	assert.ok(info.isDirectory() && !info.isSymbolicLink());
@@ -58,7 +61,7 @@ export async function ownedFileDirectory(ownedProfileRoot, { create = false } = 
 			if (error.code !== "EEXIST") throw error;
 		}
 	}
-	assert.equal(await realpath(userData), userData, "File userData escaped owned profile");
+	assert.equal(realpathSync(userData), userData, "File userData escaped owned profile");
 	const parent = await lstat(userData);
 	assert.ok(parent.isDirectory() && !parent.isSymbolicLink());
 	if (process.platform !== "win32") {
@@ -67,7 +70,7 @@ export async function ownedFileDirectory(ownedProfileRoot, { create = false } = 
 	}
 	const directory = join(userData, fileFixture.folder);
 	if (create) await mkdir(directory, { mode: 0o700 });
-	assert.equal(await realpath(directory), directory, "File fixture escaped owned profile");
+	assert.equal(realpathSync(directory), directory, "File fixture escaped owned profile");
 	const files = await lstat(directory);
 	assert.ok(files.isDirectory() && !files.isSymbolicLink());
 	return directory;
@@ -78,7 +81,7 @@ export async function readOwnedFixture(ownedProfileRoot, name = fileFixture.text
 	const path = join(await ownedFileDirectory(ownedProfileRoot), name);
 	const info = await lstat(path);
 	assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size < 65536);
-	assert.equal(await realpath(path), path);
+	assert.equal(realpathSync(path), path);
 	return readFile(path);
 }
 

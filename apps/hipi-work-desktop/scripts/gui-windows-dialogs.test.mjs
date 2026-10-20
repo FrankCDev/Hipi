@@ -301,6 +301,32 @@ test("task-dialog accessibility stays under an owned HWND with bounded, read-onl
 	);
 });
 
+test("owned DirectUI detection selects accessibility before exhausting the shared native control budget", async () => {
+	const script = await readFile(new URL("./gui-windows-dialogs.ps1", import.meta.url), "utf8");
+	const nativeChildren = script.slice(
+		script.indexOf("EnumChildWindows(hwnd,"),
+		script.indexOf("// Different representation"),
+	);
+	const directUi = nativeChildren.slice(
+		nativeChildren.indexOf('if (childKind.ToString() == "DirectUIHWND")'),
+		nativeChildren.indexOf('if (childKind.ToString() == "SysLink")'),
+	);
+	assert.match(directUi, /taskDialog = true/);
+	assert.match(directUi, /return false;/);
+	assert.doesNotMatch(directUi, /limited = true|controls\s*=/);
+	assert.ok(nativeChildren.indexOf("!Owned(child, process.Id)") < nativeChildren.indexOf(directUi));
+	assert.match(nativeChildren, /controls\+\+ >= 16/);
+	const accessibility = script.slice(
+		script.indexOf("// Different representation"),
+		script.indexOf("if (readable == 0)"),
+	);
+	assert.match(accessibility, /taskDialog && !limited && !codes.Contains\("TEXT_UNAVAILABLE"\)/);
+	assert.match(accessibility, /!codes.Contains\("IDENTITY_CHANGED"\) && !codes.Contains\("ENUMERATION_UNAVAILABLE"\)/);
+	assert.match(accessibility, /if \(!Owned\(hwnd, process.Id\)\)/);
+	assert.match(accessibility, /ReadAccessible\(dialog, hwnd, process.Id, 0, clock, codes, ref controls,/);
+	assert.doesNotMatch(accessibility, /controls\s*=|Stopwatch.StartNew|RootElement/);
+});
+
 test("owned-window query binds PID and fixed script, strips raw fields, and never falls back after refusal", async () => {
 	const calls = [];
 	const run = async (command, args, options) => {
@@ -523,7 +549,12 @@ for (const kind of ["classic", "task"])
 				assert.equal(decoy.child.exitCode, null, "Decoy must not disappear before isolation is checked");
 				assert.ok(result.codes.includes("ERR_MODULE_NOT_FOUND"), JSON.stringify(result));
 				assert.ok(result.codes.includes("ELECTRON_MAIN_JS_ERROR"), JSON.stringify(result));
-				if (kind === "task") assert.ok(result.codes.includes("TASK_DIALOG_TEXT_OBSERVED"), JSON.stringify(result));
+				if (kind === "task") {
+					assert.ok(result.codes.includes("DIRECTUI_CONTROL_OBSERVED"), JSON.stringify(result));
+					assert.ok(result.codes.includes("UIA_ROOT_OBSERVED"), JSON.stringify(result));
+					assert.ok(result.codes.includes("TASK_DIALOG_TEXT_OBSERVED"), JSON.stringify(result));
+					assert.ok(!result.codes.includes("NATIVE_CONTROL_LIMIT"), JSON.stringify(result));
+				}
 				assert.ok(!result.codes.includes("ReferenceError"), "The separate decoy process must not be read");
 				assert.ok(!JSON.stringify(result).includes("private-fixture-secret"));
 			} finally {
