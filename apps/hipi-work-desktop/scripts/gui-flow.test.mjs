@@ -12,6 +12,7 @@ import {
 	click,
 	diagnosticTarget,
 	fixture,
+	hover,
 	inspectModal,
 	modalBounds,
 	modalWheelPoint,
@@ -119,7 +120,7 @@ test("receipt scope comes from exact visible receipt identifiers and rejects mal
 });
 
 test("modal bounds rejects an offscreen or covered Close without sending input", async () => {
-	for (const reason of ["offscreen", "covered", "title-offscreen", "title-covered", "valid", "center"]) {
+	for (const reason of ["offscreen", "covered", "title-offscreen", "title-covered", "valid", "center", "settings"]) {
 		const rect = { x: 500, y: 10, width: 400, height: 600 };
 		const close = {
 			textContent: "Close",
@@ -132,10 +133,16 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 			contains: () => reason !== "title-covered",
 		};
 		const dialog = {
-			dataset: { placement: reason === "center" ? "center" : "right", scrollBody: "true" },
+			dataset: { placement: ["center", "settings"].includes(reason) ? "center" : "right", scrollBody: "true" },
 			getBoundingClientRect: () => rect,
 			querySelectorAll: () => [close],
-			querySelector: (selector) => (selector === '[data-slot="dialog-title"]' ? title : body),
+			querySelector: (selector) => {
+				if (reason === "settings") {
+					assert.ok([".settings-page-header h2", ".settings-page-content"].includes(selector));
+					return selector === ".settings-page-header h2" ? title : body;
+				}
+				return selector === '[data-slot="dialog-title"]' ? title : body;
+			},
 		};
 		const cdp = {
 			async request(method, params) {
@@ -152,7 +159,9 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 				};
 			},
 		};
-		if (reason === "valid" || reason === "center")
+		if (reason === "settings")
+			assert.equal((await modalBounds(cdp, ".unified-settings-dialog", 1, "center")).ready, true);
+		else if (reason === "valid" || reason === "center")
 			assert.equal((await modalBounds(cdp, ".dialog", 1, reason === "center" ? "center" : "right")).ready, true);
 		else await assert.rejects(modalBounds(cdp, ".dialog", 1), /modal viewport and reachable Close/);
 	}
@@ -241,6 +250,38 @@ test("click failure identifies requested text and refuses covered or ambiguous c
 			/label "Close"; candidates [12], centerHit false/,
 		);
 	}
+});
+
+test("sidebar hover sends a native mouse move only after a unique unobstructed target", async () => {
+	const events = [];
+	const node = {
+		getClientRects: () => [{}],
+		getBoundingClientRect: () => ({ x: 20, y: 40, width: 100, height: 30 }),
+		contains: (hit) => hit === node,
+	};
+	let reads = 0;
+	const cdp = {
+		request: async (method, params) => {
+			if (method !== "Runtime.evaluate") {
+				events.push({ method, ...params });
+				return {};
+			}
+			reads++;
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						document: {
+							querySelectorAll: () => (reads === 1 ? [node, node] : [node]),
+							elementFromPoint: () => (reads === 2 ? {} : node),
+						},
+					}),
+				},
+			};
+		},
+	};
+	await hover(cdp, ".conversation-link");
+	assert.equal(reads, 3);
+	assert.deepEqual(events, [{ method: "Input.dispatchMouseEvent", type: "mouseMoved", x: 70, y: 55 }]);
 });
 
 test("failure capture is bounded and redacts unknown button text; renderer loss never throws", async () => {
@@ -385,14 +426,15 @@ test("theme restoration distinguishes system preference from explicit light and 
 
 test("appearance choice follows the Theme label association rather than an arbitrary combobox", async () => {
 	const control = { id: "theme-choice", textContent: " Follow system ", getAttribute: () => "combobox" };
+	let labels = [
+		{ textContent: "Language", htmlFor: "locale-choice" },
+		{ textContent: "Theme", htmlFor: "theme-choice" },
+	];
 	const document = {
 		querySelector(selector) {
-			assert.equal(selector, '.settings-dialog[role="dialog"]');
+			assert.equal(selector, '.unified-settings-dialog[role="dialog"]');
 			return {
-				querySelectorAll: () => [
-					{ textContent: "Language", htmlFor: "locale-choice" },
-					{ textContent: "Theme", htmlFor: "theme-choice" },
-				],
+				querySelectorAll: () => labels,
 			};
 		},
 		getElementById(id) {
@@ -408,6 +450,13 @@ test("appearance choice follows the Theme label association rather than an arbit
 	const choice = await appearanceChoice(cdp);
 	assert.equal(choice.mode, "Follow system");
 	assert.equal(choice.selector, "#theme-choice");
+	labels = [{ textContent: "主题", htmlFor: "theme-choice" }];
+	control.textContent = "跟随系统";
+	assert.equal((await appearanceChoice(cdp)).mode, "跟随系统");
+	labels = [{ textContent: "语言", htmlFor: "theme-choice" }];
+	control.textContent = "简体中文";
+	assert.equal((await appearanceChoice(cdp, "language")).mode, "简体中文");
+	await assert.rejects(appearanceChoice(cdp, "unrecognized"));
 });
 
 test("unexpected application alerts fail even without console errors or visible geometry", async () => {

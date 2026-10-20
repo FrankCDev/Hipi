@@ -1,6 +1,6 @@
 import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronUp, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -9,11 +9,10 @@ import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../../components/ui/input-group.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { EditorSession } from "../files/editor-session.ts";
 import { fileLabels } from "../files/file-labels.ts";
-import { AppearanceSettings } from "../settings/index.ts";
+import { SettingsDialog } from "../settings/index.ts";
 import { ToolPacksDialog } from "../tool-packs/index.ts";
 import { artifactNavigation } from "./artifact-navigation.ts";
 import { CatalogRecovery, ConversationActions } from "./catalog-controls.tsx";
@@ -59,7 +58,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const panelId = useId();
 	const area = useRef<HTMLElement>(null);
 	const areaWidth = useWorkAreaWidth(area);
-	const { t, locale, toggleLocale, toggleTheme } = usePreferences();
+	const { t, locale } = usePreferences();
 	const [selectedWorkspace, setSelectedWorkspace] = useState(() => local.read("workspace") ?? "");
 	const [selectedConversation, setSelectedConversation] = useState(() => local.read("conversation") ?? "");
 	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
@@ -81,6 +80,9 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, []);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [detailsOpen, setDetailsOpen] = useState(false);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const settingsToolbarTrigger = useRef<HTMLButtonElement>(null);
+	const settingsReturn = useRef<HTMLButtonElement | null>(null);
 	const detailsTrigger = useRef<HTMLButtonElement>(null);
 	const detailsReturn = useRef<HTMLButtonElement | null>(null);
 	const isExpanded = (id: string) =>
@@ -380,35 +382,24 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					</div>
 				</section>
 				<div className="sidebar-footer">
-					<Popover>
-						<PopoverTrigger asChild>
-							<Button variant="ghost" className="runtime-menu-trigger" aria-label={wl["workbench.runtimeControls"]}>
-								<span className="runtime-label">
-									<span className="status-dot" />
-									{t("app.localRuntime")}
-								</span>
-								<ChevronUp size={14} aria-hidden="true" />
-							</Button>
-						</PopoverTrigger>
-						<PopoverContent
-							className="runtime-menu"
-							side="top"
-							align="start"
-							aria-label={wl["workbench.runtimeControls"]}
-							onInteractOutside={(event) => {
-								if (document.querySelector('[data-slot="dialog-content"]')) event.preventDefault();
-							}}
-						>
-							<p className="eyebrow">{wl["workbench.runtimeControls"]}</p>
-							<ConnectionActions
-								disconnect={() => guard(disconnect)}
-								onOpen={(opened, item) => {
-									cache.setQueryData(["workspace", opened.workspaceId], opened);
-									selectConversation(item);
-								}}
-							/>
-						</PopoverContent>
-					</Popover>
+					<Button
+						variant="ghost"
+						className="sidebar-settings-trigger"
+						aria-label={cl.settings}
+						aria-haspopup="dialog"
+						aria-expanded={settingsOpen}
+						onClick={(event) => {
+							settingsReturn.current = event.currentTarget;
+							setSettingsOpen(true);
+						}}
+					>
+						<Settings size={17} aria-hidden="true" />
+						{wl["workbench.settings"]}
+					</Button>
+					<span className="runtime-label sidebar-runtime-note">
+						<span className="status-dot" />
+						{t("app.localRuntime")}
+					</span>
 				</div>
 			</aside>
 			<div className="main-shell" inert={navigationOpen}>
@@ -469,42 +460,21 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 								<Icon name="info" />
 							</Button>
 						)}
-						<Popover>
-							<PopoverTrigger asChild>
-								<Button variant="ghost" size="icon" aria-label={cl.settings}>
-									<Settings size={18} aria-hidden="true" />
-								</Button>
-							</PopoverTrigger>
-							<PopoverContent
-								align="end"
-								className="workbench-settings"
-								aria-label={cl.settings}
-								onInteractOutside={(event) => {
-									// Dialogs and their portalled selects must not unmount with their settings entry.
-									if (document.querySelector('[data-slot="dialog-content"]')) event.preventDefault();
-								}}
-							>
-								{workspace && (
-									<ToolPacksDialog
-										key={
-											selected
-												? `${workspace.workspaceId}.conversation.${selected.conversationId}`
-												: `${workspace.workspaceId}.workspace`
-										}
-										workspaceId={workspace.workspaceId}
-										conversation={selected}
-									/>
-								)}
-								<AppearanceSettings />
-								<ModelSettings />
-								<Button variant="ghost" size="sm" onClick={toggleLocale} aria-label={t("settings.language")}>
-									中 / EN
-								</Button>
-								<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={t("settings.theme")}>
-									<Icon name="sun" />
-								</Button>
-							</PopoverContent>
-						</Popover>
+						<Button
+							ref={settingsToolbarTrigger}
+							variant="ghost"
+							size="icon"
+							className="workbench-settings-trigger"
+							aria-label={cl.settings}
+							aria-haspopup="dialog"
+							aria-expanded={settingsOpen}
+							onClick={(event) => {
+								settingsReturn.current = event.currentTarget;
+								setSettingsOpen(true);
+							}}
+						>
+							<Settings size={18} aria-hidden="true" />
+						</Button>
 					</div>
 				</header>
 				{panelState.storageFailed && (
@@ -567,6 +537,31 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					/>
 				</main>
 			</div>
+			<SettingsDialog
+				open={settingsOpen}
+				onOpenChange={setSettingsOpen}
+				workspace={workspace}
+				conversation={selected}
+				onRestoreFocus={() => {
+					const target = settingsReturn.current;
+					if (target?.isConnected && target.getClientRects().length) target.focus();
+					else settingsToolbarTrigger.current?.focus();
+				}}
+				onOpenConversation={() => setSettingsOpen(false)}
+				credentialSettings={<ModelSettings />}
+				workspaceActions={
+					workspace ? <ToolPacksDialog key={workspace.workspaceId} workspaceId={workspace.workspaceId} /> : undefined
+				}
+				runtimeActions={
+					<ConnectionActions
+						disconnect={() => guard(disconnect)}
+						onOpen={(opened, item) => {
+							cache.setQueryData(["workspace", opened.workspaceId], opened);
+							selectConversation(item, () => setSettingsOpen(false));
+						}}
+					/>
+				}
+			/>
 			<Dialog
 				open={!!leave}
 				onOpenChange={(open) => {

@@ -1,6 +1,6 @@
 import { type Conversation, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { Ellipsis } from "lucide-react";
+import { Archive, ArchiveRestore, Ellipsis, Info, Pencil } from "lucide-react";
 import { type RefObject, useId, useRef, useState, useSyncExternalStore } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -9,6 +9,8 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { Input } from "../../components/ui/input.tsx";
@@ -117,11 +119,17 @@ export function ConversationActions({
 				</DropdownMenuTrigger>
 				<DropdownMenuContent
 					align="end"
+					className="conversation-action-menu"
 					onCloseAutoFocus={(event) => {
 						if (action || previewSelected.current) event.preventDefault();
 						previewSelected.current = false;
 					}}
 				>
+					<DropdownMenuLabel className="conversation-action-context">
+						<span>{l.actions}</span>
+						<span className="conversation-action-title">{conversation.title}</span>
+					</DropdownMenuLabel>
+					<DropdownMenuSeparator />
 					{onPreview && (
 						<DropdownMenuItem
 							onSelect={() => {
@@ -129,6 +137,7 @@ export function ConversationActions({
 								onPreview();
 							}}
 						>
+							<Info size={15} aria-hidden="true" />
 							{l.preview}
 						</DropdownMenuItem>
 					)}
@@ -139,12 +148,19 @@ export function ConversationActions({
 							setAction("rename");
 						}}
 					>
+						<Pencil size={15} aria-hidden="true" />
 						{l.rename}
 					</DropdownMenuItem>
+					<DropdownMenuSeparator />
 					<DropdownMenuItem
 						disabled={disabled}
 						onSelect={() => setAction(conversation.archivedAt === null ? "archive" : "restore")}
 					>
+						{conversation.archivedAt === null ? (
+							<Archive size={15} aria-hidden="true" />
+						) : (
+							<ArchiveRestore size={15} aria-hidden="true" />
+						)}
 						{l[conversation.archivedAt === null ? "archive" : "restore"]}
 					</DropdownMenuItem>
 				</DropdownMenuContent>

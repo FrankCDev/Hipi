@@ -45,7 +45,9 @@ vi.mock("../src/features/workbench/conversation-composer.tsx", () => ({
 	),
 }));
 vi.mock("../src/features/workbench/conversation-receipt.tsx", () => ({ ConversationReceipt: () => null }));
-vi.mock("../src/features/agent-permissions/agent-permissions.tsx", () => ({ AgentPermissions: () => null }));
+vi.mock("../src/features/conversation-capabilities/conversation-capabilities.tsx", () => ({
+	ConversationCapabilities: () => null,
+}));
 
 const conversation = {
 	workspaceId: "workspace",

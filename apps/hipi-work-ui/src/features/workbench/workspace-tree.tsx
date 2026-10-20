@@ -6,7 +6,6 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
@@ -47,6 +46,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const { t, locale } = usePreferences();
 	const regionId = useId();
 	const headingId = useId();
+	const filterName = useId();
 	const expanded = props.isExpanded(workspace.workspaceId);
 	const [cursor, setCursor] = useState<string | undefined>();
 	const [filter, setFilter] = useState<"active" | "archived">("active");
@@ -85,16 +85,21 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						<PopoverHeader>
 							<PopoverTitle>{workspace.name}</PopoverTitle>
 						</PopoverHeader>
-						<dl className="conversation-preview-metadata">
-							<dt>{t("common.workspaceId")}</dt>
-							<dd>{workspace.workspaceId}</dd>
-							{conversations.isSuccess && (
-								<>
-									<dt>{cl.loaded}</dt>
-									<dd>{new Intl.NumberFormat(locale).format(conversations.data.items.length)}</dd>
-								</>
-							)}
-						</dl>
+						{conversations.isSuccess && (
+							<dl className="conversation-preview-summary">
+								<dt>{cl.filter}</dt>
+								<dd>{filter === "active" ? cl.active : cl.archived}</dd>
+								<dt>{cl.loaded}</dt>
+								<dd>{new Intl.NumberFormat(locale).format(conversations.data.items.length)}</dd>
+							</dl>
+						)}
+						<details className="preview-identifiers">
+							<summary>{cl.identifiers}</summary>
+							<dl className="conversation-preview-metadata">
+								<dt>{t("common.workspaceId")}</dt>
+								<dd>{workspace.workspaceId}</dd>
+							</dl>
+						</details>
 					</>
 				)}
 			>
@@ -109,10 +114,13 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 					<span className="project-chevron" data-expanded={expanded}>
 						<Icon name="chevron" size={12} />
 					</span>
-					<Icon name="folder" size={16} />
+					<span className="project-icon">
+						<Icon name="folder" size={16} />
+					</span>
 					<span className="project-name">{workspace.name}</span>
 					{conversations.isSuccess && (
-						<span className="subtle-count">
+						<span className="subtle-count project-page-count">
+							<span className="sr-only">{cl.loaded}: </span>
 							{new Intl.NumberFormat(locale).format(conversations.data.items.length)}
 						</span>
 					)}
@@ -125,23 +133,34 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				/>
 			</SidebarPreviewRow>
 			<section id={regionId} aria-labelledby={headingId} hidden={!expanded} className="project-conversations">
-				<Select
-					value={filter}
-					onValueChange={(value) => {
-						if (value === "active" || value === "archived") {
-							setFilter(value);
-							setCursor(undefined);
-						}
-					}}
-				>
-					<SelectTrigger aria-label={cl.filter} className="conversation-filter" size="sm">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="active">{cl.active}</SelectItem>
-						<SelectItem value="archived">{cl.archived}</SelectItem>
-					</SelectContent>
-				</Select>
+				<div className="project-list-toolbar">
+					<fieldset className="conversation-filter-tabs">
+						<legend className="sr-only">{cl.filter}</legend>
+						{(["active", "archived"] as const).map((value) => (
+							<label key={value} className="conversation-filter-tab" data-selected={filter === value}>
+								<input
+									type="radio"
+									className="sr-only"
+									name={filterName}
+									value={value}
+									aria-label={cl[value]}
+									checked={filter === value}
+									onChange={() => {
+										setFilter(value);
+										setCursor(undefined);
+									}}
+								/>
+								<span>{cl[value === "active" ? "activeShort" : "archivedShort"]}</span>
+							</label>
+						))}
+					</fieldset>
+					{conversations.isSuccess && (
+						<p className="project-page-summary">
+							<span>{props.search.trim() ? cl.pageMatches : cl.loaded}</span>
+							<span>{new Intl.NumberFormat(locale).format(visible.length)}</span>
+						</p>
+					)}
+				</div>
 				{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
 				{expanded && conversations.isError && (
 					<div className="nav-feedback" role="alert">
@@ -185,10 +204,15 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 					</ul>
 				)}
 				{expanded && conversations.isSuccess && visible.length === 0 && (
-					<p className="nav-feedback">{t(props.search.trim() ? "nav.noResults" : "nav.empty")}</p>
+					<div className="nav-feedback nav-empty-state">
+						<p>
+							{props.search.trim() ? t("nav.noResults") : filter === "archived" ? cl.emptyArchived : t("nav.empty")}
+						</p>
+						{!props.search.trim() && filter === "active" && <p className="nav-empty-hint">{cl.emptyHint}</p>}
+					</div>
 				)}
 				{expanded && !!(cursor || conversations.data?.nextCursor) && (
-					<div className="flex gap-1">
+					<div className="project-pagination">
 						<Button
 							variant="ghost"
 							size="sm"

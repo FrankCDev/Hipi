@@ -20,6 +20,11 @@ const diagnosticLabels = [
 	"Model status",
 	"Refresh model status",
 	"Agent file permissions",
+	"Conversation capabilities",
+	"Close settings",
+	"Appearance & language",
+	"Models & credentials",
+	"Runtime & data",
 	"Refresh permissions",
 	"Authorize model context",
 	"Rename conversation",
@@ -40,7 +45,8 @@ export function diagnosticTarget(selector, text) {
 	const label = selector.match(/\[aria-label="([^"]+)"\]/)?.[1];
 	if (diagnosticLabels.includes(label)) return label;
 	if (label?.startsWith("Conversation actions: ")) return "Conversation actions";
-	if (selector === ".permission-controls button") return "Agent file permissions";
+	if (selector === ".capabilities-trigger") return "Conversation capabilities";
+	if ([".sidebar-settings-trigger", ".workbench-settings-trigger"].includes(selector)) return "Workbench settings";
 	return "unrecognized target";
 }
 export async function evaluate(cdp, expression) {
@@ -94,6 +100,22 @@ export async function click(cdp, selector, text, milliseconds = 30000) {
 	await cdp.request("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
 	await cdp.request("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", clickCount: 1 });
 }
+export async function hover(cdp, selector) {
+	const point = await until(
+		() =>
+			evaluate(
+				cdp,
+				`(() => {
+		const nodes = [...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.getClientRects().length);
+		if(nodes.length !== 1) return null;
+		const e=nodes[0], r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+		return e.contains(document.elementFromPoint(x,y)) ? {x,y} : null;
+	})()`,
+			),
+		"unobstructed hover target",
+	);
+	await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+}
 async function fill(cdp, selector, value) {
 	await click(cdp, selector);
 	await cdp.request("Input.insertText", { text: value });
@@ -134,19 +156,47 @@ async function waitForSelectClosed(cdp, selector) {
 		"select closed and original combobox focus restored",
 	);
 }
+export async function openAppearance(cdp, trigger = ".workbench-settings-trigger") {
+	await click(cdp, trigger);
+	await until(
+		() => evaluate(cdp, `!!document.querySelector('.unified-settings-dialog[role="dialog"]')`),
+		"settings modal",
+	);
+	const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
+	await click(cdp, ".settings-page-nav button", english ? "Appearance & language" : "外观与语言");
+}
+export async function setAppearanceChoice(cdp, field, value) {
+	const choice = await appearanceChoice(cdp, field);
+	await click(cdp, choice.selector);
+	await click(cdp, '[role="option"]', value);
+	await waitForSelectClosed(cdp, choice.selector);
+}
+export async function saveAppearance(cdp) {
+	const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
+	await click(cdp, ".settings-savebar button", english ? "Save" : "保存");
+	await until(
+		() => evaluate(cdp, `!!document.querySelector('.settings-feedback')?.textContent.trim()`),
+		"appearance saved feedback",
+	);
+}
+export async function setWorkbenchPreferences(cdp, locale, mode) {
+	await openAppearance(cdp);
+	await setAppearanceChoice(cdp, "language", locale === "en" ? "English" : "简体中文");
+	const labels =
+		locale === "en"
+			? { light: "Light", dark: "Dark", system: "Follow system" }
+			: { light: "浅色", dark: "深色", system: "跟随系统" };
+	await setAppearanceChoice(cdp, "theme", labels[mode]);
+	await saveAppearance(cdp);
+	await dismissTo(cdp, ".workbench-settings-trigger");
+	await until(() => evaluate(cdp, `document.documentElement.lang === ${JSON.stringify(locale)}`), "saved locale");
+}
 export async function selectEnglish(cdp) {
-	await click(cdp, 'button[aria-label="Workbench settings"], button[aria-label="工作台设置"]');
-	await until(
-		() => evaluate(cdp, `!!document.querySelector('.workbench-settings[role="dialog"]')`),
-		"workbench settings",
-	);
-	if (await evaluate(cdp, `!!document.querySelector('.workbench-settings button[aria-label="Switch to English"]')`))
-		await click(cdp, '.workbench-settings button[aria-label="Switch to English"]');
-	await until(
-		() => evaluate(cdp, `!!document.querySelector('.workbench-settings button[aria-label="切换到中文"]')`),
-		"English selected",
-	);
-	await dismissTo(cdp, 'button[aria-label="Workbench settings"]');
+	await openAppearance(cdp);
+	await setAppearanceChoice(cdp, "language", "English");
+	await saveAppearance(cdp);
+	await dismissTo(cdp, ".workbench-settings-trigger");
+	await until(() => evaluate(cdp, `document.documentElement.lang === 'en'`), "English selected");
 }
 export async function assertNoAlerts(cdp) {
 	const alerts = await evaluate(
@@ -159,15 +209,17 @@ export function resolvedTheme(mode, systemDark) {
 	assert.ok(["Light", "Dark", "Follow system"].includes(mode), "Unknown appearance mode");
 	return mode === "Follow system" ? (systemDark ? "dark" : "light") : mode.toLowerCase();
 }
-export async function appearanceChoice(cdp) {
+export async function appearanceChoice(cdp, field = "theme") {
+	assert.ok(["theme", "language"].includes(field));
+	const labels = field === "theme" ? ["Theme", "主题"] : ["Language", "语言"];
 	return until(
 		() =>
 			evaluate(
 				cdp,
 				`(() => {
-		const dialog = document.querySelector('.settings-dialog[role="dialog"]');
+		const dialog = document.querySelector('.unified-settings-dialog[role="dialog"]');
 		if (!dialog) return null;
-		const labels = [...dialog.querySelectorAll('label')].filter(e => e.textContent.trim() === 'Theme');
+		const labels = [...dialog.querySelectorAll('label')].filter(e => ${JSON.stringify(labels)}.includes(e.textContent.trim()));
 		if (labels.length !== 1) return null;
 		const control = document.getElementById(labels[0].htmlFor);
 		if (!control || control.getAttribute('role') !== 'combobox') return null;
@@ -177,57 +229,43 @@ export async function appearanceChoice(cdp) {
 		"appearance theme choice",
 	);
 }
-async function closeAppearance(cdp) {
-	await pressKey(cdp, "Escape");
-	await waitAppearanceClosed(cdp);
-}
-async function waitAppearanceClosed(cdp) {
-	await until(
-		() =>
-			evaluate(
-				cdp,
-				`!document.querySelector('.settings-dialog') && !!document.querySelector('.workbench-settings[role="dialog"]') && [...document.querySelectorAll('.workbench-settings button')].some(e => e.textContent.trim() === 'Appearance and language' && e === document.activeElement)`,
-			),
-		"nested appearance closed with parent and trigger focus retained",
-	);
-}
 async function inspectTheme(cdp, directory, reopened) {
-	const settings = 'button[aria-label="Workbench settings"]';
-	const toggle = '.workbench-settings button[aria-label="Toggle light / dark theme"]';
+	const settings = ".workbench-settings-trigger";
 	const originalResolved = await evaluate(cdp, "document.documentElement.dataset.theme");
-	assert.ok(["light", "dark"].includes(originalResolved), "Appearance resolved theme must be light or dark");
-	await click(cdp, settings);
-	await click(cdp, ".workbench-settings button", "Appearance and language");
+	assert.ok(["light", "dark"].includes(originalResolved));
+	await openAppearance(cdp, ".sidebar-settings-trigger");
 	const original = await appearanceChoice(cdp);
-	resolvedTheme(original.mode, false); // Reject unknown mode labels before changing anything.
-	await assertNoAlerts(cdp);
-	await closeAppearance(cdp);
-	if (originalResolved === "dark") {
-		await click(cdp, toggle);
-		await until(
-			() => evaluate(cdp, `document.documentElement.dataset.theme === 'light'`),
-			"theme button light transition",
-		);
-	}
-	await click(cdp, toggle);
-	await until(() => evaluate(cdp, `document.documentElement.dataset.theme === 'dark'`), "theme button dark transition");
-	await dismissTo(cdp, settings);
+	resolvedTheme(original.mode, false);
+	// A select is the nested overlay now. Escape must restore its actual combobox.
+	await click(cdp, original.selector);
+	await pressKey(cdp, "Escape");
+	await waitForSelectClosed(cdp, original.selector);
+	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
+	await click(cdp, ".settings-savebar button", "Cancel");
+	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Cancel must restore the saved preference");
+	await until(
+		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(originalResolved)}`),
+		"cancelled preview restored",
+	);
+	await setAppearanceChoice(cdp, "theme", "Dark");
+	await saveAppearance(cdp);
+	await dismissTo(cdp, ".sidebar-settings-trigger");
+	await until(() => evaluate(cdp, `document.documentElement.dataset.theme === 'dark'`), "saved dark theme");
 	await assertNoAlerts(cdp);
 	await capture(cdp, directory, reopened ? "dark-reopened" : "dark-completed");
-	// Toggle saves an explicit mode. Restore the original system/light/dark preference through the form.
-	await click(cdp, settings);
-	await click(cdp, ".workbench-settings button", "Appearance and language");
-	const current = await appearanceChoice(cdp);
-	await click(cdp, current.selector);
-	await click(cdp, '[role="option"]', original.mode);
-	await waitForSelectClosed(cdp, current.selector);
-	await click(cdp, ".settings-dialog button", "Save");
-	await waitAppearanceClosed(cdp);
-	await click(cdp, ".workbench-settings button", "Appearance and language");
+	await openAppearance(cdp, settings);
+	assert.equal((await appearanceChoice(cdp)).mode, "Dark", "Saved mode must survive closing and reopening settings");
+	await setAppearanceChoice(cdp, "theme", original.mode);
+	await saveAppearance(cdp);
+	const geometry = await inspectModal(cdp, ".unified-settings-dialog", "center");
+	await click(cdp, '.unified-settings-dialog button[data-slot="dialog-close"]');
+	await waitForOverlayClosed(cdp, settings);
+	await openAppearance(cdp);
 	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
-	const geometry = await inspectModal(cdp, ".settings-dialog", "center");
-	await click(cdp, '.settings-dialog button[data-slot="dialog-close"]');
-	await waitAppearanceClosed(cdp);
+	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
+	await dismissTo(cdp, settings);
+	await openAppearance(cdp);
+	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Closing settings must cancel unsaved preview");
 	await dismissTo(cdp, settings);
 	const expected = resolvedTheme(
 		original.mode,
@@ -242,8 +280,10 @@ async function inspectTheme(cdp, directory, reopened) {
 		originalResolved,
 		restoredResolved: expected,
 		darkCaptured: true,
-		nestedEscapeFocus: true,
-		nestedMouseCloseFocus: true,
+		selectEscapeFocus: true,
+		sidebarEscapeFocus: true,
+		toolbarMouseCloseFocus: true,
+		cancelledPreviewRestored: true,
 		geometry,
 	};
 }
@@ -258,8 +298,8 @@ export async function modalBounds(cdp, selector, milliseconds = 30000, placement
 		const dialog = document.querySelector(${JSON.stringify(selector)});
 		if (!dialog) return null;
 		const closes = [...dialog.querySelectorAll('button[data-slot="dialog-close"]')];
-		const body = dialog.querySelector('[data-slot="dialog-body"]');
-		const title = dialog.querySelector('[data-slot="dialog-title"]');
+		const body = dialog.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-content" : '[data-slot="dialog-body"]')});
+		const title = dialog.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-header h2" : '[data-slot="dialog-title"]')});
 		if (closes.length !== 1 || !body || !title) return null;
 		const close = closes[0];
 		const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; };
@@ -305,7 +345,7 @@ export async function modalWheelPoint(cdp, selector) {
 	const point = await evaluate(
 		cdp,
 		`(() => {
-		const body=document.querySelector(${JSON.stringify(selector)})?.querySelector('[data-slot="dialog-body"]');
+		const body=document.querySelector(${JSON.stringify(selector)})?.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-content" : '[data-slot="dialog-body"]')});
 		if(!body)return null;
 		const r=body.getBoundingClientRect();
 		for(const y of [r.y+r.height/2,r.y+4,r.y+r.height-4])for(const x of [r.x+r.width/2,r.x+4,r.x+r.width-4]){
@@ -338,28 +378,26 @@ async function inspectControls(cdp) {
 	);
 	await assertNoAlerts(cdp);
 	await dismissTo(cdp, 'button[aria-label="Model status"]');
-	await click(cdp, ".permission-controls button", "Agent file permissions");
+	await click(cdp, ".capabilities-trigger");
+	await click(cdp, '.capabilities-navigation button[data-section="files"]');
 	await until(
 		() =>
-			evaluate(
-				cdp,
-				`document.querySelector('.permission-detail-dialog')?.textContent.includes('Authorize model context')`,
-			),
+			evaluate(cdp, `document.querySelector('.capabilities-dialog')?.textContent.includes('Authorize model context')`),
 		"permission details contents",
 	);
 	assert.ok(
 		await evaluate(
 			cdp,
-			`[...document.querySelectorAll('.permission-detail-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
+			`[...document.querySelectorAll('.capabilities-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
 		),
 		"Permission dialog must contain Refresh permissions",
 	);
 	await assertNoAlerts(cdp);
-	const permissionGeometry = await inspectModal(cdp, ".permission-detail-dialog");
-	await click(cdp, ".permission-detail-dialog button", "Close");
-	await waitForOverlayClosed(cdp, ".permission-controls button", "Agent file permissions");
-	await click(cdp, ".permission-controls button", "Agent file permissions");
-	await dismissTo(cdp, ".permission-controls button");
+	const permissionGeometry = await inspectModal(cdp, ".capabilities-dialog");
+	await click(cdp, '.capabilities-dialog button[data-slot="dialog-close"]');
+	await waitForOverlayClosed(cdp, ".capabilities-trigger");
+	await click(cdp, ".capabilities-trigger");
+	await dismissTo(cdp, ".capabilities-trigger");
 	const actions = `header button[aria-label="Conversation actions: ${fixture.conversation}"]`;
 	await click(cdp, actions);
 	await pressKey(cdp, "Home");
@@ -387,6 +425,7 @@ async function inspectControls(cdp) {
 		"Cancelled rename must preserve conversation title",
 	);
 	const sidebarActions = `.conversation-nav-item button[aria-label="Conversation actions: ${fixture.conversation}"]`;
+	await hover(cdp, ".conversation-link");
 	await click(cdp, sidebarActions);
 	await click(cdp, '[role="menuitem"]', "View details");
 	await until(
@@ -543,7 +582,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		{ bridge: "function", node: "undefined", process: "undefined" },
 		"Renderer must use preload bridge without Node globals",
 	);
-	// Settings is a real popover; absence of its language button is not evidence of English.
+	// Set and save the actual language preference through the settings form.
 	await selectEnglish(cdp);
 	await until(() => evaluate(cdp, `!!document.querySelector('button[aria-label="New workspace"]')`), "English labels");
 	if (reopened) {
@@ -582,7 +621,22 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		);
 		const workExperience = await exerciseWorkExperience(
 			cdp,
-			{ evaluate, click, until, pressKey, capture, waitForOverlayClosed, appearanceChoice, assertNoAlerts },
+			{
+				evaluate,
+				click,
+				until,
+				pressKey,
+				capture,
+				waitForOverlayClosed,
+				appearanceChoice,
+				assertNoAlerts,
+				openAppearance,
+				setWorkbenchPreferences,
+				setAppearanceChoice,
+				saveAppearance,
+				inspectModal,
+				hover,
+			},
 			directory,
 			{ reopened: true },
 		);
@@ -686,7 +740,22 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	const workExperience = await exerciseWorkExperience(
 		cdp,
-		{ evaluate, click, until, pressKey, capture, waitForOverlayClosed, appearanceChoice, assertNoAlerts },
+		{
+			evaluate,
+			click,
+			until,
+			pressKey,
+			capture,
+			waitForOverlayClosed,
+			appearanceChoice,
+			assertNoAlerts,
+			openAppearance,
+			setWorkbenchPreferences,
+			setAppearanceChoice,
+			saveAppearance,
+			inspectModal,
+			hover,
+		},
 		directory,
 	);
 	return {

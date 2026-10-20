@@ -14,14 +14,25 @@ export const packageText = JSON.stringify(
 	2,
 );
 export const packageDigest = createHash("sha256").update(packageText).digest("hex");
-const dialog = '[role="dialog"]:has(> [data-slot="dialog-title"])';
+const dialog = '.capabilities-dialog[role="dialog"]';
+const panel = `${dialog} .capabilities-section[data-section="tool-packs"]`;
 
 // Runs in the renderer, reads only public DOM, and returns selectors rather than modifying nodes.
 export function readToolPacks(document, selector) {
 	const matches = [...document.querySelectorAll(selector)];
 	if (matches.length !== 1) return null;
 	const root = matches[0];
-	if (root.querySelector("h2")?.textContent !== "Tool packs") return null;
+	const shell = root.closest('.capabilities-dialog[role="dialog"]');
+	const navigation = shell?.querySelector('.capabilities-navigation button[data-section="tool-packs"]');
+	if (
+		!shell ||
+		document.querySelectorAll('[role="dialog"]').length !== 1 ||
+		shell.querySelector('[data-slot="dialog-title"]')?.textContent !== "Conversation capabilities" ||
+		root.querySelector(":scope > .capabilities-section-heading > h3")?.textContent !== "Tool packs" ||
+		navigation?.getAttribute("aria-current") !== "page" ||
+		navigation.getAttribute("aria-controls") !== root.id
+	)
+		return null;
 	const path = (node) => {
 		const parts = [];
 		while (node !== root) {
@@ -78,24 +89,24 @@ export function bindingCard(state, status) {
 }
 
 export async function closeToolPacks(cdp, { click, pressKey, until, evaluate }, mouse = false) {
-	if (mouse) await click(cdp, '.tool-packs-dialog button[data-slot="dialog-close"]');
+	if (mouse) await click(cdp, `${dialog} button[data-slot="dialog-close"]`);
 	else await pressKey(cdp, "Escape");
 	await until(
 		() =>
 			evaluate(
 				cdp,
-				`!document.querySelector(${JSON.stringify(dialog)}) && [...document.querySelectorAll('.workbench-settings button')].some(e => e === document.activeElement && e.textContent.trim() === 'Tool packs')`,
+				`(() => { const triggers = [...document.querySelectorAll('button.capabilities-trigger')]; return !document.querySelector('[role="dialog"]') && triggers.length === 1 && document.activeElement === triggers[0]; })()`,
 			),
-		"tool packs parent focus",
+		"capabilities closed and actual trigger focus restored",
 	);
 }
 
 // Call once after the baseline completed screenshot; call read-only reopened mode after cold restart.
 // expectedScope must come from the existing receipt's workspace-id/conversation-id DOM, not a bridge RPC.
 export async function exerciseToolPacks(cdp, helpers, directory, { reopened = false, expectedScope }) {
-	const { click, evaluate, until, pressKey, assertNoAlerts, capture, inspectModal } = helpers;
+	const { click, evaluate, until, assertNoAlerts, capture, inspectModal } = helpers;
 	assert.ok(expectedScope?.workspaceId && expectedScope?.conversationId, "Receipt scope required");
-	const read = () => evaluate(cdp, `(${readToolPacks.toString()})(document, ${JSON.stringify(dialog)})`);
+	const read = () => evaluate(cdp, `(${readToolPacks.toString()})(document, ${JSON.stringify(panel)})`);
 	const ready = async () =>
 		until(async () => {
 			await assertNoAlerts(cdp);
@@ -112,31 +123,22 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 			}
 		}, `${kind} persisted ${status}`);
 	const button = (card, label) => click(cdp, `${card.selector} button`, label);
-	const close = async () => {
-		await closeToolPacks(cdp, helpers);
-		await pressKey(cdp, "Escape");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!document.querySelector('[role="dialog"]') && document.activeElement === document.querySelector('button[aria-label="Workbench settings"]')`,
-				),
-			"settings focus",
-		);
+	const open = async () => {
+		await click(cdp, ".capabilities-trigger");
+		await click(cdp, `${dialog} .capabilities-navigation button[data-section="tool-packs"]`);
+		await ready();
 	};
-	await click(cdp, 'button[aria-label="Workbench settings"]');
-	await click(cdp, ".workbench-settings button", "Tool packs");
-	await ready();
+	await open();
 	let activeGeometry;
 	if (!reopened) {
 		assert.equal((await read()).cards.length, 0, "Fresh profile must have no packages or bindings");
-		await click(cdp, `${dialog} textarea:not([readonly])`);
+		await click(cdp, `${panel} textarea:not([readonly])`);
 		await cdp.request("Input.insertText", { text: packageText });
 		assert.equal((await read()).input, packageText);
-		await click(cdp, `${dialog} button`, "Validate and preview");
+		await click(cdp, `${panel} button`, "Validate and preview");
 		await until(async () => (await ready()).text.includes(packageDigest), "exact source digest preview");
 		assert.equal((await read()).cards.length, 0, "Preview must not install or authorize");
-		await click(cdp, `${dialog} button`, "Install this version");
+		await click(cdp, `${panel} button`, "Install this version");
 		const disabled = await waitCard("pack", "Disabled");
 		assert.equal(disabled.buttons.find((b) => b.text === "Authorize live access")?.disabled, true);
 		assert.equal((await read()).cards.length, 1, "Install must not create a binding");
@@ -163,16 +165,16 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		}, "explicit consent recorded");
 		await click(cdp, `${disclosure.selector} button`, "Authorize live access");
 		await waitCard("binding", "Active");
-		activeGeometry = await inspectModal(cdp, ".tool-packs-dialog", "center");
+		activeGeometry = await inspectModal(cdp, ".capabilities-dialog", "right");
 		await capture(cdp, directory, "tool-packs-active");
 		await closeToolPacks(cdp, helpers, true);
-		await click(cdp, ".workbench-settings button", "Tool packs");
+		await open();
 		await button(await waitCard("binding", "Active"), "Revoke");
 		await until(
 			async () => (await ready()).cards.every((c) => c.paragraphs[0] !== "Live tool access"),
 			"revoked binding absent from active view",
 		);
-		await click(cdp, `${dialog} button`, "Binding history");
+		await click(cdp, `${panel} button`, "Binding history");
 		await waitCard("binding", "Revoked");
 		await button(await waitCard("pack", "Enabled"), "Disable");
 		await button(await waitCard("pack", "Disabled"), "Uninstall");
@@ -180,19 +182,19 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 	const uninstalled = await waitCard("pack", "Uninstalled");
 	assert.equal(uninstalled.buttons.find((b) => b.text === "Enable")?.disabled, true);
 	assert.equal(uninstalled.buttons.find((b) => b.text === "Authorize live access")?.disabled, true);
-	await click(cdp, `${dialog} button`, "Binding history");
+	await click(cdp, `${panel} button`, "Binding history");
 	const revoked = await waitCard("binding", "Revoked");
 	assert.equal(revoked.buttons.find((b) => b.text === "Revoke")?.disabled, true);
 	await button(uninstalled, "Read full source");
 	await until(async () => (await ready()).source === packageText, "uninstalled exact source retained");
-	await click(cdp, `${dialog} button`, "Active conversation bindings");
+	await click(cdp, `${panel} button`, "Active conversation bindings");
 	assert.equal((await ready()).cards.filter((c) => c.paragraphs[0] === "Live tool access").length, 0);
-	await click(cdp, `${dialog} button`, "Binding history");
+	await click(cdp, `${panel} button`, "Binding history");
 	await waitCard("binding", "Revoked");
 	await assertNoAlerts(cdp);
-	const retainedGeometry = await inspectModal(cdp, ".tool-packs-dialog", "center");
+	const retainedGeometry = await inspectModal(cdp, ".capabilities-dialog", "right");
 	await capture(cdp, directory, reopened ? "tool-packs-reopened" : "tool-packs-uninstalled");
-	await close();
+	await closeToolPacks(cdp, helpers);
 	return {
 		digest: packageDigest,
 		scope: expectedScope,

@@ -28,6 +28,7 @@ export function workExperienceGeometry(document, viewport) {
 					y: rect.y,
 					width: rect.width,
 					height: rect.height,
+					disabled: node.disabled === true,
 					hit: node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)),
 				},
 			];
@@ -48,7 +49,10 @@ export function assertWorkExperienceGeometry(state) {
 				rect.y + rect.height <= state.height + 1,
 			`${name} escapes the visible viewport`,
 		);
-		if (["input", "submit", "model", "permissions"].includes(name)) assert.equal(rect.hit, true, `${name} is covered`);
+		if (["input", "submit", "model", "permissions"].includes(name)) {
+			assert.equal(rect.disabled, false, `${name} must be actionable during draft layout acceptance`);
+			assert.equal(rect.hit, true, `${name} is covered`);
+		}
 	}
 	const { input, submit, composer, toolbar } = state.regions;
 	assert.ok(input.y >= toolbar.y + toolbar.height, "Composer overlaps toolbar");
@@ -85,8 +89,23 @@ export async function nativeEditorKey(
 }
 
 export async function exerciseWorkExperience(cdp, helpers, directory, { reopened = false } = {}) {
-	const { evaluate, click, until, pressKey, capture, waitForOverlayClosed, appearanceChoice, assertNoAlerts } = helpers;
-	const settings = 'button[aria-label="Workbench settings"],button[aria-label="工作台设置"]';
+	const {
+		evaluate,
+		click,
+		until,
+		pressKey,
+		capture,
+		waitForOverlayClosed,
+		appearanceChoice,
+		assertNoAlerts,
+		openAppearance,
+		setWorkbenchPreferences,
+		setAppearanceChoice,
+		saveAppearance,
+		inspectModal,
+		hover,
+	} = helpers;
+	const settings = ".workbench-settings-trigger";
 	const files = 'header button[aria-label="Show files"]';
 	const readDraft = () => evaluate(cdp, "document.querySelector('.composer textarea').value");
 	const readKeys = () =>
@@ -96,13 +115,11 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 	const originalKeys = await readKeys();
 	assert.equal(await readDraft(), "", "Layout acceptance requires the completed baseline's empty composer");
+	assert.equal(await evaluate(cdp, `document.querySelector('.composer button[type="submit"]').disabled`), true);
 	assert.equal(await evaluate(cdp, "document.querySelectorAll('.file-workbench').length"), 0);
 	assert.equal(await evaluate(cdp, "document.querySelector('.work-shell').dataset.navigationCollapsed"), "false");
-	await click(cdp, settings);
-	await click(cdp, ".workbench-settings button", "Appearance and language");
+	await openAppearance(cdp);
 	const originalMode = (await appearanceChoice(cdp)).mode;
-	await pressKey(cdp, "Escape");
-	await until(() => evaluate(cdp, "!document.querySelector('.settings-dialog')"), "appearance closed");
 	await pressKey(cdp, "Escape");
 	await waitForOverlayClosed(cdp, settings);
 	const samples = [];
@@ -122,17 +139,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 	}
 	async function preferences(locale, theme) {
-		await click(cdp, settings);
-		const language = locale === "en" ? "Switch to English" : "切换到中文";
-		if (await evaluate(cdp, `!!document.querySelector('.workbench-settings button[aria-label="${language}"]')`))
-			await click(cdp, `.workbench-settings button[aria-label="${language}"]`);
-		if (await evaluate(cdp, `document.documentElement.dataset.theme !== ${JSON.stringify(theme)}`))
-			await click(
-				cdp,
-				'.workbench-settings button[aria-label="Toggle light / dark theme"],.workbench-settings button[aria-label="切换明暗主题"]',
-			);
-		await pressKey(cdp, "Escape");
-		await waitForOverlayClosed(cdp, settings);
+		await setWorkbenchPreferences(cdp, locale, theme);
 		await until(
 			() =>
 				evaluate(
@@ -143,11 +150,102 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 	}
 	try {
+		// Disabled buttons intentionally ignore pointer hit testing. Exercise actionable layout
+		// with a real draft instead of weakening the center-hit gate for the send control.
+		const retainedDraft = "保留草稿 / retained draft";
+		assert.equal(
+			await evaluate(
+				cdp,
+				`(() => { window.__hipiGuiRetainedConversation = document.querySelector('.conversation-panel'); return !!window.__hipiGuiRetainedConversation; })()`,
+			),
+			true,
+		);
+		await click(cdp, ".composer textarea");
+		await cdp.request("Input.insertText", { text: retainedDraft });
+		await click(cdp, ".sidebar-settings-trigger");
+		await until(
+			() => evaluate(cdp, `document.activeElement === document.querySelector('.settings-page-header h2')`),
+			"settings heading receives initial focus",
+		);
+		assert.equal((await appearanceChoice(cdp)).mode, originalMode);
+		await click(cdp, '.settings-page-nav button[data-category="models"]');
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'models' && document.querySelector('.settings-section:not([hidden])')?.textContent.includes('faux-1')`,
+				),
+			"actual model catalog in selected category",
+		);
+		assert.equal(
+			await evaluate(
+				cdp,
+				`(() => { const matches=[...document.querySelectorAll('.settings-section:not([hidden]) button')].filter(e => e.textContent.trim() === 'Model settings'); window.__hipiGuiCredentialTrigger = matches.length === 1 ? matches[0] : null; return !!window.__hipiGuiCredentialTrigger; })()`,
+			),
+			true,
+		);
+		await click(cdp, ".settings-section:not([hidden]) button", "Model settings");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!!document.querySelector('.model-settings-dialog') && !document.querySelector('.model-settings-dialog button[data-slot="dialog-close"]').disabled`,
+				),
+			"credential status read completed",
+		);
+		await pressKey(cdp, "Escape");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.unified-settings-dialog') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
+				),
+			"nested credentials restores exact trigger",
+		);
+		await click(cdp, '.settings-page-nav button[data-category="models"]');
+		await nativeEditorKey(cdp, "Tab");
+		assert.equal(await evaluate(cdp, `document.activeElement?.dataset.category`), "runtime");
+		await pressKey(cdp, "Enter");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'runtime' && document.querySelector('.settings-section:not([hidden])')?.textContent.includes('GUI 会话')`,
+				),
+			"keyboard runtime category with current conversation",
+		);
+		await inspectModal(cdp, ".unified-settings-dialog", "center");
+		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-runtime`);
+		await click(cdp, ".settings-section:not([hidden]) button", "Return to conversation");
+		await waitForOverlayClosed(cdp, ".sidebar-settings-trigger");
+		assert.equal(await readDraft(), retainedDraft, "Settings must retain the task draft");
+		assert.equal(
+			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
+			true,
+			"Settings must retain the conversation DOM identity",
+		);
+		assert.deepEqual(await readKeys(), originalKeys);
 		for (const item of reopened
 			? layoutCases.filter((item) => item.locale === "en" && item.theme === "light")
 			: layoutCases) {
 			await resize(item.width);
 			await preferences(item.locale, item.theme);
+			assert.equal(await readDraft(), retainedDraft, "Layout changes must retain the task draft");
+			assert.deepEqual(await readKeys(), originalKeys, "Layout changes must retain conversation identities");
+			if (
+				(item.width === 1440 && item.locale === "en" && item.theme === "light") ||
+				(item.width === 640 && item.locale === "zh-CN" && item.theme === "dark")
+			) {
+				await openAppearance(cdp);
+				await inspectModal(cdp, ".unified-settings-dialog", "center");
+				await capture(
+					cdp,
+					directory,
+					`work-experience-${reopened ? "reopened-" : ""}settings-${item.width}-${item.locale}-${item.theme}`,
+				);
+				await pressKey(cdp, "Escape");
+				await waitForOverlayClosed(cdp, settings);
+			}
 			const geometry = await evaluate(
 				cdp,
 				`(${workExperienceGeometry.toString()})(document,{width:innerWidth,height:innerHeight})`,
@@ -161,7 +259,53 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		await resize(1440);
 		await preferences("en", "light");
 		await click(cdp, ".composer textarea");
-		await cdp.request("Input.insertText", { text: "保留草稿 / retained draft" });
+		await hover(cdp, ".composer textarea");
+		await until(
+			() => evaluate(cdp, `!document.querySelector('.conversation-preview-card')`),
+			"sidebar default without hover card",
+		);
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`getComputedStyle(document.querySelector('.conversation-nav-item .conversation-actions-trigger')).opacity === '0'`,
+				),
+			"desktop sidebar actions hidden before hover or focus",
+		);
+		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}sidebar-default`);
+		await hover(cdp, ".conversation-link");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!!document.querySelector('.conversation-preview-card') && getComputedStyle(document.querySelector('.conversation-nav-item .conversation-actions-trigger')).opacity === '1'`,
+				),
+			"sidebar hover preview and actions",
+		);
+		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}sidebar-hover`);
+		await hover(cdp, ".composer textarea");
+		await until(
+			() => evaluate(cdp, `!document.querySelector('.conversation-preview-card')`),
+			"hover preview dismissed on pointer leave",
+		);
+		await click(cdp, ".conversation-link");
+		await nativeEditorKey(cdp, "Tab");
+		assert.ok(
+			await evaluate(
+				cdp,
+				`document.activeElement === document.querySelector('.conversation-nav-item .conversation-actions-trigger') && document.activeElement.matches(':focus-visible') && getComputedStyle(document.activeElement).opacity === '1'`,
+			),
+			"Sidebar actions must be keyboard discoverable",
+		);
+		await pressKey(cdp, "Enter");
+		await until(() => evaluate(cdp, `!!document.querySelector('[role="menu"]')`), "sidebar keyboard action menu");
+		await pressKey(cdp, "Escape");
+		await waitForOverlayClosed(cdp, ".conversation-nav-item .conversation-actions-trigger");
+		assert.equal(await readDraft(), retainedDraft);
+		assert.deepEqual(await readKeys(), originalKeys);
+		await click(cdp, ".composer textarea");
+		await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
+		await cdp.request("Input.insertText", { text: retainedDraft });
 		await until(
 			() => evaluate(cdp, `document.querySelector('.composer button[type="submit"]')?.disabled === false`),
 			"draft is eligible to submit before exercising the composition guard",
@@ -232,6 +376,11 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		await waitForOverlayClosed(cdp, files);
 		assert.equal(await readDraft(), draft);
 		assert.deepEqual(await readKeys(), originalKeys, "Responsive file canvas must retain conversation identities");
+		assert.equal(
+			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
+			true,
+			"File canvas must retain the conversation DOM identity",
+		);
 		await click(cdp, ".navigation-toggle");
 		await until(
 			() =>
@@ -254,6 +403,11 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		result = {
 			samples,
 			sidebarCollapse: true,
+			settingsCategories: true,
+			settingsKeyboardNavigation: true,
+			nestedCredentialsEscapeFocus: true,
+			settingsRetainedDraftAndConversation: true,
+			sidebarHoverAndKeyboardActions: true,
 			narrowNavigationEscapeFocus: true,
 			composerKeyboardFocus: true,
 			shiftEnterPreservedDraft: true,
@@ -295,17 +449,13 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
 			await nativeEditorKey(cdp, "Backspace");
 			assert.equal(await readDraft(), "", "Acceptance draft must be removed before restart");
-			await click(cdp, settings);
-			await click(cdp, ".workbench-settings button", "Appearance and language");
-			const choice = await appearanceChoice(cdp);
-			await click(cdp, choice.selector);
-			await click(cdp, '[role="option"]', originalMode);
-			await until(() => evaluate(cdp, `!document.querySelector('[role="option"]')`), "theme choice closed");
-			await click(cdp, ".settings-dialog button", "Save");
-			await until(() => evaluate(cdp, "!document.querySelector('.settings-dialog')"), "theme preference saved");
+			await openAppearance(cdp);
+			await setAppearanceChoice(cdp, "theme", originalMode);
+			await saveAppearance(cdp);
 			await pressKey(cdp, "Escape");
 			await waitForOverlayClosed(cdp, settings);
 			await cdp.request("Emulation.clearDeviceMetricsOverride");
+			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation; delete window.__hipiGuiCredentialTrigger");
 			assert.deepEqual(await readKeys(), originalKeys);
 		} catch (restoreError) {
 			failure = failure

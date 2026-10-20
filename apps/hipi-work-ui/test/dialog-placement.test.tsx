@@ -58,17 +58,21 @@ test("long centered dialogs opt into a bounded shell with heading and Close outs
 });
 
 test("all long management panels opt in without moving descriptions or forms outside the body", () => {
-	for (const file of [
-		"tool-packs/tool-packs-dialog.tsx",
-		"settings/appearance-settings.tsx",
-		"workbench/model-settings.tsx",
-	]) {
+	for (const file of ["settings/appearance-settings.tsx", "workbench/model-settings.tsx"]) {
 		const source = readFileSync(new URL(`../src/features/${file}`, import.meta.url), "utf8");
 		assert.match(source, /<DialogContent\s+scrollBody/);
 		assert.match(source, /<\/DialogTitle>\s*<DialogBody>\s*<DialogDescription/);
 		assert.match(source, /<\/DialogBody>\s*<\/DialogContent>/);
 		assert.doesNotMatch(source.match(/<DialogContent[^>]*>/)?.[0] ?? "", /overflow-y-auto/);
 	}
+	const packs = readFileSync(new URL("../src/features/tool-packs/tool-packs-dialog.tsx", import.meta.url), "utf8");
+	assert.match(packs, /<DialogContent\s+scrollBody/);
+	assert.match(packs, /<\/DialogTitle>\s*<DialogBody>\{content\}<\/DialogBody>\s*<\/DialogContent>/);
+	assert.ok(packs.indexOf("<ToolPacksPanel") < packs.indexOf("<Dialog open="));
+	const panel = readFileSync(new URL("../src/features/tool-packs/tool-packs-panel.tsx", import.meta.url), "utf8");
+	assert.match(panel, /return children\(\s*<div className="tool-packs-panel grid gap-4">/);
+	assert.match(panel, /toolPacks\.description/);
+	assert.doesNotMatch(panel, /<DialogContent|<DialogBody/);
 	const css = readFileSync(new URL("../src/theme.css", import.meta.url), "utf8");
 	assert.doesNotMatch(css.match(/\.settings-dialog\s*\{[^}]+\}/)?.[0] ?? "", /overflow/);
 });

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import { click } from "./gui-flow.mjs";
 import {
@@ -97,7 +98,7 @@ test("file and stdout redaction removes unknown user paths and environment value
 });
 
 test("native log reads only fixed owned files, bounds output and redacts sensitive lines", async () => {
-	const root = await realpath(await mkdtemp(join(tmpdir(), "hipi-native-log-")));
+	const root = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "hipi-native-log-")));
 	try {
 		assert.equal((await readNativeLog(root, 0, [root])).exists, false);
 		await writeFile(
@@ -116,6 +117,21 @@ test("native log reads only fixed owned files, bounds output and redacts sensiti
 		await rm(join(root, "chromium-0.log"));
 		await symlink(root, join(root, "chromium-0.log"), process.platform === "win32" ? "junction" : "dir");
 		await assert.rejects(readNativeLog(root, 0, []), /owned regular file/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("native log rejects noncanonical spellings and linked directories without exposing their paths", async () => {
+	const root = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "hipi-native-log-private-")));
+	try {
+		const alias = join(root, "linked-directory");
+		await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+		for (const directory of [`${root}${sep}.`, alias]) {
+			await assert.rejects(readNativeLog(directory, 0, []), {
+				message: "Native log directory must be exactly canonical",
+			});
+		}
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

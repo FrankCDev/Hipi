@@ -13,11 +13,57 @@ import {
 	readToolPacks,
 } from "./gui-tool-packs.mjs";
 
-test("mouse close targets only the fixed X and both close routes await actual parent focus", async () => {
+const dialog = '.capabilities-dialog[role="dialog"]';
+const panel = `${dialog} .capabilities-section[data-section="tool-packs"]`;
+
+function toolPackSurface() {
+	const heading = { textContent: "Tool packs" };
+	const title = { textContent: "Conversation capabilities" };
+	const attributes = { "aria-current": "page", "aria-controls": "capability-section" };
+	const navigation = { getAttribute: (name) => attributes[name] };
+	const shell = {
+		querySelector: (selector) => {
+			if (selector === '[data-slot="dialog-title"]') return title;
+			assert.equal(selector, '.capabilities-navigation button[data-section="tool-packs"]');
+			return navigation;
+		},
+	};
+	const sections = [];
+	const root = {
+		id: "capability-section",
+		textContent: "No tool packs on this page.",
+		children: sections,
+		closest: (selector) => {
+			assert.equal(selector, dialog);
+			return shell;
+		},
+		querySelector: (selector) => (selector === ":scope > .capabilities-section-heading > h3" ? heading : null),
+		querySelectorAll: (selector) => (selector === "section" ? sections : []),
+	};
+	const dialogs = [shell];
+	const document = {
+		querySelectorAll: (selector) => {
+			if (selector === '[role="dialog"]') return dialogs;
+			assert.equal(selector, panel);
+			return [root];
+		},
+	};
+	return { document, root, heading, title, attributes, dialogs, sections };
+}
+
+test("mouse close targets the capability X and both routes require closed dialogs and the unique actual trigger", async () => {
 	for (const mouse of [false, true]) {
 		const calls = [];
 		let polls = 0;
-		const trigger = { textContent: "Tool packs" };
+		const trigger = { textContent: "Capabilities" };
+		const oldTrigger = { textContent: "Tool packs" };
+		const states = [
+			{ dialog: {}, triggers: [trigger], active: trigger },
+			{ dialog: null, triggers: [], active: null },
+			{ dialog: null, triggers: [trigger, { ...trigger }], active: trigger },
+			{ dialog: null, triggers: [trigger], active: oldTrigger },
+			{ dialog: null, triggers: [trigger], active: trigger },
+		];
 		await closeToolPacks(
 			{},
 			{
@@ -25,20 +71,26 @@ test("mouse close targets only the fixed X and both close routes await actual pa
 				pressKey: async (_cdp, key) => calls.push(key),
 				until,
 				evaluate: async (_cdp, expression) => {
-					polls++;
+					const state = states[polls++];
 					return runInNewContext(expression, {
 						document: {
-							querySelector: () => null,
-							querySelectorAll: () => [trigger],
-							activeElement: polls < 2 ? null : trigger,
+							querySelector: (selector) => {
+								assert.equal(selector, '[role="dialog"]');
+								return state.dialog;
+							},
+							querySelectorAll: (selector) => {
+								assert.equal(selector, "button.capabilities-trigger");
+								return state.triggers;
+							},
+							activeElement: state.active,
 						},
 					});
 				},
 			},
 			mouse,
 		);
-		assert.deepEqual(calls, [mouse ? '.tool-packs-dialog button[data-slot="dialog-close"]' : "Escape"]);
-		assert.equal(polls, 2);
+		assert.deepEqual(calls, [mouse ? `${dialog} button[data-slot="dialog-close"]` : "Escape"]);
+		assert.equal(polls, states.length);
 	}
 });
 
@@ -67,8 +119,35 @@ test("binding evidence requires exact model, digest, kind and authoritative visi
 		assert.throws(() => bindingCard({ cards: [{ paragraphs: changed }] }, "Revoked"));
 	}
 });
-test("ambiguous or absent dialogs cannot become lifecycle evidence", () => {
-	for (const nodes of [[], [{}, {}]]) assert.equal(readToolPacks({ querySelectorAll: () => nodes }, ".dialog"), null);
+test("ambiguous or absent tool-pack sections cannot become lifecycle evidence", () => {
+	for (const nodes of [[], [{}, {}]]) assert.equal(readToolPacks({ querySelectorAll: () => nodes }, panel), null);
+});
+test("tool-pack evidence requires its selected section in the sole correctly titled capability dialog", () => {
+	assert.equal(readToolPacks(toolPackSurface().document, panel).loaded, true);
+	for (const invalidate of [
+		({ root }) => {
+			root.closest = () => null;
+		},
+		({ dialogs }) => {
+			dialogs.push({});
+		},
+		({ title }) => {
+			title.textContent = "Tool packs";
+		},
+		({ heading }) => {
+			heading.textContent = "File access & approvals";
+		},
+		({ attributes }) => {
+			attributes["aria-current"] = undefined;
+		},
+		({ attributes }) => {
+			attributes["aria-controls"] = "another-section";
+		},
+	]) {
+		const surface = toolPackSurface();
+		invalidate(surface);
+		assert.equal(readToolPacks(surface.document, panel), null);
+	}
 });
 test("scope is required before sending any input", async () => {
 	let sent = false;
@@ -88,6 +167,7 @@ test("scope is required before sending any input", async () => {
 	assert.equal(sent, false);
 });
 test("disclosure checks the authorization submit button, not its preceding expiry combobox", () => {
+	const { document, root, sections } = toolPackSurface();
 	const section = {
 		textContent: "Authorize live access",
 		querySelector: (selector) => (selector === "h3" ? { textContent: "Authorize live access" } : { checked: false }),
@@ -96,18 +176,14 @@ test("disclosure checks the authorization submit button, not its preceding expir
 			{ textContent: "Authorize live access", disabled: true },
 		],
 	};
-	const root = {
-		textContent: "No tool packs on this page.",
-		children: [section],
-		querySelector: (selector) => (selector === "h2" ? { textContent: "Tool packs" } : null),
-		querySelectorAll: (selector) => (selector === "section" ? [section] : []),
-	};
+	sections.push(section);
 	section.parentElement = root;
-	const state = readToolPacks({ querySelectorAll: () => [root] }, ".dialog");
+	const state = readToolPacks(document, panel);
 	assert.equal(state.loaded, true);
 	assert.equal(state.disclosure.disabled, true);
+	assert.equal(state.disclosure.selector, `${panel} > :nth-child(1)`);
 	root.textContent = "Initial shell";
-	assert.equal(readToolPacks({ querySelectorAll: () => [root] }, ".dialog").loaded, false);
+	assert.equal(readToolPacks(document, panel).loaded, false);
 });
 
 test("cold restart performs only read controls and validates retained uninstalled source and revoked binding", async () => {
@@ -126,22 +202,43 @@ test("cold restart performs only read controls and validates retained uninstalle
 	};
 	let history = false;
 	let source = null;
+	let open = false;
+	let escapes = 0;
+	const trigger = {};
 	const clicked = [];
 	const helpers = {
-		async click(_cdp, _selector, label) {
-			if (label)
-				assert.ok(
-					["Tool packs", "Binding history", "Active conversation bindings", "Read full source"].includes(label),
-				);
-			clicked.push(label);
+		async click(_cdp, selector, label) {
+			clicked.push({ selector, label });
+			if (selector === ".capabilities-trigger") {
+				assert.equal(label, undefined);
+				assert.equal(open, false);
+				open = true;
+				return;
+			}
+			assert.equal(open, true);
+			if (selector === `${dialog} .capabilities-navigation button[data-section="tool-packs"]`) {
+				assert.equal(label, undefined);
+				return;
+			}
+			assert.ok(["Binding history", "Active conversation bindings", "Read full source"].includes(label));
+			assert.equal(selector, label === "Read full source" ? ".pack button" : `${panel} button`);
 			if (label === "Binding history") history = true;
 			if (label === "Active conversation bindings") history = false;
 			if (label === "Read full source") source = packageText;
 		},
 		async evaluate(_cdp, expression) {
-			if (expression.startsWith("(function readToolPacks"))
+			if (expression.startsWith("(function readToolPacks")) {
+				assert.equal(open, true);
+				assert.ok(expression.endsWith(`(document, ${JSON.stringify(panel)})`));
 				return { loaded: true, text: "Tool packs", cards: history ? [pack, binding] : [pack], source };
-			return true;
+			}
+			return runInNewContext(expression, {
+				document: {
+					querySelector: () => (open ? {} : null),
+					querySelectorAll: () => [trigger],
+					activeElement: open ? null : trigger,
+				},
+			});
 		},
 		async until(check) {
 			const value = await check();
@@ -150,11 +247,14 @@ test("cold restart performs only read controls and validates retained uninstalle
 		},
 		async pressKey(_cdp, key) {
 			assert.equal(key, "Escape");
+			assert.equal(open, true);
+			open = false;
+			escapes++;
 		},
 		async assertNoAlerts() {},
 		async inspectModal(_cdp, selector, placement) {
-			assert.equal(selector, ".tool-packs-dialog");
-			assert.equal(placement, "center");
+			assert.equal(selector, ".capabilities-dialog");
+			assert.equal(placement, "right");
 			return { titleReachable: true, closeReachable: true, scrolledToBottom: true };
 		},
 		async capture(_cdp, _directory, name) {
@@ -171,5 +271,11 @@ test("cold restart performs only read controls and validates retained uninstalle
 	assert.equal(result.managementOnly, true);
 	assert.equal(result.retainedGeometry.closeReachable, true);
 	assert.equal(result.escapeFocus, true);
-	assert.ok(clicked.includes("Read full source"));
+	assert.ok(clicked.some(({ label }) => label === "Read full source"));
+	assert.deepEqual(clicked.slice(0, 2), [
+		{ selector: ".capabilities-trigger", label: undefined },
+		{ selector: `${dialog} .capabilities-navigation button[data-section="tool-packs"]`, label: undefined },
+	]);
+	assert.equal(escapes, 1, "The capability surface closes directly, without an obsolete settings parent");
+	assert.equal(open, false);
 });

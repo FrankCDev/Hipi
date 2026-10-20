@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { lstat, open, realpath } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
 export const nativeLogLimit = 1024 * 1024;
@@ -47,7 +48,8 @@ export function redactNativeLog(text, roots) {
 
 export async function readNativeLog(directory, iteration, roots) {
 	assert.ok(iteration === 0 || iteration === 1);
-	assert.equal(await realpath(directory), directory);
+	// Match the owned root's canonicalizer; Windows native and JS walks can spell it differently.
+	assert.ok(realpathSync(directory) === directory, "Native log directory must be exactly canonical");
 	const path = join(directory, `chromium-${iteration}.log`);
 	let info;
 	try {

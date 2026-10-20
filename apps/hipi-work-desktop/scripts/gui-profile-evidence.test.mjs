@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { profileEvidence, profileRootEvidence } from "./gui-profile-evidence.mjs";
 
 test("profile diagnostics report only fixed metadata, never port contents or unknown files", async () => {
-	const root = await mkdtemp(join(tmpdir(), "hipi-gui-profile-evidence-"));
+	const root = realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "hipi-gui-profile-evidence-")));
 	try {
-		assert.deepEqual(await profileRootEvidence(await realpath(root)), {
+		assert.deepEqual(await profileRootEvidence(root), {
 			canonicalEqual: true,
 			resolvedEqual: true,
 			parentMatchesTemporary: true,
@@ -22,6 +23,7 @@ test("profile diagnostics report only fixed metadata, never port contents or unk
 		assert.equal(port.exists, true);
 		assert.equal(port.type, "file");
 		assert.equal(port.bytes, 19);
+		assert.equal(port.canonicalEqual, true);
 		assert.equal(evidence.find((entry) => entry.path === "profile/DevToolsActivePort").exists, false);
 		const output = JSON.stringify(evidence);
 		assert.ok(!output.includes("secret") && !output.includes(root));
@@ -38,6 +40,8 @@ test("fixed profile probes do not traverse a linked ancestor", async () => {
 		await symlink(outside, join(root, "session"), process.platform === "win32" ? "junction" : "dir");
 		const evidence = await profileEvidence(root);
 		assert.equal(evidence.find((entry) => entry.path === "session").type, "symlink");
+		assert.equal(evidence.find((entry) => entry.path === "session").canonicalEqual, false);
+		assert.equal((await profileRootEvidence(join(root, "session"))).canonicalEqual, false);
 		assert.deepEqual(
 			evidence.find((entry) => entry.path === "session/DevToolsActivePort"),
 			{ path: "session/DevToolsActivePort", exists: false, blockedAncestor: "session" },

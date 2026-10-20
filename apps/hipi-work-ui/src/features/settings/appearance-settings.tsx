@@ -109,7 +109,15 @@ function Choice({
 	);
 }
 
-export function SettingsForm({ onSave, onCancel }: { onSave: () => void; onCancel: () => void }) {
+export function SettingsForm({
+	onSave,
+	onCancel,
+	onPreview,
+}: {
+	onSave: () => void;
+	onCancel: () => void;
+	onPreview?: () => void;
+}) {
 	const theme = useThemeSettings();
 	useEffect(() => () => theme.cancel(), [theme.cancel]);
 	const pendingFile = useRef(0);
@@ -140,6 +148,7 @@ export function SettingsForm({ onSave, onCancel }: { onSave: () => void; onCance
 	}));
 	const preview = (value: ThemeConfig) => {
 		pendingFile.current += 1;
+		onPreview?.();
 		setDraft(value);
 		const parsed = theme.preview(value);
 		setError(parsed.ok ? undefined : parsed.error);
@@ -180,7 +189,7 @@ export function SettingsForm({ onSave, onCancel }: { onSave: () => void; onCance
 	};
 	return (
 		<div className="settings-form">
-			<div className="settings-grid">
+			<div className="settings-grid settings-preferences">
 				<Choice
 					label={t("settings.mode")}
 					value={draft.mode}
@@ -215,121 +224,140 @@ export function SettingsForm({ onSave, onCancel }: { onSave: () => void; onCance
 					/>
 				))}
 			</div>
-			<p className="small-copy">{t("settings.colorNote")}</p>
-			{regions.map((region) => (
-				<fieldset className="settings-region" key={region}>
-					<legend>{t(`settings.region.${region}`)}</legend>
-					<Choice
-						label={t("settings.uiFont")}
-						value={draft.regions[region]?.font ?? "inherit"}
-						options={[{ value: "inherit", label: t("settings.inherit") }, ...fontOptions]}
-						onChange={(value) => patchRegion(region, { font: value === "inherit" ? "" : value })}
-					/>
-					<div className="settings-grid">
-						{(["foreground", "background"] as const).map((field) => (
-							<label key={field} className="field" htmlFor={`${jsonId}-${region}-${field}`}>
-								{t(`settings.${field}`)}
-								<Input
-									id={`${jsonId}-${region}-${field}`}
-									value={draft.regions[region]?.[field] ?? ""}
-									placeholder="#RRGGBB"
-									maxLength={7}
-									spellCheck={false}
-									aria-invalid={!!error}
-									aria-describedby={error ? errorId : undefined}
-									onChange={(event) => patchRegion(region, { [field]: event.target.value })}
-								/>
-							</label>
-						))}
-					</div>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => {
-							const overrides = { ...draft.regions };
-							delete overrides[region];
-							preview({ ...draft, regions: overrides });
-						}}
-					>
-						{t("settings.region.reset")}
-					</Button>
-				</fieldset>
-			))}
+			<details className="settings-advanced">
+				<summary>
+					{t("settings.regions")}
+					<span>{t("settings.regionsDescription")}</span>
+				</summary>
+				<div className="settings-advanced-body">
+					<p className="small-copy">{t("settings.colorNote")}</p>
+					{regions.map((region) => (
+						<fieldset className="settings-region" key={region}>
+							<legend>{t(`settings.region.${region}`)}</legend>
+							<Choice
+								label={t("settings.uiFont")}
+								value={draft.regions[region]?.font ?? "inherit"}
+								options={[{ value: "inherit", label: t("settings.inherit") }, ...fontOptions]}
+								onChange={(value) => patchRegion(region, { font: value === "inherit" ? "" : value })}
+							/>
+							<div className="settings-grid">
+								{(["foreground", "background"] as const).map((field) => (
+									<label key={field} className="field" htmlFor={`${jsonId}-${region}-${field}`}>
+										{t(`settings.${field}`)}
+										<Input
+											id={`${jsonId}-${region}-${field}`}
+											value={draft.regions[region]?.[field] ?? ""}
+											placeholder="#RRGGBB"
+											maxLength={7}
+											spellCheck={false}
+											aria-invalid={!!error}
+											aria-describedby={error ? errorId : undefined}
+											onChange={(event) => patchRegion(region, { [field]: event.target.value })}
+										/>
+									</label>
+								))}
+							</div>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => {
+									const overrides = { ...draft.regions };
+									delete overrides[region];
+									preview({ ...draft, regions: overrides });
+								}}
+							>
+								{t("settings.region.reset")}
+							</Button>
+						</fieldset>
+					))}
+				</div>
+			</details>
 			{error && (
 				<p role="alert" id={errorId} className="error-text">
 					{t(`settings.error.${error}`)}
 				</p>
 			)}
-			<div className="settings-actions">
-				<Button variant="outline" onClick={() => preview(defaultConfig())}>
-					{t("settings.reset")}
-				</Button>
-				<Button variant="outline" onClick={() => download(theme.export(), "hipi-work-settings.json")}>
-					{t("settings.export")}
-				</Button>
-				{theme.original !== undefined && (
-					<Button variant="outline" onClick={() => download(theme.original ?? "", "hipi-work-rejected-settings.json")}>
-						{t("settings.exportOriginal")}
-					</Button>
-				)}
-			</div>
-			<label className="field" htmlFor={jsonId}>
-				{t("settings.json")}
-			</label>
-			<label className="field" htmlFor={fileId}>
-				{t("settings.importFile")}
-			</label>
-			<Input
-				id={fileId}
-				type="file"
-				accept=".json,application/json"
-				onChange={(event) => {
-					const file = event.target.files?.[0];
-					event.target.value = "";
-					const generation = ++pendingFile.current;
-					if (!file) return;
-					if (file.size > 16384) {
-						setError("format");
-						return;
-					}
-					void file
-						.text()
-						.then((text) => {
-							if (generation !== pendingFile.current) return;
-							setJson(text);
-							const parsed = parseConfig(text);
+			<details className="settings-advanced" open={theme.original !== undefined ? true : undefined}>
+				<summary>
+					{t("settings.transfer")}
+					<span>{t("settings.transferDescription")}</span>
+				</summary>
+				<div className="settings-advanced-body">
+					<div className="settings-actions">
+						<Button variant="outline" onClick={() => preview(defaultConfig())}>
+							{t("settings.reset")}
+						</Button>
+						<Button variant="outline" onClick={() => download(theme.export(), "hipi-work-settings.json")}>
+							{t("settings.export")}
+						</Button>
+						{theme.original !== undefined && (
+							<Button
+								variant="outline"
+								onClick={() => download(theme.original ?? "", "hipi-work-rejected-settings.json")}
+							>
+								{t("settings.exportOriginal")}
+							</Button>
+						)}
+					</div>
+					<label className="field" htmlFor={jsonId}>
+						{t("settings.json")}
+					</label>
+					<label className="field" htmlFor={fileId}>
+						{t("settings.importFile")}
+					</label>
+					<Input
+						id={fileId}
+						type="file"
+						accept=".json,application/json"
+						onChange={(event) => {
+							const file = event.target.files?.[0];
+							event.target.value = "";
+							const generation = ++pendingFile.current;
+							if (!file) return;
+							if (file.size > 16384) {
+								setError("format");
+								return;
+							}
+							void file
+								.text()
+								.then((text) => {
+									if (generation !== pendingFile.current) return;
+									setJson(text);
+									const parsed = parseConfig(text);
+									if (parsed.ok) preview(parsed.value);
+									else setError(parsed.error);
+								})
+								.catch(() => {
+									if (generation === pendingFile.current) setError("format");
+								});
+						}}
+					/>
+					<Textarea
+						id={jsonId}
+						ref={input}
+						rows={5}
+						value={json}
+						maxLength={16384}
+						spellCheck={false}
+						onChange={(event) => {
+							pendingFile.current += 1;
+							setJson(event.target.value);
+						}}
+					/>
+					{downloadFailed && <p role="alert">{t("settings.downloadFailed")}</p>}
+					<Button
+						variant="outline"
+						onClick={() => {
+							const parsed = parseConfig(json);
 							if (parsed.ok) preview(parsed.value);
 							else setError(parsed.error);
-						})
-						.catch(() => {
-							if (generation === pendingFile.current) setError("format");
-						});
-				}}
-			/>
-			<Textarea
-				id={jsonId}
-				ref={input}
-				rows={5}
-				value={json}
-				maxLength={16384}
-				spellCheck={false}
-				onChange={(event) => {
-					pendingFile.current += 1;
-					setJson(event.target.value);
-				}}
-			/>
-			{downloadFailed && <p role="alert">{t("settings.downloadFailed")}</p>}
-			<Button
-				variant="outline"
-				onClick={() => {
-					const parsed = parseConfig(json);
-					if (parsed.ok) preview(parsed.value);
-					else setError(parsed.error);
-				}}
-			>
-				{t("settings.import")}
-			</Button>
-			<div className="settings-actions">
+						}}
+					>
+						{t("settings.import")}
+					</Button>
+				</div>
+			</details>
+			<div className="settings-actions settings-savebar">
 				<Button variant="outline" onClick={onCancel}>
 					{t("settings.cancel")}
 				</Button>

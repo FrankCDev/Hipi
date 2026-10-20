@@ -1,4 +1,5 @@
-import { lstat, realpath } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -42,9 +43,7 @@ export async function profileEvidence(root) {
 									: "other",
 						bytes: stat.size,
 						modifiedAt: stat.mtime.toISOString(),
-						canonicalEqual: stat.isSymbolicLink()
-							? false
-							: (await realpath(join(root, ...parts))) === join(root, ...parts),
+						canonicalEqual: stat.isSymbolicLink() ? false : realpathSync(join(root, ...parts)) === join(root, ...parts),
 					};
 			}
 		} catch (error) {
@@ -59,9 +58,9 @@ export async function profileEvidence(root) {
 export async function profileRootEvidence(root) {
 	try {
 		return {
-			canonicalEqual: (await realpath(root)) === root,
+			canonicalEqual: realpathSync(root) === root,
 			resolvedEqual: resolve(root) === root,
-			parentMatchesTemporary: dirname(root) === (await realpath(tmpdir())),
+			parentMatchesTemporary: dirname(root) === realpathSync(tmpdir()),
 		};
 	} catch {
 		return { unavailable: true };

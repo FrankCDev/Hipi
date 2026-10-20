@@ -3,7 +3,7 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { AgentPermissions } from "../agent-permissions/agent-permissions.tsx";
+import { ConversationCapabilities } from "../conversation-capabilities/conversation-capabilities.tsx";
 import { ToolActivities, type ToolActivityArtifact } from "../tool-activities/tool-activities.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import { ConversationComposer } from "./conversation-composer.tsx";
@@ -85,10 +85,9 @@ export function ConversationPane({
 				controls={
 					<div className="conversation-tools">
 						<ConversationModelControls controller={controller} />
-						<AgentPermissions
+						<ConversationCapabilities
 							key={`${conversation.workspaceId}/${conversation.conversationId}`}
-							scope={conversation}
-							archived={conversation.archivedAt !== null}
+							conversation={conversation}
 							model={controller.model.data?.model}
 							connected={observation.connection === "connected"}
 						/>

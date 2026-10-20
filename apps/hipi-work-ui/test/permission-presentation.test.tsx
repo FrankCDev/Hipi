@@ -3,7 +3,7 @@ import type { FileOperation } from "@hipi/work-runtime/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
-import { AgentPermissions } from "../src/features/agent-permissions/agent-permissions.tsx";
+import { AgentPermissionManagement, AgentPermissions } from "../src/features/agent-permissions/agent-permissions.tsx";
 import { permissionLabels } from "../src/features/agent-permissions/labels.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 
@@ -124,4 +124,25 @@ test("capacity information never replaces a failed reconciliation explanation", 
 	const html = render();
 	assert.ok(html.includes(permissionLabels("zh")["permissions.operation.limit"]));
 	assert.ok(html.includes(permissionLabels("zh")["permissions.action.failed"]));
+});
+
+test("embedded permission attention remains reviewable while another capability section is active", () => {
+	fixture.state.approval = { status: "pending" };
+	fixture.state.uncertain = true;
+	const html = renderToStaticMarkup(
+		<PreferencesProvider>
+			<AgentPermissionManagement
+				scope={{ workspaceId: "workspace", conversationId: "conversation" }}
+				connected
+				archived={false}
+				detailsOpen={false}
+				onOpenDetails={() => {}}
+			>
+				{({ attention }) => <aside>{attention}</aside>}
+			</AgentPermissionManagement>
+		</PreferencesProvider>,
+	);
+	assert.match(html, /等待审批 · 1/);
+	assert.ok(html.includes(permissionLabels("zh")["permissions.action.unknown"]));
+	assert.doesNotMatch(html, /批准此次写入/);
 });

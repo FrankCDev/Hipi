@@ -22,7 +22,7 @@ vi.mock("../src/features/workbench/conversation-pane.tsx", () => ({
 	),
 }));
 
-function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "next-page") {
+function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "next-page", search = "") {
 	const cache = new QueryClient();
 	cache.setQueryData(["conversations", "workspace-id", "active", undefined], {
 		items: [
@@ -49,7 +49,7 @@ function renderTree(expanded: boolean, count = 1, nextCursor: string | null = "n
 					}))}
 					selectedWorkspace="workspace-id"
 					selectedConversation="conversation-id"
-					search=""
+					search={search}
 					isExpanded={() => expanded}
 					onToggle={() => {}}
 					onSelect={() => {}}
@@ -103,6 +103,27 @@ test("single-page conversation lists omit inert pagination without hiding their 
 	const html = renderTree(true, 1, null);
 	assert.doesNotMatch(html, /第一页|下一页/);
 	assert.match(html, /会话操作: My conversation/);
+});
+
+test("project filters are native radio groups and counts explicitly describe the displayed page", () => {
+	const html = renderTree(true);
+	assert.match(html, /<fieldset class="conversation-filter-tabs"><legend class="sr-only">会话列表<\/legend>/);
+	assert.match(html, /type="radio"[^>]*aria-label="当前会话"[^>]*checked=""/);
+	assert.match(html, /type="radio"[^>]*aria-label="已归档会话"/);
+	const names = [...html.matchAll(/type="radio"[^>]*name="([^"]+)"/g)].map((match) => match[1]);
+	assert.equal(names.length, 2);
+	assert.equal(names[0], names[1]);
+	assert.match(html, /class="project-page-summary"><span>本页数量<\/span><span>1<\/span>/);
+	assert.match(html, /class="project-pagination"/);
+});
+
+test("search counts matches on the current page without replacing the loaded-page count", () => {
+	const html = renderTree(true, 1, "next-page", "not on this page");
+	assert.match(html, /class="project-page-summary"><span>本页匹配<\/span><span>0<\/span>/);
+	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">本页数量: <\/span>1<\/span>/);
+	assert.match(html, /没有匹配的会话/);
+	assert.doesNotMatch(html, /class="conversation-link"/);
+	assert.match(html, /下一页/);
 });
 
 test("selected conversation remains mounted when it is outside the displayed directory page", () => {

@@ -1,4 +1,5 @@
 const en = {
+	"workbench.settings": "Settings",
 	"workbench.modelStatus": "Model status",
 	"workbench.runtimeControls": "Runtime controls",
 	"workbench.hideNavigation": "Hide navigation",
@@ -25,6 +26,7 @@ const en = {
 		"Help me investigate this problem. Separate what we know from assumptions and suggest the next checks: ",
 } as const;
 const zh: Record<keyof typeof en, string> = {
+	"workbench.settings": "设置",
 	"workbench.modelStatus": "模型状态",
 	"workbench.runtimeControls": "运行时管理",
 	"workbench.hideNavigation": "收起导航",

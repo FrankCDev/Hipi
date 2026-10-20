@@ -8,7 +8,7 @@ import {
 } from "./gui-work-experience.mjs";
 
 function geometry() {
-	const rect = (x, y, width, height) => ({ x, y, width, height, hit: true });
+	const rect = (x, y, width, height) => ({ x, y, width, height, hit: true, disabled: false });
 	return {
 		width: 1024,
 		height: 900,
@@ -43,6 +43,9 @@ test("geometry rejects missing, covered and offscreen key controls rather than a
 		const covered = geometry();
 		covered.regions[name].hit = false;
 		assert.throws(() => assertWorkExperienceGeometry(covered), /covered/);
+		const disabled = geometry();
+		disabled.regions[name].disabled = true;
+		assert.throws(() => assertWorkExperienceGeometry(disabled), /must be actionable/);
 		const offscreen = geometry();
 		offscreen.regions[name].x = 1024;
 		assert.throws(() => assertWorkExperienceGeometry(offscreen), /escapes the visible viewport/);
