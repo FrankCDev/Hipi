@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { credentialRequest } from "../src/credential-protocol.ts";
 import { CredentialRpc, credentialReply } from "../src/credential-rpc.ts";
-import { CredentialStore, type SafeStoragePort } from "../src/credential-store.ts";
+import { type CredentialStatusStage, CredentialStore, type SafeStoragePort } from "../src/credential-store.ts";
 import { decode, encode } from "../src/protocol.ts";
 
 // Synthetic local crypto proves adapter boundaries, not OS keychain behavior.
@@ -65,6 +65,47 @@ test("Linux unavailable and weak or unknown backends fail closed without a file"
 		storage.isEncryptionAvailable = () => false;
 		assert.equal(await new CredentialStore(join(dir, "providers.enc"), storage).status("openai"), "unavailable");
 		assert.deepEqual(await readdir(dir), []);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+test("status diagnostics report only fixed boundaries and cannot change credential outcomes", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "hipi-credentials-"));
+	try {
+		const path = join(dir, "providers.enc");
+		const storage = syntheticStorage();
+		const stages: CredentialStatusStage[] = [];
+		const store = new CredentialStore(path, storage, "linux", rename, (stage) => {
+			stages.push(stage);
+			throw new Error("synthetic-observer-failure");
+		});
+		const complete = [
+			"status-enter",
+			"availability-enter",
+			"availability-return",
+			"file-read-enter",
+			"file-read-return",
+			"status-return",
+		];
+		assert.equal(await store.status("openai"), "missing");
+		assert.deepEqual(stages, complete);
+		stages.length = 0;
+		await store.set("openai", "synthetic-secret");
+		assert.deepEqual(stages, [], "set must not emit status diagnostics");
+		assert.equal(await store.status("openai"), "configured");
+		assert.deepEqual(stages, complete);
+		stages.length = 0;
+		await writeFile(path, "damaged");
+		assert.equal(await store.status("openai"), "locked");
+		assert.deepEqual(stages, complete);
+		assert.equal(await readFile(path, "utf8"), "damaged");
+		stages.length = 0;
+		storage.isEncryptionAvailable = () => false;
+		assert.equal(await store.status("openai"), "unavailable");
+		assert.deepEqual(stages, ["status-enter", "availability-enter", "availability-return", "status-return"]);
+		stages.length = 0;
+		assert.throws(() => store.status("not-a-provider"));
+		assert.deepEqual(stages, []);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

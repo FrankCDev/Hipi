@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { until } from "./gui-flow.mjs";
-import { startProcess, waitForCimExit } from "./gui-process.mjs";
+import { queryWindowsPackageExit, startProcess, waitForCimExit } from "./gui-process.mjs";
 
 test("native runner observes actual close before releasing a child", async () => {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-gui-child-test-")));
@@ -144,4 +144,73 @@ test("CIM exit observation authorizes cleanup only after an actual zero result w
 		}, clock),
 		/deadline/,
 	);
+});
+
+test("Windows exit query requires complete fixed outcomes and preserves query scope, environment and deadline", async () => {
+	const prefix = ["start", "query", "query-return"].map((phase) => `HIPI_PACKAGE_EXIT_PHASE:${phase}\n`).join("");
+	const absent = `${prefix}HIPI_PACKAGE_EXIT_PHASE:absent\n`;
+	const present = `${prefix}HIPI_PACKAGE_EXIT_PHASE:present\n`;
+	const directory = "C:\\owned-private-package";
+	await queryWindowsPackageExit(directory, 4321, async (command, args, options) => {
+		assert.equal(command, "powershell.exe");
+		assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
+		assert.ok(!args[3].includes(directory));
+		assert.match(args[3], /Get-CimInstance Win32_Process -ErrorAction Stop \| Where-Object/);
+		assert.match(
+			args[3],
+			/StartsWith\(\$p \+ \[IO.Path\]::DirectorySeparatorChar, \[StringComparison\]::OrdinalIgnoreCase\)/,
+		);
+		assert.equal(options.timeout, 4321);
+		assert.equal(options.maxBuffer, 1024 * 1024);
+		assert.equal(options.env.HIPI_SMOKE_PACKAGE, directory);
+		assert.ok(Object.keys(options.env).every((name) => /^(PATH|SYSTEMROOT|WINDIR|HIPI_SMOKE_PACKAGE)$/i.test(name)));
+		return { stdout: absent, stderr: "" };
+	});
+	for (const stdout of ["", prefix, absent.trimEnd(), `${absent}private-output\n`, "x".repeat(4097), present])
+		await assert.rejects(
+			queryWindowsPackageExit(directory, 1000, async () => ({ stdout, stderr: "" })),
+			{
+				message: "Packaged exit observation did not confirm a result",
+			},
+		);
+	await assert.rejects(queryWindowsPackageExit(directory, 1000, async () => ({ stdout: absent, stderr: "private" })));
+	for (const [stdout, phase] of [
+		["", "helper-start"],
+		["HIPI_PACKAGE_EXIT_PHASE:start\nHIPI_PACKAGE_EXIT_PHASE:query\n", "query"],
+		["private\n", "output-invalid"],
+	]) {
+		const failure = Object.assign(new Error("command=private"), {
+			code: null,
+			killed: true,
+			signal: "SIGTERM",
+			stdout,
+		});
+		await assert.rejects(
+			queryWindowsPackageExit(directory, 1000, async () => {
+				throw failure;
+			}),
+			(error) => {
+				assert.equal(error, failure);
+				assert.equal(error.packageExitPhase, phase);
+				return true;
+			},
+		);
+	}
+	await assert.rejects(
+		queryWindowsPackageExit(directory, 1000, async () => {
+			throw Object.assign(new Error("helpers present"), { code: 2, stdout: present, stderr: "" });
+		}),
+		{ code: 2, packageExitPhase: "present" },
+	);
+	for (const stdout of ["", absent, present.trimEnd(), `${present}private\n`])
+		await assert.rejects(
+			queryWindowsPackageExit(directory, 1000, async () => {
+				throw Object.assign(new Error("private"), { code: 2, stdout, stderr: "" });
+			}),
+			(error) => {
+				assert.notEqual(error.code, 2, "Unconfirmed output must not authorize retry");
+				assert.equal(error.message, "Packaged exit observation did not confirm a result");
+				return true;
+			},
+		);
 });

@@ -4,7 +4,36 @@ import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
 export const nativeLogLimit = 1024 * 1024;
-const workExperiencePhases = new Set(["draft", "settings", "matrix", "sidebar", "composer", "files", "restoration"]);
+const workExperiencePhases = new Set([
+	"draft",
+	"settings",
+	"matrix",
+	"sidebar",
+	"composer",
+	"files",
+	"credential_open",
+	"credential_close",
+	"restoration",
+]);
+const credentialStatusMarkers = new Set(
+	[
+		"status-enter",
+		"availability-enter",
+		"availability-return",
+		"file-read-enter",
+		"file-read-return",
+		"status-return",
+	].map((phase) => `[Hipi smoke credential-status] ${phase}`),
+);
+const packageExitPhases = new Set([
+	"helper-start",
+	"start",
+	"query",
+	"query-return",
+	"present",
+	"absent",
+	"output-invalid",
+]);
 
 export function recordGuiFailure(evidence, field, error, roots) {
 	assert.ok(field === "failure" || field === "cleanupFailure");
@@ -17,6 +46,7 @@ export function recordGuiFailure(evidence, field, error, roots) {
 	const seen = new Set();
 	delete evidence[`${field}Phase`];
 	delete evidence[`${field}Causes`];
+	delete evidence[`${field}PackageExitPhase`];
 	if (field === "cleanupFailure") {
 		delete evidence.cleanupFailureCommand;
 		if (error instanceof Error) {
@@ -50,8 +80,10 @@ export function recordGuiFailure(evidence, field, error, roots) {
 		seen.add(value);
 		// Own data properties only: do not invoke accessors or serialize stacks, stderr or arbitrary objects.
 		const phase = Object.getOwnPropertyDescriptor(value, "workExperiencePhase")?.value;
+		const packageExitPhase = Object.getOwnPropertyDescriptor(value, "packageExitPhase")?.value;
 		if (depth === 0) {
 			if (workExperiencePhases.has(phase)) evidence[`${field}Phase`] = phase;
+			if (packageExitPhases.has(packageExitPhase)) evidence[`${field}PackageExitPhase`] = packageExitPhase;
 		} else {
 			const message = Object.getOwnPropertyDescriptor(value, "message")?.value;
 			causes.push({
@@ -60,6 +92,7 @@ export function recordGuiFailure(evidence, field, error, roots) {
 					roots,
 				).slice(0, 500),
 				...(workExperiencePhases.has(phase) ? { phase } : {}),
+				...(packageExitPhases.has(packageExitPhase) ? { packageExitPhase } : {}),
 			});
 		}
 		if (depth === 3) return;
@@ -86,6 +119,8 @@ export function redactNativeLog(text, roots) {
 		.replace(/ws:\/\/127\.0\.0\.1:\d+\/devtools\/[^\s]+/g, "<private-debugger>")
 		.split(/\r\n|[\r\n]/)
 		.map((line) => {
+			// Only these complete fixed smoke markers may bypass sensitive-line redaction.
+			if (credentialStatusMarkers.has(line)) return line;
 			// Normalize Chromium's timestamp/module envelope before treating slashes as private paths.
 			const envelope = line.match(
 				/^\[(?:\d+:){1,2}\d{4}\/\d{6}\.\d{3,6}:(INFO|WARNING|ERROR|FATAL|VERBOSE\d*):[A-Za-z0-9_./-]+(?::\d+|\(\d+\))\]\s*/,

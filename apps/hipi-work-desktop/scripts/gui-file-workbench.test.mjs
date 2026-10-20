@@ -248,8 +248,15 @@ test(
 			if (args[0] === "getwindowpid") return { stdout: "100\n" };
 			if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
 			if (args[0] === "getwindowfocus") return { stdout: "900\n" };
+			if (["key", "type"].includes(args[0])) {
+				assert.ok(!args.includes("--window"), "Use focused XTEST, not GTK-rejected XSendEvent");
+				assert.deepEqual(
+					calls.slice(-5, -1).map((call) => call[0]),
+					["search", "getwindowpid", "getwindowname", "getwindowfocus"],
+					"Revalidate the exact native target and focus immediately before every input",
+				);
+			}
 			if (args[0] === "type") {
-				assert.ok(args.includes("--window") && args.includes("900"));
 				assert.match(args.at(-1), /Hipi GUI profile-[A-Za-z0-9]+\/profile\/workbench-files$/);
 			}
 			if (args.at(-1) === "Return") closed = true;
@@ -258,6 +265,55 @@ test(
 		assert.equal(result.nativePicker, true);
 		assert.equal(calls.filter((args) => args[0] === "type").length, 1);
 		assert.equal(calls.filter((args) => args.at(-1) === "Return").length, 1);
+	},
+);
+
+test(
+	"native candidate stops on PID, title or focus change before every text or key input",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		for (const mismatch of ["pid", "title", "focus"]) {
+			for (const completedInputs of [0, 1, 2, 3, 4]) {
+				let inputs = 0;
+				await assert.rejects(
+					pickerHarness(async (_binary, args) => {
+						const changed = inputs >= completedInputs;
+						if (args[0] === "search") return { stdout: "900\n" };
+						if (args[0] === "getwindowpid") return { stdout: mismatch === "pid" && changed ? "101\n" : "100\n" };
+						if (args[0] === "getwindowname")
+							return {
+								stdout:
+									mismatch === "title" && changed
+										? "Unrelated window\n"
+										: "Allow Hipi Work to read and edit this folder\n",
+							};
+						if (args[0] === "getwindowfocus") return { stdout: mismatch === "focus" && changed ? "901\n" : "900\n" };
+						if (["key", "type"].includes(args[0])) inputs++;
+						return { stdout: "" };
+					}),
+				);
+				assert.equal(inputs, completedInputs, "Never input into another window or refocus after losing the picker");
+			}
+		}
+	},
+);
+
+test(
+	"native candidate retains the two-confirmation bound when focused input does not close the picker",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		let confirmations = 0;
+		await assert.rejects(
+			pickerHarness(async (_binary, args) => {
+				if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
+				if (args[0] === "getwindowpid") return { stdout: "100\n" };
+				if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
+				if (args.at(-1) === "Return") confirmations++;
+				return { stdout: "" };
+			}),
+			/Native folder picker did not close after bounded confirmation/,
+		);
+		assert.equal(confirmations, 2);
 	},
 );
 

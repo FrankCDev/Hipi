@@ -4,6 +4,64 @@ import { promisify } from "node:util";
 import { until } from "./gui-flow.mjs";
 
 const execute = promisify(execFile);
+const packageExitCommand = [
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:start'); [Console]::Out.Flush();",
+	"$p = $env:HIPI_SMOKE_PACKAGE;",
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:query'); [Console]::Out.Flush();",
+	"$found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($p + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) });",
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:query-return'); [Console]::Out.Flush();",
+	"if ($found.Count -ne 0) { [Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:present'); [Console]::Out.Flush(); exit 2 }",
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:absent'); [Console]::Out.Flush();",
+].join(" ");
+
+function packageExitProgress(stdout) {
+	if (typeof stdout !== "string" || Buffer.byteLength(stdout, "utf8") > 4096) return { phase: "output-invalid" };
+	const lines = stdout.replace(/^\uFEFF/, "").split(/\r?\n/);
+	const remainder = lines.pop();
+	let phase = "helper-start";
+	for (const [index, line] of lines.entries()) {
+		const expected = ["start", "query", "query-return"][index];
+		const value = line.slice("HIPI_PACKAGE_EXIT_PHASE:".length);
+		if (
+			!line.startsWith("HIPI_PACKAGE_EXIT_PHASE:") ||
+			(index < 3 ? value !== expected : index !== 3 || !["present", "absent"].includes(value))
+		)
+			return { phase: "output-invalid" };
+		phase = value;
+	}
+	// Incomplete progress is diagnostic only, never an absence/presence result.
+	return { phase, ...(remainder === "" && lines.length === 4 ? { outcome: phase } : {}) };
+}
+
+/** Observe the unchanged package-path filter; never authorize cleanup from missing protocol output. */
+export async function queryWindowsPackageExit(appDirectory, timeout, run = execute) {
+	let result;
+	try {
+		result = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", packageExitCommand], {
+			env: {
+				...Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(PATH|SYSTEMROOT|WINDIR)$/i.test(name))),
+				HIPI_SMOKE_PACKAGE: appDirectory,
+			},
+			windowsHide: true,
+			timeout,
+			maxBuffer: 1024 * 1024,
+		});
+	} catch (error) {
+		const progress = packageExitProgress(error?.stdout);
+		if (error?.code === 2 && (progress.outcome !== "present" || error.stderr !== "")) {
+			throw Object.assign(new Error("Packaged exit observation did not confirm a result"), {
+				packageExitPhase: progress.phase,
+			});
+		}
+		if (error instanceof Error) error.packageExitPhase = progress.phase;
+		throw error;
+	}
+	const progress = packageExitProgress(result.stdout);
+	if (progress.outcome !== "absent" || result.stderr !== "")
+		throw Object.assign(new Error("Packaged exit observation did not confirm a result"), {
+			packageExitPhase: progress.phase,
+		});
+}
 
 export function debuggerClosed(port) {
 	return new Promise((resolve, reject) => {
@@ -115,28 +173,7 @@ export async function waitForCimExit(
 export async function assertNoPackageProcesses(appDirectory) {
 	if (process.platform === "win32") {
 		// Fixed command; path is passed as data, never interpolated into PowerShell source.
-		await waitForCimExit((timeout) =>
-			execute(
-				"powershell.exe",
-				[
-					"-NoProfile",
-					"-NonInteractive",
-					"-Command",
-					"$p = $env:HIPI_SMOKE_PACKAGE; $found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($p + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) }); if ($found.Count -ne 0) { exit 2 }",
-				],
-				{
-					env: {
-						...Object.fromEntries(
-							Object.entries(process.env).filter(([name]) => /^(PATH|SYSTEMROOT|WINDIR)$/i.test(name)),
-						),
-						HIPI_SMOKE_PACKAGE: appDirectory,
-					},
-					windowsHide: true,
-					timeout,
-					maxBuffer: 1024 * 1024,
-				},
-			),
-		);
+		await waitForCimExit((timeout) => queryWindowsPackageExit(appDirectory, timeout));
 		return;
 	}
 	const result = await execute("ps", ["-ww", "-axo", "pid=,command="], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });

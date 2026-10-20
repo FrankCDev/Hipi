@@ -116,14 +116,19 @@ export async function chooseOwnedFileFolder(
 	};
 	await assertDialog();
 	await command(["windowfocus", "--sync", window]);
-	assert.equal((await command(["getwindowfocus"])).stdout.trim(), window, "Native picker focus not confirmed");
-	await command(["key", "--clearmodifiers", "--window", window, "ctrl+l"]);
-	await assertDialog();
-	await command(["key", "--clearmodifiers", "--window", window, "ctrl+a"]);
-	await command(["type", "--clearmodifiers", "--window", window, "--delay", "1", "--", directory]);
-	for (let attempt = 0; attempt < 2; attempt++) {
+	const input = async (args) => {
 		await assertDialog();
-		await command(["key", "--clearmodifiers", "--window", window, "Return"]);
+		assert.equal((await command(["getwindowfocus"])).stdout.trim(), window, "Native picker focus not confirmed");
+		// --window uses XSendEvent, which GTK can reject. A fresh xdotool invocation without
+		// a window stack uses XTEST on this verified private display's focused dialog only.
+		// Never recover focus here: any focus/identity change must stop before input.
+		await command(args);
+	};
+	await input(["key", "--clearmodifiers", "ctrl+l"]);
+	await input(["key", "--clearmodifiers", "ctrl+a"]);
+	await input(["type", "--clearmodifiers", "--delay", "1", "--", directory]);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await input(["key", "--clearmodifiers", "Return"]);
 		const closedDeadline = now() + 1500;
 		while (now() < closedDeadline) {
 			if (!(await find())) return { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true };

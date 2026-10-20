@@ -13,19 +13,41 @@ export interface SafeStoragePort {
 	decryptString(value: Buffer): string;
 }
 const MAX_BYTES = 32768;
+export type CredentialStatusStage =
+	| "status-enter"
+	| "availability-enter"
+	| "availability-return"
+	| "file-read-enter"
+	| "file-read-return"
+	| "status-return";
 /** Main-process-only store. No plaintext fallback, cache, or secret-bearing error messages. */
 export class CredentialStore {
 	readonly #path: string;
 	readonly #storage: SafeStoragePort;
 	readonly #platform: string;
 	readonly #replace: typeof rename;
+	readonly #observeStatus?: (stage: CredentialStatusStage) => void;
 	#tail: Promise<unknown> = Promise.resolve();
 	#pending = 0;
-	constructor(path: string, storage: SafeStoragePort, platform = process.platform, replace = rename) {
+	constructor(
+		path: string,
+		storage: SafeStoragePort,
+		platform = process.platform,
+		replace = rename,
+		observeStatus?: (stage: CredentialStatusStage) => void,
+	) {
 		this.#path = path;
 		this.#storage = storage;
 		this.#platform = platform;
 		this.#replace = replace;
+		this.#observeStatus = observeStatus;
+	}
+	#observe(stage: CredentialStatusStage) {
+		try {
+			this.#observeStatus?.(stage);
+		} catch {
+			// Optional smoke diagnostics must never affect credential operations.
+		}
 	}
 	#available() {
 		try {
@@ -80,12 +102,23 @@ export class CredentialStore {
 	}
 	status(provider: string): Promise<CredentialState> {
 		credentialProvider(provider);
+		this.#observe("status-enter");
 		return this.#serial(async () => {
-			if (!this.#available()) return "unavailable";
 			try {
-				return (await this.#read()) === undefined ? "missing" : "configured";
-			} catch {
-				return "locked";
+				this.#observe("availability-enter");
+				const available = this.#available();
+				this.#observe("availability-return");
+				if (!available) return "unavailable";
+				this.#observe("file-read-enter");
+				try {
+					return (await this.#read()) === undefined ? "missing" : "configured";
+				} catch {
+					return "locked";
+				} finally {
+					this.#observe("file-read-return");
+				}
+			} finally {
+				this.#observe("status-return");
 			}
 		});
 	}

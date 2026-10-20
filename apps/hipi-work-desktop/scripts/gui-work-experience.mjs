@@ -180,31 +180,6 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"actual model catalog in selected category",
 		);
 		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-models`);
-		assert.equal(
-			await evaluate(
-				cdp,
-				`(() => { const matches=[...document.querySelectorAll('.settings-section:not([hidden]) button')].filter(e => e.textContent.trim() === 'Model settings'); window.__hipiGuiCredentialTrigger = matches.length === 1 ? matches[0] : null; return !!window.__hipiGuiCredentialTrigger; })()`,
-			),
-			true,
-		);
-		await click(cdp, ".settings-section:not([hidden]) button", "Model settings");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!!document.querySelector('.model-settings-dialog') && !document.querySelector('.model-settings-dialog button[data-slot="dialog-close"]').disabled`,
-				),
-			"credential status read completed",
-		);
-		await pressKey(cdp, "Escape");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.unified-settings-dialog') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
-				),
-			"nested credentials restores exact trigger",
-		);
 		await click(cdp, '.settings-page-nav button[data-category="models"]');
 		await nativeEditorKey(cdp, "Tab");
 		assert.equal(await evaluate(cdp, `document.activeElement?.dataset.category`), "runtime");
@@ -406,6 +381,48 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 					`document.querySelector('.work-shell').dataset.navigationOpen==='false' && document.activeElement===document.querySelector('.navigation-toggle')`,
 				),
 			"narrow navigation Escape focus",
+		);
+		await assertNoAlerts(cdp);
+		// Keep the platform credential read mandatory, but independent core visual evidence comes first.
+		phase = "settings";
+		await resize(1440);
+		await openAppearance(cdp);
+		await click(cdp, '.settings-page-nav button[data-category="models"]');
+		assert.equal(
+			await evaluate(
+				cdp,
+				`(() => { const matches=[...document.querySelectorAll('.settings-section:not([hidden]) button')].filter(e => e.textContent.trim() === 'Model settings'); window.__hipiGuiCredentialTrigger = matches.length === 1 ? matches[0] : null; return !!window.__hipiGuiCredentialTrigger; })()`,
+			),
+			true,
+		);
+		phase = "credential_open";
+		await click(cdp, ".settings-section:not([hidden]) button", "Model settings");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!!document.querySelector('.model-settings-dialog') && !document.querySelector('.model-settings-dialog button[data-slot="dialog-close"]').disabled`,
+				),
+			"credential status read completed",
+		);
+		phase = "credential_close";
+		await pressKey(cdp, "Escape");
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.unified-settings-dialog') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
+				),
+			"nested credentials restores exact trigger",
+		);
+		await pressKey(cdp, "Escape");
+		await waitForOverlayClosed(cdp, settings);
+		assert.equal(await readDraft(), draft, "Nested credentials must retain the task draft");
+		assert.deepEqual(await readKeys(), originalKeys);
+		assert.equal(
+			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
+			true,
+			"Nested credentials must retain the conversation DOM identity",
 		);
 		await assertNoAlerts(cdp);
 		result = {

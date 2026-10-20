@@ -21,8 +21,42 @@ import {
 	rememberCreateTrigger,
 	resolvedTheme,
 	selectReopenedConversation,
+	settleFloatingAnimations,
 	waitForOverlayClosed,
 } from "./gui-flow.mjs";
+
+test("capture waits for finite floating entrances and two frames, without awaiting infinite busy indicators", async () => {
+	const events = [];
+	const finite = { playState: "running", effect: { getComputedTiming: () => ({ endTime: 180 }) } };
+	finite.finished = Promise.resolve().then(() => {
+		events.push("finished");
+		finite.playState = "finished";
+	});
+	const infinite = {
+		playState: "running",
+		effect: { getComputedTiming: () => ({ endTime: Infinity }) },
+		finished: new Promise(() => {}),
+	};
+	const document = { querySelectorAll: () => [{ getAnimations: () => [finite, infinite] }] };
+	await settleFloatingAnimations(document, 100, (callback) => {
+		events.push("frame");
+		callback();
+	});
+	assert.deepEqual(events, ["finished", "frame", "frame"]);
+});
+
+test("capture fails a bounded finite entrance stall instead of silently taking a translucent screenshot", async () => {
+	const animation = {
+		playState: "running",
+		effect: { getComputedTiming: () => ({ endTime: 180 }) },
+		finished: new Promise(() => {}),
+	};
+	const document = { querySelectorAll: () => [{ getAnimations: () => [animation] }] };
+	await assert.rejects(
+		settleFloatingAnimations(document, 10, (callback) => callback()),
+		/did not settle/,
+	);
+});
 
 test("retained creation trigger never crosses CDP's return-by-value serialization boundary", async () => {
 	const trigger = {};
@@ -303,7 +337,7 @@ test("failure capture is bounded and redacts unknown button text; renderer loss 
 		async request(method, params) {
 			if (method === "Page.captureScreenshot") return { data: png.toString("base64") };
 			assert.equal(method, "Runtime.evaluate");
-			if (params.expression.startsWith("document.fonts.ready")) return { result: { value: undefined } };
+			if (params.expression.startsWith("document.fonts.ready")) return { result: { value: true } };
 			return {
 				result: {
 					value: runInNewContext(params.expression, {

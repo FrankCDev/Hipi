@@ -32,6 +32,34 @@ test("Chromium timestamp envelopes preserve safe error text without exposing pat
 	assert.ok(!redactNativeLog("[4440:1019/private-user] unsafe", []).includes("private-user"));
 });
 
+test("only six exact credential-status marker lines survive sensitive-line redaction", () => {
+	for (const phase of [
+		"status-enter",
+		"availability-enter",
+		"availability-return",
+		"file-read-enter",
+		"file-read-return",
+		"status-return",
+	]) {
+		const marker = `[Hipi smoke credential-status] ${phase}`;
+		assert.equal(redactNativeLog(marker, []), marker);
+		for (const line of [
+			` ${marker}`,
+			`${marker} `,
+			`private-payload ${marker}`,
+			`${marker} private-payload`,
+			`${marker} token=private-token`,
+			`${marker} /home/private-user/file`,
+			`[4440:1019/231817.849:ERROR:module.cc:408] ${marker}`,
+		]) {
+			const result = redactNativeLog(line, []);
+			assert.ok(result.includes("<redacted-sensitive-line>"));
+			assert.ok(!result.includes(marker) && !result.includes("private"));
+		}
+	}
+	assert.equal(redactNativeLog("[Hipi smoke credential-status] private-phase", []), "<redacted-sensitive-line>");
+});
+
 test("shared evidence writers redact failures, cleanup and renderer details without losing click diagnostics", async () => {
 	const evidence = { errors: [] };
 	recordGuiFailure(evidence, "failure", new Error("EACCES open C:\\Users\\private-user\\secret.log"), []);
@@ -123,6 +151,15 @@ test("aggregate failure diagnostics retain bounded redacted causes and allowlist
 	assert.deepEqual(evidence.cleanupFailureCauses, [evidence.failureCauses[0]]);
 	recordGuiFailure(evidence, "cleanupFailure", new Error("Later operation failed"), []);
 	assert.ok(!("cleanupFailurePhase" in evidence) && !("cleanupFailureCauses" in evidence));
+	for (const phase of ["credential_open", "credential_close"]) {
+		recordGuiFailure(
+			evidence,
+			"failure",
+			Object.assign(new Error("Bounded step failed"), { workExperiencePhase: phase }),
+			[],
+		);
+		assert.equal(evidence.failurePhase, phase);
+	}
 });
 
 test("failure cause diagnostics cap depth, count and text, ignore cycles, getters and unknown phases", () => {
@@ -206,6 +243,29 @@ test("cleanup command diagnostics expose only fixed categories and bounded Power
 	const failure = {};
 	recordGuiFailure(failure, "failure", error, []);
 	assert.ok(!("cleanupFailureCommand" in failure));
+});
+
+test("package-exit diagnostics preserve only allowlisted phases without exposing helper output", () => {
+	const evidence = {};
+	for (const phase of ["helper-start", "start", "query", "query-return", "present", "absent", "output-invalid"]) {
+		const error = Object.assign(new Error("command=private"), { packageExitPhase: phase, stdout: "private-output" });
+		recordGuiFailure(evidence, "failure", error, []);
+		assert.equal(evidence.failurePackageExitPhase, phase);
+		recordGuiFailure(evidence, "cleanupFailure", new AggregateError([error], "Observation failed"), []);
+		assert.equal(evidence.cleanupFailureCauses[0].packageExitPhase, phase);
+		assert.ok(!JSON.stringify(evidence).includes("private"));
+	}
+	recordGuiFailure(
+		evidence,
+		"failure",
+		Object.assign(new Error("Unknown observation"), { packageExitPhase: "private" }),
+		[],
+	);
+	assert.ok(!("failurePackageExitPhase" in evidence));
+	const accessor = new Error("Unknown observation");
+	Object.defineProperty(accessor, "packageExitPhase", { get: () => assert.fail("phase getter must not run") });
+	recordGuiFailure(evidence, "failure", accessor, []);
+	assert.ok(!("failurePackageExitPhase" in evidence));
 });
 
 test("native log reads only fixed owned files, bounds output and redacts sensitive lines", async () => {

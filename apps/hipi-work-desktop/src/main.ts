@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AppError, parseRequest } from "@hipi/work-runtime/contracts";
@@ -19,7 +20,7 @@ import {
 	utilityProcess,
 } from "electron";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
-import { CredentialStore } from "./credential-store.ts";
+import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
 import { diagnosticMessages } from "./diagnostic-messages.ts";
 import { DesktopDiagnostics, DiagnosticExporter, finishFailedStartup, writeDiagnosticFile } from "./diagnostics.ts";
 import { filePickerLabels } from "./file-messages.ts";
@@ -173,7 +174,29 @@ async function start(mode: "production" | "deterministic") {
 	await app.whenReady();
 	const text = hostMessages(app.getLocale());
 	diagnosticText = diagnosticMessages(app.getLocale());
-	const credentials = new CredentialStore(join(app.getPath("userData"), "credentials", "providers.enc"), safeStorage);
+	// start is reached only after prepareDesktopLaunch validates the isolated smoke profile.
+	const credentialStages = new Set<CredentialStatusStage>([
+		"status-enter",
+		"availability-enter",
+		"availability-return",
+		"file-read-enter",
+		"file-read-return",
+		"status-return",
+	]);
+	const credentials = new CredentialStore(
+		join(app.getPath("userData"), "credentials", "providers.enc"),
+		safeStorage,
+		process.platform,
+		undefined,
+		mode === "deterministic" && process.argv.some((argument) => argument.startsWith("--smoke-data-root="))
+			? (stage) => {
+					if (!credentialStages.delete(stage)) return;
+					// Flush at most six fixed lines before a potentially blocking native call.
+					// CredentialStore isolates observer failures from operation results.
+					writeSync(2, `[Hipi smoke credential-status] ${stage}\n`);
+				}
+			: undefined,
+	);
 	const assets = resolve(root, "renderer");
 	protocol.handle("hipi-work", createRendererAssetHandler(assets));
 	session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

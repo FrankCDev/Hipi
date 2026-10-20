@@ -448,10 +448,46 @@ async function inspectControls(cdp) {
 		focusRestored: true,
 	};
 }
+export async function settleFloatingAnimations(document, milliseconds = 3000, frame = requestAnimationFrame) {
+	const selector =
+		'[role="dialog"],[role="menu"],[data-slot="dialog-overlay"],[data-slot="popover-content"],.conversation-preview-card';
+	const pending = () =>
+		[...document.querySelectorAll(selector)]
+			.flatMap((node) => node.getAnimations({ subtree: true }))
+			.filter(
+				(animation) =>
+					animation.playState !== "finished" &&
+					animation.playState !== "idle" &&
+					Number.isFinite(animation.effect?.getComputedTiming().endTime),
+			);
+	let timer;
+	let stopped = false;
+	try {
+		await Promise.race([
+			(async () => {
+				while (!stopped) {
+					await Promise.all(pending().map((animation) => animation.finished.catch(() => {})));
+					await new Promise((resolve) => frame(() => frame(resolve)));
+					if (pending().length === 0) return;
+				}
+			})(),
+			new Promise((_, reject) => {
+				timer = setTimeout(() => reject(new Error("Floating entrance animations did not settle")), milliseconds);
+			}),
+		]);
+	} finally {
+		stopped = true;
+		clearTimeout(timer);
+	}
+}
 export async function capture(cdp, directory, name) {
-	await evaluate(
-		cdp,
-		"document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))",
+	assert.equal(
+		await evaluate(
+			cdp,
+			`document.fonts.ready.then(() => (${settleFloatingAnimations.toString()})(document)).then(() => true, () => false)`,
+		),
+		true,
+		"Screenshot floating entrance animations did not settle",
 	);
 	const image = await cdp.request("Page.captureScreenshot", { format: "png", fromSurface: true });
 	const bytes = Buffer.from(image.data, "base64");
