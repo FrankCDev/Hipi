@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,6 +7,8 @@ import test from "node:test";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { PROTOCOL_VERSION } from "../src/contracts.ts";
 import { openRuntime as openNodeRuntime } from "../src/node.ts";
+import { PROJECT_SCHEMA } from "../src/projects/schema.ts";
+import { SIDEBAR_PIN_SCHEMA } from "../src/sidebar-pins/schema.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
 for (const point of ["after_reserve", "after_directory", "after_storage", "before_ready"] as const) {
@@ -107,7 +109,7 @@ test("persistent identity and bounded catalogs survive restart; listings never r
 	}
 });
 
-test("phase-one workspace discovery repairs registration without replacing its PI conversation", async () => {
+test("pre-project schema10 workspace discovery repairs registration without replacing its PI conversation", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-discovery-"));
 	let runtime = await openTestRuntime(directory);
 	try {
@@ -119,7 +121,14 @@ test("phase-one workspace discovery repairs registration without replacing its P
 		});
 		const identity = await runtime.call("handshake", {});
 		await runtime.close();
+		const physicalBefore = await readFile(join(directory, "legacy", "workspace.sqlite"));
 		const db = new DatabaseSync(join(directory, "catalog.sqlite"));
+		// Simulate the historical catalog before project/mixed-pin authority existed. Derive
+		// exactly those feature tables from their schema definitions, retaining every older table.
+		for (const schema of [SIDEBAR_PIN_SCHEMA, PROJECT_SCHEMA])
+			for (const match of schema.matchAll(/CREATE TABLE IF NOT EXISTS ([a-z_]+)/g))
+				db.exec(`DROP TABLE ${match[1]}`);
+		db.exec("UPDATE identity SET version=10");
 		db.exec("DELETE FROM workspaces");
 		db.close();
 		runtime = await openTestRuntime(directory);
@@ -128,6 +137,36 @@ test("phase-one workspace discovery repairs registration without replacing its P
 			items: [conversation],
 			nextCursor: null,
 		});
+		assert.equal((await runtime.call("getProject", { projectId: "legacy" })).homeWorkspaceId, "legacy");
+		await runtime.close();
+		assert.deepEqual(await readFile(join(directory, "legacy", "workspace.sqlite")), physicalBefore);
+	} finally {
+		await runtime.close();
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("schema12 lost registration cannot silently reconstruct authoritative logical history", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-registration-loss-"));
+	const runtime = await openTestRuntime(directory);
+	try {
+		await runtime.call("createWorkspace", { workspaceId: "registered", name: "Registered" });
+		assert.equal((await runtime.call("getProject", { projectId: "registered" })).homeWorkspaceId, "registered");
+		await runtime.close();
+		const catalogPath = join(directory, "catalog.sqlite");
+		const db = new DatabaseSync(catalogPath);
+		try {
+			assert.equal(db.prepare("SELECT version FROM identity").get()?.version, 12);
+			db.exec("DELETE FROM workspaces");
+		} finally {
+			db.close();
+		}
+		const catalogBefore = await readFile(catalogPath);
+		const physicalPath = join(directory, "registered", "workspace.sqlite");
+		const physicalBefore = await readFile(physicalPath);
+		await assert.rejects(openTestRuntime(directory), { code: "STORE_MISMATCH" });
+		assert.deepEqual(await readFile(catalogPath), catalogBefore);
+		assert.deepEqual(await readFile(physicalPath), physicalBefore);
 	} finally {
 		await runtime.close();
 		await rm(directory, { recursive: true, force: true });

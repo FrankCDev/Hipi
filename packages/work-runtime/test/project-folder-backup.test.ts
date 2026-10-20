@@ -28,7 +28,7 @@ async function fixture() {
 	try {
 		// Keep the schema6 compatibility fixture independent of later catalog migrations.
 		db.exec(
-			"DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; UPDATE identity SET version=6",
+			"DROP TABLE sidebar_pin_commands; DROP TABLE sidebar_pin_order; DROP TABLE sidebar_pin_state; DROP TABLE project_commands; DROP TABLE project_memberships; DROP TABLE project_presentations; DROP TABLE project_presentation_state; DROP TABLE project_catalog_state; DROP TABLE projects; DROP TABLE navigation_sources; DROP TABLE navigation_publication; DROP TABLE navigation_state; DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; UPDATE identity SET version=6",
 		);
 		db.prepare("INSERT INTO project_folders VALUES ('work','binding-current',3,?,?,?,'Offline project',0)").run(
 			projectPath,

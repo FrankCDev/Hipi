@@ -4,6 +4,9 @@ import {
 	type ConversationSearchHit,
 	type ModelReference,
 	PROTOCOL_VERSION,
+	type Project,
+	type ProjectListItem,
+	type ProjectPage,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,12 +27,15 @@ import { ToolPacksDialog } from "../tool-packs/index.ts";
 import { CatalogRecovery, ConversationActions } from "./catalog/controls.tsx";
 import { CreateDialog } from "./catalog/create-dialog.tsx";
 import type { StagedProjectConsent } from "./catalog/initial-context.ts";
+import { initialWorkspaceId } from "./catalog/initial-send.ts";
 import { catalogLabels } from "./catalog/labels.ts";
 import { CatalogPagination } from "./catalog/pagination.tsx";
 import { PreparedTaskRecovery } from "./catalog/prepared-task-recovery.tsx";
 import { CatalogSession } from "./catalog/session.ts";
 import { useCatalogPages } from "./catalog/use-pages.ts";
+import { DraftRecovery } from "./composer/draft-recovery.tsx";
 import { PreparedTaskEntry } from "./composer/prepared-entry.tsx";
+import { useHomeDraft } from "./composer/use-home-draft.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
 import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
 import { prepareSearchNavigation } from "./conversation/history-reads.ts";
@@ -40,10 +46,14 @@ import { FILE_PANEL, FilePanelController, panelLayout } from "./files/panel-cont
 import { filePanelLabels } from "./files/panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./projects/folder.tsx";
+import { canCreateProjectless, legacyAdoptionInput } from "./projects/identity.ts";
+import { projectRecoveryLabels } from "./projects/recovery-labels.ts";
 import { ConversationSearch } from "./search/search.tsx";
 import { SidebarDisclosureSession } from "./sidebar/disclosure-session.ts";
 import { SidebarDragProvider, type SidebarOrderAction } from "./sidebar/drag-provider.tsx";
+import { SidebarInitialLoading } from "./sidebar/initial-loading.tsx";
 import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar/layout-session.ts";
+import { useNavigationRefresh } from "./sidebar/navigation-refresh.ts";
 import { sidebarOrderLabels } from "./sidebar/order-labels.ts";
 import { PinRecovery, presentationKey } from "./sidebar/pin-conversation.tsx";
 import { pinLabels } from "./sidebar/pin-labels.ts";
@@ -53,7 +63,9 @@ import { SidebarPreviewProvider } from "./sidebar/preview-provider.tsx";
 import { visibleSidebarProjects } from "./sidebar/project-visibility.ts";
 import { SidebarOrderSection, SidebarSectionContent, SidebarSectionHeading } from "./sidebar/section.tsx";
 import { sidebarSectionLabels } from "./sidebar/section-labels.ts";
-import { WorkspaceTree } from "./sidebar/workspace-tree.tsx";
+import type { SidebarLocation } from "./sidebar/selection-owner.ts";
+import { SidebarSelectionProvider } from "./sidebar/selection-provider.tsx";
+import { WorkspaceBranch, WorkspaceTree } from "./sidebar/workspace-tree.tsx";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
 
@@ -95,6 +107,11 @@ export function Workbench({
 	}, []);
 	const local = useLocalState();
 	const cache = useQueryClient();
+	const projectCatalog = useQuery({
+		queryKey: ["project-catalog"],
+		queryFn: ({ signal }) => client.call("getProjectCatalogState", {}, signal),
+		retry: false,
+	});
 	const catalog = useMemo(() => new CatalogSession(client, local, fileAuthority), [client, local, fileAuthority]);
 	const catalogState = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot, catalog.getSnapshot);
 	useEffect(() => {
@@ -144,7 +161,10 @@ export function Workbench({
 	useEffect(() => {
 		if (
 			presentationState.busy ||
-			(!presentationState.result && !presentationState.orderResult && !presentationState.rejected)
+			(!presentationState.result &&
+				!presentationState.orderResult &&
+				!presentationState.mixedOrderResult &&
+				!presentationState.rejected)
 		)
 			return;
 		if (presentationState.orderResult)
@@ -154,10 +174,12 @@ export function Workbench({
 			});
 		else void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
 		void cache.invalidateQueries({ queryKey: ["conversation-presentation"] });
+		void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
 	}, [
 		presentationState.busy,
 		presentationState.result,
 		presentationState.orderResult,
+		presentationState.mixedOrderResult,
 		presentationState.rejected,
 		cache,
 	]);
@@ -178,10 +200,41 @@ export function Workbench({
 			: undefined;
 	const { t, locale } = usePreferences();
 	const [selectedWorkspace, setSelectedWorkspace] = useState(() => local.read("workspace") ?? "");
+	const [selectedProjectId, setSelectedProjectId] = useState<string | null | undefined>(() => {
+		const saved = local.read("project");
+		return saved === null && local.read("workspace") ? undefined : saved || null;
+	});
 	const [selectedConversation, setSelectedConversation] = useState(() => local.read("conversation") ?? "");
-	const [sidebarSelection, setSidebarSelection] = useState<SidebarSection | null>(null);
+	const [sidebarSelection, setSidebarSelection] = useState<SidebarLocation | null>(null);
 	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
 	const navigationRevision = useRef(0);
+	useEffect(() => {
+		let owner: { requestId: string; revision: number; current: boolean; admitted: boolean } | undefined;
+		return presentation.subscribePinLifecycle((event) => {
+			if (event.phase === "initiated")
+				owner = {
+					requestId: event.input.requestId,
+					revision: navigationRevision.current,
+					current:
+						currentScope.current.workspaceId === event.input.workspaceId &&
+						currentScope.current.conversationId === event.input.conversationId,
+					admitted: false,
+				};
+			else if (event.phase === "admitted" && owner?.requestId === event.input.requestId) owner.admitted = true;
+			else if (event.phase === "retired" && owner?.requestId === event.input.requestId) owner = undefined;
+			else if (event.phase === "confirmed" && owner?.requestId === event.input.requestId) {
+				if (
+					owner.admitted &&
+					owner.current &&
+					owner.revision === navigationRevision.current &&
+					currentScope.current.workspaceId === event.result.workspaceId &&
+					currentScope.current.conversationId === event.result.conversationId
+				)
+					setSidebarSelection(null);
+				owner = undefined;
+			}
+		});
+	}, [presentation]);
 	useEffect(() => {
 		currentScope.current = { workspaceId: selectedWorkspace, conversationId: selectedConversation };
 		session?.setWorkspace(selectedWorkspace);
@@ -209,6 +262,10 @@ export function Workbench({
 	const [reopenFailure, setReopenFailure] = useState<"failed" | "limit" | null>(null);
 	const [pinLookupFailed, setPinLookupFailed] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	useNavigationRefresh(
+		!settingsOpen && (narrow ? navigationOpen : !navigationCollapsed),
+		projectCatalog.data?.state === "ready",
+	);
 	const [folderProject, setFolderProject] = useState<Workspace>();
 	const [folderCreationFailed, setFolderCreationFailed] = useState(false);
 	const [folderCreationFailures, setFolderCreationFailures] = useState<Record<string, boolean>>({});
@@ -228,7 +285,7 @@ export function Workbench({
 	const isExpanded = (id: string) =>
 		expanded[id] ??
 		(local.read(`workspace-expanded.${id}`) === "true" ||
-			(local.read(`workspace-expanded.${id}`) !== "false" && id === selectedWorkspace));
+			(local.read(`workspace-expanded.${id}`) !== "false" && (id === selectedProjectId || id === selectedWorkspace)));
 	const setProjectExpanded = (id: string, value: boolean) => {
 		setExpanded((current) => ({ ...current, [id]: value }));
 		local.write(`workspace-expanded.${id}`, String(value));
@@ -267,44 +324,60 @@ export function Workbench({
 			navigationToggle.current?.focus();
 		};
 	}, [navigationOpen]);
-	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
 	const [recoveredDrafts, setRecoveredDrafts] = useState<Record<string, string>>({});
-	const preparedKey = (workspaceId: string) => (workspaceId ? `task-draft.${workspaceId}` : "chat-draft.global");
-	const preparedDraft = (workspaceId: string) =>
-		preparedDrafts[preparedKey(workspaceId)] ?? local.read(preparedKey(workspaceId)) ?? "";
-	const changePreparedDraft = (workspaceId: string, value: string) => {
-		local.write(preparedKey(workspaceId), value);
-		setPreparedDrafts((current) => ({ ...current, [preparedKey(workspaceId)]: value }));
-	};
+	const homeDraft = useHomeDraft(local, selectedWorkspace, selectedConversation, composerFocusRevision);
 	const navigationList = useRef<HTMLDivElement>(null);
+	const navigationRoot = useRef<HTMLElement>(null);
 	const cl = catalogLabels(locale);
 	const wl = workbenchLabels(locale);
 	const catalogBlocked =
 		catalogState.busy || !!catalogState.pending || !!catalogState.initialSend || catalogState.incompatible;
+	const projects = useCatalogPages<ProjectListItem, ProjectPage>({
+		queryKey: ["projects"],
+		queryPage: (cursor, signal) => client.call("listProjects", cursor ? { cursor } : {}, signal),
+		itemKey: (item) => item.project.projectId,
+	});
+	const adoptionAttempt = useRef<string | null>(null);
+	useEffect(() => {
+		const state = projectCatalog.data;
+		if (!state || catalogBlocked) return;
+		const input = legacyAdoptionInput(local, state);
+		if (!input) return;
+		const key = JSON.stringify([input.workspaceId, input.expectedCatalogGeneration, input.expectedDefaultWorkspaceId]);
+		if (adoptionAttempt.current === key) return;
+		adoptionAttempt.current = key;
+		void catalog
+			.execute({ version: PROTOCOL_VERSION, method: "adoptLegacyDefaultWorkspace", params: input })
+			.then(() => {
+				if (!connectionLease.active) return;
+				void cache.invalidateQueries({ queryKey: ["project-catalog"] });
+				void cache.invalidateQueries({ queryKey: ["projects"] });
+				void cache.invalidateQueries({ queryKey: ["sidebar-navigation"] });
+			});
+	}, [projectCatalog.data, catalogBlocked, local, catalog, cache, connectionLease]);
 	const workspaces = useCatalogPages({
 		queryKey: ["workspaces"],
 		queryPage: (cursor, signal) => client.call("listWorkspaces", cursor ? { cursor } : {}, signal),
 		itemKey: (item: Workspace) => item.workspaceId,
 	});
-	const projectIds = workspaces.items
-		.filter((item) => item.workspaceId !== catalog.defaultWorkspaceId())
-		.map((item) => item.workspaceId);
+	// Protocol 9 is the identity boundary; a delayed metadata read must never select the old creation model.
+	const projectIds = projects.items
+		.filter((item) => projectCatalog.data?.state !== "ready" || !item.presentation.pinned)
+		.map((item) => item.project.projectId);
 	const projectOrder = mergeOrder(layoutState.projects, projectIds);
 	const orderedProjects = layout.orderedProjects(projectIds);
 	const visibleProjects = visibleSidebarProjects(
 		orderedProjects,
 		projectListExpanded,
-		selectedConversation && sidebarSelection === "projects" ? selectedWorkspace : "",
-		workspaces.hasMore,
+		selectedConversation && sidebarSelection?.kind === "project"
+			? sidebarSelection.projectId
+			: selectedConversation && sidebarSelection?.kind === "workspace"
+				? sidebarSelection.workspaceId
+				: "",
+		projects.hasMore,
 	);
+	const projectById = new Map(projects.items.map((item) => [item.project.projectId, item]));
 	const workspaceById = new Map(workspaces.items.map((item) => [item.workspaceId, item]));
-	const orderedWorkspaces = [
-		...orderedProjects.flatMap((id) => {
-			const item = workspaceById.get(id);
-			return item ? [item] : [];
-		}),
-		...workspaces.items.filter((item) => item.workspaceId === catalog.defaultWorkspaceId()),
-	];
 	const layoutBlocked = layoutState.busy || layoutState.incompatible || !!layoutState.pending;
 	const disclosureBlocked = disclosureState.busy || disclosureState.incompatible || !!disclosureState.pending;
 	const disclosureProps = (section: SidebarSection) => ({
@@ -312,9 +385,7 @@ export function Workbench({
 		disabled: disclosureBlocked,
 		onCollapsedChange: (collapsed: boolean) => void disclosure.setCollapsed(section, collapsed),
 	});
-	const visibleSections = layoutState.sections.filter(
-		(id) => id === "projects" || (id === "pinned" ? pinnedVisible : !!catalog.defaultWorkspaceId()),
-	);
+	const visibleSections = layoutState.sections.filter((id) => id !== "pinned" || pinnedVisible);
 	const sectionAction = (id: SidebarSection): SidebarOrderAction => {
 		const index = visibleSections.indexOf(id);
 		const fullIndex = layoutState.sections.indexOf(id);
@@ -341,24 +412,24 @@ export function Workbench({
 			down: next ? (layoutState.sections[layoutState.sections.indexOf(next) + 1] ?? null) : undefined,
 		};
 	};
-	const projectAction = (item: Workspace): SidebarOrderAction => {
-		const index = visibleProjects.indexOf(item.workspaceId);
+	const projectActionFor = (id: string, name: string): SidebarOrderAction => {
+		const index = visibleProjects.indexOf(id);
 		const after = (id: string) => projectOrder[projectOrder.indexOf(id) + 1] ?? null;
-		const disabled = layoutBlocked || workspaces.isFetching || workspaces.isError;
+		const disabled = layoutBlocked || projects.isFetching || projects.isError;
 		const next = visibleProjects[index + 1];
 		return {
 			item: {
-				id: item.workspaceId,
+				id: id,
 				group: "projects",
-				label: item.name,
+				label: name,
 				revision: `${layoutState.revision}:${disabled}:${projectIds.join(",")}`,
 				disabled,
-				after: after(item.workspaceId),
+				after: after(id),
 				move: (before) => {
-					void layout.moveProject(item.workspaceId, before, projectIds, layoutState.revision).then((saved) => {
+					void layout.moveProject(id, before, projectIds, layoutState.revision).then((saved) => {
 						if (saved && connectionLease.active)
 							setOrderAnnouncement(
-								`${item.name}: ${sidebarOrderLabels(locale).movedTo} ${layout.orderedProjects(projectIds).indexOf(item.workspaceId) + 1}`,
+								`${name}: ${sidebarOrderLabels(locale).movedTo} ${layout.orderedProjects(projectIds).indexOf(id) + 1}`,
 							);
 					});
 				},
@@ -378,6 +449,35 @@ export function Workbench({
 		queryFn: ({ signal }) => client.call("getWorkspace", { workspaceId: selectedWorkspace }, signal),
 		enabled: !!selectedWorkspace,
 	});
+	const membershipQuery = useQuery({
+		queryKey: ["conversation-membership", selectedWorkspace, selectedConversation],
+		queryFn: ({ signal }) =>
+			client.call(
+				"getConversationMembership",
+				{ workspaceId: selectedWorkspace, conversationId: selectedConversation },
+				signal,
+			),
+		enabled: !!selectedWorkspace && !!selectedConversation,
+		retry: false,
+	});
+	const currentProjectId = selectedConversation ? membershipQuery.data?.projectId : selectedProjectId;
+	const currentProjectQuery = useQuery({
+		queryKey: ["project", currentProjectId],
+		queryFn: ({ signal }) => {
+			if (!currentProjectId) throw new Error("PROJECT_REQUIRED");
+			return client.call("getProject", { projectId: currentProjectId }, signal);
+		},
+		enabled: !!currentProjectId,
+		retry: false,
+	});
+	const currentProject = currentProjectQuery.data;
+	useEffect(() => {
+		if (selectedConversation || selectedProjectId || !selectedWorkspace) return;
+		const project = projects.items.find((item) => item.project.homeWorkspaceId === selectedWorkspace)?.project;
+		if (!project) return;
+		setSelectedProjectId(project.projectId);
+		local.write("project", project.projectId);
+	}, [selectedConversation, selectedProjectId, selectedWorkspace, projects.items, local]);
 	useEffect(() => {
 		const warn = (event: BeforeUnloadEvent) => {
 			if (local.hasUnsavedWork() || session?.protected) {
@@ -482,6 +582,8 @@ export function Workbench({
 		openSearch,
 	]);
 	const selectWorkspace = (id: string) => {
+		homeDraft.cancel();
+		setComposerFocusRevision((value) => value + 1);
 		setSidebarSelection(null);
 		navigationRevision.current++;
 		session?.setWorkspace(id);
@@ -494,10 +596,35 @@ export function Workbench({
 		setSearchAnchor(undefined);
 		local.write("workspace", id);
 		local.write("conversation", "");
+		const projectId = projects.items.find((item) => item.project.homeWorkspaceId === id)?.project.projectId ?? null;
+		setSelectedProjectId(projectId);
+		local.write("project", projectId ?? "");
 	};
-	const selectConversation = (item: Conversation, onSelected?: () => void) => {
+	const selectKnownProject = (project: Project) => {
+		cache.setQueryData(["project", project.projectId], project);
+		selectWorkspace(project.homeWorkspaceId);
+		setSelectedProjectId(project.projectId);
+		setProjectExpanded(project.projectId, true);
+		local.write("project", project.projectId);
+	};
+	const selectProject = (id: string) => {
+		const project = projectById.get(id)?.project ?? (currentProject?.projectId === id ? currentProject : undefined);
+		if (project) selectKnownProject(project);
+	};
+	const selectConversation = (item: Conversation, onSelected?: () => void, location: SidebarLocation | null = null) => {
+		homeDraft.cancel();
+		if (
+			location &&
+			currentScope.current.workspaceId === item.workspaceId &&
+			currentScope.current.conversationId === item.conversationId
+		) {
+			// Another visible alias is a presentation choice, not a new route or execution owner.
+			navigationRevision.current++;
+			setSidebarSelection(location);
+			return;
+		}
 		const select = () => {
-			setSidebarSelection(null);
+			setSidebarSelection(location);
 			setSearchAnchor(undefined);
 			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
 			navigationRevision.current++;
@@ -509,29 +636,19 @@ export function Workbench({
 			setSelectedConversation(item.conversationId);
 			local.write("workspace", item.workspaceId);
 			local.write("conversation", item.conversationId);
+			setSelectedProjectId(null);
+			local.write("project", "");
 			setNavigationOpen(false);
 		};
 		select();
 		onSelected?.();
 	};
-	const openNewConversation = (requestedWorkspaceId: string) => {
-		const workspaceId = requestedWorkspaceId === catalog.defaultWorkspaceId() ? "" : requestedWorkspaceId;
-		const open = () => {
-			setSidebarSelection(null);
-			setSearchAnchor(undefined);
-			navigationRevision.current++;
-			session?.setWorkspace(workspaceId);
-			currentScope.current = { workspaceId, conversationId: "" };
-			setSelectedWorkspace(workspaceId);
-			setSelectedConversation("");
-			setDetailsOpen(false);
-			setNavigationOpen(false);
-			setComposerFocusRevision((value) => value + 1);
-			if (workspaceId) setProjectExpanded(workspaceId, true);
-			local.write("workspace", workspaceId);
-			local.write("conversation", "");
-		};
-		open();
+	const openNewConversation = (requestedProjectId?: string | null) => {
+		homeDraft.cancel();
+		const projectId = requestedProjectId !== undefined ? requestedProjectId : currentProjectId;
+		if (projectId === undefined) return;
+		if (projectId) selectProject(projectId);
+		else selectWorkspace("");
 	};
 	const activateSearch = async (hit: ConversationSearchHit, signal: AbortSignal) => {
 		const origin = navigationRevision.current;
@@ -552,6 +669,12 @@ export function Workbench({
 	const applyCatalogResult = (origin?: number) => {
 		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
 		const state = catalog.getSnapshot();
+		if (state.projectResult && !state.pending) {
+			void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
+			void cache.invalidateQueries({ queryKey: ["projects"] });
+			void cache.invalidateQueries({ queryKey: ["project-catalog"] });
+			void cache.invalidateQueries({ queryKey: ["sidebar-navigation"] });
+		}
 		// A consent-bearing first Send retains its recovery owner until delivery is confirmed.
 		if (state.initialSend?.context) return;
 		if (state.submission && !state.busy && state.result && "conversationId" in state.result) {
@@ -562,11 +685,7 @@ export function Workbench({
 				initialSubmissionNavigation.current !== state.submission.requestId
 			) {
 				initialSubmissionNavigation.current = state.submission.requestId;
-				setPreparedDrafts((current) => ({
-					...current,
-					[preparedKey(result.workspaceId)]: local.read(preparedKey(result.workspaceId)) ?? "",
-					"chat-draft.global": local.read("chat-draft.global") ?? "",
-				}));
+				if (origin === undefined || navigationRevision.current === origin) void homeDraft.refresh();
 				void cache.invalidateQueries({ queryKey: ["workspaces"] });
 				void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
 				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
@@ -574,19 +693,27 @@ export function Workbench({
 			return;
 		}
 		if (state.pending || state.failed || state.incompatible || state.handoffConflict) return;
+		if (state.projectResult?.method === "createProject") {
+			const project = state.projectResult.result;
+			cache.setQueryData(["project", project.projectId], project);
+			if (origin === undefined || navigationRevision.current === origin) {
+				selectWorkspace(project.homeWorkspaceId);
+				setSelectedProjectId(project.projectId);
+				setProjectExpanded(project.projectId, true);
+				local.write("project", project.projectId);
+			}
+			return;
+		}
 		const result = state.result;
 		if (!result) return;
 		if ("conversationId" in result) {
 			cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
 			void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
 			void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
+			void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
 			void cache.invalidateQueries({ queryKey: presentationKey(result) });
-			if (state.resultMethod === "createConversation") {
-				setPreparedDrafts((current) => ({
-					...current,
-					[preparedKey(result.workspaceId)]: local.read(preparedKey(result.workspaceId)) ?? "",
-					"chat-draft.global": local.read("chat-draft.global") ?? "",
-				}));
+			if (state.resultMethod === "createConversation" || state.resultMethod === "createProjectConversation") {
+				if (origin === undefined || navigationRevision.current === origin) void homeDraft.refresh();
 				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
 			}
 		} else {
@@ -605,9 +732,9 @@ export function Workbench({
 			connectionLease.active &&
 			currentConnection.current === connectionLease
 		) {
-			setPreparedDrafts((current) => ({ ...current, [initial.sourceKey]: local.read(initial.sourceKey) ?? "" }));
+			if (navigationRevision.current === origin) void homeDraft.refresh();
 			if (initial.conversationId && initial.context && !initial.context.submitAttempted) {
-				const scope = `${initial.conversationCommand.params.workspaceId}.${initial.conversationId}`;
+				const scope = `${initialWorkspaceId(initial)}.${initial.conversationId}`;
 				const revision = local.valueSnapshot(`draft.${scope}`)?.revision;
 				if (revision) setRecoveredDrafts((current) => ({ ...current, [scope]: revision }));
 			}
@@ -618,16 +745,20 @@ export function Workbench({
 		const origin = navigationRevision.current;
 		await catalog.execute({
 			version: PROTOCOL_VERSION,
-			method: "createWorkspace",
-			params: { workspaceId: crypto.randomUUID(), name },
+			method: "createProject",
+			params: { requestId: crypto.randomUUID(), name },
 		});
 		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
 			throw new Error("UNCONFIRMED");
 		const ownsNavigation = navigationRevision.current === origin;
 		applyCatalogResult(origin);
+		const created = catalog.getSnapshot().projectResult;
+		if (created?.method !== "createProject") throw new Error("UNCONFIRMED");
+		const project = created.result;
+		cache.setQueryData(["project", project.projectId], project);
 		const bindingNavigation = ownsNavigation ? navigationRevision.current : undefined;
-		const result = catalog.getSnapshot().result;
-		if (folder && result && !("conversationId" in result) && fileAuthority?.attachProject) {
+		const result = { workspaceId: project.homeWorkspaceId, name: project.name };
+		if (folder && fileAuthority?.attachProject) {
 			try {
 				const binding = await fileAuthority.attachProject(result.workspaceId, folder.selectionId);
 				if (connectionLease.active && currentConnection.current === connectionLease) {
@@ -651,12 +782,21 @@ export function Workbench({
 	};
 	const sendInitial = async (text: string, model: ModelReference, context?: StagedProjectConsent) => {
 		const origin = navigationRevision.current;
+		const active = homeDraft.inventory?.active;
+		if (!active || homeDraft.busy || homeDraft.failed) throw new Error("INITIAL_SEND_SOURCE_UNAVAILABLE");
+		if (
+			currentProjectId === undefined ||
+			(currentProjectId === null && !canCreateProjectless(local, projectCatalog.data))
+		)
+			throw new Error("PROJECT_DESTINATION_UNVERIFIED");
 		await catalog.sendInitial({
-			workspaceId: selectedWorkspace || null,
+			workspaceId: currentProject?.homeWorkspaceId ?? null,
+			projectId: currentProjectId,
 			text,
 			title: text.trim().split("\n")[0]?.slice(0, 128) ?? "",
 			model,
-			sourceKey: preparedKey(selectedWorkspace),
+			sourceKey: active.sourceKey,
+			sourceGeneration: active.generation,
 			...(context ? { context } : {}),
 		});
 		applyCatalogResult(origin);
@@ -670,23 +810,30 @@ export function Workbench({
 			throw new Error("UNCONFIRMED");
 	};
 	const workspaceTreeProps = {
-		workspaces: orderedWorkspaces,
+		workspaces: workspaces.items,
 		catalog,
 		presentation,
 		guard: (action: () => void) => action(),
 		selectedWorkspace,
 		selectedConversation,
+		projects: orderedProjects.flatMap((id) => {
+			const item = projectById.get(id);
+			return item ? [item] : [];
+		}),
+		selectedProjectId: currentProjectId,
+		logicalReady: projectCatalog.data?.state === "ready",
+		projectPinEnabled: projectCatalog.data?.state === "ready",
 		isExpanded,
 		onToggle: (id: string) => setProjectExpanded(id, !isExpanded(id)),
-		onOpenProject: selectWorkspace,
-		onSelect: (item: Conversation) => {
-			selectConversation(item);
-			setSidebarSelection(item.workspaceId === catalog.defaultWorkspaceId() ? "recent" : "projects");
-		},
+		onOpenProject: selectProject,
+		onSelect: (item: Conversation, location?: SidebarLocation) => selectConversation(item, undefined, location),
 		onNewConversation: openNewConversation,
 		defaultWorkspaceId: catalog.defaultWorkspaceId(),
 		onManageProjectFolder: manageProjectFolder,
-		projectOrder: projectAction,
+		onManageLogicalProjectFolder: (project: Project, restoreFocus?: () => void) =>
+			manageProjectFolder({ workspaceId: project.homeWorkspaceId, name: project.name }, restoreFocus),
+		projectOrder: (workspace: Workspace) => projectActionFor(workspace.workspaceId, workspace.name),
+		logicalProjectOrder: (item: ProjectListItem) => projectActionFor(item.project.projectId, item.project.name),
 		filterFor: (id: string) => projectFilters[id] ?? "active",
 		onFilterChange: (id: string, filter: "active" | "archived") =>
 			setProjectFilters((current) => ({ ...current, [id]: filter })),
@@ -701,7 +848,9 @@ export function Workbench({
 			data-settings-open={settingsOpen}
 		>
 			<aside
+				ref={navigationRoot}
 				className="sidebar"
+				data-sidebar-navigation-root=""
 				id="work-navigation"
 				aria-label={t("nav.workspaces")}
 				inert={settingsOpen || (narrow ? !navigationOpen : navigationCollapsed)}
@@ -760,125 +909,147 @@ export function Workbench({
 				</div>
 				<section className="conversation-nav">
 					<div className="workspace-create">
-						<Button
-							variant="ghost"
-							className="new-conversation-trigger"
-							onClick={() =>
-								openNewConversation(selectedWorkspace === catalog.defaultWorkspaceId() ? "" : selectedWorkspace)
-							}
-						>
+						<Button variant="ghost" className="new-conversation-trigger" onClick={() => openNewConversation()}>
 							<SquarePen size={16} aria-hidden="true" />
 							{t("nav.newConversation")}
 						</Button>
 					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
-						<SidebarDragProvider
-							scrollRef={navigationList}
-							keybindings={keybindings}
-							disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
-						>
-							<SidebarPreviewProvider
-								disabled={
-									settingsOpen || searchOpen || !!folderProject || (narrow ? !navigationOpen : navigationCollapsed)
-								}
-								navigationKey={JSON.stringify([selectedWorkspace, selectedConversation])}
+						<SidebarInitialLoading>
+							<SidebarDragProvider
+								scrollRef={navigationList}
+								keybindings={keybindings}
+								disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
 							>
-								{layoutState.sections.map((section) =>
-									section === "pinned" ? (
-										<PinnedConversations
-											key={section}
-											catalog={catalog}
-											presentation={presentation}
-											selectedWorkspace={selectedWorkspace}
-											selectedConversation={selectedConversation}
-											onSelect={(item) => {
-												selectConversation(item);
-												setSidebarSelection("pinned");
-											}}
-											sectionAction={sectionAction(section)}
-											onVisibleChange={setPinnedVisible}
-											collapsed={disclosureState.collapsed.pinned}
-											disclosureDisabled={disclosureBlocked}
-											onCollapsedChange={(collapsed) => void disclosure.setCollapsed("pinned", collapsed)}
-										/>
-									) : section === "recent" ? (
-										catalog.defaultWorkspaceId() ? (
-											<SidebarOrderSection key={section} action={sectionAction(section)} {...disclosureProps(section)}>
-												<WorkspaceTree {...workspaceTreeProps} section="recent" />
-											</SidebarOrderSection>
-										) : null
-									) : (
-										<SidebarOrderSection key={section} action={sectionAction(section)} {...disclosureProps(section)}>
-											<SidebarSectionHeading
-												actions={
-													<CreateDialog
-														disabled={catalogBlocked}
-														kind="workspace"
-														compact
-														onCreate={createWorkspace}
-														chooseFolder={fileAuthority?.prepareProject}
-														forgetFolder={fileAuthority?.forgetProjectSelection}
-													/>
-												}
-											>
-												{t("nav.workspaces")}
-											</SidebarSectionHeading>
-											<SidebarSectionContent>
-												{workspaces.isPending && !workspaces.hasData && (
-													<output className="nav-feedback">{t("common.loading")}</output>
-												)}
-												{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
-													<output className="catalog-refresh-status">{t("common.loading")}</output>
-												)}
-												{workspaces.isError && (
-													<div className="nav-feedback" role="alert">
-														<p>
-															{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-																? t("connection.storeMismatch")
-																: workspaces.staleCursor
-																	? cl.staleList
-																	: workspaces.isLoadMoreError
-																		? cl.loadMoreFailed
-																		: workspaces.hasData
-																			? cl.refreshFailed
-																			: t("nav.loadError")}
-														</p>
-														<Button
-															variant="outline"
-															size="sm"
-															disabled={workspaces.isFetching}
-															onClick={() => void workspaces.retry()}
-														>
-															<Icon name="refresh" size={14} />
-															{t("nav.refresh")}
-														</Button>
-													</div>
-												)}
-												{workspaces.isSuccess && workspaces.items.length === 0 && (
-													<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
-												)}
-												<WorkspaceTree
-													{...workspaceTreeProps}
-													workspaces={orderedWorkspaces.filter((item) => visibleProjects.includes(item.workspaceId))}
-													section="projects"
+								<SidebarSelectionProvider
+									scope={{ workspaceId: selectedWorkspace, conversationId: selectedConversation }}
+									preferredLocation={sidebarSelection}
+									rootRef={navigationRoot}
+								>
+									<SidebarPreviewProvider
+										disabled={
+											settingsOpen || searchOpen || !!folderProject || (narrow ? !navigationOpen : navigationCollapsed)
+										}
+										navigationKey={JSON.stringify([selectedWorkspace, selectedConversation])}
+									>
+										{layoutState.sections.map((section) =>
+											section === "pinned" ? (
+												<PinnedConversations
+													key={section}
+													catalog={catalog}
+													presentation={presentation}
+													mixed
+													mixedReady={projectCatalog.data?.state === "ready"}
+													renderProject={(item, orderAction) => (
+														<WorkspaceBranch
+															key={item.project.projectId}
+															{...workspaceTreeProps}
+															projectItem={item}
+															pinnedProject
+															onOpenProject={() => selectKnownProject(item.project)}
+															onNewConversation={() => selectKnownProject(item.project)}
+															logicalProjectOrder={() => orderAction}
+														/>
+													)}
+													navigationRevision={navigationRevision.current}
+													onSelect={(item) => selectConversation(item, undefined, { kind: "pinned" })}
+													sectionAction={sectionAction(section)}
+													onVisibleChange={setPinnedVisible}
+													collapsed={disclosureState.collapsed.pinned}
+													disclosureDisabled={disclosureBlocked}
+													onCollapsedChange={(collapsed) => void disclosure.setCollapsed("pinned", collapsed)}
 												/>
-												{!projectListExpanded && orderedProjects.length > visibleProjects.length && (
-													<Button
-														variant="ghost"
-														size="sm"
-														className="sidebar-project-show-more"
-														onClick={() => setProjectListExpanded(true)}
+											) : section === "recent" ? (
+												<SidebarOrderSection
+													key={section}
+													action={sectionAction(section)}
+													{...disclosureProps(section)}
+												>
+													<WorkspaceTree {...workspaceTreeProps} section="recent" />
+												</SidebarOrderSection>
+											) : (
+												<SidebarOrderSection
+													key={section}
+													action={sectionAction(section)}
+													{...disclosureProps(section)}
+												>
+													<SidebarSectionHeading
+														actions={
+															<CreateDialog
+																disabled={catalogBlocked}
+																kind="workspace"
+																compact
+																onCreate={createWorkspace}
+																chooseFolder={fileAuthority?.prepareProject}
+																forgetFolder={fileAuthority?.forgetProjectSelection}
+															/>
+														}
 													>
-														{t("work.showMore")}
-													</Button>
-												)}
-												<CatalogPagination pages={workspaces} listRef={navigationList} />
-											</SidebarSectionContent>
-										</SidebarOrderSection>
-									),
-								)}
-							</SidebarPreviewProvider>
-						</SidebarDragProvider>
+														{t("nav.workspaces")}
+													</SidebarSectionHeading>
+													<SidebarSectionContent>
+														{projects.isPending && !projects.hasData && (
+															<output className="nav-feedback">{t("common.loading")}</output>
+														)}
+														{projects.hasData && projects.isFetching && !projects.isLoadingMore && (
+															<output className="catalog-refresh-status">{t("common.loading")}</output>
+														)}
+														{projects.isError && (
+															<div className="nav-feedback" role="alert">
+																<p>
+																	{projects.error instanceof AppError && projects.error.code === "STORE_MISMATCH"
+																		? t("connection.storeMismatch")
+																		: projects.staleCursor
+																			? cl.staleList
+																			: projects.isLoadMoreError
+																				? cl.loadMoreFailed
+																				: projects.hasData
+																					? cl.refreshFailed
+																					: t("nav.loadError")}
+																</p>
+																<Button
+																	variant="outline"
+																	size="sm"
+																	disabled={projects.isFetching}
+																	onClick={() => void projects.retry()}
+																>
+																	<Icon name="refresh" size={14} />
+																	{t("nav.refresh")}
+																</Button>
+															</div>
+														)}
+														{projects.isSuccess &&
+															!projects.isFetching &&
+															!projects.isError &&
+															!projects.hasMore &&
+															projectIds.length === 0 && <p className="nav-feedback">{t("nav.noWorkspaces")}</p>}
+														<WorkspaceTree
+															{...workspaceTreeProps}
+															projects={workspaceTreeProps.projects.filter((item) =>
+																visibleProjects.includes(item.project.projectId),
+															)}
+															section="projects"
+															projectDataUpdatedAt={projects.dataUpdatedAt}
+														/>
+														{!projectListExpanded && orderedProjects.length > visibleProjects.length && (
+															<Button
+																variant="ghost"
+																size="sm"
+																className="sidebar-project-show-more"
+																onClick={() => setProjectListExpanded(true)}
+															>
+																{t("work.showMore")}
+															</Button>
+														)}
+														<CatalogPagination pages={projects} listRef={navigationList} />
+													</SidebarSectionContent>
+												</SidebarOrderSection>
+											),
+										)}
+									</SidebarPreviewProvider>
+								</SidebarSelectionProvider>
+							</SidebarDragProvider>
+						</SidebarInitialLoading>
 						<output className="sr-only" aria-live="polite">
 							{orderAnnouncement}
 						</output>
@@ -931,6 +1102,12 @@ export function Workbench({
 							</section>
 						)}
 						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
+						{projectCatalog.data &&
+							!canCreateProjectless(local, projectCatalog.data) &&
+							!catalogState.pending &&
+							!catalogState.busy && (
+								<output className="nav-feedback">{projectRecoveryLabels(locale).defaultUnverified}</output>
+							)}
 						<PinRecovery session={presentation} />
 						{pinLookupFailed && (
 							<p className="nav-feedback" role="alert">
@@ -983,17 +1160,17 @@ export function Workbench({
 									{selected.title}
 								</span>
 							) : (
-								<span className="toolbar-project-title">{workspace?.name ?? "Hipi Work"}</span>
+								<span className="toolbar-project-title">{currentProject?.name ?? "Hipi Work"}</span>
 							)}
-							{workspace && selected && workspace.workspaceId !== catalog.defaultWorkspaceId() && (
+							{currentProject && selected && (
 								<button
 									type="button"
 									className="toolbar-project-link"
-									aria-label={`${wl["workbench.projectHome"]}: ${workspace.name}`}
-									onClick={() => selectWorkspace(workspace.workspaceId)}
+									aria-label={`${wl["workbench.projectHome"]}: ${currentProject.name}`}
+									onClick={() => selectProject(currentProject.projectId)}
 								>
 									<Icon name="folder" size={12} />
-									<span>{workspace.name}</span>
+									<span>{currentProject.name}</span>
 								</button>
 							)}
 						</div>
@@ -1039,6 +1216,20 @@ export function Workbench({
 					</div>
 				</header>
 				<PreparedTaskRecovery session={catalog} onResolve={resolveCatalog} />
+				{!selectedConversation && (
+					<DraftRecovery
+						inventory={homeDraft.inventory}
+						busy={homeDraft.busy}
+						failed={homeDraft.failed}
+						onRecover={(source) => {
+							void homeDraft.recover(source);
+						}}
+						onReload={() => {
+							void homeDraft.reload();
+						}}
+						projectName={(id) => workspaceById.get(id)?.name ?? id}
+					/>
+				)}
 				{reopenFailure && (
 					<p className="file-panel-storage" role="alert">
 						{fileLabels(locale)[reopenFailure === "limit" ? "tabs.limit" : "tabs.reopenFailed"]}
@@ -1048,7 +1239,11 @@ export function Workbench({
 					<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
 				)}
 				<main className="work-area" ref={area} data-file-panel-full-width={filePanelFullWidth}>
-					{(selectedQuery.isError || workspaceQuery.isError) && (
+					{(selectedQuery.isError ||
+						workspaceQuery.isError ||
+						currentProjectQuery.isError ||
+						membershipQuery.isError ||
+						projectCatalog.isError) && (
 						<p role="alert">
 							{cl.currentFailed}
 							<Button
@@ -1056,6 +1251,9 @@ export function Workbench({
 								onClick={() => {
 									void selectedQuery.refetch();
 									void workspaceQuery.refetch();
+									if (currentProjectId) void currentProjectQuery.refetch();
+									if (selectedConversation) void membershipQuery.refetch();
+									void projectCatalog.refetch();
 								}}
 							>
 								{t("nav.refresh")}
@@ -1093,26 +1291,37 @@ export function Workbench({
 							/>
 						) : (
 							<WorkbenchWelcome
-								workspaceName={workspace?.name}
+								workspaceName={currentProject?.name}
 								action={
 									<>
-										{workspace && workspace.workspaceId !== catalog.defaultWorkspaceId() && (
+										{currentProject && (
 											<ProjectFolderSummary
-												workspaceId={workspace.workspaceId}
-												failed={folderCreationFailures[workspace.workspaceId]}
+												workspaceId={currentProject.homeWorkspaceId}
+												failed={folderCreationFailures[currentProject.homeWorkspaceId]}
 												onManage={(trigger) =>
-													manageProjectFolder(workspace, () => {
-														if (trigger.isConnected) trigger.focus({ preventScroll: true });
-													})
+													manageProjectFolder(
+														{ workspaceId: currentProject.homeWorkspaceId, name: currentProject.name },
+														() => {
+															if (trigger.isConnected) trigger.focus({ preventScroll: true });
+														},
+													)
 												}
 											/>
 										)}
 										<PreparedTaskEntry
-											key={selectedWorkspace || "global"}
-											workspaceId={selectedWorkspace}
-											draft={preparedDraft(selectedWorkspace)}
-											onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
-											disabled={catalogBlocked}
+											key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
+											workspaceId={currentProject?.homeWorkspaceId ?? ""}
+											draft={homeDraft.text}
+											onDraftChange={homeDraft.change}
+											readOnly={homeDraft.busy || !homeDraft.inventory?.active}
+											disabled={
+												catalogBlocked ||
+												homeDraft.busy ||
+												homeDraft.failed ||
+												!homeDraft.inventory?.active ||
+												(!!currentProjectId && !currentProject) ||
+												(!currentProjectId && !canCreateProjectless(local, projectCatalog.data))
+											}
 											busy={catalogState.busy}
 											onSend={sendInitial}
 											focusRevision={composerFocusRevision}

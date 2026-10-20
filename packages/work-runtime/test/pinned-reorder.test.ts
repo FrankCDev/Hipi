@@ -311,7 +311,7 @@ for (const target of ["source", "anchor"] as const) {
 	});
 }
 
-test("real runtime lost reorder reply, concurrent duplicates, restart and schema9 backup retain first receipt", async () => {
+test("real runtime lost reorder reply, concurrent duplicates, restart and schema12 backup retain first receipt", async () => {
 	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-reorder-replay-")));
 	const root = join(directory, "store");
 	let loseReply = false;
@@ -367,10 +367,10 @@ test("real runtime lost reorder reply, concurrent duplicates, restart and schema
 			conversations,
 		);
 		await runtime.close();
-		assert.equal(inspectCatalog(join(root, "catalog.sqlite")).catalogSchema, 9);
+		assert.equal(inspectCatalog(join(root, "catalog.sqlite")).catalogSchema, 12);
 		const backup = await backupStore({ source: root, destination: join(directory, "backup") });
-		assert.equal(backup.manifest.catalogSchema, 9);
-		assert.equal((await verifyBackup({ directory: backup.directory })).manifest.catalogSchema, 9);
+		assert.equal(backup.manifest.catalogSchema, 12);
+		assert.equal((await verifyBackup({ directory: backup.directory })).manifest.catalogSchema, 12);
 		const saved = new DatabaseSync(join(backup.directory, "catalog.sqlite"), { readOnly: true });
 		try {
 			assert.deepEqual(

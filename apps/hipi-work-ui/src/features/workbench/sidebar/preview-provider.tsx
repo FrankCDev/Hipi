@@ -3,6 +3,7 @@ import { useSidebarDragging } from "./drag-provider.tsx";
 import { SidebarPreviewCoordinator } from "./preview-coordinator.ts";
 
 const PreviewContext = createContext<SidebarPreviewCoordinator | null>(null);
+const DisabledContext = createContext(false);
 
 export function SidebarPreviewProvider({
 	children,
@@ -28,8 +29,14 @@ export function SidebarPreviewProvider({
 			coordinator.dispose();
 		};
 	}, [coordinator]);
-	return <PreviewContext.Provider value={coordinator}>{children}</PreviewContext.Provider>;
+	return (
+		<PreviewContext.Provider value={coordinator}>
+			<DisabledContext.Provider value={disabled || dragging}>{children}</DisabledContext.Provider>
+		</PreviewContext.Provider>
+	);
 }
+
+export const useSidebarPreviewDisabled = () => useContext(DisabledContext);
 
 export function useSidebarPreviewCoordinator() {
 	const coordinator = useContext(PreviewContext);

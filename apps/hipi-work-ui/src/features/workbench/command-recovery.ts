@@ -1,7 +1,8 @@
-import { parseRequest, type Request } from "@hipi/work-runtime/contracts";
+import type { Request } from "@hipi/work-runtime/contracts";
 import type { LocalState } from "./local-state.ts";
+import { parseStoredRequest } from "./recovery/stored-request.ts";
 
-export type CatalogCommand = Extract<
+export type LegacyCatalogCommand = Extract<
 	Request,
 	{
 		method:
@@ -12,11 +13,24 @@ export type CatalogCommand = Extract<
 			| "restoreConversation";
 	}
 >;
+export type ProjectCatalogCommand = Extract<
+	Request,
+	{
+		method:
+			| "createProject"
+			| "createProjectConversation"
+			| "renameProject"
+			| "setProjectPinned"
+			| "reorderPinnedProject"
+			| "adoptLegacyDefaultWorkspace";
+	}
+>;
+export type CatalogCommand = LegacyCatalogCommand | ProjectCatalogCommand;
 export type AgentCommand = Extract<
 	Request,
 	{ method: "authorizeAgentContext" | "authorizeRetainedContext" | "revokeAgentContext" | "decideToolApproval" }
 >;
-export type RecoverableCommand = CatalogCommand | AgentCommand;
+export type RecoverableCommand = LegacyCatalogCommand | AgentCommand;
 export type RecoveryRecord = { request: RecoverableCommand | null; incompatible: boolean };
 
 /** Version 2 command payloads are separate from v1 drafts and pending message submissions. */
@@ -25,11 +39,18 @@ export function readCommand(local: LocalState | undefined, key: string): Recover
 	if (!raw) return { request: null, incompatible: false };
 	try {
 		const saved: unknown = JSON.parse(raw);
-		if (!saved || typeof saved !== "object" || !("version" in saved) || saved.version !== 2 || !("request" in saved))
+		if (
+			!saved ||
+			typeof saved !== "object" ||
+			!("version" in saved) ||
+			saved.version !== 2 ||
+			!("request" in saved) ||
+			Object.keys(saved).some((key) => !["version", "request"].includes(key))
+		)
 			throw new Error("INCOMPATIBLE_RECOVERY");
 		if (saved.request === null) return { request: null, incompatible: false };
 		if (!saved.request || typeof saved.request !== "object") throw new Error("INVALID_RECOVERY");
-		const request = parseRequest(saved.request);
+		const request = parseStoredRequest(saved.request);
 		if (request.expectedStoreId !== undefined) throw new Error("INVALID_RECOVERY");
 		if (
 			request.method === "createWorkspace" ||

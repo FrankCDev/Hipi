@@ -12,7 +12,10 @@ import {
 	PRESENTATION_SCHEMA,
 	validatePresentationStore,
 } from "../conversation-presentation.ts";
+import { NAVIGATION_SCHEMA, validateNavigationStore } from "../navigation/schema.ts";
+import { PROJECT_SCHEMA, validateProjectStore } from "../projects/schema.ts";
 import { SEARCH_SCHEMA, validateSearchStore } from "../search/schema.ts";
+import { SIDEBAR_PIN_SCHEMA, validateSidebarPinStore } from "../sidebar-pins/schema.ts";
 import { checkDatabasePath } from "../store-owner.ts";
 import { MAINTENANCE_LIMITS, MaintenanceError } from "./contracts.ts";
 import { assertRegularFile, validateWorkspaceId } from "./paths.ts";
@@ -37,6 +40,9 @@ let expectedProjectCatalogSchema: string | undefined;
 let expectedPresentationCatalogSchema: string | undefined;
 let expectedSearchCatalogSchema: string | undefined;
 let expectedOrderedCatalogSchema: string | undefined;
+let expectedNavigationCatalogSchema: string | undefined;
+let expectedLogicalProjectCatalogSchema: string | undefined;
+let expectedSidebarPinCatalogSchema: string | undefined;
 function assertSchemaBudget(db: DatabaseSync): void {
 	const count = db.prepare("SELECT count(*) AS total FROM sqlite_schema").get()?.total;
 	if (
@@ -113,7 +119,7 @@ export function assertSqliteIntegrity(path: string, standalone = false): void {
 		closeDatabase(db);
 	}
 }
-function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 | 9 {
+function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 {
 	if (expectedCatalogSchema === undefined) {
 		const reference = new DatabaseSync(":memory:");
 		try {
@@ -135,6 +141,12 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 | 9 {
 			expectedSearchCatalogSchema = schemaSignature(reference);
 			reference.exec(PRESENTATION_ORDER_SCHEMA);
 			expectedOrderedCatalogSchema = schemaSignature(reference);
+			reference.exec(NAVIGATION_SCHEMA);
+			expectedNavigationCatalogSchema = schemaSignature(reference);
+			reference.exec(PROJECT_SCHEMA);
+			expectedLogicalProjectCatalogSchema = schemaSignature(reference);
+			reference.exec(SIDEBAR_PIN_SCHEMA);
+			expectedSidebarPinCatalogSchema = schemaSignature(reference);
 		} finally {
 			reference.close();
 		}
@@ -146,6 +158,9 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 | 9 {
 	if (signature === expectedPresentationCatalogSchema) return 7;
 	if (signature === expectedSearchCatalogSchema) return 8;
 	if (signature === expectedOrderedCatalogSchema) return 9;
+	if (signature === expectedNavigationCatalogSchema) return 10;
+	if (signature === expectedLogicalProjectCatalogSchema) return 11;
+	if (signature === expectedSidebarPinCatalogSchema) return 12;
 	throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 }
 function assertProjectFolders(db: DatabaseSync): void {
@@ -217,6 +232,18 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			...(version >= 6 ? ["project_folders"] : []),
 			...(version >= 7 ? ["conversation_presentations", "presentation_state", "presentation_commands"] : []),
 			...(version >= 8 ? ["search_state", "search_sources", "search_chunks"] : []),
+			...(version >= 10 ? ["navigation_state", "navigation_sources", "navigation_publication"] : []),
+			...(version >= 12 ? ["sidebar_pin_order", "sidebar_pin_state", "sidebar_pin_commands"] : []),
+			...(version >= 11
+				? [
+						"projects",
+						"project_memberships",
+						"project_catalog_state",
+						"project_presentations",
+						"project_presentation_state",
+						"project_commands",
+					]
+				: []),
 		]);
 		for (const row of db.prepare("SELECT type,name,sql FROM sqlite_schema").iterate()) {
 			if (row.type === "table" && typeof row.name === "string" && allowed.delete(row.name)) continue;
@@ -226,6 +253,10 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 				(row.name === "conversation_page" ||
 					(version >= 7 && row.name === "presentation_pin_order") ||
 					(version >= 8 && row.name === "search_chunk_scope") ||
+					(version >= 10 && (row.name === "navigation_recent" || row.name === "navigation_workspace")) ||
+					(version >= 11 && (row.name === "project_membership_scope" || row.name === "project_pin_order")) ||
+					(version >= 12 &&
+						["sidebar_pin_ordinal", "sidebar_pin_project", "sidebar_pin_conversation"].includes(row.name)) ||
 					row.name.startsWith("sqlite_autoindex_"))
 			)
 				continue;
@@ -274,6 +305,9 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			try {
 				validatePresentationStore(db, version >= 9);
 				if (version >= 8) validateSearchStore(db);
+				if (version >= 10) validateNavigationStore(db);
+				if (version >= 11) validateProjectStore(db);
+				if (version >= 12) validateSidebarPinStore(db);
 			} catch (error) {
 				throw new MaintenanceError(
 					error instanceof AppError && error.code === "CAPACITY_EXCEEDED"

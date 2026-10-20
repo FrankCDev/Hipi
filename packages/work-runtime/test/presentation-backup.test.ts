@@ -50,7 +50,7 @@ async function fixture() {
 		const database = new DatabaseSync(join(source, "catalog.sqlite"));
 		try {
 			database.exec(
-				"DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; ALTER TABLE presentation_state DROP COLUMN order_generation; UPDATE identity SET version=7",
+				"DROP TABLE sidebar_pin_commands; DROP TABLE sidebar_pin_order; DROP TABLE sidebar_pin_state; DROP TABLE project_commands; DROP TABLE project_memberships; DROP TABLE project_presentations; DROP TABLE project_presentation_state; DROP TABLE project_catalog_state; DROP TABLE projects; DROP TABLE navigation_sources; DROP TABLE navigation_publication; DROP TABLE navigation_state; DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; ALTER TABLE presentation_state DROP COLUMN order_generation; UPDATE identity SET version=7",
 			);
 		} finally {
 			database.close();
@@ -119,7 +119,7 @@ test("schema6 migrates atomically to empty presentation state without changing s
 		} finally {
 			await runtime.close();
 		}
-		assert.equal(inspectCatalog(f.catalogPath).catalogSchema, 9);
+		assert.equal(inspectCatalog(f.catalogPath).catalogSchema, 12);
 	} finally {
 		await rm(f.parent, { recursive: true, force: true });
 	}

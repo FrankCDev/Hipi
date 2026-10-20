@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { AppClient, ConversationModel } from "@hipi/work-runtime/contracts";
-import type { ReactNode } from "react";
+import { createRef, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { AppClientProvider } from "../../../src/app/client-provider.tsx";
@@ -9,6 +9,7 @@ import { ConversationPane } from "../../../src/features/workbench/conversation/p
 import type { ConnectionState } from "../../../src/features/workbench/conversation/use-observation.ts";
 import { ConversationPreview } from "../../../src/features/workbench/sidebar/conversation-preview.tsx";
 import { SidebarPreviewProvider } from "../../../src/features/workbench/sidebar/preview-provider.tsx";
+import { SidebarSelectionProvider } from "../../../src/features/workbench/sidebar/selection-provider.tsx";
 
 const fixture = vi.hoisted(() => ({
 	connection: "connected" as ConnectionState,
@@ -110,16 +111,35 @@ test("connecting displays an honest transitional notice without a redundant reco
 	assert.doesNotMatch(html, /重新连接并核对/);
 });
 
-test("preview row owns the selection surface without inventing a second navigation action", () => {
+test("preview row keeps canonical location without premature SSR selection or a second navigation action", () => {
+	const navigationRoot = createRef<HTMLElement>();
 	const html = renderToStaticMarkup(
 		<PreferencesProvider>
-			<SidebarPreviewProvider disabled={false} navigationKey="selection-fixture">
-				<ConversationPreview conversation={conversation} workspaceName="Workspace" selected onSelect={() => {}} />
-			</SidebarPreviewProvider>
+			<aside ref={navigationRoot}>
+				<SidebarSelectionProvider
+					scope={conversation}
+					preferredLocation={{ kind: "workspace", workspaceId: "workspace" }}
+					rootRef={navigationRoot}
+				>
+					<SidebarPreviewProvider disabled={false} navigationKey="selection-fixture">
+						<ConversationPreview
+							conversation={conversation}
+							workspaceName="Workspace"
+							location={{ kind: "workspace", workspaceId: "workspace" }}
+							onSelect={() => {}}
+						/>
+					</SidebarPreviewProvider>
+				</SidebarSelectionProvider>
+			</aside>
 		</PreferencesProvider>,
 	);
-	assert.match(html, /aria-current="page"/);
-	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
+	// SSR cannot choose a visible alias before its navigation DOM has mounted.
+	assert.doesNotMatch(html, /aria-current=/);
+	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="false"/);
+	assert.match(
+		html,
+		/data-workspace-id="workspace" data-conversation-id="conversation" data-sidebar-location="workspace" data-sidebar-location-workspace="workspace"/,
+	);
 	assert.match(html, /class="conversation-link"/);
 	assert.doesNotMatch(html, /lucide-ellipsis|conversation-preview-trigger|conversation-link selected/);
 	assert.equal((html.match(/<button /g) ?? []).length, 1);

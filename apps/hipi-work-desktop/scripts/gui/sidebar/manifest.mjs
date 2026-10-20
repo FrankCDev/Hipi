@@ -12,9 +12,9 @@ export function defaultRoleEntry(seed) {
 		kind: "value",
 		key: "default-chat-workspace",
 		value: JSON.stringify({
-			version: seed.handshake.protocolVersion,
-			method: "createWorkspace",
-			params: { workspaceId: seed.defaultWorkspaceId, name: "Chats" },
+			version: 1,
+			role: "default-chat-workspace",
+			workspaceId: seed.defaultWorkspaceId,
 		}),
 	};
 }

@@ -47,6 +47,7 @@ export function useCatalogPages<T, P extends Page<T> = Page<T>>(options: Catalog
 		await cache.resetQueries({ queryKey: queryOptions.queryKey, exact: true });
 	};
 	return {
+		dataUpdatedAt: query.dataUpdatedAt,
 		pages,
 		items: [...items.values()],
 		hasData: query.data !== undefined,

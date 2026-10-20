@@ -18,6 +18,8 @@ function catalog() {
 	};
 	return new WorkRuntime({
 		storeId: "store",
+		refreshSidebarProjection: rejectFeatureRead,
+		listSidebarConversations: rejectFeatureRead,
 		refreshConversationSearch: rejectFeatureRead,
 		searchConversations: rejectFeatureRead,
 		getHistoryAroundMatch: rejectFeatureRead,

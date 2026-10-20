@@ -60,7 +60,7 @@ export function PreparedTaskRecovery({
 				>
 					{c.check}
 				</Button>
-				{state.notFound && !state.initialConsentInvalidated && (
+				{(state.notFound || state.projectPending) && !state.initialConsentInvalidated && (
 					<Button
 						variant="outline"
 						size="sm"

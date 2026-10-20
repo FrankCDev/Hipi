@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import test from "node:test";
-import { parseRequest } from "@hipi/work-runtime/contracts";
 import { ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
 import { assertScenarioWorkspaceDatabases, createGuiProfile } from "../../smoke-packaged-gui.mjs";
 import { seedSidebar, verifySidebar } from "./fixture.mjs";
@@ -20,14 +19,31 @@ test("public-runtime sidebar fixture persists three exact workspaces, cross-proj
 		const seed = await seedSidebar(context);
 		assert.equal(closedChecks, 1);
 		assert.equal(seed.snapshot.workspaces.length, 3);
-		assert.equal(seed.snapshot.conversations.length, 27);
+		assert.equal(seed.snapshot.conversations.length, 28);
 		assert.equal(seed.pins.length, 3);
+		assert.equal(seed.aliasProjectId, "sidebar-project-a");
 		assert.equal(new Set(seed.pins.map((scope) => scope.workspaceId)).size, 2);
 		assert.equal(
 			seed.snapshot.conversations.reduce((count, item) => count + item.history.messages.length, 0),
 			2,
 		);
-		assert.deepEqual(parseRequest(JSON.parse(defaultRoleEntry(seed).value)), JSON.parse(defaultRoleEntry(seed).value));
+		assert.deepEqual(JSON.parse(defaultRoleEntry(seed).value), {
+			version: 1,
+			role: "default-chat-workspace",
+			workspaceId: seed.defaultWorkspaceId,
+		});
+		assert.ok(
+			seed.snapshot.conversations.some(
+				({ conversation }) =>
+					conversation.workspaceId === seed.alias.workspaceId &&
+					conversation.conversationId === seed.alias.conversationId,
+			),
+		);
+		assert.ok(
+			!seed.pins.some(
+				(scope) => scope.workspaceId === seed.alias.workspaceId && scope.conversationId === seed.alias.conversationId,
+			),
+		);
 		await assertScenarioWorkspaceDatabases(await ownedHistoryDirectory(ownedProfileRoot), "sidebar");
 		const result = await verifySidebar({ ...context, seed, gui: { final: { pins: seed.snapshot.pins } } });
 		assert.equal(result.cleanColdRead, true);

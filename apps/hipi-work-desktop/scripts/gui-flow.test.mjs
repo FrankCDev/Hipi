@@ -200,34 +200,35 @@ test("streaming observation retains every invalid action state even after a vali
 	assert.equal(observation.invalidRunningActions, 4, "Idle Send is not a running-state failure");
 });
 
-test("default chat identity and cardinality reject duplicate backing workspaces, conversations and incorrect receipt scope", async () => {
+test("global Recent and cold pinned identity reject wrong scopes, aliases and extra projects", async () => {
+	const scope = { workspaceId: "receipt-work", conversationId: "one" };
 	const valid = {
-		count: 1,
+		projects: 0,
 		recent: 1,
-		workspaceId: "receipt-work",
-		selected: "true",
-		conversations: 1,
+		recentWorkspaceId: null,
+		rows: [{ ...scope, selected: true, location: "recent" }],
 		title: fixture.conversation,
 	};
 	const verify = (state, reopened = false) =>
-		assertDefaultChatScope(
-			{ request: async () => ({ result: { value: state } }) },
-			{ workspaceId: "receipt-work", conversationId: "one" },
-			reopened,
-		);
+		assertDefaultChatScope({ request: async () => ({ result: { value: state } }) }, scope, reopened);
 	await verify(valid);
-	await verify({ ...valid, count: 2 }, true);
-	for (const [key, value] of Object.entries({
-		count: 2,
-		recent: 2,
-		workspaceId: "same-name-wrong-id",
-		selected: "false",
-		conversations: 2,
-		title: "wrong",
-	}))
-		await assert.rejects(verify({ ...valid, [key]: value }));
+	const cold = { ...valid, projects: 1, rows: [{ ...scope, selected: true, location: "pinned" }] };
+	await verify(cold, true);
+	for (const delta of [
+		{ projects: 1 },
+		{ recent: 2 },
+		{ recentWorkspaceId: scope.workspaceId },
+		{ rows: [] },
+		{ rows: [valid.rows[0], valid.rows[0]] },
+		{ title: "wrong" },
+		...Object.entries({ workspaceId: "wrong", conversationId: "wrong", selected: false, location: "pinned" }).map(
+			([field, value]) => ({ rows: [{ ...valid.rows[0], [field]: value }] }),
+		),
+	])
+		await assert.rejects(verify({ ...valid, ...delta }));
 	await assert.rejects(verify(valid, true));
-	await assert.rejects(verify({ ...valid, count: 3 }, true));
+	await assert.rejects(verify({ ...cold, projects: 2 }, true));
+	await assert.rejects(verify({ ...cold, rows: [...cold.rows, ...valid.rows] }, true));
 });
 
 test("initial chat uses native draft input, Shift+Enter and IME without creating work before Send", async () => {
@@ -271,6 +272,8 @@ test("initial chat uses native draft input, Shift+Enter and IME without creating
 			return nodes[selector] ?? null;
 		},
 		querySelectorAll(selector) {
+			if (selector === ".workspace-branch") return [{ dataset: {} }];
+			if (selector === ".workspace-branch[data-workspace-id]") return [];
 			return nodes[selector] ? [nodes[selector]] : selector === '[role="dialog"]' && menu ? [{}] : [];
 		},
 		elementFromPoint(_x, y) {
@@ -339,7 +342,7 @@ test("initial chat rejects premature backing objects, lost drafts and disabled-S
 		sendType: "submit",
 		sendDisabled: false,
 		dialogs: 0,
-		workspaces: 0,
+		projects: 0,
 		conversations: 0,
 		messages: 0,
 	};
@@ -350,7 +353,7 @@ test("initial chat rejects premature backing objects, lost drafts and disabled-S
 		sendType: "button",
 		sendDisabled: true,
 		dialogs: 1,
-		workspaces: 1,
+		projects: 1,
 		conversations: 1,
 		messages: 1,
 	}))
@@ -722,7 +725,7 @@ function renderer({ delay = 0, selected = false } = {}) {
 		querySelector: () => (selected ? { textContent: fixture.conversation } : null),
 		querySelectorAll(selector) {
 			if (selector === ".recent-conversations") return ++reads > delay ? [{}] : [];
-			if (selector === ".recent-conversations .conversation-link") return reads > delay ? [conversation] : [];
+			if (selector === ".sidebar .conversation-link") return reads > delay ? [conversation] : [];
 			throw new Error(`Unexpected selector: ${selector}`);
 		},
 		elementFromPoint: () => conversation,
@@ -790,7 +793,7 @@ test("unexpected application alerts fail even without console errors or visible 
 	await assert.rejects(assertNoAlerts(cdp), /Unexpected application alert.*Records could not be read/);
 });
 
-test("reopen waits for the actual retained default Recent branch without creating another workspace", async () => {
+test("reopen waits for the unique persisted sidebar row without creating another workspace", async () => {
 	const cdp = renderer({ delay: 2 });
 	await selectReopenedConversation(cdp);
 	assert.deepEqual(cdp.clicks, ["conversation"]);

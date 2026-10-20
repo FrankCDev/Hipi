@@ -9,6 +9,8 @@ import { catalogLabels } from "../catalog/labels.ts";
 import type { SidebarOrderAction } from "./drag-provider.tsx";
 import { conversationAge } from "./preview-metadata.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./preview-row.tsx";
+import type { SidebarLocation } from "./selection-owner.ts";
+import { useSidebarAlias } from "./selection-provider.tsx";
 import { SidebarTitle } from "./title.tsx";
 
 function ConversationProject({ workspaceId }: { workspaceId: string }) {
@@ -27,24 +29,44 @@ function ConversationProject({ workspaceId }: { workspaceId: string }) {
 	) : null;
 }
 
+function LogicalConversationProject({ projectId }: { projectId: string }) {
+	const client = useAppClient();
+	const query = useQuery({
+		queryKey: ["project", projectId],
+		queryFn: ({ signal }) => client.call("getProject", { projectId }, signal),
+		staleTime: 15_000,
+		retry: false,
+	});
+	return !query.isError && query.data?.projectId === projectId ? (
+		<p className="preview-workspace">
+			<Icon name="folder" size={15} />
+			<span>{query.data.name}</span>
+		</p>
+	) : null;
+}
+
 export function ConversationPreview({
 	conversation,
 	workspaceName,
-	selected,
+	location,
 	onSelect,
 	renderActions,
 	resolveWorkspace = false,
+	projectId,
 	orderAction,
 }: {
 	conversation: Conversation;
 	workspaceName?: string;
-	selected: boolean;
+	location: SidebarLocation;
 	onSelect: () => void;
 	renderActions?: PreviewActions;
 	resolveWorkspace?: boolean;
+	/** Undefined is legacy physical metadata; null is authoritatively projectless. */
+	projectId?: string | null;
 	orderAction?: SidebarOrderAction;
 }) {
 	const { locale } = usePreferences();
+	const alias = useSidebarAlias(conversation, location);
 	const titleId = useId();
 	const l = catalogLabels(locale);
 	const timestamp = conversation.createdAt === null ? null : new Date(conversation.createdAt);
@@ -52,7 +74,7 @@ export function ConversationPreview({
 	return (
 		<SidebarPreviewRow
 			className="conversation-preview-row"
-			selected={selected}
+			selected={alias.active}
 			titleId={titleId}
 			renderActions={renderActions}
 			orderAction={orderAction}
@@ -71,23 +93,31 @@ export function ConversationPreview({
 							</time>
 						)}
 					</PopoverHeader>
-					{workspaceName && (
+					{projectId === undefined && workspaceName && (
 						<p className="preview-workspace">
 							<Icon name="folder" size={15} />
 							<span>{workspaceName}</span>
 						</p>
 					)}
-					{!workspaceName && resolveWorkspace && <ConversationProject workspaceId={conversation.workspaceId} />}
+					{projectId ? (
+						<LogicalConversationProject projectId={projectId} />
+					) : projectId === undefined && !workspaceName && resolveWorkspace ? (
+						<ConversationProject workspaceId={conversation.workspaceId} />
+					) : null}
 				</>
 			)}
 		>
 			{({ hovered, describedBy }) => (
 				<button
+					ref={alias.ref}
 					type="button"
 					className="conversation-link"
 					data-workspace-id={conversation.workspaceId}
 					data-conversation-id={conversation.conversationId}
-					aria-current={selected ? "page" : undefined}
+					data-sidebar-location={location.kind}
+					data-sidebar-location-workspace={location.kind === "workspace" ? location.workspaceId : undefined}
+					data-sidebar-location-project={location.kind === "project" ? location.projectId : undefined}
+					aria-current={alias.active ? "page" : undefined}
 					aria-describedby={describedBy}
 					onClick={onSelect}
 				>

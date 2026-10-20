@@ -1,4 +1,4 @@
-import type { Workspace } from "@hipi/work-runtime/contracts";
+import type { Project, Workspace } from "@hipi/work-runtime/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Folder, MessageCircle, Pencil } from "lucide-react";
 import { useAppClient } from "../../../app/client-provider.tsx";
@@ -13,22 +13,39 @@ import { projectConversationCount } from "./preview-metadata.ts";
 /** Mounted on demand by the preview, never reads execution or grants model access. */
 export function ProjectPreviewCard({
 	workspace,
+	project,
+	logicalReady = true,
 	onManageFolder,
 	mode = "card",
 }: {
-	workspace: Workspace;
+	logicalReady?: boolean;
 	onManageFolder?: () => void;
 	mode?: "card" | "menu";
-}) {
+} & ({ workspace: Workspace; project?: never } | { project: Project; workspace?: never })) {
 	const client = useAppClient();
 	const { locale, t } = usePreferences();
 	const l = catalogLabels(locale);
 	const folders = projectFolderLabels(locale);
-	const folder = useProjectFolder(workspace.workspaceId);
-	const count = useQuery({
-		queryKey: ["conversations", workspace.workspaceId, "all", "preview"],
+	const workspaceId = project ? project.homeWorkspaceId : workspace.workspaceId;
+	const logical = project !== undefined;
+	const folder = useProjectFolder(workspaceId);
+	const count = useQuery<{ count: number; partial: boolean; state: "building" | "refreshing" | "ready" }>({
+		queryKey: logical
+			? ["sidebar-navigation", "project-summary", project.projectId, "all"]
+			: ["conversations", workspaceId, "all", "preview"],
 		queryFn: ({ signal }) =>
-			client.call("listConversations", { workspaceId: workspace.workspaceId, filter: "all" }, signal),
+			logical
+				? client
+						.call("getProjectConversationSummary", { projectId: project.projectId, filter: "all" }, signal)
+						.then((summary) => ({
+							count: summary.matchedAtLeast,
+							partial: !summary.complete || summary.coverage.state !== "ready",
+							state: summary.coverage.state,
+						}))
+				: client
+						.call("listConversations", { workspaceId, filter: "all" }, signal)
+						.then((page) => ({ count: page.items.length, partial: page.nextCursor !== null, state: "ready" as const })),
+		enabled: !logical || logicalReady,
 		staleTime: 15_000,
 		retry: false,
 	});
@@ -37,22 +54,31 @@ export function ProjectPreviewCard({
 			<PopoverHeader>
 				<PopoverTitle className="project-preview-title">
 					<Folder size={16} aria-hidden="true" />
-					{workspace.name}
+					{project ? project.name : workspace.name}
 				</PopoverTitle>
 			</PopoverHeader>
-			{count.data && !count.isError && (
-				<p className="project-preview-meta">
-					<MessageCircle size={16} aria-hidden="true" />
-					<span>{projectConversationCount(count.data.items.length, count.data.nextCursor !== null, locale)}</span>
-				</p>
+			{(!logical || logicalReady) &&
+				count.data &&
+				!count.isError &&
+				count.data.state !== "building" &&
+				(!count.data.partial || count.data.count > 0) && (
+					<p className="project-preview-meta">
+						<MessageCircle size={16} aria-hidden="true" />
+						<span>{projectConversationCount(count.data.count, count.data.partial, locale)}</span>
+					</p>
+				)}
+			{(count.isPending || (logical && !logicalReady) || (!count.isError && count.data?.state === "building")) && (
+				<p className="project-preview-meta">{t("common.loading")}</p>
 			)}
-			{count.isPending && <p className="project-preview-meta">{t("common.loading")}</p>}
-			{count.isError && mode === "card" && (
+			{logicalReady && !count.isError && count.data?.state === "refreshing" && (
+				<p className="project-preview-meta">{l.refreshing}</p>
+			)}
+			{(!logical || logicalReady) && count.isError && mode === "card" && (
 				<Button variant="ghost" size="sm" disabled={count.isFetching} onClick={() => void count.refetch()}>
 					{l.reloadPreview}
 				</Button>
 			)}
-			{folder.data?.workspaceId === workspace.workspaceId && !folder.isError && (
+			{folder.data?.workspaceId === workspaceId && !folder.isError && (
 				<p className="project-preview-meta project-preview-path">
 					<Folder size={16} aria-hidden="true" />
 					<span

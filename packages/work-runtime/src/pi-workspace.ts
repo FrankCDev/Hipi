@@ -30,6 +30,7 @@ import {
 	type ModelReference,
 	type ObservationStatus,
 	type Params,
+	parseResult,
 	type Receipt,
 	type ReceiptView,
 	type Scope,
@@ -60,6 +61,8 @@ import type { TrustedAgentFileService } from "./files/service.ts";
 import { readHistory, readMessageText, textEnd, textOf, visibleEntry } from "./history.ts";
 import { readModelFailureDetail } from "./model-failure.ts";
 import type { CredentialPort } from "./model-provider.ts";
+import { ConversationActivityDoc, changesNavigation } from "./navigation/activity.ts";
+import type { NavigationInvalidation } from "./navigation/contracts.ts";
 import { StreamIdentity } from "./stream-identity.ts";
 
 type Catalog = {
@@ -73,6 +76,8 @@ type StoredReceipt = Receipt & {
 	fingerprint: string;
 	mappedRequestId: string;
 	durableConversationId: number;
+	/** Original first acceptance time; absent on legacy receipts and never synthesized during replay. */
+	acceptedAt?: number;
 };
 // Match the directory and authorization documents: at most 31 deltas per cold read.
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) => info.deltasSinceBase >= 31;
@@ -118,6 +123,8 @@ export type PiWorkspaceOptions = {
 	resume?: boolean;
 	failpoint?: (point: Failpoint) => Promise<void>;
 	onError?: (error: unknown) => void;
+	/** Synchronous invalidation only. Must not block or call Session APIs. */
+	onNavigationChanged?: (metadata?: NavigationInvalidation) => void;
 };
 /** Diagnostics must never become an unhandled rejection or break writer teardown. */
 function report(options: PiWorkspaceOptions, error: unknown): void {
@@ -157,18 +164,74 @@ export class PiWorkspace implements WorkspacePort {
 	#observers = 0;
 	#paused = false;
 	#mutation: Promise<unknown> = Promise.resolve();
+	readonly #stopNavigation: () => void;
 	private constructor(
 		harness: Harness,
 		catalog: Workspace,
 		options: PiWorkspaceOptions,
 		agentTools: AgentToolBroker,
 		toolPacks: ToolPackLifecycle,
+		generation: string,
 	) {
 		this.#harness = harness;
 		this.#options = options;
 		this.#agentTools = agentTools;
 		this.#toolPacks = toolPacks;
 		this.workspace = Object.freeze({ workspaceId: catalog.workspaceId, name: catalog.name });
+		const started = new Set<number>();
+		this.#stopNavigation = harness.subscribeCommits((publication) => {
+			if (!changesNavigation(publication, started)) return;
+			try {
+				const conversations: NavigationInvalidation["conversations"] = [];
+				let reset = false,
+					header = false;
+				for (const change of publication.changes) {
+					if (change.type !== "document" && change.type !== "document.copy") continue;
+					if (change.record.kind === "hipi.workspace-directory") {
+						header = true;
+						if (change.type !== "document" || change.value?.generation !== generation) reset = true;
+					}
+					if (change.record.kind !== "hipi.conversation-metadata") continue;
+					const value = change.type === "document" ? change.value?.value : undefined;
+					if (!value || typeof value !== "object" || Array.isArray(value) || conversations.length >= 256) {
+						reset = true;
+						continue;
+					}
+					if (
+						typeof value.durableId !== "number" ||
+						!Number.isSafeInteger(value.durableId) ||
+						value.durableId <= 0
+					) {
+						reset = true;
+						continue;
+					}
+					conversations.push({
+						generation,
+						durableId: value.durableId,
+						conversation: parseResult("getConversation", {
+							workspaceId: value.workspaceId,
+							conversationId: value.conversationId,
+							title: value.title,
+							revision: value.revision,
+							createdAt: value.createdAt,
+							archivedAt: value.archivedAt,
+						}),
+					});
+				}
+				options.onNavigationChanged?.(
+					conversations.length || reset || header
+						? { conversations, reset: reset || (header && conversations.length === 0) }
+						: undefined,
+				);
+			} catch (error) {
+				try {
+					options.onNavigationChanged?.({ conversations: [], reset: true });
+				} catch {
+					/* Report the original failure. */
+				}
+				report(options, error);
+			}
+		});
 	}
 	static async open(storage: Storage, options: PiWorkspaceOptions): Promise<PiWorkspace> {
 		const agentTools = new AgentToolBroker(
@@ -308,7 +371,7 @@ export class PiWorkspace implements WorkspacePort {
 			}
 			if (!header || header.workspaceId !== options.workspaceId) throw new AppError("NOT_FOUND");
 			if (options.name !== undefined && header.name !== options.name) throw new AppError("IDEMPOTENCY_CONFLICT");
-			workspace = new PiWorkspace(harness, header, options, agentTools, toolPacks);
+			workspace = new PiWorkspace(harness, header, options, agentTools, toolPacks, header.generation);
 			const live = await harness.snapshot(WorkspaceLiveDoc, context);
 			for (const item of live?.items ?? []) {
 				const meta = await workspace.#metadata({ workspaceId: header.workspaceId, conversationId: item.publicId });
@@ -332,6 +395,7 @@ export class PiWorkspace implements WorkspacePort {
 			}
 			return workspace;
 		} catch (error) {
+			if (workspace) workspace.#stopNavigation();
 			try {
 				await harness.close(context);
 			} catch (failure) {
@@ -702,6 +766,14 @@ export class PiWorkspace implements WorkspacePort {
 			// Existing PI abort marks and withdrawn receipts remain authoritative.
 			(await tx.doc(CancellationDoc, conversation.id)).requested = false;
 			await this.#agentTools.submitted(tx, conversation.id);
+			const activity = await tx.doc(ConversationActivityDoc, input.conversationId, null);
+			if (
+				activity.latestAcceptedAt !== null &&
+				(!Number.isSafeInteger(activity.latestAcceptedAt) || activity.latestAcceptedAt < 0)
+			)
+				throw new AppError("STORE_MISMATCH");
+			const acceptedAt = Date.now();
+			activity.latestAcceptedAt = Math.max(activity.latestAcceptedAt ?? acceptedAt, acceptedAt);
 			doc.receipt = {
 				...input,
 				receiptId: randomUUID(),
@@ -709,6 +781,7 @@ export class PiWorkspace implements WorkspacePort {
 				fingerprint,
 				mappedRequestId: key,
 				durableConversationId: conversation.id,
+				acceptedAt,
 			};
 			return receiptOf(doc.receipt);
 		}, context);
@@ -1003,7 +1076,11 @@ export class PiWorkspace implements WorkspacePort {
 			try {
 				await this.#dispatch;
 			} finally {
-				await this.#harness.close(context);
+				try {
+					await this.#harness.close(context);
+				} finally {
+					this.#stopNavigation();
+				}
 			}
 			this.#closed = true;
 		})();

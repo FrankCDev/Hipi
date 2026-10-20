@@ -80,6 +80,17 @@ export async function seedSidebar({ ownedProfileRoot, assertAllOwnedProcessesExi
 				}
 			}
 		}
+		const aliasConversation = await runtime.call("createConversation", {
+			workspaceId: sidebarFixture.workspaceIds[1],
+			requestId: "sidebar-unpinned-alias",
+			title: "Shared project and Recent conversation",
+		});
+		const alias = {
+			workspaceId: aliasConversation.workspaceId,
+			conversationId: aliasConversation.conversationId,
+		};
+		const aliasProjectId = (await runtime.call("getConversationMembership", alias)).projectId;
+		assert.ok(aliasProjectId, "Fixture alias needs an authoritative logical project");
 		await runtime.call("submit", { ...pins[0], requestId: "sidebar-history", text: "SIDEBAR_PERSISTED_USER 中文" });
 		const deadline = Date.now() + 30000;
 		for (;;) {
@@ -97,7 +108,7 @@ export async function seedSidebar({ ownedProfileRoot, assertAllOwnedProcessesExi
 		const handshake = await runtime.call("handshake", {});
 		const snapshot = await sidebarRuntimeSnapshot(runtime);
 		assert.equal(snapshot.pins.length, 3);
-		return { ...sidebarFixture, handshake, pins, snapshot, seedViaPublicRuntime: true };
+		return { ...sidebarFixture, handshake, pins, alias, aliasProjectId, snapshot, seedViaPublicRuntime: true };
 	} finally {
 		await runtime.close();
 	}

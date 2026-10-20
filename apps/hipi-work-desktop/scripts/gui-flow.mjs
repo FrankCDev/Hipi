@@ -129,7 +129,7 @@ export function assertInitialChatUnsubmitted(state, goal) {
 	assert.equal(state.sendType, "submit", "Home must expose the actual Send action");
 	assert.equal(state.sendDisabled, false, "Safety must be tested with Send enabled");
 	assert.equal(state.dialogs, 0, "Initial chat must not require a creation dialog");
-	assert.equal(state.workspaces, 0, "Editing created a backing workspace before Send");
+	assert.equal(state.projects, 0, "Editing introduced a project branch before Send");
 	assert.equal(state.conversations, 0, "Editing persisted a conversation before Send");
 	assert.equal(state.messages, 0, "Editing submitted a turn before Send");
 }
@@ -228,7 +228,7 @@ export async function inspectInitialChat(cdp) {
 		return { home: !!home, goal: home?.querySelector('.prepared-task-input')?.value,
 			sendType: send?.type, sendDisabled: send?.disabled,
 			dialogs: document.querySelectorAll('[role="dialog"]').length,
-			workspaces: document.querySelectorAll('.workspace-branch').length,
+			projects: document.querySelectorAll('.workspace-branch[data-workspace-id]').length,
 			conversations: document.querySelectorAll('.conversation-link').length,
 			messages: document.querySelectorAll('[data-message-id]').length };
 	})()`,
@@ -629,34 +629,34 @@ export async function selectReopenedConversation(cdp) {
 		() =>
 			evaluate(
 				cdp,
-				`document.querySelectorAll('.recent-conversations').length === 1 && [...document.querySelectorAll('.recent-conversations .conversation-link')].filter(e => e.textContent.trim() === ${JSON.stringify(fixture.conversation)}).length === 1`,
+				`document.querySelectorAll('.recent-conversations').length === 1 && [...document.querySelectorAll('.sidebar .conversation-link')].filter(e => e.textContent.trim() === ${JSON.stringify(fixture.conversation)}).length === 1`,
 			),
-		"persisted default Recent conversation",
+		"unique persisted conversation in Recent or Pinned",
 	);
-	await click(cdp, ".recent-conversations .conversation-link", fixture.conversation);
+	await click(cdp, ".sidebar .conversation-link", fixture.conversation);
 }
 export async function assertDefaultChatScope(cdp, scope, reopened) {
 	const state = await evaluate(
 		cdp,
 		`(() => {
-		const branches = [...document.querySelectorAll('.workspace-branch')];
-		const recent = branches.filter(e => e.classList.contains('recent-conversations'));
-		return { count: branches.length, recent: recent.length,
-			workspaceId: recent[0]?.dataset.workspaceId,
-			selected: recent[0]?.dataset.containsCurrent,
-			conversations: document.querySelectorAll('.conversation-link').length,
+		const projects = [...document.querySelectorAll('.workspace-branch[data-workspace-id]')];
+		const recent = [...document.querySelectorAll('.recent-conversations')];
+		const rows = [...document.querySelectorAll('.sidebar .conversation-link')];
+		return { projects: projects.length, recent: recent.length,
+			recentWorkspaceId: recent[0]?.dataset.workspaceId ?? null,
+			rows: rows.map(row => ({ workspaceId: row.dataset.workspaceId, conversationId: row.dataset.conversationId,
+				selected: row.getAttribute('aria-current') === 'page', location: row.dataset.sidebarLocation })),
 			title: document.querySelector('.toolbar-conversation')?.textContent };
 	})()`,
 	);
-	assert.equal(
-		state.count,
-		reopened ? 2 : 1,
-		"One Send must create only its backing workspace; restart must reuse A and B",
-	);
+	assert.equal(state.projects, reopened ? 1 : 0, "Only the deliberately created named project may appear");
 	assert.equal(state.recent, 1);
-	assert.equal(state.workspaceId, scope.workspaceId, "Default Recent must match the actual receipt workspace identity");
-	assert.equal(state.selected, "true");
-	assert.equal(state.conversations, 1, "One Send and restart must retain exactly one conversation");
+	assert.equal(state.recentWorkspaceId, null, "Global Recent cannot claim one workspace identity");
+	assert.deepEqual(
+		state.rows,
+		[{ ...scope, selected: true, location: reopened ? "pinned" : "recent" }],
+		"One Send and restart must retain exactly one selected row with the actual receipt scope",
+	);
 	assert.equal(state.title, fixture.conversation);
 }
 export async function activityEvidence(cdp) {

@@ -15,6 +15,7 @@ import {
 	parseRequest,
 	type Receipt,
 	type ReceiptView,
+	type Request,
 	type Response,
 	type Result,
 	type Scope,
@@ -23,6 +24,21 @@ import {
 	type Subscription,
 	type Workspace,
 } from "./contracts.ts";
+import { isProjectMethod, type ProjectMethod } from "./projects/contracts.ts";
+import type { ProjectRuntimePort } from "./projects/ports.ts";
+import {
+	isSidebarPinMethod,
+	type SidebarPinMethod,
+	type SidebarPinRequest,
+	type SidebarPinResponse,
+} from "./sidebar-pins/contracts.ts";
+
+function isSidebarPinRequest(request: Request): request is Extract<Request, { method: SidebarPinMethod }> {
+	return isSidebarPinMethod(request.method);
+}
+function isProjectRequest(request: Request): request is Extract<Request, { method: ProjectMethod }> {
+	return isProjectMethod(request.method);
+}
 
 /** The application owns use cases; the implementation owns PI and storage, never a window. */
 export interface WorkspacePort {
@@ -71,6 +87,14 @@ export interface WorkspacePort {
 	close(): Promise<void>;
 }
 export type RuntimePorts = {
+	executeProject?: ProjectRuntimePort;
+	executeSidebarPin?: (request: SidebarPinRequest) => Promise<SidebarPinResponse>;
+	stopProjectWork?(): void;
+	refreshSidebarProjection(
+		input: Params<"refreshSidebarProjection">,
+		signal?: AbortSignal,
+	): Promise<Result<"refreshSidebarProjection">>;
+	listSidebarConversations(input: Params<"listSidebarConversations">): Promise<Result<"listSidebarConversations">>;
 	refreshConversationSearch(
 		input: Params<"refreshConversationSearch">,
 		signal?: AbortSignal,
@@ -217,6 +241,34 @@ export class WorkRuntime implements AppClient {
 		if (this.#closed) throw new AppError("CLOSED");
 		if (request.method === "handshake") return { protocolVersion: PROTOCOL_VERSION, storeId: this.#ports.storeId };
 		if (request.expectedStoreId !== this.#ports.storeId) throw new AppError("STORE_MISMATCH");
+		if (isSidebarPinRequest(request)) {
+			if (!this.#ports.executeSidebarPin) throw new AppError("INDEX_RECOVERY_REQUIRED");
+			return this.#ports.executeSidebarPin(request);
+		}
+		if (isProjectRequest(request)) {
+			if (!this.#ports.executeProject) throw new AppError("INDEX_RECOVERY_REQUIRED");
+			return this.#ports.executeProject(request, {
+				createWorkspace: async (input) => {
+					const lease = await this.#workspace(input.workspaceId, input.name);
+					try {
+						return { ...lease.port.workspace };
+					} finally {
+						lease.release();
+					}
+				},
+				createConversation: async (input) => {
+					const lease = await this.#workspace(input.workspaceId);
+					try {
+						return await lease.port.createConversation(input);
+					} finally {
+						lease.release();
+					}
+				},
+			});
+		}
+		if (request.method === "refreshSidebarProjection")
+			return this.#ports.refreshSidebarProjection(request.params, readSignal);
+		if (request.method === "listSidebarConversations") return this.#ports.listSidebarConversations(request.params);
 		if (request.method === "getConversationPresentation")
 			return this.#ports.getConversationPresentation(request.params);
 		if (request.method === "listPinnedConversations") return this.#ports.listPinnedConversations(request.params);
@@ -423,6 +475,7 @@ export class WorkRuntime implements AppClient {
 
 	async close(): Promise<void> {
 		this.#closed = true;
+		this.#ports.stopProjectWork?.();
 		this.#closing ??= (async () => {
 			// Admission stops first; accepted calls must settle before releasing any writer or root owner.
 			await Promise.allSettled([...this.#active]);

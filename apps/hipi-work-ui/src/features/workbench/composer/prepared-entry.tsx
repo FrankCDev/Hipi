@@ -34,6 +34,7 @@ export function PreparedTaskEntry({
 	onManageModels,
 	focusRevision = 0,
 	workspaceId = "",
+	readOnly = false,
 }: {
 	disabled: boolean;
 	busy: boolean;
@@ -43,6 +44,7 @@ export function PreparedTaskEntry({
 	onManageModels: (returnFocus: HTMLButtonElement | null) => void;
 	focusRevision?: number;
 	workspaceId?: string;
+	readOnly?: boolean;
 }) {
 	const client = useAppClient();
 	const local = useLocalState();
@@ -157,6 +159,7 @@ export function PreparedTaskEntry({
 						className="composer-input prepared-task-input border-0 bg-transparent shadow-none focus-visible:outline-none"
 						rows={COMPOSER_ROWS.min}
 						value={draft}
+						readOnly={readOnly}
 						maxLength={LIMITS.text}
 						placeholder={t("work.placeholder")}
 						onChange={(event) => onDraftChange(event.target.value)}

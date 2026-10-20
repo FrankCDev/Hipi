@@ -15,6 +15,8 @@ import {
 } from "./model-provider.ts";
 import { PiWorkspace, type PiWorkspaceOptions, WorkspaceShutdownFailed } from "./pi-workspace.ts";
 import { registerRuntimeProjectFolders } from "./project-folders.ts";
+import type { ProjectFailpoint } from "./projects/catalog.ts";
+import type { SidebarPinFailpoint } from "./sidebar-pins/catalog.ts";
 import { checkDatabasePath, StoreCatalog } from "./store-catalog.ts";
 
 export { createRuntimeProjectFolders } from "./project-folders.ts";
@@ -31,6 +33,8 @@ export type RuntimeOptions = Pick<
 	onDiagnostic?: (diagnostic: { category: "storage"; phase: "storage-open" }) => void;
 	catalogFailpoint?: (point: "after_reserve" | "after_directory" | "after_storage" | "before_ready") => Promise<void>;
 	presentationFailpoint?: (point: PresentationFailpoint) => void | Promise<void>;
+	projectFailpoint?: (point: ProjectFailpoint) => void | Promise<void>;
+	sidebarPinFailpoint?: (point: SidebarPinFailpoint) => void | Promise<void>;
 };
 /**
  * Local filesystem adapter. A dedicated SQLite lock transaction guards the actual workspace directory.
@@ -43,7 +47,12 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 	try {
 		await mkdir(directory, { recursive: true, mode: 0o700 });
 		root = await realpath(directory);
-		catalog = await StoreCatalog.open(root, options.presentationFailpoint);
+		catalog = await StoreCatalog.open(
+			root,
+			options.presentationFailpoint,
+			options.projectFailpoint,
+			options.sidebarPinFailpoint,
+		);
 	} catch (error) {
 		try {
 			options.onDiagnostic?.({ category: "storage", phase: "storage-open" });
@@ -61,6 +70,11 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 	}
 	const runtime = new WorkRuntime({
 		storeId: catalog.storeId,
+		executeSidebarPin: (request) => catalog.executeSidebarPin(request),
+		executeProject: (request, creation) => catalog.executeProject(request, creation),
+		stopProjectWork: () => catalog.stopProjectWork(),
+		refreshSidebarProjection: (input, signal) => catalog.refreshSidebarProjection(input, signal),
+		listSidebarConversations: (input) => catalog.listSidebarConversations(input),
 		refreshConversationSearch: (input, signal) => catalog.refreshConversationSearch(input, signal),
 		searchConversations: (input, signal) => catalog.searchConversations(input, signal),
 		getHistoryAroundMatch: (input, signal) => catalog.getHistoryAroundMatch(input, signal),
@@ -171,6 +185,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 				}
 				const port = await PiWorkspace.open(storage, {
 					...options,
+					onNavigationChanged: (metadata) => catalog.invalidateNavigation(metadata),
 					// Cache reopening is read-only even when test startup explicitly requested resume.
 					resume: openOptions?.resume === false ? false : options.resume,
 					workspaceId,

@@ -1,11 +1,72 @@
 import {
+	isSidebarPinMethod,
+	parseSidebarPinParams,
+	parseSidebarPinResult,
+	type SidebarPinMethods,
+} from "./sidebar-pins/contracts.ts";
+
+export type {
+	PinKey,
+	ReorderSidebarPin,
+	SidebarPinCommandResult,
+	SidebarPinItem,
+	SidebarPinMethod,
+	SidebarPinMethods,
+	SidebarPinMutationMethod,
+	SidebarPinPage,
+	SidebarPinRequest,
+	SidebarPinResponse,
+} from "./sidebar-pins/contracts.ts";
+export {
+	parsePinKey,
+	parseSidebarPinParams,
+	parseSidebarPinResult,
+	samePinKey,
+	sidebarPinCommandPayload,
+} from "./sidebar-pins/contracts.ts";
+
+import {
 	ACTIVITY_LIMITS,
 	type ToolActivity,
 	type ToolActivityPage,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
+import { ACTIVITY_BASES, type NavigationMethods } from "./navigation/contracts.ts";
+import {
+	isProjectMethod,
+	type ProjectMethods,
+	parseConversationMembership,
+	parseProjectParams,
+	parseProjectResult,
+} from "./projects/contracts.ts";
+
+export { parseProjectParams, parseProjectResult, projectCommandPayload } from "./projects/contracts.ts";
+
 import { SEARCH_LIMITS, type SearchMethods, searchQuery } from "./search/contracts.ts";
+
+export type {
+	ActivityBasis,
+	SidebarConversation,
+	SidebarCoverage,
+	SidebarPage,
+	SidebarView,
+} from "./navigation/contracts.ts";
+export type {
+	ConversationMembership,
+	Project,
+	ProjectCatalogState,
+	ProjectCommandResult,
+	ProjectCompletedCommand,
+	ProjectConversation,
+	ProjectConversationSummary,
+	ProjectId,
+	ProjectListItem,
+	ProjectMethods,
+	ProjectPage,
+	ProjectPendingCommand,
+	ProjectPresentation,
+} from "./projects/contracts.ts";
 
 export {
 	type ConversationSearchHit,
@@ -55,7 +116,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -260,7 +321,10 @@ export type ObservationStatus =
 export type Subscription = { dispose(): Promise<void> };
 export type Handshake = { protocolVersion: typeof PROTOCOL_VERSION; storeId: string };
 export type Methods = ToolPackMethods &
+	ProjectMethods &
+	SidebarPinMethods &
 	ProviderConfigurationMethods &
+	NavigationMethods &
 	SearchMethods & {
 		getToolActivities: { params: Scope & { cursor?: string }; result: ToolActivityPage };
 		getToolActivityText: { params: Scope & { activityId: string; cursor?: string }; result: ToolActivityTextPage };
@@ -419,6 +483,30 @@ export function parseRequest(value: unknown): Request {
 	)
 		throw new AppError("INVALID_REQUEST");
 	const p = object(r.params);
+	if (isSidebarPinMethod(r.method)) {
+		try {
+			return {
+				version: PROTOCOL_VERSION,
+				...(r.expectedStoreId === undefined ? {} : { expectedStoreId: id(r.expectedStoreId) }),
+				method: r.method,
+				params: parseSidebarPinParams(r.method, p),
+			} as Request;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
+	if (isProjectMethod(r.method)) {
+		try {
+			return {
+				version: PROTOCOL_VERSION,
+				...(r.expectedStoreId === undefined ? {} : { expectedStoreId: id(r.expectedStoreId) }),
+				method: r.method,
+				params: parseProjectParams(r.method, p),
+			} as Request;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (isProviderConfigurationMethod(r.method)) {
 		try {
 			return {
@@ -445,6 +533,7 @@ export function parseRequest(value: unknown): Request {
 	}
 	let request: Request;
 	switch (r.method) {
+		case "refreshSidebarProjection":
 		case "refreshConversationSearch":
 			request = {
 				version: PROTOCOL_VERSION,
@@ -452,6 +541,41 @@ export function parseRequest(value: unknown): Request {
 				params: p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) },
 			};
 			break;
+		case "listSidebarConversations": {
+			const view = object(p.view);
+			if (
+				view.kind !== "recent" &&
+				view.kind !== "project_recent" &&
+				view.kind !== "workspace" &&
+				view.kind !== "project"
+			)
+				throw new AppError("INVALID_REQUEST");
+			fields(
+				view,
+				view.kind === "recent" || view.kind === "project_recent"
+					? ["kind"]
+					: view.kind === "project"
+						? ["kind", "projectId"]
+						: ["kind", "workspaceId"],
+			);
+			if (p.filter !== undefined && p.filter !== "active" && p.filter !== "archived" && p.filter !== "all")
+				throw new AppError("INVALID_REQUEST");
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: {
+					view:
+						view.kind === "recent" || view.kind === "project_recent"
+							? { kind: view.kind }
+							: view.kind === "project"
+								? { kind: "project", projectId: view.projectId === null ? null : id(view.projectId) }
+								: { kind: "workspace", workspaceId: id(view.workspaceId) },
+					...(p.filter === undefined ? {} : { filter: p.filter }),
+					...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }),
+				},
+			};
+			break;
+		}
 		case "searchConversations": {
 			let query: string;
 			try {
@@ -1236,6 +1360,20 @@ function parsePage<T>(value: unknown, max: number, parse: (value: unknown) => T,
 }
 export function parseResult<M extends Method>(method: M, value: unknown): Result<M> {
 	if (!fitsPayloadBudget(value)) throw new AppError("INVALID_REQUEST");
+	if (isSidebarPinMethod(method)) {
+		try {
+			return parseSidebarPinResult(method, value) as Result<M>;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
+	if (isProjectMethod(method)) {
+		try {
+			return parseProjectResult(method, value) as Result<M>;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (isProviderConfigurationMethod(method)) {
 		try {
 			return parseProviderConfigurationResult(method, value) as Result<M>;
@@ -1251,7 +1389,84 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		}
 	}
 	let result: Response;
-	if (method === "refreshConversationSearch") {
+	if (method === "refreshSidebarProjection") {
+		const p = object(value);
+		fields(p, [
+			"generation",
+			"membershipGeneration",
+			"projectMembershipGeneration",
+			"projectOrderGeneration",
+			"state",
+			"completedAt",
+			"nextCursor",
+		]);
+		if (p.state !== "building" && p.state !== "refreshing" && p.state !== "ready")
+			throw new AppError("INVALID_REQUEST");
+		if ((p.projectMembershipGeneration === undefined) !== (p.projectOrderGeneration === undefined))
+			throw new AppError("INVALID_REQUEST");
+		const completedAt = p.completedAt === null ? null : integer(p.completedAt);
+		const nextCursor = cursor(p.nextCursor);
+		if ((p.state === "building") !== (completedAt === null) || (p.state === "ready") !== (nextCursor === null))
+			throw new AppError("INVALID_REQUEST");
+		result = {
+			generation: id(p.generation),
+			membershipGeneration: integer(p.membershipGeneration),
+			...(p.projectMembershipGeneration === undefined
+				? {}
+				: {
+						projectMembershipGeneration: integer(p.projectMembershipGeneration),
+						projectOrderGeneration: integer(p.projectOrderGeneration),
+					}),
+			state: p.state,
+			completedAt,
+			nextCursor,
+		};
+	} else if (method === "listSidebarConversations") {
+		const p = object(value);
+		fields(p, ["items", "coverage", "nextCursor"]);
+		if (!Array.isArray(p.items) || p.items.length > LIMITS.directoryPage) throw new AppError("INVALID_REQUEST");
+		const coverage = parseResult("refreshSidebarProjection", p.coverage);
+		const items = p.items.map((raw) => {
+			const row = object(raw);
+			fields(row, [
+				"conversation",
+				"recencyAt",
+				"activityBasis",
+				...(coverage.projectMembershipGeneration === undefined ? [] : ["membership"]),
+			]);
+			const activityBasis = ACTIVITY_BASES.find((basis) => basis === row.activityBasis);
+			if (!activityBasis || (activityBasis === "unknown") !== (row.recencyAt === null))
+				throw new AppError("INVALID_REQUEST");
+			const conversation = parseConversation(row.conversation);
+			let membership: ReturnType<typeof parseConversationMembership> | undefined;
+			if (coverage.projectMembershipGeneration !== undefined) {
+				try {
+					membership = parseConversationMembership(row.membership);
+				} catch {
+					throw new AppError("INVALID_REQUEST");
+				}
+				if (
+					membership.workspaceId !== conversation.workspaceId ||
+					membership.conversationId !== conversation.conversationId
+				)
+					throw new AppError("INVALID_REQUEST");
+			}
+			return {
+				conversation,
+				...(membership ? { membership } : {}),
+				recencyAt: row.recencyAt === null ? null : integer(row.recencyAt),
+				activityBasis,
+			};
+		});
+		if (
+			new Set(items.map(({ conversation: c }) => JSON.stringify([c.workspaceId, c.conversationId]))).size !==
+			items.length
+		)
+			throw new AppError("INVALID_REQUEST");
+		const nextCursor = cursor(p.nextCursor);
+		if (coverage.state === "building" && (items.length || nextCursor !== null)) throw new AppError("INVALID_REQUEST");
+		result = { items, coverage, nextCursor };
+	} else if (method === "refreshConversationSearch") {
 		const p = object(value);
 		fields(p, ["generation", "state", "completedAt", "nextCursor"]);
 		if (p.state !== "building" && p.state !== "refreshing" && p.state !== "ready")

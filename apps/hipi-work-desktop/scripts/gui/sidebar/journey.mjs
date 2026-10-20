@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { capture, click, evaluate, hover, until } from "../../gui-flow.mjs";
 import { assertSidebarHoverTrace, startSidebarHoverTrace } from "../../gui-sidebar-hover.mjs";
+import { exerciseSidebarContextMenus } from "./context-menu.mjs";
 import { defaultRoleEntry } from "./manifest.mjs";
 
 const heading = (id) => `[data-sidebar-section="${id}"] .sidebar-section-toggle`;
@@ -10,6 +11,7 @@ const project = (id) => `.workspace-branch[data-workspace-id="${id}"] .project-o
 const pin = (scope) =>
 	`.pinned-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const aliasDraft = "SIDEBAR_ALIAS_UNSUBMITTED 中文";
 
 /** Read-only observer; native CDP input owns every interaction. */
 export function sidebarState(document) {
@@ -56,6 +58,83 @@ export function assertSidebarState(value, seed) {
 }
 const scopeKey = ({ workspaceId, conversationId }) => `${workspaceId}.${conversationId}`;
 
+export function assertAliasSelection(value, scope, location, draft, projectId) {
+	if (location === "project") assert.ok(typeof projectId === "string" && projectId.length > 0);
+	assert.deepEqual(
+		value.selected,
+		[{ ...scope, location, ...(location === "project" ? { projectId } : {}) }],
+		"Exactly one rendered alias must own selection",
+	);
+	assert.equal(value.draft, draft, "Alias navigation must preserve the unsent draft");
+	assert.equal(value.samePanel, true, "Alias navigation must retain the conversation panel");
+	assert.equal(value.sameComposer, true, "Alias navigation must retain the composer node");
+	assert.equal(value.sameHistory, true, "Alias navigation must retain the history node");
+}
+
+async function exerciseAliasSelection(cdp, seed) {
+	const scope = seed.alias;
+	assert.ok(scope, "Fixture requires an unpinned project conversation");
+	const row = `.conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
+	const recentRow = `.recent-conversations ${row}`;
+	const projectRow = `.workspace-branch:not(.recent-conversations)[data-workspace-id="${scope.workspaceId}"] ${row}`;
+	const toggle = `.workspace-branch:not(.recent-conversations)[data-workspace-id="${scope.workspaceId}"] .project-toggle`;
+	await click(cdp, recentRow);
+	await until(
+		() => evaluate(cdp, "!!document.querySelector('.conversation-panel .composer textarea')"),
+		"alias composer ready",
+	);
+	const draft = aliasDraft;
+	await click(cdp, ".composer textarea");
+	await cdp.request("Input.insertText", { text: draft });
+	await evaluate(
+		cdp,
+		"(()=>{const nodes={panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll')};if(Object.values(nodes).some(node=>!node?.isConnected))throw Error('Missing alias continuity owner');window.__sidebarAlias=nodes;return true})()",
+	);
+	const evidence = [];
+	const verify = async (location) => {
+		const read = () =>
+			evaluate(
+				cdp,
+				`(()=>{
+			const retained=window.__sidebarAlias;
+			return {selected:[...document.querySelectorAll('.conversation-link[aria-current="page"]')].map(node=>({
+				workspaceId:node.dataset.workspaceId,conversationId:node.dataset.conversationId,
+				location:node.dataset.sidebarLocation,
+				...(node.dataset.sidebarLocation==='project'?{projectId:node.dataset.sidebarLocationProject}:{})
+			})),draft:document.querySelector('.composer textarea')?.value,
+				samePanel:retained.panel===document.querySelector('.conversation-panel'),
+				sameComposer:retained.composer===document.querySelector('.composer textarea'),
+				sameHistory:retained.history===document.querySelector('.message-scroll')};
+		})()`,
+			);
+		await until(async () => {
+			const value = await read();
+			return value.selected.length === 1 && value.selected[0].location === location;
+		}, `single active ${location} alias`);
+		const value = await read();
+		assertAliasSelection(value, scope, location, draft, seed.aliasProjectId);
+		evidence.push(value);
+	};
+	try {
+		await verify("recent");
+		if (
+			await evaluate(cdp, `document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded')==='false'`)
+		)
+			await click(cdp, toggle);
+		await click(cdp, projectRow);
+		await verify("project");
+		await click(cdp, toggle);
+		await verify("recent");
+		await click(cdp, toggle);
+		await verify("project");
+		await click(cdp, recentRow);
+		await verify("recent");
+		return evidence;
+	} finally {
+		await evaluate(cdp, "delete window.__sidebarAlias");
+	}
+}
+
 export function assertSidebarAcceptance({ first, reopened }) {
 	assert.equal(first.nativeInput, true);
 	assert.equal(first.fixtureSetupOnly, true);
@@ -70,6 +149,104 @@ export function assertSidebarAcceptance({ first, reopened }) {
 	assert.equal(reopened.coldRestored, true);
 }
 
+export function assertHomeDraftContext(value, workspaceId, draft, continuousHome = true) {
+	assert.deepEqual(value.projects, workspaceId ? [workspaceId] : [], "New chat must keep its exact chosen project");
+	assert.equal(value.conversations, 0, "New chat must leave the previous conversation view");
+	assert.equal(value.draft, draft, "Changing the destination must not replace the shared home draft");
+	if (continuousHome) assert.equal(value.sameInput, true, "Changing the destination must retain the actual input node");
+}
+
+async function exerciseNewChatContext(cdp, seed) {
+	const draft = "SIDEBAR_HOME_SHARED 中文";
+	const inputFocused = () =>
+		until(
+			() =>
+				evaluate(
+					cdp,
+					"!!document.querySelector('.prepared-task-input') && document.activeElement===document.querySelector('.prepared-task-input')",
+				),
+			"New chat focuses its actual home input",
+		);
+	await click(cdp, ".new-conversation-trigger");
+	await until(
+		() => evaluate(cdp, "!!document.querySelector('.prepared-task-input:not(:disabled)')"),
+		"inherited project home input ready",
+	);
+	await inputFocused();
+	assert.equal(await evaluate(cdp, "document.querySelector('.prepared-task-input').value"), "");
+	await click(cdp, ".prepared-task-input");
+	await cdp.request("Input.insertText", { text: draft });
+	await evaluate(
+		cdp,
+		"(()=>{const input=document.querySelector('.prepared-task-input');if(!input?.isConnected)throw Error('Missing shared home input');window.__sidebarHomeInput=input;return true})()",
+	);
+	const evidence = [];
+	const verify = async (workspaceId, continuousHome = true) => {
+		const value = await evaluate(
+			cdp,
+			`({
+			projects:[...document.querySelectorAll('.project-open[aria-current="page"]')].map(node=>node.closest('.workspace-branch').dataset.workspaceId),
+			conversations:document.querySelectorAll('.conversation-panel').length,
+			draft:document.querySelector('.prepared-task-input')?.value,
+			sameInput:window.__sidebarHomeInput===document.querySelector('.prepared-task-input')
+		})`,
+		);
+		assertHomeDraftContext(value, workspaceId, draft, continuousHome);
+		evidence.push({ ...value, continuousHome });
+	};
+	try {
+		await verify(seed.alias.workspaceId);
+		const otherProject = seed.workspaceIds.find(
+			(id) => id !== seed.defaultWorkspaceId && id !== seed.alias.workspaceId,
+		);
+		assert.ok(otherProject);
+		await click(cdp, project(otherProject));
+		await verify(otherProject);
+		await click(cdp, ".new-conversation-trigger");
+		await inputFocused();
+		await verify(otherProject);
+		await click(cdp, ".brand-home");
+		await verify(null);
+		const ordinary = seed.snapshot.conversations.find(
+			({ conversation }) => conversation.workspaceId === seed.defaultWorkspaceId,
+		)?.conversation;
+		assert.ok(ordinary);
+		await click(
+			cdp,
+			`.recent-conversations .conversation-link[data-workspace-id="${ordinary.workspaceId}"][data-conversation-id="${ordinary.conversationId}"]`,
+		);
+		await until(
+			() => evaluate(cdp, "!!document.querySelector('.conversation-panel .composer textarea')"),
+			"ordinary default conversation opens",
+		);
+		await click(cdp, ".new-conversation-trigger");
+		await inputFocused();
+		await verify(null, false);
+		const alias = `.recent-conversations .conversation-link[data-workspace-id="${seed.alias.workspaceId}"][data-conversation-id="${seed.alias.conversationId}"]`;
+		await click(cdp, alias);
+		await until(
+			() => evaluate(cdp, `document.querySelector('.composer textarea')?.value===${JSON.stringify(aliasDraft)}`),
+			"existing conversation draft remains separate from home draft",
+		);
+		await click(cdp, ".new-conversation-trigger");
+		await inputFocused();
+		await until(
+			() => evaluate(cdp, `document.querySelector('.prepared-task-input')?.value===${JSON.stringify(draft)}`),
+			"home draft returns after conversation navigation",
+		);
+		// Entering a conversation intentionally unmounts the home. Subsequent home routes
+		// must still preserve text and destination; this is not a same-node claim across views.
+		await verify(seed.alias.workspaceId, false);
+		await click(cdp, ".prepared-task-input");
+		await key(cdp, "a", process.platform === "darwin" ? 4 : 2);
+		await key(cdp, "Backspace");
+		assert.equal(await evaluate(cdp, "document.querySelector('.prepared-task-input').value"), "");
+		return evidence;
+	} finally {
+		await evaluate(cdp, "delete window.__sidebarHomeInput");
+	}
+}
+
 async function key(cdp, value, modifiers = 0) {
 	const keys = {
 		Enter: [13, "Enter"],
@@ -78,6 +255,8 @@ async function key(cdp, value, modifiers = 0) {
 		Escape: [27, "Escape"],
 		ArrowUp: [38, "ArrowUp"],
 		ArrowDown: [40, "ArrowDown"],
+		a: [65, "KeyA"],
+		Backspace: [8, "Backspace"],
 	};
 	assert.ok(keys[value]);
 	for (const type of ["keyDown", "keyUp"])
@@ -286,6 +465,12 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			await capture(cdp, directory, "sidebar-cold-restored");
 			return { final, coldRestored: true };
 		}
+		const aliasSelection = await exerciseAliasSelection(cdp, seed);
+		actions.push({ name: "native project Recent alias ownership and disclosure fallback", aliasSelection });
+		record({ sidebarAction: "native project Recent alias ownership and disclosure fallback" });
+		const newChatContext = await exerciseNewChatContext(cdp, seed);
+		actions.push({ name: "native New chat project inheritance and shared draft", newChatContext });
+		record({ sidebarAction: "native New chat project inheritance and shared draft" });
 		await click(cdp, pin(seed.pins[0]));
 		await until(
 			() =>
@@ -304,13 +489,17 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		const baseline = await readState(cdp);
 		assert.equal(baseline.draft, seed.draft);
 		assert.equal(baseline.messages.length, 2, "Continuity needs actual persisted history rows");
+		const contextMenus = await exerciseSidebarContextMenus({ cdp, seed, directory });
+		actions.push({ name: "native conversation context and ellipsis menus", contextMenus });
+		record({ sidebarAction: "native conversation context and ellipsis menus" });
 		const continuity = async () => {
 			const current = await readState(cdp);
 			assert.equal(current.draft, baseline.draft);
 			assert.deepEqual(current.messages, baseline.messages);
 			if (!current.collapsed.pinned)
-				assert.ok(
-					current.selected.some((selected) => scopeKey(selected) === scopeKey(seed.pins[0])),
+				assert.deepEqual(
+					current.selected,
+					[seed.pins[0]],
 					"Expanded pins must expose the exact active canonical scope",
 				);
 			for (const selected of current.selected)

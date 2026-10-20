@@ -4,8 +4,8 @@ import { Pin, PinOff } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
+import { ActionMenuItem } from "../../../components/ui/action-menu.tsx";
 import { Button } from "../../../components/ui/button.tsx";
-import { DropdownMenuItem } from "../../../components/ui/dropdown-menu.tsx";
 import { pinLabels } from "./pin-labels.ts";
 import type { PresentationSession } from "./presentation-session.ts";
 
@@ -69,7 +69,7 @@ export function PinConversationItem(props: PinProps) {
 	if (conversation.archivedAt !== null) return null;
 	if (action.isError)
 		return (
-			<DropdownMenuItem
+			<ActionMenuItem
 				disabled={action.isFetching}
 				onSelect={(event) => {
 					event.preventDefault();
@@ -77,13 +77,13 @@ export function PinConversationItem(props: PinProps) {
 				}}
 			>
 				{action.l.reload}
-			</DropdownMenuItem>
+			</ActionMenuItem>
 		);
 	return (
-		<DropdownMenuItem data-action="pin-conversation" disabled={action.disabled} onSelect={action.toggle}>
+		<ActionMenuItem data-action="pin-conversation" disabled={action.disabled} onSelect={action.toggle}>
 			{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
 			{action.current ? action.l[action.current.pinned ? "unpin" : "pin"] : action.l.loading}
-		</DropdownMenuItem>
+		</ActionMenuItem>
 	);
 }
 

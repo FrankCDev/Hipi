@@ -1,4 +1,5 @@
 import { LIMITS, PROTOCOL_VERSION, parseRequest, type Submit } from "@hipi/work-runtime/contracts";
+import { ACTIVE_DRAFT_KEY, parseActiveDraft, validHomeDraft } from "./composer/draft-record.ts";
 import { validPanelRatio, validPanelWidth } from "./files/panel-controller.ts";
 
 export type BrowserStorage = Pick<Storage, "getItem" | "setItem" | "key" | "length">;
@@ -22,10 +23,9 @@ export type SavedEntry = SavedValue | SavedPending;
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
 const scope = "[a-zA-Z0-9_-]{1,128}\\.[a-zA-Z0-9_-]{1,128}";
 const draftKey = new RegExp(`^draft\\.${scope}$`);
-const taskDraftKey = /^(task-draft\.[a-zA-Z0-9_-]{1,128}|chat-draft\.global)$/;
 
 export function validTaskDraft(key: string, value: string): boolean {
-	return taskDraftKey.test(key) && value.length <= LIMITS.text;
+	return validHomeDraft(key, value);
 }
 function validModelPreference(value: string): boolean {
 	if (value.length > 1024) return false;
@@ -82,7 +82,7 @@ export class LocalPersistence {
 					("revision" in entry &&
 						(typeof entry.revision !== "string" ||
 							!id.test(entry.revision) ||
-							(!draftKey.test(entry.key) && !taskDraftKey.test(entry.key)))) ||
+							(!draftKey.test(entry.key) && !validHomeDraft(entry.key, entry.value)))) ||
 					("handoffRequestId" in entry &&
 						(typeof entry.handoffRequestId !== "string" ||
 							!id.test(entry.handoffRequestId) ||
@@ -97,6 +97,7 @@ export class LocalPersistence {
 					(entry.key === "file-panel.ratio" && validPanelRatio(entry.value)) ||
 					(draftKey.test(entry.key) && entry.value.length <= LIMITS.text) ||
 					validTaskDraft(entry.key, entry.value) ||
+					(entry.key === ACTIVE_DRAFT_KEY && !!parseActiveDraft(entry.value)) ||
 					(/^command\.tool-packs\.(workspace\.[a-zA-Z0-9_-]{1,128}|conversation\.[a-zA-Z0-9_-]{1,128}\.[a-zA-Z0-9_-]{1,128})$/.test(
 						entry.key,
 					) &&
@@ -110,7 +111,8 @@ export class LocalPersistence {
 					(entry.key === "sidebar.disclosure" && entry.value.length <= 1024) ||
 					(/^workspace-expanded\.[a-zA-Z0-9_-]{1,128}$/.test(entry.key) &&
 						(entry.value === "true" || entry.value === "false")) ||
-					((entry.key === "workspace" || entry.key === "conversation") && (entry.value === "" || id.test(entry.value)))
+					((entry.key === "workspace" || entry.key === "conversation" || entry.key === "project") &&
+						(entry.value === "" || id.test(entry.value)))
 				)
 					return {
 						kind: "value",
@@ -170,6 +172,20 @@ export class LocalPersistence {
 		const entry = this.#parse(raw);
 		if (raw !== null && (entry?.kind !== "value" || entry.key !== key)) throw new Error("Invalid local state");
 		return entry?.kind === "value" ? entry : null;
+	}
+	/** Read only home-draft records; unrelated conversation recovery cannot block draft migration. */
+	readDraftValues(): SavedValue[] {
+		const prefix = `${this.#prefix}value.`;
+		const entries: SavedValue[] = [];
+		for (let index = 0; index < this.#storage.length; index++) {
+			const storageKey = this.#storage.key(index);
+			if (!storageKey?.startsWith(prefix)) continue;
+			const key = storageKey.slice(prefix.length);
+			if (!validHomeDraft(key, "")) continue;
+			const entry = this.readValue(key);
+			if (entry) entries.push(entry);
+		}
+		return entries;
 	}
 	readPending(key: string): SavedPending | null {
 		const raw = this.#storage.getItem(`${this.#prefix}pending.${key}`);

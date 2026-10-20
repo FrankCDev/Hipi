@@ -439,14 +439,52 @@ test("sidebar journey restores canonical fixture before existing cold pin and us
 	assert.ok(observer.indexOf("await writeFile") < observer.lastIndexOf("return trace"));
 	const measured = helper.slice(
 		helper.indexOf('"sidebar-warm-hover-frames", targets'),
-		helper.indexOf("const result = assertSidebarHoverTrace(trace)"),
+		helper.indexOf("const result = assertSidebarHoverTrace(trace, 2)"),
 	);
 	assert.ok(measured.includes("targets.slice(1)"));
 	assert.ok(measured.includes("sampleTwoFrames(cdp)"));
 	assert.equal(/await (?:until|hover|capture)\(/.test(measured), false);
-	assert.ok(helper.includes("if (pinned) warmHover = await exerciseWarmSidebarHover"));
+	assert.ok(helper.includes("if (pinned) warmPinnedToProject = await exerciseWarmSidebarHover"));
 	assert.ok(helper.indexOf('"sidebar-warm-pinned-source"') < helper.indexOf('"sidebar-warm-hover-frames", targets'));
-	assert.ok(helper.indexOf('"sidebar-warm-recent-result"') > helper.indexOf("assertSidebarHoverTrace(trace)"));
+	assert.ok(helper.indexOf('"sidebar-warm-project-result"') > helper.indexOf("assertSidebarHoverTrace(trace, 2)"));
 	for (const name of ["sidebar-corridor-frames", "sidebar-card-focus-frames", "sidebar-row-focus-frames"])
 		assert.ok(helper.includes(name));
+});
+
+test("generic two-owner warm trace requires explicit opt-in without weakening dedicated three-owner defaults", () => {
+	const trace = validWarmHoverTrace();
+	trace.targets = trace.targets.slice(0, 2);
+	trace.moves = trace.moves.slice(0, 2);
+	trace.frames = trace.frames.slice(0, 5);
+	assert.throws(() => assertSidebarHoverTrace(trace));
+	assert.equal(assertSidebarHoverTrace(trace, 2).owners.length, 2);
+	assert.throws(() => assertSidebarHoverTrace(validWarmHoverTrace(), 2));
+	assert.throws(() => assertSidebarHoverTrace(trace, 1));
+	for (const mutate of [
+		(value) => {
+			value.frames[4].cards = [];
+		},
+		(value) => {
+			value.frames[4].cards[0].owner = value.targets[0].owner;
+		},
+		(value) => {
+			value.frames[4].cards[0].visible = false;
+		},
+		(value) => {
+			value.frames[4].cards[0].positioned = false;
+		},
+		(value) => {
+			value.frames[4].cards[0].interactive = false;
+		},
+		(value) => {
+			value.moves[1].trusted = false;
+		},
+		(value) => {
+			value.frames.splice(4, 1);
+		},
+	]) {
+		const invalid = structuredClone(trace);
+		mutate(invalid);
+		assert.throws(() => assertSidebarHoverTrace(invalid, 2));
+	}
 });

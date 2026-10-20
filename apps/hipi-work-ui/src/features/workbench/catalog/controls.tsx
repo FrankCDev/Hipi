@@ -13,18 +13,18 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
+import {
+	ActionMenu,
+	ActionMenuContent,
+	ActionMenuItem,
+	ActionMenuLabel,
+	ActionMenuSeparator,
+	ActionMenuTrigger,
+} from "../../../components/ui/action-menu.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog.tsx";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuLabel,
-	DropdownMenuSeparator,
-	DropdownMenuTrigger,
-} from "../../../components/ui/dropdown-menu.tsx";
 import { Input } from "../../../components/ui/input.tsx";
-import type { CatalogCommand } from "../command-recovery.ts";
+import type { LegacyCatalogCommand } from "../command-recovery.ts";
 import { ComposerKeyboard } from "../composer/keyboard.ts";
 import { PinConversationButton, PinConversationItem } from "../sidebar/pin-conversation.tsx";
 import type { PresentationSession } from "../sidebar/presentation-session.ts";
@@ -60,8 +60,12 @@ export function CatalogRecovery({
 			{state.pending && (
 				<div className="break-all">
 					<p>
-						{state.pending.params.workspaceId} /{" "}
-						{"conversationId" in state.pending.params ? state.pending.params.conversationId : ""}
+						{"workspaceId" in state.pending.params
+							? state.pending.params.workspaceId
+							: "projectId" in state.pending.params
+								? state.pending.params.projectId
+								: ""}{" "}
+						/ {"conversationId" in state.pending.params ? state.pending.params.conversationId : ""}
 					</p>
 					{"title" in state.pending.params && <p>{state.pending.params.title}</p>}
 					{"name" in state.pending.params && <p>{state.pending.params.name}</p>}
@@ -84,7 +88,7 @@ export function CatalogRecovery({
 			>
 				{l.check}
 			</Button>
-			{state.notFound && (
+			{(state.notFound || state.projectPending) && (
 				<Button size="sm" variant="outline" disabled={state.busy} onClick={() => void onResolve(session.retry)}>
 					{l.retry}
 				</Button>
@@ -98,6 +102,7 @@ export function ConversationActions({
 	guard,
 	previewContent,
 	menuPosition,
+	rowMenu,
 	onMenuOpen,
 	onOverlayChange,
 	onReturnFocus,
@@ -112,6 +117,7 @@ export function ConversationActions({
 	guard: (action: () => void) => void;
 	previewContent?: ReactNode;
 	menuPosition?: Parameters<PreviewActions>[0]["menuPosition"];
+	rowMenu?: Parameters<PreviewActions>[0]["rowMenu"];
 	onMenuOpen?: () => void;
 	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus?: (reason?: "dialog") => void;
@@ -131,12 +137,17 @@ export function ConversationActions({
 		// Its unsaved title and failed-command recovery must survive external collapse.
 		if (!present && !renaming) safeToRemove?.();
 	}, [present, renaming, safeToRemove]);
-	const [menuOpen, setMenuOpen] = useState(false);
+	const [standaloneMenuOpen, setStandaloneMenuOpen] = useState(false);
+	const menuOpen = rowMenu?.open ?? standaloneMenuOpen;
+	const setMenuOpen = (open: boolean) => {
+		if (rowMenu) rowMenu.onOpenChange(rowMenu.entry, open);
+		else setStandaloneMenuOpen(open);
+	};
 	useLayoutEffect(() => {
-		if (!hidden || !menuOpen) return;
-		setMenuOpen(false);
+		if (rowMenu || !hidden || !menuOpen) return;
+		setStandaloneMenuOpen(false);
 		onOverlayChange?.("menu", false);
-	}, [hidden, menuOpen, onOverlayChange]);
+	}, [hidden, menuOpen, onOverlayChange, rowMenu]);
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const presentationState = useSyncExternalStore(
@@ -161,7 +172,7 @@ export function ConversationActions({
 		setRenaming(false);
 		onOverlayChange?.("dialog", false);
 	};
-	const execute = (command: CatalogCommand) => {
+	const execute = (command: LegacyCatalogCommand) => {
 		guard(() => {
 			const previous = session.getSnapshot();
 			if (previous.busy || previous.pending || previous.initialSend || previous.incompatible) return;
@@ -264,7 +275,8 @@ export function ConversationActions({
 						)}
 					</Button>
 				)}
-				<DropdownMenu
+				<ActionMenu
+					boundary={rowMenu}
 					open={menuOpen && !hidden}
 					onOpenChange={(open) => {
 						setMenuOpen(open);
@@ -272,7 +284,7 @@ export function ConversationActions({
 						if (open) onMenuOpen?.();
 					}}
 				>
-					<DropdownMenuTrigger asChild>
+					<ActionMenuTrigger asChild>
 						<Button
 							ref={trigger}
 							className="conversation-actions-trigger"
@@ -282,8 +294,8 @@ export function ConversationActions({
 						>
 							<Ellipsis size={16} aria-hidden="true" />
 						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent
+					</ActionMenuTrigger>
+					<ActionMenuContent
 						side={menuPosition ? "right" : "bottom"}
 						align={menuPosition ? "start" : "end"}
 						sideOffset={menuPosition?.sideOffset}
@@ -292,17 +304,15 @@ export function ConversationActions({
 						className="conversation-action-menu"
 						data-sidebar-row-portal={inlineActions ? "" : undefined}
 						onCloseAutoFocus={(event) => {
-							if (renaming) event.preventDefault();
+							if (renameOpen.current) event.preventDefault();
 							else if (onReturnFocus) {
 								event.preventDefault();
 								onReturnFocus();
 							}
 						}}
 					>
-						<DropdownMenuLabel className="sidebar-menu-preview">
-							{previewContent ?? conversation.title}
-						</DropdownMenuLabel>
-						<DropdownMenuSeparator />
+						<ActionMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</ActionMenuLabel>
+						<ActionMenuSeparator />
 						{presentation && (
 							<PinConversationItem
 								conversation={conversation}
@@ -311,7 +321,7 @@ export function ConversationActions({
 								disabled={disabled}
 							/>
 						)}
-						<DropdownMenuItem
+						<ActionMenuItem
 							disabled={renameDisabled}
 							onSelect={() => {
 								const current = session.getSnapshot();
@@ -325,20 +335,21 @@ export function ConversationActions({
 						>
 							<Pencil size={15} aria-hidden="true" />
 							{l.rename}
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem disabled={archiveDisabled} onSelect={archive}>
+						</ActionMenuItem>
+						<ActionMenuSeparator />
+						<ActionMenuItem disabled={archiveDisabled} onSelect={archive}>
 							{conversation.archivedAt === null ? (
 								<Archive size={15} aria-hidden="true" />
 							) : (
 								<ArchiveRestore size={15} aria-hidden="true" />
 							)}
 							{l[conversation.archivedAt === null ? "archive" : "restore"]}
-						</DropdownMenuItem>
-					</DropdownMenuContent>
-				</DropdownMenu>
+						</ActionMenuItem>
+					</ActionMenuContent>
+				</ActionMenu>
 			</div>
 			<DialogContent
+				onContextMenu={(event) => event.stopPropagation()}
 				className="conversation-rename-dialog"
 				data-sidebar-row-portal={inlineActions ? "" : undefined}
 				closeLabel={l.close}

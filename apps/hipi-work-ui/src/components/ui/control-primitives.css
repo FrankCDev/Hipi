@@ -19,6 +19,7 @@
 	}
 
 	.ui-menu-surface {
+		--ui-menu-transform-origin: var(--radix-dropdown-menu-content-transform-origin);
 		max-width: min(
 			var(--ui-menu-available-width, var(--radix-dropdown-menu-content-available-width, calc(100vw - 16px))),
 			calc(100vw - 16px)
@@ -33,6 +34,11 @@
 		color: var(--text);
 		backdrop-filter: blur(8px);
 		line-height: 1.428571;
+	}
+	.ui-context-menu-surface {
+		--ui-menu-available-width: var(--radix-context-menu-content-available-width, calc(100vw - 16px));
+		--ui-menu-available-height: var(--radix-context-menu-content-available-height, calc(100dvh - 16px));
+		--ui-menu-transform-origin: var(--radix-context-menu-content-transform-origin);
 	}
 	.ui-select-surface {
 		--ui-menu-available-width: var(--radix-select-content-available-width, calc(100vw - 16px));

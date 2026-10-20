@@ -701,7 +701,7 @@ test("catalog schema 3 migration, schema 6 backup and non-executing restore pres
 		await runtime.close();
 		const legacy = new DatabaseSync(join(source, "catalog.sqlite"));
 		legacy.exec(
-			"DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; DROP TABLE project_folders; DROP TABLE custom_providers; DROP TABLE provider_commands; UPDATE identity SET version=3",
+			"DROP TABLE sidebar_pin_commands; DROP TABLE sidebar_pin_order; DROP TABLE sidebar_pin_state; DROP TABLE project_commands; DROP TABLE project_memberships; DROP TABLE project_presentations; DROP TABLE project_presentation_state; DROP TABLE project_catalog_state; DROP TABLE projects; DROP TABLE navigation_sources; DROP TABLE navigation_publication; DROP TABLE navigation_state; DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; DROP TABLE project_folders; DROP TABLE custom_providers; DROP TABLE provider_commands; UPDATE identity SET version=3",
 		);
 		legacy.close();
 		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 3);
@@ -714,12 +714,12 @@ test("catalog schema 3 migration, schema 6 backup and non-executing restore pres
 		const profile = await runtime.call("saveCustomProvider", { ...settings(), requestId: "save" });
 		credentials.keys.set(profile.provider, "synthetic-key-not-for-backup");
 		await runtime.close();
-		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 9);
+		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 12);
 		// Retain an actual schema6 backup fixture, not a version label over schema7 tables.
 		const configured = new DatabaseSync(join(source, "catalog.sqlite"));
 		try {
 			configured.exec(
-				"DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; UPDATE identity SET version=6",
+				"DROP TABLE sidebar_pin_commands; DROP TABLE sidebar_pin_order; DROP TABLE sidebar_pin_state; DROP TABLE project_commands; DROP TABLE project_memberships; DROP TABLE project_presentations; DROP TABLE project_presentation_state; DROP TABLE project_catalog_state; DROP TABLE projects; DROP TABLE navigation_sources; DROP TABLE navigation_publication; DROP TABLE navigation_state; DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; DROP TABLE conversation_presentations; DROP TABLE presentation_state; DROP TABLE presentation_commands; UPDATE identity SET version=6",
 			);
 		} finally {
 			configured.close();
@@ -752,7 +752,7 @@ test("catalog schema 3 migration, schema 6 backup and non-executing restore pres
 			{ code: "STORE_MISMATCH" },
 		);
 		const future = new DatabaseSync(join(source, "catalog.sqlite"));
-		future.exec("UPDATE identity SET version=10");
+		future.exec("UPDATE identity SET version=13");
 		future.close();
 		assert.throws(() => inspectCatalog(join(source, "catalog.sqlite")), { code: "UNSUPPORTED_SCHEMA" });
 		await assert.rejects(

@@ -7,6 +7,7 @@ import {
 	toolPackCommandPayload,
 } from "@hipi/work-runtime/contracts";
 import type { LocalState } from "../workbench/local-state.ts";
+import { parseStoredRequest } from "../workbench/recovery/stored-request.ts";
 
 export type PackCommand = Extract<Request, { method: ToolPackMutationMethod }>;
 export type PendingPackCommand = {
@@ -62,7 +63,14 @@ export function readPackCommand(
 	if (!raw || raw === JSON.stringify({ version: 2, request: null })) return { pending: null, incompatible: false };
 	try {
 		const value: unknown = JSON.parse(raw);
-		if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1 || !("pending" in value))
+		if (
+			!value ||
+			typeof value !== "object" ||
+			!("version" in value) ||
+			value.version !== 1 ||
+			!("pending" in value) ||
+			Object.keys(value).some((key) => !["version", "pending"].includes(key))
+		)
 			throw new Error();
 		const pending = value.pending;
 		if (
@@ -70,7 +78,8 @@ export function readPackCommand(
 			typeof pending !== "object" ||
 			!("lookup" in pending) ||
 			!("command" in pending) ||
-			!("install" in pending)
+			!("install" in pending) ||
+			Object.keys(pending).some((key) => !["lookup", "command", "install"].includes(key))
 		)
 			throw new Error();
 		const lookup = parseRequest({
@@ -98,7 +107,7 @@ export function readPackCommand(
 				throw new Error();
 			return { pending: { lookup: lookup.params, command: null, install }, incompatible: false };
 		}
-		const command = parseRequest(pending.command);
+		const command = parseStoredRequest(pending.command);
 		if (
 			command.expectedStoreId !== undefined ||
 			pending.install !== null ||

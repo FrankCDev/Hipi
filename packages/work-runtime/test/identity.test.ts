@@ -14,7 +14,7 @@ import { createNodeIpcClient, serveNodeIpc } from "../src/transport-ipc.ts";
 
 const origin = "http://127.0.0.1:5173";
 
-test("HTTP and IPC reject protocol 7 and future requests before runtime admission", { timeout: 15000 }, async () => {
+test("HTTP and IPC reject obsolete and future requests before runtime admission", { timeout: 15000 }, async () => {
 	let admissions = 0;
 	const server = await serveLoopback(
 		{
@@ -32,7 +32,7 @@ test("HTTP and IPC reject protocol 7 and future requests before runtime admissio
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
 	});
 	try {
-		for (const version of [7, 9, PROTOCOL_VERSION]) {
+		for (const version of [7, 8, PROTOCOL_VERSION + 1, PROTOCOL_VERSION]) {
 			for (const method of ["handshake", "createWorkspace"]) {
 				const request = {
 					version,

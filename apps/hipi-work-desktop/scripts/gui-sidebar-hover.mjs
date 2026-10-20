@@ -134,14 +134,19 @@ export function startSidebarHoverTrace(document, targets) {
 	};
 }
 
-export function assertSidebarHoverTrace(trace) {
+export function assertSidebarHoverTrace(trace, expectedOwners = 3) {
+	assert.ok(expectedOwners === 2 || expectedOwners === 3, "Explicit two- or three-owner qualification required");
 	assert.equal(trace.truncated, false, "Frame trace exceeded its bound; native qualification is incomplete");
-	assert.equal(trace.targets.length, 3, "The probe must cover cold A and warm B/C");
-	assert.equal(new Set(trace.targets.map((target) => target.owner)).size, 3, "Each row needs its own DOM owner");
+	assert.equal(trace.targets.length, expectedOwners, "The probe must cover every declared cold/warm owner");
+	assert.equal(
+		new Set(trace.targets.map((target) => target.owner)).size,
+		expectedOwners,
+		"Each row needs its own DOM owner",
+	);
 	assert.deepEqual(
 		trace.moves.map((move) => move.owner),
 		trace.targets.map((target) => target.owner),
-		"Native moves must visit the exact pinned, project and Recent rows",
+		"Native moves must visit the exact declared rows",
 	);
 	for (const [index, move] of trace.moves.entries()) {
 		assert.ok(Number.isFinite(move.at) && move.at >= (trace.moves[index - 1]?.at ?? trace.armedAt));
@@ -370,7 +375,9 @@ async function exerciseSidebarFocusProtection(cdp, directory, project, recent, t
 	};
 }
 
-async function exerciseWarmSidebarHover(cdp, directory, scope, recent, title) {
+// Pinned rows are excluded from Recent. Three-owner continuous travel is qualified
+// by the dedicated sidebar journey; this baseline preserves the cross-type handoff.
+async function exerciseWarmSidebarHover(cdp, directory, scope, title) {
 	const pinned = `.pinned-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
 	const project = ".workspace-branch:not(.recent-conversations) .project-open";
 	// Resolve fixture metadata before measurement, then let the shared warm interval expire.
@@ -402,7 +409,7 @@ async function exerciseWarmSidebarHover(cdp, directory, scope, recent, title) {
 	await new Promise((resolve) => setTimeout(resolve, 350));
 	const targets = await evaluate(
 		cdp,
-		`[${[pinned, project, recent].map((selector) => JSON.stringify(selector)).join(",")}].map(selector=>{
+		`[${[pinned, project].map((selector) => JSON.stringify(selector)).join(",")}].map(selector=>{
 			const nodes=[...document.querySelectorAll(selector)];
 			if(nodes.length!==1)return null;
 			const node=nodes[0],rect=node.getBoundingClientRect(),point={x:Math.round(rect.x+rect.width/2),y:Math.round(rect.y+rect.height/2)};
@@ -410,7 +417,7 @@ async function exerciseWarmSidebarHover(cdp, directory, scope, recent, title) {
 			return owner&&rect.width>0&&rect.height>0&&node.contains(document.elementFromPoint(point.x,point.y))?{owner,point}:null;
 		})`,
 	);
-	assert.ok(targets.every(Boolean), "All three actual row centers must be unobstructed before sampling");
+	assert.ok(targets.every(Boolean), "Both actual row centers must be unobstructed before sampling");
 	for (const [index, target] of targets.entries()) {
 		target.title = index === 1 ? "GUI disclosure empty project" : title;
 		target.metadata = {
@@ -434,8 +441,8 @@ async function exerciseWarmSidebarHover(cdp, directory, scope, recent, title) {
 			await sampleTwoFrames(cdp);
 		}
 	});
-	const result = assertSidebarHoverTrace(trace);
-	await capture(cdp, directory, "sidebar-warm-recent-result");
+	const result = assertSidebarHoverTrace(trace, 2);
+	await capture(cdp, directory, "sidebar-warm-project-result");
 	return { ...result, created, trace: "sidebar-warm-hover-frames.json", input: "native-cdp" };
 }
 
@@ -460,9 +467,10 @@ export function assertPreviewBounds(value) {
 
 export async function exerciseSidebarHover(cdp, directory, scope, originalTitle) {
 	for (const value of [scope.workspaceId, scope.conversationId]) assert.match(value, /^[A-Za-z0-9_-]{1,128}$/);
-	const branch = `.workspace-branch[data-workspace-id="${scope.workspaceId}"]`;
-	const link = `${branch} .conversation-link[data-conversation-id="${scope.conversationId}"]`;
-	const row = `${branch} .conversation-nav-item`;
+	const branch = ".recent-conversations";
+	const link = `${branch} .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
+	const pinnedLink = `.pinned-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
+	const row = `${branch} .conversation-nav-item:has(.conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"])`;
 	const longTitle =
 		"GUI sidebar long title 中文 overflow acceptance with retained conversation identity and complete preview";
 	const read = (expression) => evaluate(cdp, expression);
@@ -481,12 +489,12 @@ export async function exerciseSidebarHover(cdp, directory, scope, originalTitle)
 		);
 	};
 	await read(
-		`void (window.__hipiSidebarContinuity={panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),draft:document.querySelector('.composer textarea').value,ids:[...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId)})`,
+		`void (window.__hipiSidebarContinuity={projectIds:[...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId),panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),draft:document.querySelector('.composer textarea').value,ids:[...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId)})`,
 	);
 	const continuity = async () =>
 		assert.equal(
 			await read(
-				`(()=>{const b=window.__hipiSidebarContinuity;return b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===b.draft&&JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId))&&document.querySelectorAll('.workspace-branch').length===2})()`,
+				`(()=>{const b=window.__hipiSidebarContinuity;return b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===b.draft&&JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId))&&JSON.stringify(b.projectIds)===JSON.stringify([...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId))})()`,
 			),
 			true,
 			"Sidebar actions must retain actual conversation, draft, history and workspace identities",
@@ -496,7 +504,7 @@ export async function exerciseSidebarHover(cdp, directory, scope, originalTitle)
 		await click(cdp, '[role="menuitemradio"]', text);
 		await check(`!document.querySelector('[role="menu"]')`, "Recent filter menu closes");
 	};
-	let warmHover;
+	let warmPinnedToProject;
 	try {
 		await rename(longTitle);
 		await hover(cdp, ".app-toolbar");
@@ -555,14 +563,22 @@ export async function exerciseSidebarHover(cdp, directory, scope, originalTitle)
 		await hover(cdp, ".app-toolbar");
 		await cdp.request("Emulation.setEmulatedMedia", { features: [] });
 		for (const pinned of [true, false]) {
-			await hover(cdp, link);
-			await click(cdp, `${row} [data-action="pin-conversation-direct"]`);
+			await hover(cdp, pinned ? link : pinnedLink);
+			const actionRow = pinned
+				? row
+				: `.pinned-conversations [data-pinned-conversation][data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
+			await click(cdp, `${actionRow} [data-action="pin-conversation-direct"]`);
 			await check(
-				`document.querySelectorAll('.pinned-conversations .conversation-link').length===${pinned ? 1 : 0} && document.querySelectorAll('.pinned-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]').length===${pinned ? 1 : 0}`,
-				"direct pin toggles only shortcut",
+				`document.querySelectorAll('.pinned-conversations .conversation-link').length===${pinned ? 1 : 0} && document.querySelectorAll('.pinned-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]').length===${pinned ? 1 : 0} && document.querySelectorAll(${JSON.stringify(link)}).length===${pinned ? 0 : 1}`,
+				"direct pin moves the exact row exclusively between Recent and Pinned",
 			);
 			await continuity();
-			if (pinned) warmHover = await exerciseWarmSidebarHover(cdp, directory, scope, link, longTitle);
+			if (pinned) warmPinnedToProject = await exerciseWarmSidebarHover(cdp, directory, scope, longTitle);
+			else
+				await check(
+					`document.activeElement===document.querySelector(${JSON.stringify(link)})`,
+					"direct unpin returns focus to the exact restored canonical row",
+				);
 		}
 		await hover(cdp, link);
 		await click(cdp, `${row} [data-action="archive-conversation-direct"]`);
@@ -603,7 +619,7 @@ export async function exerciseSidebarHover(cdp, directory, scope, originalTitle)
 			project,
 			link,
 			originalTitle,
-			warmHover.created,
+			warmPinnedToProject.created,
 		);
 		await hover(cdp, `${project} .project-open`);
 		await check(
@@ -626,7 +642,7 @@ export async function exerciseSidebarHover(cdp, directory, scope, originalTitle)
 			cardBounds: bounds,
 			pointerTransfer: true,
 			pointerCorridor: corridor,
-			warmHover,
+			warmPinnedToProject,
 			focusProtection,
 			directPinRoundTrip: true,
 			archiveRestoreRoundTrip: true,

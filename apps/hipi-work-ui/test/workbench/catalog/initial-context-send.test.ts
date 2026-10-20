@@ -301,6 +301,89 @@ test("reload only checks exact outcomes and never creates grants, pending submit
 	}
 });
 
+test.each(["createConversation", "authorizeAgentContext", "submit"] as const)(
+	"protocol v8 %s recovery remains read-only after upgrading to v9",
+	async (stage) => {
+		const f = fixture();
+		f.override((method) => (method === stage ? Promise.reject(new Error("lost")) : undefined));
+		await f.session.sendInitial(input());
+		f.session.dispose();
+		const original = f.local.read("command.catalog");
+		assert.ok(original);
+		const record = JSON.parse(original);
+		// Pin the historical wire version rather than letting the current fixture hide upgrade regressions.
+		record.initialSend.conversationCommand.version = 8;
+		if (record.request) record.request.version = 8;
+		const legacy = JSON.stringify(record);
+		f.local.write("command.catalog", legacy);
+		const storageBefore = new Map(f.storage.values);
+		const local = new LocalState("store", f.storage);
+		const reopened = new CatalogSession(f.client, local, f.authority);
+		const task = reopened.getSnapshot().initialSend;
+		assert.equal(PROTOCOL_VERSION, 9);
+		assert.equal(reopened.getSnapshot().incompatible, false, stage);
+		assert.ok(task?.context);
+		assert.equal(task.conversationCommand.version, 9);
+		assert.equal(task.text, prompt);
+		assert.equal(task.submissionId, record.initialSend.submissionId);
+		assert.deepEqual(task.context, record.initialSend.context);
+		assert.equal(task.context.createAttempted, true);
+		assert.equal(task.context.submitAttempted, stage === "submit");
+		assert.equal(task.context.authorization !== null, stage !== "createConversation");
+		assert.equal(reopened.getSnapshot().initialConsentInvalidated, true);
+		assert.equal(
+			reopened.getSnapshot().initialConsentStage,
+			stage === "createConversation" ? "create" : stage === "authorizeAgentContext" ? "authorize" : "submit",
+		);
+
+		const callsBefore = f.calls.length;
+		const mutationsBefore = mutations(f);
+		f.override(undefined);
+		await reopened.check();
+		assert.equal(reopened.getSnapshot().notFound, true, stage);
+		assert.ok(
+			f.calls.slice(callsBefore).some((call) => {
+				const lookup =
+					stage === "createConversation"
+						? "getConversationCommandResult"
+						: stage === "authorizeAgentContext"
+							? "getAgentCommandResult"
+							: "getReceipt";
+				return call.method === lookup;
+			}),
+		);
+		await reopened.retry();
+		await reopened.recoverInitialDraft();
+		await reopened.combineInitialDraft();
+		for (const requestId of [task.submissionId, "bypass"]) {
+			await assert.rejects(
+				submitRequest(
+					f.client,
+					local,
+					{
+						workspaceId: "project",
+						conversationId: task.conversationId ?? "discovered-conversation",
+						requestId,
+						text: prompt,
+					},
+					new AbortController().signal,
+				),
+				/PREREQUISITE_REQUIRED/,
+			);
+		}
+		assert.deepEqual(mutations(f), mutationsBefore, stage);
+		assert.equal(f.providerTurns.length, 0);
+		assert.equal(local.pending("project.conversation"), null);
+		assert.equal(local.pending("project.discovered-conversation"), null);
+		assert.equal(reopened.getSnapshot().initialConsentInvalidated, true);
+		assert.equal(reopened.getSnapshot().initialConsentCanRecoverDraft, false);
+		assert.deepEqual(reopened.getSnapshot().initialSend, task);
+		assert.equal(local.read("task-draft.project"), prompt);
+		assert.equal(local.read("command.catalog"), legacy);
+		assert.deepEqual(f.storage.values, storageBefore, "Unknown outcomes must not rewrite the v8 journal");
+	},
+);
+
 test("lost committed responses reconcile to one exact turn and Check can finish accepted submit after reload", async () => {
 	for (const stage of ["createConversation", "authorizeAgentContext", "submit"] as const) {
 		const f = fixture();

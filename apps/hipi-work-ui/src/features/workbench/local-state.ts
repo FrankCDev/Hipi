@@ -14,6 +14,7 @@ export type NavigationIndex = { workspaces: Workspace[]; conversations: Conversa
 export class LocalState {
 	navigation: NavigationIndex = { workspaces: [], conversations: [] };
 	readonly #values = new Map<string, SavedValue>();
+	readonly #unsavedDrafts = new Set<string>();
 	readonly #pending = new Map<string, Submit>();
 	readonly #pendingDraftRevisions = new Map<string, string | null>();
 	readonly #unconfirmed = new Set<string>();
@@ -53,6 +54,9 @@ export class LocalState {
 	activate() {
 		this.#active = true;
 	}
+	get storeIdentity(): string | undefined {
+		return this.#storeId;
+	}
 	deactivate() {
 		this.#active = false;
 	}
@@ -73,7 +77,11 @@ export class LocalState {
 	}
 	write(key: string, value: string): boolean {
 		if (!this.#active || !this.#leaseActive()) return false;
-		if ((key.startsWith("task-draft.") || key === "chat-draft.global") && !validTaskDraft(key, value)) return false;
+		if (
+			(key.startsWith("task-draft.") || key.startsWith("new-chat-draft.") || key === "chat-draft.global") &&
+			!validTaskDraft(key, value)
+		)
+			return false;
 		const previous = this.#values.get(key);
 		const entry: SavedValue = {
 			kind: "value",
@@ -84,7 +92,41 @@ export class LocalState {
 			...(previous?.handoffRevision ? { handoffRevision: previous.handoffRevision } : {}),
 		};
 		this.#values.set(key, entry);
-		return this.#save(entry);
+		const saved = this.#save(entry);
+		if (validTaskDraft(key, value)) {
+			if (saved) this.#unsavedDrafts.delete(key);
+			else this.#unsavedDrafts.add(key);
+		}
+		return saved;
+	}
+	/** Caller holds command.catalog admission. Current durable values are not stale window caches. */
+	storedDraftValues(): SavedValue[] {
+		if (!this.#active || !this.#leaseActive()) throw new Error("Connection is closed");
+		try {
+			if (this.#persistence) return this.#persistence.readDraftValues();
+			if (this.#requiresPersistence) throw new Error("Recovery storage is unavailable");
+			return [...this.#values.values()]
+				.filter((entry) => validTaskDraft(entry.key, entry.value))
+				.map((entry) => ({ ...entry }));
+		} catch (error) {
+			this.storageAvailable = false;
+			throw error;
+		}
+	}
+	unsavedDraftValues(): SavedValue[] {
+		return [...this.#unsavedDrafts].flatMap((key) => {
+			const entry = this.#values.get(key);
+			return entry ? [{ ...entry }] : [];
+		});
+	}
+	/** Refresh one source after a verified draft selection, without overwriting failed local edits. */
+	refreshDraftValue(key: string): SavedValue | null {
+		if (!validTaskDraft(key, "")) throw new Error("INVALID_HOME_DRAFT");
+		if (this.#unsavedDrafts.has(key)) throw new Error("HOME_DRAFT_STORAGE_CONFLICT");
+		const entry = this.storedValue(key);
+		if (entry) this.#values.set(key, { ...entry });
+		else this.#values.delete(key);
+		return entry;
 	}
 	/** Captures local edits, including a write that could not yet be persisted. */
 	valueSnapshot(key: string): SavedValue | null {
@@ -107,6 +149,7 @@ export class LocalState {
 	persistValue(entry: SavedValue): void {
 		if (!this.#save(entry)) throw new Error("RECOVERY_STORAGE_UNAVAILABLE");
 		this.#values.set(entry.key, { ...entry });
+		this.#unsavedDrafts.delete(entry.key);
 	}
 	pending(key: string): Submit | null {
 		const value = this.#pending.get(key);

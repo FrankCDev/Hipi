@@ -272,3 +272,41 @@ test("storage schema v1 pending records remain readable under the current wire p
 	assert.equal(storage.getItem(key), saved);
 	assert.equal(new LocalState("other-store", storage).pending("w.c"), null);
 });
+
+test("home inventory is store-scoped, ignores unrelated corrupt records and rejects corrupt matching sources", () => {
+	const storage = new MemoryStorage();
+	const local = new LocalState("store", storage);
+	local.write("new-chat-draft.home", "Home text");
+	local.write("task-draft.old", "Legacy text");
+	storage.setItem("hipi.work.local.v1.store.value.draft.w.c", "invalid conversation draft");
+	new LocalState("other", storage).write("task-draft.foreign", "Private other store");
+	assert.deepEqual(
+		local.storedDraftValues().map((entry) => entry.value),
+		["Home text", "Legacy text"],
+	);
+	storage.setItem("hipi.work.local.v1.store.value.task-draft.broken", "invalid home draft");
+	assert.throws(() => local.storedDraftValues(), /Invalid local state/);
+	assert.equal(local.read("new-chat-draft.home"), "Home text");
+});
+
+test("stale cached draft values are not unsaved edits, while failed writes remain available until a successful retry", () => {
+	const storage = new MemoryStorage();
+	const first = new LocalState("store", storage);
+	first.write("new-chat-draft.home", "Old text");
+	const second = new LocalState("store", storage);
+	second.write("new-chat-draft.home", "Other window text");
+	assert.deepEqual(first.unsavedDraftValues(), []);
+	assert.equal(first.storedDraftValues()[0]?.value, "Other window text");
+	assert.equal(first.refreshDraftValue("new-chat-draft.home")?.value, "Other window text");
+	const save = storage.setItem.bind(storage);
+	storage.setItem = () => {
+		throw new Error("denied");
+	};
+	assert.equal(first.write("new-chat-draft.home", "Memory-only text"), false);
+	assert.equal(first.unsavedDraftValues()[0]?.value, "Memory-only text");
+	assert.throws(() => first.refreshDraftValue("new-chat-draft.home"), /HOME_DRAFT_STORAGE_CONFLICT/);
+	storage.setItem = save;
+	assert.equal(first.write("new-chat-draft.home", "Memory-only text"), true);
+	assert.deepEqual(first.unsavedDraftValues(), []);
+	assert.equal(new LocalState("store", storage).read("new-chat-draft.home"), "Memory-only text");
+});

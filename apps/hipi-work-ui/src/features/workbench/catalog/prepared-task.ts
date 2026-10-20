@@ -1,7 +1,9 @@
-import { LIMITS, parseRequest } from "@hipi/work-runtime/contracts";
-import type { CatalogCommand } from "../command-recovery.ts";
+import { LIMITS } from "@hipi/work-runtime/contracts";
+import type { CatalogCommand, LegacyCatalogCommand } from "../command-recovery.ts";
 import type { SavedValue } from "../local-persistence.ts";
 import type { LocalState } from "../local-state.ts";
+import { parseProjectCommand } from "../projects/commands.ts";
+import { parseStoredRequest } from "../recovery/stored-request.ts";
 import { type InitialSend, readInitialSendRecovery } from "./initial-send.ts";
 
 export type PreparedTask = {
@@ -20,8 +22,8 @@ export type CatalogRecoveryRecord = {
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
 const recoveryKey = "command.catalog";
 
-function catalogCommand(value: unknown): CatalogCommand {
-	const command = parseRequest(value);
+function catalogCommand(value: unknown): LegacyCatalogCommand {
+	const command = parseStoredRequest(value);
 	if (
 		command.expectedStoreId !== undefined ||
 		(command.method !== "createWorkspace" &&
@@ -40,7 +42,29 @@ export function readCatalogRecovery(raw: string | null): CatalogRecoveryRecord {
 	try {
 		if (raw.length > 30000) throw new Error("INVALID_CATALOG_RECOVERY");
 		const saved: unknown = JSON.parse(raw);
-		if (saved && typeof saved === "object" && "version" in saved && (saved.version === 3 || saved.version === 4))
+		if (
+			saved &&
+			typeof saved === "object" &&
+			"version" in saved &&
+			saved.version === 6 &&
+			"kind" in saved &&
+			saved.kind === "project-command"
+		) {
+			if (Object.keys(saved).some((key) => !["version", "kind", "request"].includes(key)) || !("request" in saved))
+				throw new Error("INVALID_CATALOG_RECOVERY");
+			return {
+				request: parseProjectCommand(saved.request),
+				preparedTask: null,
+				initialSend: null,
+				incompatible: false,
+			};
+		}
+		if (
+			saved &&
+			typeof saved === "object" &&
+			"version" in saved &&
+			(saved.version === 3 || saved.version === 4 || saved.version === 5 || saved.version === 6)
+		)
 			return { ...readInitialSendRecovery(saved), preparedTask: null, incompatible: false };
 		if (
 			!saved ||
@@ -101,14 +125,14 @@ function saveRecovery(local: LocalState, request: CatalogCommand | null, prepare
 
 export function currentCatalogRecovery(local: LocalState, command: CatalogCommand): CatalogRecoveryRecord {
 	const saved = readCatalogRecovery(local.storedValue(recoveryKey)?.value ?? null);
-	if (saved.incompatible || !saved.request || JSON.stringify(saved.request) !== JSON.stringify(catalogCommand(command)))
+	if (saved.incompatible || !saved.request || JSON.stringify(saved.request) !== JSON.stringify(command))
 		throw new Error("CATALOG_RECOVERY_MISMATCH");
 	return saved;
 }
 
 export function admitCatalog(
 	local: LocalState,
-	input: CatalogCommand,
+	input: LegacyCatalogCommand,
 	text: string | undefined,
 	signal: AbortSignal,
 ): Promise<CatalogRecoveryRecord> {
@@ -146,7 +170,7 @@ function sameValue(left: SavedValue | null, right: SavedValue | null): boolean {
 /** Called only after CatalogSession verifies the exact command receipt and current target. */
 export function finishCatalog(
 	local: LocalState,
-	command: CatalogCommand,
+	command: LegacyCatalogCommand,
 	conversationId: string | null,
 	signal: AbortSignal,
 	discardPreparedTask = false,

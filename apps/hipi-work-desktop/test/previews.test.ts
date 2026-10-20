@@ -98,6 +98,8 @@ test("desktop files and previews share grants; revoke blocks cached handles and 
 	};
 	const runtime = new WorkRuntime({
 		storeId: "store",
+		refreshSidebarProjection: rejectFeatureRead,
+		listSidebarConversations: rejectFeatureRead,
 		refreshConversationSearch: rejectFeatureRead,
 		searchConversations: rejectFeatureRead,
 		getHistoryAroundMatch: rejectFeatureRead,

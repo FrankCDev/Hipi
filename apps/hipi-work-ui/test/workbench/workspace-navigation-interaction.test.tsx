@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import {
 	type AgentContext,
 	type AppClient,
+	AppError,
 	type Conversation,
 	type ConversationSearchHit,
 	type Method,
+	type Params,
 	PROTOCOL_VERSION,
+	type ProjectCommandResult,
+	type ProjectListItem,
 	parseRequest,
 	parseResult,
 	type SearchHistoryWindow,
@@ -30,6 +34,8 @@ import { admitInitialSend } from "../../src/features/workbench/catalog/initial-s
 import { PreparedTaskRecovery } from "../../src/features/workbench/catalog/prepared-task-recovery.tsx";
 import { CatalogSession } from "../../src/features/workbench/catalog/session.ts";
 import { type CatalogCommand, saveCommand } from "../../src/features/workbench/command-recovery.ts";
+import { parseActiveDraft } from "../../src/features/workbench/composer/draft-record.ts";
+import { DraftRecovery } from "../../src/features/workbench/composer/draft-recovery.tsx";
 import { PreparedTaskEntry } from "../../src/features/workbench/composer/prepared-entry.tsx";
 import { ConnectionActions } from "../../src/features/workbench/connection-actions.tsx";
 import { ConversationPane } from "../../src/features/workbench/conversation/pane.tsx";
@@ -38,7 +44,10 @@ import type { BrowserStorage } from "../../src/features/workbench/local-persiste
 import { LocalState } from "../../src/features/workbench/local-state.ts";
 import { ProjectFolderDialog } from "../../src/features/workbench/projects/folder.tsx";
 import { ConversationSearch } from "../../src/features/workbench/search/search.tsx";
+import { PinnedConversations } from "../../src/features/workbench/sidebar/pinned-conversations.tsx";
+import { PresentationSession } from "../../src/features/workbench/sidebar/presentation-session.ts";
 import { SidebarSectionHeading } from "../../src/features/workbench/sidebar/section.tsx";
+import { SidebarSelectionProvider } from "../../src/features/workbench/sidebar/selection-provider.tsx";
 import { WorkspaceTree } from "../../src/features/workbench/sidebar/workspace-tree.tsx";
 import { Workbench } from "../../src/features/workbench/workbench.tsx";
 import { WorkbenchWelcome } from "../../src/features/workbench/workbench-welcome.tsx";
@@ -109,15 +118,21 @@ vi.mock("@tanstack/react-query", async () => ({
 		const [kind, workspaceId, conversationId] = queryKey;
 		const data = !enabled
 			? undefined
-			: kind === "workspaces"
-				? { items: workspaces, nextCursor: null }
-				: kind === "workspace"
-					? workspaces.find((item) => item.workspaceId === workspaceId)
-					: kind === "conversation" &&
-							workspaceId === conversation.workspaceId &&
-							conversationId === conversation.conversationId
-						? conversation
-						: undefined;
+			: kind === "project-catalog"
+				? { state: "ready", generation: 1, defaultWorkspaceId: local.read("default-chat-workspace") ? "default" : null }
+				: kind === "project"
+					? projectItems().find((item) => item.project.projectId === workspaceId)?.project
+					: kind === "conversation-membership"
+						? { workspaceId, conversationId, projectId: workspaceId, revision: 1 }
+						: kind === "workspaces"
+							? { items: workspaces, nextCursor: null }
+							: kind === "workspace"
+								? workspaces.find((item) => item.workspaceId === workspaceId)
+								: kind === "conversation" &&
+										workspaceId === conversation.workspaceId &&
+										conversationId === conversation.conversationId
+									? conversation
+									: undefined;
 		return { data, isSuccess: data !== undefined, isPending: false, isError: false, isFetching: false, error: null };
 	},
 }));
@@ -132,8 +147,8 @@ vi.mock("../../src/features/workbench/files/panel.tsx", async (original) => ({
 	useWorkAreaWidth: () => measurement.width,
 }));
 vi.mock("../../src/features/workbench/catalog/use-pages.ts", () => ({
-	useCatalogPages: () => ({
-		items: workspaces,
+	useCatalogPages: ({ queryKey }: { queryKey: readonly unknown[] }) => ({
+		items: queryKey[0] === "projects" ? projectItems() : workspaces,
 		hasData: true,
 		hasMore: false,
 		canRestart: false,
@@ -143,6 +158,9 @@ vi.mock("../../src/features/workbench/catalog/use-pages.ts", () => ({
 		isFetching: false,
 	}),
 }));
+// Central projection polling has its own Query-cache lifecycle suite. This
+// adapter exercises canonical navigation and command owners, not DOM visibility.
+vi.mock("../../src/features/workbench/sidebar/navigation-refresh.ts", () => ({ useNavigationRefresh: () => {} }));
 vi.mock("../../src/app/client-provider.tsx", () => ({
 	useAppClient: () => client,
 	useFiles: () => ({ files: fileFixture.files, fileAuthority }),
@@ -169,6 +187,38 @@ const workspaces: Workspace[] = [
 	{ workspaceId: "other", name: "Other project" },
 	{ workspaceId: "empty", name: "Empty project" },
 ];
+// Migrated legacy projects retain their IDs; new creation fixtures below use distinct IDs.
+function projectItems(): ProjectListItem[] {
+	return workspaces
+		.filter((item) => item.workspaceId !== "default")
+		.map((item) => ({
+			project: { projectId: item.workspaceId, homeWorkspaceId: item.workspaceId, name: item.name, revision: 1 },
+			presentation: { projectId: item.workspaceId, pinned: false, revision: 0 },
+		}));
+}
+function logicalCreation(target: Conversation) {
+	let receipt: ProjectCommandResult | null = null;
+	return (method: Method, params: unknown): unknown => {
+		const request = parseRequest({ version: PROTOCOL_VERSION, method, params });
+		if (request.method === "getProject")
+			return projectItems().find((item) => item.project.projectId === request.params.projectId)?.project;
+		if (request.method === "createProjectConversation") {
+			const result = {
+				conversation: target,
+				membership: {
+					workspaceId: target.workspaceId,
+					conversationId: target.conversationId,
+					projectId: request.params.projectId,
+					revision: 1,
+				},
+			};
+			receipt = { status: "completed", method: request.method, params: request.params, result };
+			return result;
+		}
+		if (request.method === "getProjectCommandResult") return receipt;
+		return undefined;
+	};
+}
 const conversation: Conversation = {
 	workspaceId: "current",
 	conversationId: "task",
@@ -305,7 +355,8 @@ function drive(keybindings?: AppKeybindings) {
 		const content = Workbench({ disconnect, keybindings });
 		for (const commit of hooks.commits.splice(0)) commit();
 		if (hooks.changed) continue;
-		const tree = element(content, WorkspaceTree);
+		const tree = elements(content, WorkspaceTree).find((entry) => entry.props.section === "projects");
+		assert.ok(tree);
 		const file = element(content, FilePanel);
 		const leave = element(content, Dialog);
 		assert.ok(file.props.session instanceof FileWorkspaceSession);
@@ -329,6 +380,13 @@ function drive(keybindings?: AppKeybindings) {
 		};
 	}
 	throw new Error("Workbench did not settle after committed effects");
+}
+async function readyHome() {
+	await vi.waitFor(() => {
+		const entry = element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+		assert.equal(entry.props.readOnly, false);
+	});
+	return element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry);
 }
 function assertPreserved(current: ReturnType<typeof drive>, initial: ReturnType<typeof drive>) {
 	assert.equal(current.tree.selectedWorkspace, "current");
@@ -578,6 +636,51 @@ test("disclosure from home never selects a project or a task", () => {
 	}
 });
 
+test.each(["open", "new-chat"] as const)(
+	"off-page pinned project %s uses its logical identity and physical home without replacing work",
+	async (action) => {
+		const initial = drive();
+		await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
+		initial.editor.edit("Keep the source editor");
+		const owner = initial.editor;
+		const editor = owner.snapshot();
+		const item: ProjectListItem = {
+			project: {
+				projectId: "off-page-logical",
+				homeWorkspaceId: "off-page-physical",
+				name: "Off-page project",
+				revision: 3,
+			},
+			presentation: { projectId: "off-page-logical", pinned: true, revision: 2 },
+		};
+		assert.equal(
+			projectItems().some((entry) => entry.project.projectId === item.project.projectId),
+			false,
+		);
+		const pins = element(initial.content, PinnedConversations);
+		assert.ok(pins.props.renderProject);
+		const branch = pins.props.renderProject(item, undefined);
+		assert.ok(isValidElement<React.ComponentProps<typeof WorkspaceTree>>(branch));
+		if (action === "open") branch.props.onOpenProject(item.project.projectId);
+		else branch.props.onNewConversation(item.project.projectId);
+		const current = drive();
+		assert.equal(current.tree.selectedProjectId, item.project.projectId);
+		assert.equal(current.tree.selectedWorkspace, item.project.homeWorkspaceId);
+		assert.equal(current.tree.selectedConversation, "");
+		assert.equal(current.tree.isExpanded(item.project.projectId), true);
+		assert.equal(current.file.workspaceId, item.project.homeWorkspaceId);
+		assert.equal(local.read("project"), item.project.projectId);
+		assert.equal(local.read("workspace"), item.project.homeWorkspaceId);
+		assert.equal(current.session, initial.session);
+		assert.equal(owner.snapshot(), editor);
+		assert.equal(current.session.protected, true);
+		assert.equal(current.leave.props.open, false);
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.deepEqual(local.pending(scope), pending);
+		assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+	},
+);
+
 test("narrow navigation stays open while other and current project branches expand or collapse", () => {
 	const initial = drive();
 	assert.equal(initial.content.props["data-navigation-mode"], "narrow");
@@ -665,7 +768,10 @@ test.each([
 		});
 		local.write("task-draft.current", goal);
 		local.write("conversation", "");
+		const logical = logicalCreation(target);
 		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
+			const result = logical(method, input);
+			if (result !== undefined) return parseResult(method, result);
 			if (method === "getWorkspace") return parseResult(method, workspaces[0]);
 			if (method === "getReceipt") return parseResult(method, null);
 			if (method === "getConversationModel")
@@ -693,7 +799,7 @@ test.each([
 			);
 		});
 		const initial = drive();
-		const entry = element(element(initial.content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+		const entry = await readyHome();
 		const sending = entry.props.onSend(goal, { provider: "faux", modelId: "one" });
 		await vi.waitFor(() => assert.ok(initial.tree.catalog.getSnapshot().submission));
 		const during = drive();
@@ -726,7 +832,10 @@ test.each([
 		}
 		assert.equal(current.tree.catalog.getSnapshot().busy, false);
 		assert.equal(local.read("task-draft.current"), "");
-		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
+		assert.equal(
+			vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProjectConversation").length,
+			1,
+		);
 		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length, 1);
 		assert.equal(local.pending("current.created")?.text, goal);
 		assert.equal(local.isConfirmed(current.tree.catalog.getSnapshot().submission?.requestId ?? ""), !lostReceipt);
@@ -736,27 +845,137 @@ test.each([
 );
 
 test("New chat opens the scoped composer without creating objects or discarding same-project file work", async () => {
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
 	local.write("conversation", "");
 	const home = () => element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props;
+	await readyHome();
 	home().onDraftChange("Written at project home");
 	const initial = drive();
 	await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
 	initial.editor.edit("Unsaved file input");
 	const snapshot = initial.editor.snapshot();
 	initial.tree.onNewConversation("current");
+	await readyHome();
 	assert.equal(drive().leave.props.open, false);
 	assert.equal(drive().editor.snapshot(), snapshot);
 	assert.equal(home().draft, "Written at project home");
 	drive().tree.onNewConversation("other");
+	await readyHome();
+	assert.equal(home().draft, "Written at project home");
 	home().onDraftChange("Other project's goal");
 	assert.equal(home().draft, "Other project's goal");
 	drive().tree.onNewConversation("current");
-	assert.equal(home().draft, "Written at project home");
+	await readyHome();
+	assert.equal(home().draft, "Other project's goal");
+	const active = parseActiveDraft(local.read("new-chat.active") ?? "null");
 	for (const state of [local, new LocalState("store", storage)]) {
-		assert.equal(state.read("task-draft.current"), "Written at project home");
-		assert.equal(state.read("task-draft.other"), "Other project's goal");
+		assert.equal(state.read(active.sourceKey), "Other project's goal");
+		assert.equal(state.read("task-draft.other"), null);
 	}
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+});
+
+test("explicit legacy text recovery keeps the current destination and preserves both source records", async () => {
+	saveCommand(local, "catalog", null);
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+	local.write("conversation", "");
+	local.write("task-draft.current", "Current text");
+	local.write("task-draft.other", "Other text");
+	await readyHome();
+	const recovery = element(drive().content, DraftRecovery).props;
+	const source = recovery.inventory?.recoverable.find((entry) => entry.key === "task-draft.other");
+	assert.ok(source);
+	recovery.onRecover(source);
+	await vi.waitFor(() =>
+		assert.equal(
+			element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props.draft,
+			"Other text",
+		),
+	);
+	assert.equal(drive().tree.selectedWorkspace, "current");
+	assert.equal(local.read("task-draft.current"), "Current text");
+	assert.equal(local.read("task-draft.other"), "Other text");
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+});
+
+test.each(["current", ""])(
+	"same home navigation while admission waits replaces the cancelled intent: %s",
+	async (workspaceId) => {
+		saveCommand(local, "catalog", null);
+		local.write("conversation", "");
+		local.write("workspace", workspaceId);
+		const gate = Promise.withResolvers<void>();
+		vi.stubGlobal("navigator", {
+			locks: {
+				request: async (key: string, action: () => unknown) => {
+					if (key.endsWith("command.catalog")) await gate.promise;
+					return action();
+				},
+			},
+		});
+		const initial = drive();
+		initial.tree.onOpenProject(workspaceId);
+		drive();
+		gate.resolve();
+		const entry = await readyHome();
+		assert.equal(entry.props.readOnly, false);
+		assert.equal(drive().tree.selectedWorkspace, workspaceId);
+		assert.ok(local.read("new-chat.active"));
+		assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+	},
+);
+
+test.each(["source", "descriptor"] as const)("home publication revalidates a queued %s change", async (change) => {
+	saveCommand(local, "catalog", null);
+	local.write("conversation", "");
+	local.write("task-draft.current", "Original text");
+	const other = new LocalState("store", storage);
+	let admissions = 0;
+	vi.stubGlobal("navigator", {
+		locks: {
+			request: async (key: string, action: () => unknown) => {
+				if (key.endsWith("command.catalog") && ++admissions === 3) {
+					if (change === "source") other.write("task-draft.current", "Newer durable text");
+					else {
+						other.write("task-draft.other", "Rotated text");
+						other.write(
+							"new-chat.active",
+							JSON.stringify({ version: 1, generation: "rotated", sourceKey: "task-draft.other" }),
+						);
+					}
+				}
+				return action();
+			},
+		},
+	});
+	if (change === "descriptor") {
+		await vi.waitFor(() => assert.equal(element(drive().content, DraftRecovery).props.failed, true));
+		const entry = element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+		assert.equal(entry.props.draft, "");
+		assert.equal(entry.props.readOnly, true);
+		element(drive().content, DraftRecovery).props.onReload();
+	}
+	const entry = await readyHome();
+	const expected = change === "source" ? "Newer durable text" : "Rotated text";
+	assert.equal(entry.props.draft, expected);
+	const active = parseActiveDraft(local.storedValue("new-chat.active")?.value ?? "");
+	assert.deepEqual(local.valueSnapshot(active.sourceKey), local.storedValue(active.sourceKey));
+	assert.equal(drive().tree.selectedWorkspace, "current");
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+});
+
+test("default-only workspace inventory shows the Projects empty state without treating its name as identity", () => {
+	const previous = [...workspaces];
+	try {
+		workspaces.splice(0, workspaces.length, { workspaceId: "default", name: "Chats" });
+		local.write(
+			"default-chat-workspace",
+			JSON.stringify({ version: 1, role: "default-chat-workspace", workspaceId: "default" }),
+		);
+		assert.ok(elements(drive().content, "p").some((entry) => entry.props.children === "nav.noWorkspaces"));
+	} finally {
+		workspaces.splice(0, workspaces.length, ...previous);
+	}
 });
 
 test.each([false, true])(
@@ -784,7 +1003,10 @@ test.each([false, true])(
 		local.write("conversation", "");
 		const waiting = Promise.withResolvers<void>();
 		let grant: AgentContext | undefined;
+		const logical = logicalCreation(target);
 		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+			const result = logical(method, params);
+			if (result !== undefined) return parseResult(method, result);
 			const request = parseRequest({ version: PROTOCOL_VERSION, method, params });
 			if (request.method === "getWorkspace") return parseResult(method, workspaces[0]);
 			if (request.method === "getConversationModel")
@@ -812,8 +1034,7 @@ test.each([false, true])(
 				});
 			throw new Error(`Unexpected ${method}`);
 		});
-		const initial = drive();
-		const entry = element(element(initial.content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+		const entry = await readyHome();
 		assert.equal(entry.props.workspaceId, "current");
 		const sending = entry.props
 			.onSend(goal, model, {
@@ -847,7 +1068,10 @@ test.each([false, true])(
 		assert.equal(error instanceof Error, unknownGrant);
 		const after = drive();
 		assert.equal(after.tree.selectedConversation, unknownGrant ? "" : "consented");
-		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
+		assert.equal(
+			vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProjectConversation").length,
+			1,
+		);
 		assert.equal(
 			vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length,
 			unknownGrant ? 0 : 1,
@@ -879,11 +1103,12 @@ test("explicit conflict combine refreshes the project composer with both exact t
 		}),
 	};
 	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
-		assert.equal(method, "getWorkspace");
-		return parseResult(method, workspaces[0]);
+		assert.equal(method, "getProject");
+		return parseResult(method, projectItems()[0]?.project);
 	});
 	const initial = drive();
 	const home = () => element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props;
+	await readyHome();
 	await assert.rejects(
 		home().onSend(original, model, {
 			workspaceId: "current",
@@ -925,12 +1150,12 @@ test("explicit conflict combine refreshes the project composer with both exact t
 	);
 	press(combine);
 	await vi.waitFor(() => assert.equal(initial.tree.catalog.getSnapshot().initialSend, null));
-	assert.equal(home().draft, `${later}\n\n---\n\n${original}`);
+	await vi.waitFor(() => assert.equal(home().draft, `${later}\n\n---\n\n${original}`));
 	assert.equal(local.read("task-draft.current"), home().draft);
 	assert.equal(drive().tree.selectedConversation, "");
 	assert.deepEqual(
 		vi.mocked(client.call).mock.calls.map(([method]) => method),
-		["getWorkspace"],
+		["getProject"],
 	);
 	assert.equal(local.pending("current.consented"), null);
 });
@@ -957,7 +1182,10 @@ test("combining into the already selected created chat signals only its draft, w
 			root: { workspaceId: "current", rootId: "project-root", writable: false, displayName: "Project source" },
 		}),
 	};
-	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+	const logical = logicalCreation(conversation);
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
+		const result = logical(method, input);
+		if (result !== undefined) return parseResult(method, result);
 		if (method === "getWorkspace") return parseResult(method, workspaces[0]);
 		if (method === "getConversationCommandResult")
 			return parseResult(method, { method: "createConversation", result: conversation });
@@ -965,7 +1193,7 @@ test("combining into the already selected created chat signals only its draft, w
 		return parseResult(method, conversation);
 	});
 	const initial = drive();
-	const home = element(element(initial.content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+	const home = await readyHome();
 	await assert.rejects(
 		home.props.onSend(original, model, {
 			workspaceId: "current",
@@ -1002,7 +1230,10 @@ test("combining into the already selected created chat signals only its draft, w
 		vi.mocked(client.call).mock.calls.filter(([method]) => ["submit", "authorizeAgentContext"].includes(method)).length,
 		0,
 	);
-	assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createConversation").length, 1);
+	assert.equal(
+		vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProjectConversation").length,
+		1,
+	);
 });
 
 test.each([
@@ -1167,11 +1398,21 @@ test.each([false, true])(
 		saveCommand(local, "catalog", null);
 		const binding = Promise.withResolvers<never>();
 		let created: Workspace | undefined;
+		let receipt: ProjectCommandResult | null = null;
 		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
-			assert.equal(method, "createWorkspace");
-			assert.ok(input && typeof input === "object" && "workspaceId" in input && "name" in input);
-			created = { workspaceId: String(input.workspaceId), name: String(input.name) };
-			return parseResult(method, created);
+			const request = parseRequest({ version: PROTOCOL_VERSION, method, params: input });
+			if (request.method === "getProjectCommandResult") return parseResult(method, receipt);
+			assert.equal(request.method, "createProject");
+			if (request.method !== "createProject") throw new Error("Unexpected command");
+			const project = {
+				projectId: "created-logical",
+				homeWorkspaceId: "created-physical",
+				name: request.params.name,
+				revision: 1,
+			};
+			created = { workspaceId: project.homeWorkspaceId, name: project.name };
+			receipt = { status: "completed", method: "createProject", params: request.params, result: project };
+			return parseResult(method, project);
 		});
 		const attach = vi.fn(() => binding.promise);
 		fileAuthority = {
@@ -1187,11 +1428,14 @@ test.each([false, true])(
 		await vi.waitFor(() => assert.equal(attach.mock.calls.length, 1));
 		assert.ok(created);
 		assert.equal(drive().tree.selectedWorkspace, created.workspaceId);
+		assert.equal(drive().tree.selectedProjectId, "created-logical");
+		assert.equal(local.read("project"), "created-logical");
+		assert.equal(created.workspaceId, "created-physical");
 		if (navigateAway) drive().tree.onOpenProject("other");
 		binding.reject(new Error("Binding response lost"));
 		await creating;
 		const current = drive();
-		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createWorkspace").length, 1);
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProject").length, 1);
 		assert.deepEqual(attach.mock.calls, [[created.workspaceId, "opaque-selection"]]);
 		assert.equal(current.tree.selectedWorkspace, navigateAway ? "other" : created.workspaceId);
 		const manager = elements(current.content, ProjectFolderDialog)[0];
@@ -1212,11 +1456,21 @@ test.each(["empty", "BUSY"] as const)(
 		saveCommand(local, "catalog", null);
 		const binding = Promise.withResolvers<ProjectFolder>();
 		let created: Workspace | undefined;
+		let receipt: ProjectCommandResult | null = null;
 		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
-			assert.equal(method, "createWorkspace");
-			assert.ok(input && typeof input === "object" && "workspaceId" in input && "name" in input);
-			created = { workspaceId: String(input.workspaceId), name: String(input.name) };
-			return parseResult(method, created);
+			const request = parseRequest({ version: PROTOCOL_VERSION, method, params: input });
+			if (request.method === "getProjectCommandResult") return parseResult(method, receipt);
+			assert.equal(request.method, "createProject");
+			if (request.method !== "createProject") throw new Error("Unexpected command");
+			const project = {
+				projectId: "created-logical",
+				homeWorkspaceId: "created-physical",
+				name: request.params.name,
+				revision: 1,
+			};
+			created = { workspaceId: project.homeWorkspaceId, name: project.name };
+			receipt = { status: "completed", method: "createProject", params: request.params, result: project };
+			return parseResult(method, project);
 		});
 		const attach = vi.fn(() => binding.promise);
 		fileAuthority = { chooseRoot: async () => {}, revokeRoot: async () => {}, attachProject: attach };
@@ -1229,6 +1483,7 @@ test.each(["empty", "BUSY"] as const)(
 		assert.ok(created);
 		const workspaceId = created.workspaceId;
 		assert.equal(drive().tree.selectedWorkspace, workspaceId);
+		assert.equal(drive().tree.selectedProjectId, "created-logical");
 		// These two active queries may have observed unbound [] or BUSY while attachment was exclusive.
 		const rootRefreshes = () =>
 			cache.invalidateQueries.mock.calls
@@ -1484,6 +1739,184 @@ const searchWindow: SearchHistoryWindow = {
 	olderCursor: "older",
 	newerCursor: "newer",
 };
+
+test("same-Scope sidebar aliases change only location and retain the active search, file, draft and navigation owners", async () => {
+	const initial = drive();
+	await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
+	initial.editor.edit("Keep this alias-time file input");
+	const editor = initial.editor;
+	const document = editor.snapshot();
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+		assert.ok(method === "getConversation" || method === "getHistoryAroundMatch");
+		return parseResult(method, method === "getConversation" ? conversation : searchWindow);
+	});
+	assert.equal(
+		await element(initial.content, ConversationSearch).props.onActivate(searchHit, new AbortController().signal),
+		true,
+	);
+	drive().tree.onToggle("current");
+	const before = drive();
+	assert.equal(before.tree.isExpanded("current"), false);
+	const anchor = before.pane?.props.searchAnchor;
+	assert.ok(anchor);
+	const panel = before.file.controller.snapshot();
+	const stored = [...storage.values];
+	const workspace = vi.spyOn(initial.session, "setWorkspace");
+	cache.setQueryData.mockClear();
+	cache.invalidateQueries.mockClear();
+	vi.mocked(client.call).mockClear();
+	for (const location of [
+		{ kind: "recent" },
+		{ kind: "workspace", workspaceId: "current" },
+		{ kind: "pinned" },
+	] as const) {
+		drive().tree.onSelect(conversation, location);
+		const after = drive();
+		assert.deepEqual(element(after.content, SidebarSelectionProvider).props.preferredLocation, location);
+		assert.deepEqual(element(after.content, SidebarSelectionProvider).props.scope, {
+			workspaceId: "current",
+			conversationId: "task",
+		});
+		assert.equal(after.pane?.key, before.pane?.key);
+		assert.equal(after.pane?.props.searchAnchor, anchor);
+		assert.equal(after.tree.isExpanded("current"), false);
+		assert.equal(after.session, initial.session);
+		assert.equal(after.editor, editor);
+		assert.equal(editor.snapshot(), document);
+		assert.equal(after.file.controller.snapshot(), panel);
+		assert.deepEqual([...storage.values], stored);
+		assert.equal(workspace.mock.calls.length, 0);
+		assert.equal(cache.setQueryData.mock.calls.length, 0);
+		assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+		assert.equal(vi.mocked(client.call).mock.calls.length, 0);
+	}
+});
+
+test("explicit non-sidebar navigation clears the transient location without creating a durable preference", () => {
+	for (const navigate of [
+		() => drive().tree.onOpenProject("other"),
+		() => drive().tree.onNewConversation("current"),
+		() => drive().tree.onSelect(conversation),
+	]) {
+		drive().tree.onSelect(conversation, { kind: "workspace", workspaceId: "current" });
+		assert.equal(element(drive().content, SidebarSelectionProvider).props.preferredLocation?.kind, "workspace");
+		navigate();
+		assert.equal(element(drive().content, SidebarSelectionProvider).props.preferredLocation, null);
+	}
+	assert.equal(
+		[...storage.values.keys()].some((key) => key.includes("sidebar.selection")),
+		false,
+	);
+});
+
+test.each(["confirmed", "recovered", "late-alias", "late-away-back", "queued-away-back", "rejected"] as const)(
+	"pin confirmation clears only its exact admitted navigation origin: %s",
+	async (outcome) => {
+		vi.stubGlobal("navigator", { locks: { request: async (_key: string, operation: () => unknown) => operation() } });
+		const initial = drive();
+		initial.tree.onSelect(conversation, { kind: "workspace", workspaceId: "current" });
+		const presentation = initial.tree.presentation;
+		assert.ok(presentation);
+		const input: Params<"setConversationPinned"> = {
+			workspaceId: "current",
+			conversationId: "task",
+			requestId: "navigation-pin",
+			expectedPresentationRevision: 0,
+			pinned: true,
+		};
+		const result = { workspaceId: "current", conversationId: "task", revision: 1, pinned: true };
+		const response = Promise.withResolvers<void>();
+		let recoverable = false;
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			if (method === "setConversationPinned") {
+				await response.promise;
+				if (outcome === "rejected") throw new AppError("IDEMPOTENCY_CONFLICT");
+				if (outcome === "recovered") throw new Error("Lost response");
+				return parseResult(method, result);
+			}
+			if (method === "getPresentationCommandResult")
+				return parseResult(method, recoverable ? { method: "setConversationPinned", params: input, result } : null);
+			assert.equal(method, "getConversationPresentation");
+			return parseResult(method, result);
+		});
+		const admission = Promise.withResolvers<void>();
+		if (outcome === "queued-away-back") {
+			const admit = local.withAdmission.bind(local);
+			local.withAdmission = async (key, operation) => {
+				if (key === "command.presentation") await admission.promise;
+				return admit(key, operation);
+			};
+		}
+		const running = presentation.execute(input);
+		if (outcome !== "queued-away-back")
+			await vi.waitFor(() => assert.equal(presentation.getSnapshot().pending?.params.requestId, input.requestId));
+		if (outcome === "late-away-back" || outcome === "queued-away-back") drive().tree.onOpenProject("other");
+		if (outcome.startsWith("late-") || outcome === "queued-away-back")
+			drive().tree.onSelect(conversation, { kind: "recent" });
+		admission.resolve();
+		response.resolve();
+		await running;
+		if (outcome === "recovered") {
+			assert.equal(element(drive().content, SidebarSelectionProvider).props.preferredLocation?.kind, "workspace");
+			recoverable = true;
+			await presentation.check();
+		}
+		const current = drive();
+		assert.deepEqual(
+			element(current.content, SidebarSelectionProvider).props.preferredLocation,
+			outcome === "confirmed" || outcome === "recovered"
+				? null
+				: outcome === "rejected"
+					? { kind: "workspace", workspaceId: "current" }
+					: { kind: "recent" },
+		);
+		assert.equal(current.tree.selectedWorkspace, "current");
+		assert.equal(current.tree.selectedConversation, "task");
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.deepEqual(local.pending(scope), pending);
+	},
+);
+
+test.each(["startup", "foreign-admission"] as const)(
+	"%s recovered pin cannot acquire the current alias origin",
+	async (mode) => {
+		vi.stubGlobal("navigator", { locks: { request: async (_key: string, operation: () => unknown) => operation() } });
+		const input: Params<"setConversationPinned"> = {
+			workspaceId: "current",
+			conversationId: "task",
+			requestId: "foreign-pin",
+			expectedPresentationRevision: 0,
+			pinned: true,
+		};
+		const result = { workspaceId: "current", conversationId: "task", revision: 1, pinned: true };
+		let recoverable = false;
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			if (method === "setConversationPinned") throw new Error("Lost response");
+			if (method === "getPresentationCommandResult")
+				return parseResult(method, recoverable ? { method: "setConversationPinned", params: input, result } : null);
+			assert.equal(method, "getConversationPresentation");
+			return parseResult(method, result);
+		});
+		if (mode === "foreign-admission") drive();
+		const foreign = new PresentationSession(client, new LocalState("store", storage));
+		await foreign.execute(input);
+		foreign.dispose();
+		if (mode === "startup") local = new LocalState("store", storage);
+		const initial = drive();
+		initial.tree.onSelect(conversation, { kind: "recent" });
+		const presentation = initial.tree.presentation;
+		assert.ok(presentation);
+		if (mode === "foreign-admission") {
+			await presentation.execute({ ...input, requestId: "failed-local-attempt" });
+			assert.equal(presentation.getSnapshot().pending?.params.requestId, input.requestId);
+		}
+		recoverable = true;
+		await presentation.check();
+		assert.equal(presentation.getSnapshot().pending, null);
+		assert.deepEqual(element(drive().content, SidebarSelectionProvider).props.preferredLocation, { kind: "recent" });
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "setConversationPinned").length, 1);
+	},
+);
 
 test.each(["success", "away", "away-back", "retired", "aborted", "failure"] as const)(
 	"search activation waits for exact hydration and preserves full-width buffers until %s outcome",

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import type { Conversation } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { PreferencesProvider } from "../../../src/app/preferences.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
+import { navigationKey } from "../../../src/features/workbench/sidebar/navigation-query.ts";
 import { SidebarPreviewProvider } from "../../../src/features/workbench/sidebar/preview-provider.tsx";
 import { visibleSidebarProjects } from "../../../src/features/workbench/sidebar/project-visibility.ts";
+import { SidebarSelectionProvider } from "../../../src/features/workbench/sidebar/selection-provider.tsx";
 import { WorkspaceTree } from "../../../src/features/workbench/sidebar/workspace-tree.tsx";
 import { Workbench } from "../../../src/features/workbench/workbench.tsx";
 
@@ -15,12 +18,19 @@ const local = new LocalState();
 
 test("project presentation caps at five, preserves an eligible active row and avoids hiding one last item", () => {
 	const ids = Array.from({ length: 8 }, (_, index) => `project-${index}`);
+	const penultimate = ids[6];
+	const last = ids[7];
+	assert.ok(penultimate);
+	assert.ok(last);
 	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 5), false, "", false), ids.slice(0, 5));
 	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 6), false, "", false), ids.slice(0, 6));
 	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 6), false, "", true), ids.slice(0, 5));
-	assert.deepEqual(visibleSidebarProjects(ids, false, ids[7], false), [...ids.slice(0, 5), ids[7]]);
-	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, ids[6], false), ids.slice(0, 7));
-	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, ids[6], true), [...ids.slice(0, 5), ids[6]]);
+	assert.deepEqual(visibleSidebarProjects(ids, false, last, false), [...ids.slice(0, 5), last]);
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, penultimate, false), ids.slice(0, 7));
+	assert.deepEqual(visibleSidebarProjects(ids.slice(0, 7), false, penultimate, true), [
+		...ids.slice(0, 5),
+		penultimate,
+	]);
 	assert.deepEqual(visibleSidebarProjects(ids, true, "", true), ids);
 	assert.deepEqual(visibleSidebarProjects(ids, false, "unloaded-project", false), ids.slice(0, 5));
 	assert.equal(ids.length, 8, "Presentation never prunes the loaded canonical data");
@@ -36,6 +46,11 @@ vi.mock("../../../src/features/workbench/conversation/pane.tsx", () => ({
 		<section data-selected-conversation={conversation.conversationId}>{conversation.title}</section>
 	),
 }));
+vi.mock("../../../src/features/files/pdf-preview.tsx", () => ({
+	PdfPreview: () => {
+		throw new Error("This sidebar SSR fixture must not render the browser PDF adapter");
+	},
+}));
 
 function renderTree(
 	expanded: boolean,
@@ -43,47 +58,65 @@ function renderTree(
 	nextCursor: string | null = "next-page",
 	selectedConversation = "conversation-id",
 	defaultWorkspaceId?: string,
+	section: "projects" | "recent" | "all" = "projects",
 ) {
+	const navigationRoot = createRef<HTMLElement>();
 	const cache = new QueryClient();
-	cache.setQueryData(["conversations", "workspace-id", "active", "pages"], {
+	const window = {
 		pages: [
 			{
 				items: [
 					{
-						workspaceId: "workspace-id",
-						conversationId: "conversation-id",
-						title: "My conversation",
-						revision: 1,
-						createdAt: 1,
-						archivedAt: null,
+						conversation: {
+							workspaceId: "workspace-id",
+							conversationId: "conversation-id",
+							title: "My conversation",
+							revision: 1,
+							createdAt: 1,
+							archivedAt: null,
+						},
+						recencyAt: 1,
+						activityBasis: "creation",
 					},
 				],
 				nextCursor,
+				coverage: { generation: "one", membershipGeneration: 0, state: "ready", completedAt: 1, nextCursor: null },
 			},
 		],
-		pageParams: [undefined],
-	});
+		cursors: [undefined],
+	};
+	cache.setQueryData(navigationKey({ kind: "workspace", workspaceId: "workspace-id" }, "active"), window);
+	cache.setQueryData(navigationKey({ kind: "recent" }, "active"), window);
 	const html = renderToStaticMarkup(
 		<QueryClientProvider client={cache}>
 			<PreferencesProvider>
-				<SidebarPreviewProvider disabled={false} navigationKey="tree-fixture">
-					<WorkspaceTree
-						catalog={new CatalogSession({ call: vi.fn(), observe: vi.fn() }, new LocalState())}
-						guard={(action) => action()}
-						workspaces={Array.from({ length: count }, (_, index) => ({
-							workspaceId: index === 0 ? "workspace-id" : `workspace-${index}`,
-							name: `My project ${index}`,
-						}))}
-						selectedWorkspace="workspace-id"
-						defaultWorkspaceId={defaultWorkspaceId}
-						selectedConversation={selectedConversation}
-						isExpanded={() => expanded}
-						onToggle={() => {}}
-						onOpenProject={() => {}}
-						onSelect={() => {}}
-						onNewConversation={() => {}}
-					/>
-				</SidebarPreviewProvider>
+				<aside ref={navigationRoot}>
+					<SidebarSelectionProvider
+						scope={{ workspaceId: "workspace-id", conversationId: selectedConversation }}
+						preferredLocation={null}
+						rootRef={navigationRoot}
+					>
+						<SidebarPreviewProvider disabled={false} navigationKey="tree-fixture">
+							<WorkspaceTree
+								section={section === "all" ? undefined : section}
+								catalog={new CatalogSession({ call: vi.fn(), observe: vi.fn() }, new LocalState())}
+								guard={(action) => action()}
+								workspaces={Array.from({ length: count }, (_, index) => ({
+									workspaceId: index === 0 ? "workspace-id" : `workspace-${index}`,
+									name: `My project ${index}`,
+								}))}
+								selectedWorkspace="workspace-id"
+								defaultWorkspaceId={defaultWorkspaceId}
+								selectedConversation={selectedConversation}
+								isExpanded={() => expanded}
+								onToggle={() => {}}
+								onOpenProject={() => {}}
+								onSelect={() => {}}
+								onNewConversation={() => {}}
+							/>
+						</SidebarPreviewProvider>
+					</SidebarSelectionProvider>
+				</aside>
 			</PreferencesProvider>
 		</QueryClientProvider>,
 	);
@@ -91,13 +124,18 @@ function renderTree(
 	return html;
 }
 
-test("current conversation and its containing project have distinct surfaces without nested action buttons", () => {
+test("current conversation and its containing project retain distinct SSR surfaces without premature alias selection", () => {
 	const html = renderTree(true);
 	assert.match(
 		html,
 		/class="sidebar-preview-row project-row" data-selected="false" data-current="false" data-contains-current="true"/,
 	);
-	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
+	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="false"/);
+	assert.match(
+		html,
+		/data-workspace-id="workspace-id" data-conversation-id="conversation-id" data-sidebar-location="workspace" data-sidebar-location-workspace="workspace-id"/,
+	);
+	assert.doesNotMatch(html, /aria-current=/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
 	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
 	assert.match(html, />收起项目<\/span>/);
@@ -140,8 +178,8 @@ test("project disclosure and navigation have distinct names and only disclosure 
 	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>[\s\S]*?<\/button>/)?.[0];
 	assert.ok(disclosure);
 	assert.ok(open);
-	const disclosureLabels = disclosure.match(/aria-labelledby="([^"]+)"/)?.[1].split(" ");
-	const openLabels = open.match(/aria-labelledby="([^"]+)"/)?.[1].split(" ");
+	const disclosureLabels = disclosure.match(/aria-labelledby="([^"]+)"/)?.[1]?.split(" ");
+	const openLabels = open.match(/aria-labelledby="([^"]+)"/)?.[1]?.split(" ");
 	assert.equal(disclosureLabels?.length, 2);
 	assert.equal(openLabels?.length, 2);
 	assert.notEqual(disclosureLabels?.[0], openLabels?.[0]);
@@ -193,16 +231,25 @@ test("the sidebar remains an unfiltered bounded list independently of the search
 	assert.match(html, /加载更多/);
 });
 
-test("only the verified default workspace becomes Recent and remains available outside the project catalog window", () => {
-	const known = renderTree(false, 1, null, "conversation-id", "workspace-id");
+test("Recent is global and remains available independently of default workspace and project catalog windows", () => {
+	const known = renderTree(false, 1, null, "conversation-id", "workspace-id", "all");
 	assert.match(known, /recent-conversations-heading/);
 	assert.match(known, />最近<\/h3>/);
 	assert.match(known, /class="conversation-link"/);
+	assert.match(
+		known,
+		/data-workspace-id="workspace-id" data-conversation-id="conversation-id" data-sidebar-location="recent"/,
+	);
+	assert.doesNotMatch(known, /aria-current=|data-sidebar-location-workspace=/);
 	assert.doesNotMatch(known, /project-row|project-toggle|project-open|project-new-conversation|My project 0/);
-	const outsideWindow = renderTree(false, 1, null, "conversation-id", "verified-default");
+	const outsideWindow = renderTree(false, 1, null, "conversation-id", "verified-default", "all");
 	assert.match(outsideWindow, /My project 0/);
 	assert.match(outsideWindow, /recent-conversations-heading/);
 	assert.equal((outsideWindow.match(/class="project-toggle"/g) ?? []).length, 1);
+	const noDefault = renderTree(true, 1, null, "conversation-id", undefined, "all");
+	assert.match(noDefault, /data-sidebar-location="recent"/);
+	assert.match(noDefault, /data-sidebar-location="workspace"/);
+	assert.equal((noDefault.match(/data-conversation-id="conversation-id"/g) ?? []).length, 2);
 });
 
 test("selected conversation remains mounted when it is outside the displayed directory page", () => {
@@ -210,6 +257,28 @@ test("selected conversation remains mounted when it is outside the displayed dir
 	local.write("conversation", "selected-conversation");
 	local.write("draft.selected-workspace.selected-conversation", "keep this draft");
 	const cache = new QueryClient();
+	cache.setQueryData(["project-catalog"], { state: "ready", generation: 1, defaultWorkspaceId: null });
+	cache.setQueryData(["projects", "pages"], {
+		pages: [
+			{
+				items: [
+					{
+						project: {
+							projectId: "other-project",
+							homeWorkspaceId: "other-workspace",
+							name: "Other project",
+							revision: 1,
+						},
+						presentation: { projectId: "other-project", pinned: false, revision: 0 },
+					},
+				],
+				metadataGeneration: 1,
+				orderGeneration: 0,
+				nextCursor: "next",
+			},
+		],
+		pageParams: [undefined],
+	});
 	cache.setQueryData(["workspaces", "pages"], {
 		pages: [{ items: [{ workspaceId: "other-workspace", name: "Other project" }], nextCursor: "next" }],
 		pageParams: [undefined],
@@ -237,6 +306,10 @@ test("selected conversation remains mounted when it is outside the displayed dir
 	assert.match(render(), /data-selected-conversation="selected-conversation"/);
 	assert.match(render(), /加载更多/);
 	cache.setQueryData(["workspaces", "pages"], { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] });
+	cache.setQueryData(["projects", "pages"], {
+		pages: [{ items: [], metadataGeneration: 1, orderGeneration: 0, nextCursor: null }],
+		pageParams: [undefined],
+	});
 	const empty = render();
 	assert.match(empty, /data-selected-conversation="selected-conversation"/);
 	assert.doesNotMatch(empty, /第一页|加载更多/);

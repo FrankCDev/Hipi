@@ -52,6 +52,10 @@ test("backup freezes the catalog union and preserves source bytes and unknown du
 		await writeFile(join(f.source, "credentials.enc"), "not included");
 		const db = new DatabaseSync(join(f.source, "catalog.sqlite"));
 		db.prepare("INSERT INTO workspaces VALUES ('empty','Not created',0)").run();
+		// Model an interrupted physical registration, not a corrupt logical project's ready home.
+		db.exec(
+			"DELETE FROM project_memberships WHERE workspace_id='work'; DELETE FROM project_presentations WHERE project_id IN (SELECT project_id FROM projects WHERE home_workspace_id='work'); DELETE FROM projects WHERE home_workspace_id='work'",
+		);
 		db.prepare("UPDATE workspaces SET ready=0 WHERE workspace_id='work'").run();
 		db.close();
 		const writer = await openNodeSqliteStorage(join(f.source, "work/workspace.sqlite"));

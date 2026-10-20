@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { PreferencesProvider } from "../../../src/app/preferences.tsx";
 import { ConversationPreview } from "../../../src/features/workbench/sidebar/conversation-preview.tsx";
+import { SidebarSelectionProvider } from "../../../src/features/workbench/sidebar/selection-provider.tsx";
 
 // Inspect card content without replacing the independently tested hover/focus lifecycle.
 vi.mock("../../../src/features/workbench/sidebar/preview-row.tsx", () => ({
@@ -34,12 +35,14 @@ const conversation: Conversation = {
 function renderPreview(overrides: Partial<Conversation> = {}) {
 	return renderToStaticMarkup(
 		<PreferencesProvider>
-			<ConversationPreview
-				conversation={{ ...conversation, ...overrides }}
-				workspaceName="Example project"
-				selected
-				onSelect={() => {}}
-			/>
+			<SidebarSelectionProvider scope={conversation} preferredLocation={null} rootRef={{ current: null }}>
+				<ConversationPreview
+					conversation={{ ...conversation, ...overrides }}
+					workspaceName="Example project"
+					location={{ kind: "workspace", workspaceId: conversation.workspaceId }}
+					onSelect={() => {}}
+				/>
+			</SidebarSelectionProvider>
 		</PreferencesProvider>,
 	);
 }

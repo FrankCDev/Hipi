@@ -6,20 +6,23 @@ import { motion } from "framer-motion";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import {
+	ActionMenu,
+	ActionMenuBoundary,
+	ActionMenuContent,
+	ActionMenuItem,
+	ActionMenuLabel,
+} from "../../../src/components/ui/action-menu.tsx";
 import { Button } from "../../../src/components/ui/button.tsx";
 import { Dialog, DialogContent } from "../../../src/components/ui/dialog.tsx";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuLabel,
-} from "../../../src/components/ui/dropdown-menu.tsx";
 import { Input } from "../../../src/components/ui/input.tsx";
 import { Popover, PopoverContent } from "../../../src/components/ui/popover.tsx";
 import { ConversationActions } from "../../../src/features/workbench/catalog/controls.tsx";
 import { CatalogPagination } from "../../../src/features/workbench/catalog/pagination.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
+import { ProjectActions } from "../../../src/features/workbench/projects/actions.tsx";
+import { ProjectRenameDialog } from "../../../src/features/workbench/projects/rename.tsx";
 import { PresentationSession } from "../../../src/features/workbench/sidebar/presentation-session.ts";
 import { SidebarPreviewCoordinator } from "../../../src/features/workbench/sidebar/preview-coordinator.ts";
 import { type PreviewActions, SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
@@ -34,6 +37,7 @@ const hooks = vi.hoisted(() => ({
 	dragContext: { state: { source: false } },
 	sectionContext: null as { collapsed: boolean; heading: { current: HTMLButtonElement | null } } | null,
 	present: true,
+	surfaceDisabled: false,
 	releasePresence: vi.fn(),
 	motionContext: null as { collapsed: boolean; contentId: string; headingId: string } | null,
 	motionPreference: "system" as "system" | "on" | "off",
@@ -124,6 +128,7 @@ const cache = { setQueryData: vi.fn(), invalidateQueries: vi.fn() };
 let previewCoordinator: SidebarPreviewCoordinator;
 vi.mock("../../../src/features/workbench/sidebar/preview-provider.tsx", () => ({
 	useSidebarPreviewCoordinator: () => previewCoordinator,
+	useSidebarPreviewDisabled: () => hooks.surfaceDisabled,
 }));
 
 function drive<T>(scope: string, render: () => T, beforeCommit?: () => void) {
@@ -270,6 +275,7 @@ beforeEach(() => {
 	hooks.dragContext = { state: { source: false } };
 	hooks.sectionContext = null;
 	hooks.present = true;
+	hooks.surfaceDisabled = false;
 	hooks.motionContext = null;
 	hooks.motionPreference = "system";
 	hooks.stores = [];
@@ -319,7 +325,7 @@ const conversation: Conversation = {
 	createdAt: 1,
 	archivedAt: null,
 };
-function rowAndActions() {
+function rowAndActions(client: AppClient = { call: vi.fn(), observe: vi.fn() }) {
 	let controls: Parameters<PreviewActions>[0] | undefined;
 	const renderRow = () =>
 		drive("row", () =>
@@ -345,10 +351,10 @@ function rowAndActions() {
 	const owner = controls;
 	const returned = vi.fn(focus);
 	Object.assign(owner.triggerRef, { current: { focus: returned } });
-	const session = new CatalogSession({ call: vi.fn(), observe: vi.fn() }, new LocalState());
+	const session = new CatalogSession(client, new LocalState());
 	const renderActions = () =>
 		drive("actions", () => ConversationActions({ conversation, session, guard: (action) => action(), ...controls }));
-	return { renderRow, renderActions, focus, returned };
+	return { renderRow, renderActions, focus, returned, session };
 }
 
 function renameActions(client: AppClient) {
@@ -368,7 +374,7 @@ function renameActions(client: AppClient) {
 			}),
 		);
 	const open = () => {
-		const rename = elements(render(), DropdownMenuItem).find((item) =>
+		const rename = elements(render(), ActionMenuItem).find((item) =>
 			JSON.stringify(item.props.children).includes("Rename conversation"),
 		);
 		assert.ok(rename?.props.onSelect);
@@ -428,7 +434,9 @@ function catalogSettled(session: CatalogSession) {
 		const unsubscribe = session.subscribe(() => {
 			if (!session.getSnapshot().busy) {
 				unsubscribe();
-				resolve();
+				void Promise.resolve()
+					.then(() => Promise.resolve())
+					.then(resolve);
 			}
 		});
 	});
@@ -504,14 +512,14 @@ test("Rename blocks empty titles, implicit form submission, repeated Enter and I
 
 test("external collapse closes menus but retains an unsaved rename until Cancel releases its Motion presence", () => {
 	const ui = renameActions({ call: vi.fn(), observe: vi.fn() });
-	element(ui.render(), DropdownMenu).props.onOpenChange?.(true);
-	assert.equal(element(ui.render(), DropdownMenu).props.open, true);
+	element(ui.render(), ActionMenu).props.onOpenChange?.(true);
+	assert.equal(element(ui.render(), ActionMenu).props.open, true);
 	ui.open();
 	ui.change("Keep this unsaved title");
 	hooks.present = false;
 	ui.hide();
 	let view = ui.render();
-	assert.equal(element(view, DropdownMenu).props.open, false);
+	assert.equal(element(view, ActionMenu).props.open, false);
 	assert.equal(element(view, Dialog).props.open, true);
 	assert.equal(element(view, Input).props.value, "Keep this unsaved title");
 	assert.equal(hooks.releasePresence.mock.calls.length, 0);
@@ -570,7 +578,7 @@ test("collapse retires previews immediately and only explicit dialog return can 
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
 	const menuClose = new Event("close", { cancelable: true });
-	element(ui.renderActions(), DropdownMenuContent).props.onCloseAutoFocus?.(menuClose);
+	element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(menuClose);
 	assert.equal(focus.mock.calls.length, 0, "Forced menu close cannot take a newer focus owner");
 	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
 	assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
@@ -695,9 +703,9 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 	Object.assign(requiredRef(trigger.props.ref), {
 		current: { getBoundingClientRect: () => ({ right: 263, top: 84 }), focus: vi.fn() },
 	});
-	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
+	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(true);
 	ui.renderRow();
-	const content = element(ui.renderActions(), DropdownMenuContent);
+	const content = element(ui.renderActions(), ActionMenuContent);
 	assert.equal(content.props.side, "right");
 	assert.equal(content.props.align, "start");
 	assert.equal(content.props.sideOffset, 14);
@@ -708,22 +716,22 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 
 test("production menu-to-dialog callbacks exclude previews until dialog closes and suppress return-focus reopen", () => {
 	const ui = rowAndActions();
-	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
+	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(true);
 	ui.focus();
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
-	const rename = elements(ui.renderActions(), DropdownMenuItem).find((item) =>
+	const rename = elements(ui.renderActions(), ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("Rename conversation"),
 	);
 	assert.ok(rename?.props.onSelect);
 	rename.props.onSelect(new Event("select"));
-	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(false);
+	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(false);
 	assert.equal(element(ui.renderActions(), Dialog).props.open, true);
 	ui.focus();
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
 	const menuClose = new Event("close", { cancelable: true });
-	element(ui.renderActions(), DropdownMenuContent).props.onCloseAutoFocus?.(menuClose);
+	element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(menuClose);
 	assert.equal(menuClose.defaultPrevented, true);
 	assert.equal(ui.returned.mock.calls.length, 0, "menu dismissal must not steal focus from the dialog");
 	element(ui.renderActions(), Dialog).props.onOpenChange?.(false);
@@ -738,21 +746,21 @@ test("production menu-to-dialog callbacks exclude previews until dialog closes a
 
 test("touch menu exposes the same read-only preview with no duplicate View details action", () => {
 	const ui = rowAndActions();
-	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
+	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(true);
 	const menu = ui.renderActions();
 	assert.deepEqual(
-		element(menu, DropdownMenuLabel).props.children,
+		element(menu, ActionMenuLabel).props.children,
 		element(ui.renderRow(), PopoverContent).props.children,
 	);
-	assert.match(JSON.stringify(element(menu, DropdownMenuLabel).props.children), /Actual title and project metadata/);
-	const preview = elements(menu, DropdownMenuItem).find((item) =>
+	assert.match(JSON.stringify(element(menu, ActionMenuLabel).props.children), /Actual title and project metadata/);
+	const preview = elements(menu, ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("View details"),
 	);
 	assert.equal(preview, undefined);
-	assert.equal(elements(menu, DropdownMenuItem).length, 2);
-	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(false);
+	assert.equal(elements(menu, ActionMenuItem).length, 2);
+	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(false);
 	const close = new Event("close", { cancelable: true });
-	element(ui.renderActions(), DropdownMenuContent).props.onCloseAutoFocus?.(close);
+	element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(close);
 	assert.equal(close.defaultPrevented, true);
 	assert.equal(ui.returned.mock.calls.length, 1);
 	vi.advanceTimersByTime(400);
@@ -1081,7 +1089,7 @@ for (const method of ["archiveConversation", "restoreConversation"] as const) {
 					guard: (action) => actions.push(action),
 				}),
 			);
-		const item = elements(render(), DropdownMenuItem).find((entry) =>
+		const item = elements(render(), ActionMenuItem).find((entry) =>
 			JSON.stringify(entry.props.children).includes(
 				method === "archiveConversation" ? "Archive conversation" : "Restore conversation",
 			),
@@ -1093,14 +1101,7 @@ for (const method of ["archiveConversation", "restoreConversation"] as const) {
 		assert.equal(local.read("command.catalog"), null);
 		source.title = "Later UI label";
 		source.revision = 9;
-		const finished = new Promise<void>((resolve) => {
-			const unsubscribe = session.subscribe(() => {
-				if (!session.getSnapshot().busy) {
-					unsubscribe();
-					resolve();
-				}
-			});
-		});
+		const finished = catalogSettled(session);
 		actions[0]?.();
 		await finished;
 		await Promise.resolve();
@@ -1142,7 +1143,7 @@ test("an unknown archive keeps its original recovery record and never reports op
 				guard: (action) => action(),
 			}),
 		);
-	const archive = elements(render(), DropdownMenuItem).find((entry) =>
+	const archive = elements(render(), ActionMenuItem).find((entry) =>
 		JSON.stringify(entry.props.children).includes("Archive conversation"),
 	);
 	assert.ok(archive?.props.onSelect);
@@ -1164,7 +1165,7 @@ test("an unknown archive keeps its original recovery record and never reports op
 	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
 	assert.equal(element(render(), Dialog).props.open, false);
 	assert.equal(
-		elements(render(), DropdownMenuItem).every((item) => item.props.disabled),
+		elements(render(), ActionMenuItem).every((item) => item.props.disabled),
 		true,
 	);
 	archive.props.onSelect(new Event("select"));
@@ -1182,7 +1183,7 @@ test("a cancelled dirty-file guard does not send or persist the archive", () => 
 	const local = new LocalState();
 	const session = new CatalogSession({ call, observe: vi.fn() }, local);
 	const output = drive("cancelled", () => ConversationActions({ conversation, session, guard: () => {} }));
-	const archive = elements(output, DropdownMenuItem).find((entry) =>
+	const archive = elements(output, ActionMenuItem).find((entry) =>
 		JSON.stringify(entry.props.children).includes("Archive conversation"),
 	);
 	assert.ok(archive?.props.onSelect);
@@ -1210,7 +1211,7 @@ test("an unresolved order blocks archive mutations but leaves rename and navigat
 		drive("archive-order", () =>
 			ConversationActions({ conversation, session, presentation, inlineActions: true, guard: (action) => action() }),
 		);
-	const staleArchive = elements(render(), DropdownMenuItem).find((item) =>
+	const staleArchive = elements(render(), ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("Archive conversation"),
 	);
 	await presentation.reorder({
@@ -1220,10 +1221,10 @@ test("an unresolved order blocks archive mutations but leaves rename and navigat
 		expectedOrderGeneration: 0,
 	});
 	const view = render();
-	const archive = elements(view, DropdownMenuItem).find((item) =>
+	const archive = elements(view, ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("Archive conversation"),
 	);
-	const rename = elements(view, DropdownMenuItem).find((item) =>
+	const rename = elements(view, ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("Rename conversation"),
 	);
 	assert.equal(archive?.props.disabled, true);
@@ -1305,7 +1306,7 @@ test("a delayed dirty-file callback cannot mutate a disposed catalog or report o
 			},
 		}),
 	);
-	const archive = elements(output, DropdownMenuItem).find((entry) =>
+	const archive = elements(output, ActionMenuItem).find((entry) =>
 		JSON.stringify(entry.props.children).includes("Archive conversation"),
 	);
 	assert.ok(archive?.props.onSelect);
@@ -1390,4 +1391,313 @@ test("bounded pagination labels disclose eviction and an error blocks Load more 
 	assert.equal(more.props["aria-disabled"], true);
 	invoke(more.props.onClick, []);
 	assert.equal(pages.loadMore.mock.calls.length, 0);
+});
+
+function contextEntry(ui: ReturnType<typeof rowAndActions>, keyboard = false) {
+	vi.stubGlobal("Element", Object);
+	const source = {
+		isConnected: true,
+		focus: vi.fn(),
+		getBoundingClientRect: () => ({ left: 16, right: 264, top: 80, bottom: 116 }),
+	};
+	const target = { closest: () => source };
+	const row = element(ui.renderRow(), "div");
+	const currentTarget = { contains: (value: unknown) => value === target };
+	const event = {
+		target,
+		currentTarget,
+		clientX: keyboard ? 0 : 90,
+		clientY: keyboard ? 0 : 95,
+		preventDefault: vi.fn(),
+	};
+	invoke(row.props.onContextMenu, [event]);
+	assert.equal(
+		event.preventDefault.mock.calls.length,
+		0,
+		"The row leaves opening to the genuine Radix context trigger",
+	);
+	assert.equal(element(ui.renderRow(), ActionMenuBoundary).props.state.open, false);
+	// Bounded callback evidence: the real trigger's onOpenChange, not native browser dispatch.
+	element(ui.renderRow(), ActionMenuBoundary).props.state.onOpenChange("context", true);
+	ui.renderRow();
+	return source;
+}
+
+for (const keyboard of [false, true]) {
+	test(`${keyboard ? "native keyboard context" : "right-click context"} entry only opens one menu, excludes preview and restores its source`, () => {
+		const call = vi.fn();
+		const ui = rowAndActions({ call, observe: vi.fn() });
+		ui.focus();
+		const source = contextEntry(ui, keyboard);
+		const state = element(ui.renderRow(), ActionMenuBoundary).props.state;
+		assert.equal(state.entry, "context");
+		assert.equal(state.open, true);
+		assert.deepEqual(state.contextPosition, keyboard ? { sideOffset: 16, alignOffset: 116 } : undefined);
+		assert.equal(element(ui.renderActions(), ActionMenu).props.open, true);
+		assert.equal(elements(ui.renderActions(), Dialog).length, 1);
+		assert.equal(element(ui.renderActions(), Dialog).props.open, false);
+		ui.focus();
+		vi.advanceTimersByTime(500);
+		assert.equal(element(ui.renderRow(), Popover).props.open, false);
+		assert.equal(call.mock.calls.length, 0);
+		state.onOpenChange("context", false);
+		ui.renderRow();
+		element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+		assert.equal(source.focus.mock.calls.length, 1);
+		assert.equal(ui.returned.mock.calls.length, 0, "Context dismissal must not move to the ellipsis or selected alias");
+		ui.session.dispose();
+	});
+}
+
+test("context Rename uses the same draft, IME guards and cancel owner after menu-family handoff", () => {
+	const call = vi.fn();
+	const ui = rowAndActions({ call, observe: vi.fn() });
+	const source = contextEntry(ui, true);
+	const rename = elements(ui.renderActions(), ActionMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Rename conversation"),
+	);
+	assert.ok(rename?.props.onSelect);
+	rename.props.onSelect(new Event("select"));
+	element(ui.renderRow(), ActionMenuBoundary).props.state.onOpenChange("context", false);
+	ui.renderRow();
+	const input = element(ui.renderActions(), Input);
+	invoke(input.props.onChange, [{ target: { value: "未提交标题" } }]);
+	invoke(input.props.onCompositionStart, []);
+	renameEnter(ui.renderActions(), { isComposing: true });
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(element(ui.renderActions(), Input).props.value, "未提交标题");
+	const state = element(ui.renderRow(), ActionMenuBoundary).props.state;
+	state.onOpenChange("ellipsis", true);
+	assert.equal(
+		element(ui.renderRow(), ActionMenuBoundary).props.state.open,
+		false,
+		"A row entry cannot replace an owned rename dialog",
+	);
+	element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(source.focus.mock.calls.length, 0);
+	invoke(renameButton(ui.renderActions(), "cancel").props.onClick, []);
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(source.focus.mock.calls.length, 1);
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.session.getSnapshot().pending, null);
+	ui.session.dispose();
+});
+
+test("unknown context Archive stays with the same recovery owner when the ellipsis is reopened", async () => {
+	const calls: Method[] = [];
+	const ui = rowAndActions({
+		call: async (method) => {
+			calls.push(method);
+			if (method === "getConversationCommandResult") return parseResult(method, null);
+			throw new Error("Lost response");
+		},
+		observe: vi.fn(),
+	});
+	contextEntry(ui);
+	const archive = elements(ui.renderActions(), ActionMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Archive conversation"),
+	);
+	assert.ok(archive?.props.onSelect);
+	const settled = catalogSettled(ui.session);
+	archive.props.onSelect(new Event("select"));
+	await settled;
+	const pending = ui.session.getSnapshot().pending;
+	const oldState = element(ui.renderRow(), ActionMenuBoundary).props.state;
+	oldState.onOpenChange("context", false);
+	ui.renderRow();
+	element(ui.renderRow(), ActionMenuBoundary).props.state.onOpenChange("ellipsis", true);
+	ui.renderRow();
+	oldState.onOpenChange("context", false);
+	assert.equal(element(ui.renderRow(), ActionMenuBoundary).props.state.entry, "ellipsis");
+	assert.equal(
+		element(ui.renderRow(), ActionMenuBoundary).props.state.open,
+		true,
+		"Late close from an old family cannot close the new menu",
+	);
+	assert.equal(
+		elements(ui.renderActions(), ActionMenuItem).every((item) => item.props.disabled),
+		true,
+	);
+	archive.props.onSelect(new Event("select"));
+	assert.equal(ui.session.getSnapshot().pending, pending);
+	assert.deepEqual(calls, ["archiveConversation", "getConversationCommandResult"]);
+	ui.session.dispose();
+});
+
+for (const entry of ["context", "ellipsis"] as const) {
+	test(`hiding the navigation surface closes its ${entry} menu without restoring hidden-row focus`, () => {
+		const ui = rowAndActions();
+		const source = contextEntry(ui);
+		if (entry === "ellipsis") element(ui.renderRow(), ActionMenuBoundary).props.state.onOpenChange("ellipsis", true);
+		hooks.surfaceDisabled = true;
+		assert.equal(element(ui.renderRow(), ActionMenuBoundary).props.state.open, false);
+		element(ui.renderActions(), ActionMenuContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+		assert.equal(source.focus.mock.calls.length, 0);
+		assert.equal(ui.returned.mock.calls.length, 0);
+		hooks.surfaceDisabled = false;
+		assert.equal(
+			element(ui.renderRow(), ActionMenuBoundary).props.state.open,
+			false,
+			"Showing the sidebar does not reopen a retired menu",
+		);
+		ui.session.dispose();
+	});
+}
+
+test("a newer outside focus owner wins over the source when an owned rename closes", () => {
+	const ui = rowAndActions();
+	const source = contextEntry(ui);
+	const body = {};
+	const doc = { body, activeElement: {} };
+	Object.assign(source, { ownerDocument: doc });
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(source.focus.mock.calls.length, 0);
+	doc.activeElement = body;
+	element(ui.renderActions(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(
+		source.focus.mock.calls.length,
+		1,
+		"Body focus after dismissal returns to the exact source, not the selected row",
+	);
+	ui.session.dispose();
+});
+
+function logicalActions(client: AppClient, projectPinEnabled = true) {
+	const local = new LocalState();
+	const session = new CatalogSession(client, local);
+	const item = {
+		project: { projectId: "logical", name: "Original", revision: 7, homeWorkspaceId: "home-only" },
+		presentation: { projectId: "logical", pinned: false, revision: 4 },
+	};
+	const controls = {
+		previewContent: null,
+		menuPosition: { sideOffset: 2, alignOffset: 0 },
+		triggerRef: { current: null },
+		onMenuOpen: vi.fn(),
+		onOverlayChange: vi.fn(),
+		onReturnFocus: vi.fn(),
+		active: false,
+		inlineActions: true,
+		hidden: false,
+	};
+	const render = () =>
+		drive("logical-actions", () =>
+			ProjectActions({
+				projectPinEnabled,
+				item,
+				session,
+				controls,
+				guard: (action) => action(),
+				filter: "active",
+				onFilterChange: vi.fn(),
+			}),
+		);
+	const select = (label: string) => {
+		const entry = elements(render(), ActionMenuItem).find((entry) =>
+			JSON.stringify(entry.props.children).includes(label),
+		);
+		assert.ok(entry?.props.onSelect);
+		entry.props.onSelect(new Event("select"));
+	};
+	return { local, session, item, controls, render, select };
+}
+
+test("logical project menu exposes only supported mutations and opening rename captures its original revision", async () => {
+	const call: AppClient["call"] = vi.fn(async (method) => {
+		throw new Error(`Unknown ${method}`);
+	});
+	const ui = logicalActions({ call, observe: vi.fn() });
+	assert.equal(elements(ui.render(), ActionMenuItem).length, 2);
+	assert.equal(vi.mocked(call).mock.calls.length, 0);
+	ui.select("Rename project");
+	const rename = element(ui.render(), ProjectRenameDialog);
+	assert.equal(rename.props.name, "Original");
+	ui.item.project = { ...ui.item.project, projectId: "new-selection", name: "Refreshed", revision: 99 };
+	assert.equal(element(ui.render(), ProjectRenameDialog).props.name, "Original");
+	const settled = catalogSettled(ui.session);
+	rename.props.onSave("  Preserved target  ");
+	await settled;
+	const pending = ui.session.getSnapshot().pending;
+	assert.equal(pending?.method, "renameProject");
+	if (pending?.method !== "renameProject") throw new Error("Missing project rename request");
+	assert.equal(pending.params.projectId, "logical");
+	assert.equal(pending.params.expectedRevision, 7);
+	assert.equal(pending.params.name, "Preserved target");
+	const saved = ui.local.read("command.catalog");
+	element(ui.render(), ProjectRenameDialog).props.onClose();
+	assert.equal(elements(ui.render(), ProjectRenameDialog).length, 0);
+	rename.props.onSave("Should not replay");
+	assert.equal(ui.local.read("command.catalog"), saved);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	ui.session.dispose();
+});
+
+test("project pin uses presentation revision and never its folder adapter or rename revision", async () => {
+	const ui = logicalActions({
+		call: vi.fn(async () => {
+			throw new Error("Unknown pin result");
+		}),
+		observe: vi.fn(),
+	});
+	const settled = catalogSettled(ui.session);
+	ui.select("Pin project");
+	await settled;
+	const pending = ui.session.getSnapshot().pending;
+	assert.equal(pending?.method, "setProjectPinned");
+	if (pending?.method !== "setProjectPinned") throw new Error("Missing pin request");
+	assert.equal(pending.params.projectId, "logical");
+	assert.equal(pending.params.expectedPresentationRevision, 4);
+	assert.equal(pending.params.pinned, true);
+	assert.equal(elements(ui.render(), ProjectRenameDialog).length, 0);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	ui.session.dispose();
+});
+
+test("mismatched project presentation cannot dispatch a pin through a stale callback", () => {
+	const call = vi.fn();
+	const ui = logicalActions({ call, observe: vi.fn() });
+	ui.item.presentation.projectId = "other";
+	ui.select("Pin project");
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.session.getSnapshot().pending, null);
+	ui.session.dispose();
+});
+
+test("verified logical rename receipt alone closes the dialog and refreshes project caches", async () => {
+	let command: unknown;
+	const renamed = { projectId: "logical", name: "Confirmed", revision: 8, homeWorkspaceId: "home-only" };
+	const ui = logicalActions({
+		call: async (method, params) => {
+			if (method === "renameProject") {
+				command = params;
+				return parseResult(method, renamed);
+			}
+			if (method === "getProjectCommandResult")
+				return parseResult(method, { status: "completed", method: "renameProject", params: command, result: renamed });
+			throw new Error(`Unexpected ${method}`);
+		},
+		observe: vi.fn(),
+	});
+	ui.select("Rename project");
+	const settled = catalogSettled(ui.session);
+	element(ui.render(), ProjectRenameDialog).props.onSave("Confirmed");
+	await settled;
+	await Promise.resolve();
+	ui.render();
+	assert.equal(elements(ui.render(), ProjectRenameDialog).length, 0);
+	assert.equal(ui.session.getSnapshot().pending, null);
+	assert.deepEqual(cache.setQueryData.mock.calls, [[["project", "logical"], renamed]]);
+	assert.deepEqual(
+		cache.invalidateQueries.mock.calls.map((call) => call[0].queryKey),
+		[["projects"], ["project", "logical"], ["project-catalog"], ["sidebar-navigation"], ["sidebar-pins"]],
+	);
+	ui.session.dispose();
+});
+
+test("project pin stays absent until authoritative mixed composition is available, independently of rename", () => {
+	const ui = logicalActions({ call: vi.fn(), observe: vi.fn() }, false);
+	assert.equal(elements(ui.render(), ActionMenuItem).length, 1);
+	ui.select("Rename project");
+	assert.equal(element(ui.render(), ProjectRenameDialog).props.name, "Original");
+	ui.session.dispose();
 });

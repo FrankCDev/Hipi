@@ -42,17 +42,25 @@ export function currentProject(document) {
 	const branches = [
 		...document.querySelectorAll('.workspace-branch:is([data-current="true"],[data-contains-current="true"])'),
 	];
-	if (branches.length !== 1) return null;
+	const rows = [...document.querySelectorAll('.sidebar .conversation-link[aria-current="page"]')];
+	if (branches.length > 1 || rows.length > 1) return null;
 	const branch = branches[0];
-	if (branch.dataset.current === "true" && branch.dataset.containsCurrent === "true") return null;
-	return branch.dataset.workspaceId ?? null;
+	if (branch?.dataset.current === "true" && branch.dataset.containsCurrent === "true") return null;
+	if (rows.length === 1) {
+		if (branch && (branch.dataset.current === "true" || branch.dataset.workspaceId !== rows[0].dataset.workspaceId))
+			return null;
+		return rows[0].dataset.workspaceId ?? null;
+	}
+	return branch?.dataset.current === "true" ? (branch.dataset.workspaceId ?? null) : null;
 }
 
 export function assertDisclosureContinuity(actual, expected) {
 	assert.equal(actual.sameConversation, true, "Disclosure remounted the active conversation");
 	assert.equal(actual.sameComposer, true, "Disclosure remounted the composer");
 	assert.equal(actual.selected, expected.selected, "Disclosure selected another project");
+	assert.equal(actual.conversationId, expected.conversationId, "Disclosure selected another conversation");
 	assert.equal(actual.draft, expected.draft, "Disclosure changed the draft");
+	assert.deepEqual(actual.projectIds, expected.projectIds, "Disclosure changed project identities");
 	assert.deepEqual(actual.keys, expected.keys, "Disclosure changed execution message identities");
 	assert.equal(actual.navigationOpen, expected.navigationOpen, "Disclosure closed the navigation drawer");
 }
@@ -62,6 +70,11 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		expectedScope?.workspaceId ?? "",
 		/^[A-Za-z0-9_-]{1,128}$/,
 		"Actual receipt workspace identity required",
+	);
+	assert.match(
+		expectedScope?.conversationId ?? "",
+		/^[A-Za-z0-9_-]{1,128}$/,
+		"Actual receipt conversation identity required",
 	);
 	const { evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts, inspectModal } = helpers;
 	const second = "GUI disclosure empty project";
@@ -76,7 +89,9 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			cdp,
 			`({
 		selected: (${currentProject.toString()})(document),
+		conversationId: document.querySelector('.sidebar .conversation-link[aria-current="page"]')?.dataset.conversationId ?? null,
 		draft: document.querySelector('.composer textarea')?.value,
+		projectIds: [...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(node => node.dataset.workspaceId),
 		keys: [...document.querySelectorAll('[data-message-id]')].map(e => 'message:' + e.dataset.messageId),
 		navigationOpen: document.querySelector('.work-shell').dataset.navigationOpen,
 		sameConversation: window.__hipiDisclosureConversation === document.querySelector('.conversation-panel'),
@@ -151,7 +166,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			await waitForOverlayClosed(cdp, creator);
 			await evaluate(cdp, "delete window.__hipiProjectCreate");
 		}
-		const a = `.workspace-branch[data-workspace-id="${expectedScope.workspaceId}"]`;
+		const a = `.recent-conversations .conversation-link[data-workspace-id="${expectedScope.workspaceId}"][data-conversation-id="${expectedScope.conversationId}"]`;
 		const b = await locate(second);
 		const secondId = await evaluate(cdp, `document.querySelector(${JSON.stringify(b)}).dataset.workspaceId`);
 		assert.match(secondId, /^[A-Za-z0-9_-]{1,128}$/);
@@ -159,12 +174,12 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		assert.equal(
 			await evaluate(
 				cdp,
-				`document.querySelectorAll(${JSON.stringify(a)}).length === 1 && document.querySelector(${JSON.stringify(a)}).classList.contains('recent-conversations')`,
+				`document.querySelectorAll(${JSON.stringify(a)}).length === 1 && !document.querySelector('.recent-conversations').hasAttribute('data-workspace-id')`,
 			),
 			true,
-			"Original receipt must identify the unique default Recent branch",
+			"Original receipt must identify the unique row inside global Recent",
 		);
-		await click(cdp, `${a} .conversation-link`, fixture.conversation);
+		await click(cdp, a, fixture.conversation);
 		await until(
 			() => evaluate(cdp, `!!document.querySelector('.composer textarea')`),
 			"original conversation restored after fixture setup",
@@ -184,6 +199,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		);
 		const expected = await read();
 		assert.equal(expected.selected, expectedScope.workspaceId);
+		assert.equal(expected.conversationId, expectedScope.conversationId);
 		assert.equal(expected.draft, "A draft stays while B unfolds");
 		assert.ok(expected.keys.length >= 2);
 		for (const width of [1440, 640]) {
@@ -258,8 +274,8 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			await resize(1440);
 			if (await evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationOpen === 'true'`))
 				await pressKey(cdp, "Escape");
-			const a = `.workspace-branch[data-workspace-id="${expectedScope.workspaceId}"]`;
-			await click(cdp, `${a} .conversation-link`, fixture.conversation);
+			const a = `.recent-conversations .conversation-link[data-workspace-id="${expectedScope.workspaceId}"][data-conversation-id="${expectedScope.conversationId}"]`;
+			await click(cdp, a, fixture.conversation);
 			await until(
 				() => evaluate(cdp, `!!document.querySelector('.composer textarea')`),
 				"restore original conversation",

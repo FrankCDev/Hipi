@@ -12,8 +12,14 @@ import {
 	type Submit,
 } from "@hipi/work-runtime/contracts";
 import { afterEach, test, vi } from "vitest";
-import type { InitialSendInput } from "../../../src/features/workbench/catalog/initial-send.ts";
+import {
+	admitInitialSend,
+	type InitialSendInput,
+	readInitialSendRecovery,
+} from "../../../src/features/workbench/catalog/initial-send.ts";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
+import { openHomeDraft, readDraftInventory } from "../../../src/features/workbench/composer/draft.ts";
+import { ACTIVE_DRAFT_KEY } from "../../../src/features/workbench/composer/draft-record.ts";
 import type { BrowserStorage } from "../../../src/features/workbench/local-persistence.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { reconcileReceipt } from "../../../src/features/workbench/receipt-reconciliation.ts";
@@ -153,6 +159,153 @@ function mutations(f: ReturnType<typeof fixture>) {
 	return f.calls.filter((call) => ["createWorkspace", "createConversation", "submit"].includes(call.method));
 }
 afterEach(() => vi.unstubAllGlobals());
+
+async function sharedInput(f: ReturnType<typeof fixture>, sourceKey = "task-draft.old-project") {
+	f.local.write(sourceKey, prompt);
+	const chosen = await openHomeDraft(
+		f.local,
+		{ destination: "old-project", expected: null },
+		new AbortController().signal,
+	);
+	assert.ok(chosen.active);
+	return { ...input, sourceKey: chosen.active.sourceKey, sourceGeneration: chosen.active.generation };
+}
+
+test("v5 uses the current destination with a legacy source from another project and clears only that source", async () => {
+	locks();
+	const f = fixture();
+	const captured = await sharedInput(f);
+	f.local.write("task-draft.project", "Unrelated retained text");
+	await f.session.sendInitial(captured);
+	assert.equal(f.session.getSnapshot().failed, false);
+	assert.equal(f.session.getSnapshot().submission?.workspaceId, "project");
+	assert.equal(f.session.getSnapshot().submission?.text, prompt);
+	assert.equal(f.local.read(captured.sourceKey), "");
+	assert.equal(f.local.read("task-draft.project"), "Unrelated retained text");
+	assert.deepEqual(
+		mutations(f).map((call) => call.method),
+		["createConversation", "submit"],
+	);
+});
+
+test("v5 queued Send rejects changed generation and source revision before any runtime call", async () => {
+	for (const changed of ["owner", "source"] as const) {
+		locks();
+		const f = fixture();
+		const captured = await sharedInput(f);
+		const gate = Promise.withResolvers<void>();
+		locks(gate.promise);
+		const send = f.session.sendInitial(captured);
+		if (changed === "owner")
+			f.local.persistValue({
+				kind: "value",
+				key: ACTIVE_DRAFT_KEY,
+				value: JSON.stringify({ version: 1, generation: "other-owner", sourceKey: captured.sourceKey }),
+			});
+		else {
+			f.local.write(captured.sourceKey, "edit");
+			f.local.write(captured.sourceKey, prompt);
+		}
+		gate.resolve();
+		await send;
+		assert.equal(f.session.getSnapshot().failed, true);
+		assert.deepEqual(f.calls, []);
+		assert.equal(f.local.read(captured.sourceKey), prompt);
+	}
+});
+
+test("legacy null-revision Send survives a source-metadata write followed by a failed journal write", async () => {
+	locks();
+	const f = fixture();
+	f.local.persistValue({ kind: "value", key: "task-draft.old-project", value: prompt });
+	const chosen = await openHomeDraft(
+		f.local,
+		{ destination: "old-project", expected: null },
+		new AbortController().signal,
+	);
+	assert.ok(chosen.active);
+	const captured = { ...input, sourceKey: chosen.active.sourceKey, sourceGeneration: chosen.active.generation };
+	f.storage.fail = (key) => key.endsWith(".value.command.catalog");
+	await f.session.sendInitial(captured);
+	assert.equal(f.session.getSnapshot().failed, true);
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.local.read(captured.sourceKey), prompt);
+	assert.ok(f.local.valueSnapshot(captured.sourceKey)?.revision);
+	f.storage.fail = () => false;
+	await f.session.sendInitial(captured);
+	assert.equal(f.session.getSnapshot().failed, false);
+	assert.equal(f.local.read(captured.sourceKey), "");
+	assert.equal(mutations(f).filter((call) => call.method === "submit").length, 1);
+});
+
+test("v5 unknown create retains its immutable owner while New chat gets independent text and never automatically sends", async () => {
+	locks();
+	const f = fixture();
+	const captured = await sharedInput(f);
+	f.handle((method) => (method === "createConversation" ? Promise.reject(new Error("unknown create")) : undefined));
+	await f.session.sendInitial(captured);
+	const raw = f.local.read("command.catalog");
+	assert.ok(raw);
+	const before = readInitialSendRecovery(JSON.parse(raw));
+	const inventory = await readDraftInventory(f.local);
+	const next = await openHomeDraft(
+		f.local,
+		{ destination: "project", expected: inventory.active },
+		new AbortController().signal,
+	);
+	assert.ok(next.active);
+	assert.notEqual(next.active.sourceKey, captured.sourceKey);
+	f.local.write(next.active.sourceKey, "Independent next draft");
+	assert.equal(f.local.read("command.catalog"), raw);
+	await f.session.sendInitial({
+		...captured,
+		sourceKey: next.active.sourceKey,
+		sourceGeneration: next.active.generation,
+		text: "Independent next draft",
+	});
+	assert.equal(mutations(f).length, 1);
+	const reopened = new CatalogSession(f.client, new LocalState("store", f.storage));
+	await reopened.check();
+	assert.equal(mutations(f).length, 1);
+	f.handle(undefined);
+	await reopened.retry();
+	assert.equal(reopened.getSnapshot().submission?.requestId, before.initialSend.submissionId);
+	assert.equal(reopened.getSnapshot().submission?.text, prompt);
+	assert.equal(new LocalState("store", f.storage).read(next.active.sourceKey), "Independent next draft");
+});
+
+test("v5 envelope rejects arbitrary keys, missing provenance and malformed optional consent without relaxing v3/v4", async () => {
+	locks();
+	const f = fixture();
+	const captured = await sharedInput(f);
+	await admitInitialSend(f.local, captured, new AbortController().signal);
+	const raw = JSON.parse(f.local.read("command.catalog") ?? "null");
+	assert.equal(raw.version, 5);
+	assert.equal(readInitialSendRecovery(raw).initialSend.context, undefined);
+	for (const change of [
+		{ sourceKey: "command.catalog" },
+		{ sourceGeneration: undefined },
+		{ sourceGeneration: "../foreign" },
+		{ sourceRevision: null },
+		{ context: null },
+		{ context: {} },
+	])
+		assert.throws(() => readInitialSendRecovery({ ...raw, initialSend: { ...raw.initialSend, ...change } }));
+	assert.throws(() => readInitialSendRecovery({ ...raw, version: 3 }));
+	assert.throws(() => readInitialSendRecovery({ ...raw, version: 4 }));
+});
+
+test("verified default role written by another window is read without construction-time cache or name guessing", () => {
+	locks();
+	const f = fixture();
+	const other = new LocalState("store", f.storage);
+	assert.equal(f.session.defaultWorkspaceId(), null);
+	other.write(
+		"default-chat-workspace",
+		JSON.stringify({ version: 1, role: "default-chat-workspace", workspaceId: "default-from-other" }),
+	);
+	assert.equal(f.session.defaultWorkspaceId(), "default-from-other");
+});
 
 test("one project Send creates and submits original input once despite duplicate activation and caller edits", async () => {
 	locks();
@@ -478,11 +631,11 @@ test("an independently authored destination with identical text is neither repla
 	assert.equal(mutations(f).filter((call) => call.method === "submit").length, 1);
 });
 
-test("old draft-only prepared records recover as drafts and never acquire Send authorization", async () => {
+test("protocol 8 draft-only prepared records recover as drafts and never acquire Send authorization", async () => {
 	locks();
 	const f = fixture();
 	const command = {
-		version: PROTOCOL_VERSION,
+		version: 8,
 		method: "createConversation",
 		params: { workspaceId: "project", requestId: "legacy", title: input.title, model: input.model },
 	};
@@ -780,4 +933,107 @@ test("a saved target must still match its exact creation receipt before recovery
 		false,
 	);
 	assert.equal(local.read(input.sourceKey), prompt);
+});
+
+test("protocol 8 completed default identity survives upgrade without duplicate Chats or name adoption", async () => {
+	locks();
+	const f = fixture();
+	const legacy = JSON.stringify({
+		version: 8,
+		method: "createWorkspace",
+		params: { workspaceId: "canonical-default", name: "Chats" },
+	});
+	f.local.write("default-chat-workspace", legacy);
+	f.workspaces.set("canonical-default", { workspaceId: "canonical-default", name: "Chats" });
+	f.workspaces.set("unrelated", { workspaceId: "unrelated", name: "Chats" });
+	const local = new LocalState("store", f.storage);
+	const reopened = new CatalogSession(f.client, local);
+	assert.equal(reopened.defaultWorkspaceId(), "canonical-default");
+	assert.equal(local.read("default-chat-workspace"), legacy, "Reading must not rewrite legacy metadata");
+	await reopened.check();
+	assert.deepEqual(mutations(f), []);
+	await reopened.sendInitial(globalInput);
+	assert.equal(reopened.getSnapshot().failed, false);
+	assert.equal(mutations(f).filter((call) => call.method === "createWorkspace").length, 0);
+	assert.equal(reopened.getSnapshot().submission?.workspaceId, "canonical-default");
+	assert.equal(local.read("default-chat-workspace"), legacy);
+	assert.equal(new CatalogSession(f.client, new LocalState("other", f.storage)).defaultWorkspaceId(), null);
+});
+
+test("new completed default identity uses local metadata rather than a wire envelope", async () => {
+	locks();
+	const f = fixture();
+	await f.session.sendInitial(globalInput);
+	const workspaceId = f.session.defaultWorkspaceId();
+	assert.ok(workspaceId);
+	assert.deepEqual(JSON.parse(f.local.read("default-chat-workspace") ?? "null"), {
+		version: 1,
+		role: "default-chat-workspace",
+		workspaceId,
+	});
+});
+
+test("unknown legacy default metadata blocks new creation without overwriting it", async () => {
+	for (const marker of [
+		{ version: 7, method: "createWorkspace", params: { workspaceId: "old", name: "Chats" } },
+		{ version: 99, method: "createWorkspace", params: { workspaceId: "future", name: "Chats" } },
+		{ version: 8, method: "createWorkspace", params: { workspaceId: "foreign", name: "Chats", extra: true } },
+		{
+			version: 8,
+			expectedStoreId: "other",
+			method: "createWorkspace",
+			params: { workspaceId: "foreign", name: "Chats" },
+		},
+		{ version: 1, role: "default-chat-workspace", workspaceId: "default", extra: true },
+		{ version: 1, role: "project", workspaceId: "default" },
+	]) {
+		locks();
+		const f = fixture();
+		const raw = JSON.stringify(marker);
+		f.local.write("default-chat-workspace", raw);
+		const reopened = new CatalogSession(f.client, new LocalState("store", f.storage));
+		assert.equal(reopened.defaultWorkspaceId(), null);
+		await reopened.sendInitial(globalInput);
+		assert.equal(reopened.getSnapshot().failed, true);
+		assert.deepEqual(mutations(f), []);
+		assert.equal(new LocalState("store", f.storage).read("default-chat-workspace"), raw);
+	}
+});
+
+test("protocol 8 unknown create remains byte-preserved until explicit same-identity retry", async () => {
+	locks();
+	const f = fixture();
+	const command = {
+		version: 8,
+		method: "createConversation",
+		params: { workspaceId: "project", requestId: "legacy-create", title: input.title, model: input.model },
+	};
+	const raw = JSON.stringify({
+		version: 3,
+		request: command,
+		initialSend: {
+			workspaceCommand: null,
+			conversationCommand: command,
+			text: prompt,
+			submissionId: "legacy-submit",
+			sourceKey: "task-draft.project",
+			sourceRevision: null,
+			conversationId: null,
+		},
+	});
+	f.local.write("command.catalog", raw);
+	f.local.write("task-draft.project", "later independently authored text");
+	const local = new LocalState("store", f.storage);
+	const reopened = new CatalogSession(f.client, local);
+	assert.equal(reopened.getSnapshot().incompatible, false);
+	await reopened.check();
+	assert.equal(reopened.getSnapshot().notFound, true);
+	assert.deepEqual(mutations(f), []);
+	assert.equal(local.read("command.catalog"), raw);
+	await reopened.retry();
+	assert.equal(reopened.getSnapshot().failed, false);
+	assert.deepEqual(mutations(f)[0]?.params, command.params);
+	assert.equal(reopened.getSnapshot().submission?.requestId, "legacy-submit");
+	assert.equal(reopened.getSnapshot().submission?.text, prompt);
+	assert.equal(local.read("task-draft.project"), "later independently authored text");
 });

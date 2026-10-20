@@ -466,7 +466,7 @@ test("a missing project directory is not silently rebuilt as an empty binding ca
 		await assert.rejects(openTestRuntime(join(app.directory, "store")), { code: "STORE_MISMATCH" });
 		const inspected = new DatabaseSync(join(app.directory, "store", "catalog.sqlite"), { readOnly: true });
 		try {
-			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 9);
+			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 12);
 			assert.equal(inspected.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders'").get(), undefined);
 		} finally {
 			inspected.close();

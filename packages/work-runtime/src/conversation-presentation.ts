@@ -14,6 +14,7 @@ import {
 	type Result,
 	type Scope,
 } from "./contracts.ts";
+import type { SidebarPins } from "./sidebar-pins/catalog.ts";
 
 /** Only StoreCatalog constructs this schema, under its original root owner lease. */
 export const PRESENTATION_SCHEMA =
@@ -122,6 +123,7 @@ export function validatePresentationStore(database: DatabaseSync, ordered = fals
 /** Presentation metadata never owns a Harness, execution, workspace lease or filesystem capability. */
 export class ConversationPresentations {
 	readonly #database: DatabaseSync;
+	readonly #pins?: SidebarPins;
 	readonly #storeId: string;
 	readonly #getConversation: (scope: Scope) => Promise<Conversation>;
 	readonly #failpoint?: (point: PresentationFailpoint) => void | Promise<void>;
@@ -130,8 +132,10 @@ export class ConversationPresentations {
 		storeId: string,
 		getConversation: (scope: Scope) => Promise<Conversation>,
 		failpoint?: (point: PresentationFailpoint) => void | Promise<void>,
+		pins?: SidebarPins,
 	) {
 		this.#database = database;
+		this.#pins = pins;
 		this.#storeId = storeId;
 		this.#getConversation = getConversation;
 		this.#failpoint = failpoint;
@@ -176,6 +180,9 @@ export class ConversationPresentations {
 				value.archivedRevision,
 			);
 	}
+	current(scope: Scope): ConversationPresentation {
+		return this.#public(this.#read(scope));
+	}
 	/** Must run before Restore, and after Archive using its immutable result. Old replay cannot erase a newer pin. */
 	recordArchive(conversation: Conversation): void {
 		if (conversation.archivedAt === null) return;
@@ -184,7 +191,9 @@ export class ConversationPresentations {
 		this.#database.exec("BEGIN IMMEDIATE");
 		try {
 			prior.archivedRevision = conversation.revision;
+			let removed = false;
 			if (prior.pinConversationRevision !== null && prior.pinConversationRevision <= conversation.revision) {
+				removed = true;
 				prior.pinOrdinal = null;
 				prior.pinConversationRevision = null;
 				prior.revision = increment(prior.revision);
@@ -194,6 +203,15 @@ export class ConversationPresentations {
 					.run(increment(state.generation), increment(state.orderGeneration));
 			}
 			this.#put(prior);
+			if (removed)
+				this.#pins?.changed(
+					{
+						kind: "conversation",
+						workspaceId: conversation.workspaceId,
+						conversationId: conversation.conversationId,
+					},
+					false,
+				);
 			this.#database.exec("COMMIT");
 		} catch (error) {
 			this.#database.exec("ROLLBACK");
@@ -267,6 +285,11 @@ export class ConversationPresentations {
 						);
 				}
 				this.#put(value);
+				if (value.pinned !== input.pinned)
+					this.#pins?.changed(
+						{ kind: "conversation", workspaceId: value.workspaceId, conversationId: value.conversationId },
+						input.pinned,
+					);
 				result = this.#public(value);
 				const receipt: PresentationCommandResult = { method: "setConversationPinned", params: input, result };
 				this.#database
@@ -316,41 +339,49 @@ export class ConversationPresentations {
 				});
 				const state = this.#state();
 				if (state.orderGeneration !== input.expectedOrderGeneration) throw new AppError("IDEMPOTENCY_CONFLICT");
-				const moved = values[0].pinOrdinal;
-				const anchor = values[1]?.pinOrdinal ?? null;
-				if (moved === null) throw new AppError("IDEMPOTENCY_CONFLICT");
-				const destination =
-					anchor !== null && anchor < moved
-						? anchor
-						: integer(
-								this.#database
-									.prepare(
-										`SELECT max(pin_ordinal) AS ordinal FROM conversation_presentations ${anchor === null ? "" : "WHERE pin_ordinal<?"}`,
-									)
-									.get(...(anchor === null ? [] : [anchor]))?.ordinal,
-							);
-				let orderGeneration = state.orderGeneration;
-				if (destination !== moved) {
-					const low = Math.min(moved, destination);
-					const high = Math.max(moved, destination);
-					// Rotate the existing ordinal slots, including gaps and all unloaded pins. Negative staging
-					// avoids transient unique-index collisions; no membership revision or archive fence changes.
-					this.#database
-						.prepare(
-							`WITH positions AS MATERIALIZED (SELECT workspace_id,public_id,CASE WHEN pin_ordinal=? THEN ? ELSE ${destination < moved ? "lead" : "lag"}(pin_ordinal) OVER (ORDER BY pin_ordinal) END AS target FROM conversation_presentations WHERE pin_ordinal BETWEEN ? AND ?) UPDATE conversation_presentations SET pin_ordinal=-(SELECT target FROM positions WHERE positions.workspace_id=conversation_presentations.workspace_id AND positions.public_id=conversation_presentations.public_id) WHERE pin_ordinal BETWEEN ? AND ?`,
-						)
-						.run(moved, destination, low, high, low, high);
-					this.#database
-						.prepare(
-							"UPDATE conversation_presentations SET pin_ordinal=-pin_ordinal WHERE pin_ordinal BETWEEN ? AND ?",
-						)
-						.run(-high, -low);
-					orderGeneration = increment(orderGeneration);
-					this.#database
-						.prepare("UPDATE presentation_state SET order_generation=? WHERE singleton=1")
-						.run(orderGeneration);
+				if (this.#pins) {
+					this.#pins.reorderInside(
+						{ kind: "conversation", ...input.moved },
+						input.before ? { kind: "conversation", ...input.before } : null,
+					);
+					result = { orderGeneration: this.#state().orderGeneration };
+				} else {
+					const moved = values[0].pinOrdinal;
+					const anchor = values[1]?.pinOrdinal ?? null;
+					if (moved === null) throw new AppError("IDEMPOTENCY_CONFLICT");
+					const destination =
+						anchor !== null && anchor < moved
+							? anchor
+							: integer(
+									this.#database
+										.prepare(
+											`SELECT max(pin_ordinal) AS ordinal FROM conversation_presentations ${anchor === null ? "" : "WHERE pin_ordinal<?"}`,
+										)
+										.get(...(anchor === null ? [] : [anchor]))?.ordinal,
+								);
+					let orderGeneration = state.orderGeneration;
+					if (destination !== moved) {
+						const low = Math.min(moved, destination);
+						const high = Math.max(moved, destination);
+						// Rotate the existing ordinal slots, including gaps and all unloaded pins. Negative staging
+						// avoids transient unique-index collisions; no membership revision or archive fence changes.
+						this.#database
+							.prepare(
+								`WITH positions AS MATERIALIZED (SELECT workspace_id,public_id,CASE WHEN pin_ordinal=? THEN ? ELSE ${destination < moved ? "lead" : "lag"}(pin_ordinal) OVER (ORDER BY pin_ordinal) END AS target FROM conversation_presentations WHERE pin_ordinal BETWEEN ? AND ?) UPDATE conversation_presentations SET pin_ordinal=-(SELECT target FROM positions WHERE positions.workspace_id=conversation_presentations.workspace_id AND positions.public_id=conversation_presentations.public_id) WHERE pin_ordinal BETWEEN ? AND ?`,
+							)
+							.run(moved, destination, low, high, low, high);
+						this.#database
+							.prepare(
+								"UPDATE conversation_presentations SET pin_ordinal=-pin_ordinal WHERE pin_ordinal BETWEEN ? AND ?",
+							)
+							.run(-high, -low);
+						orderGeneration = increment(orderGeneration);
+						this.#database
+							.prepare("UPDATE presentation_state SET order_generation=? WHERE singleton=1")
+							.run(orderGeneration);
+					}
+					result = { orderGeneration };
 				}
-				result = { orderGeneration };
 				const receipt: PresentationCommandResult = { method: "reorderPinnedConversation", params: input, result };
 				this.#database
 					.prepare("INSERT INTO presentation_commands VALUES (?,?,?)")

@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { assertSidebarAcceptance, assertSidebarState, expectedPinnedPreview } from "./journey.mjs";
+import {
+	assertAliasSelection,
+	assertHomeDraftContext,
+	assertSidebarAcceptance,
+	assertSidebarState,
+	expectedPinnedPreview,
+} from "./journey.mjs";
 import { defaultRoleEntry, sidebarWorkspaceIds } from "./manifest.mjs";
 
 const seed = {
 	workspaceIds: [...sidebarWorkspaceIds],
 	defaultWorkspaceId: sidebarWorkspaceIds[0],
-	handshake: { storeId: "owned-store", protocolVersion: 8 },
+	handshake: { storeId: "owned-store", protocolVersion: 9 },
 	pins: [
 		{ workspaceId: sidebarWorkspaceIds[1], conversationId: "same-a" },
 		{ workspaceId: sidebarWorkspaceIds[1], conversationId: "same-b" },
@@ -23,6 +29,75 @@ const state = () => ({
 	messages: [{ id: "message-1", text: "synthetic history" }],
 	dragging: false,
 	overlay: false,
+});
+
+test("alias oracle rejects duplicate highlights, wrong location and remounted conversation owners", () => {
+	const scope = seed.pins[0];
+	const value = {
+		selected: [{ ...scope, location: "workspace" }],
+		draft: "Unsent alias text",
+		samePanel: true,
+		sameComposer: true,
+		sameHistory: true,
+	};
+	assertAliasSelection(value, scope, "workspace", value.draft);
+	for (const change of [
+		(item) => item.selected.push({ ...scope, location: "recent" }),
+		(item) => {
+			item.selected[0].location = "recent";
+		},
+		(item) => {
+			item.selected[0].workspaceId = "foreign";
+		},
+		(item) => {
+			item.draft = "";
+		},
+		(item) => {
+			item.samePanel = false;
+		},
+		(item) => {
+			item.sameComposer = false;
+		},
+		(item) => {
+			item.sameHistory = false;
+		},
+	]) {
+		const changed = structuredClone(value);
+		change(changed);
+		assert.throws(() => assertAliasSelection(changed, scope, "workspace", value.draft));
+	}
+});
+
+test("New chat context oracle requires exact project, retained text and stable home input", () => {
+	const value = { projects: ["project-a"], conversations: 0, draft: "Shared unsent text", sameInput: true };
+	assertHomeDraftContext(value, "project-a", value.draft);
+	assertHomeDraftContext({ ...value, projects: [] }, null, value.draft);
+	assertHomeDraftContext({ ...value, sameInput: false }, "project-a", value.draft, false);
+	assert.throws(() =>
+		assertHomeDraftContext({ ...value, draft: "wrong", sameInput: false }, "project-a", value.draft, false),
+	);
+	for (const changed of [
+		{ ...value, projects: ["project-b"] },
+		{ ...value, projects: [] },
+		{ ...value, conversations: 1 },
+		{ ...value, draft: "" },
+		{ ...value, sameInput: false },
+	])
+		assert.throws(() => assertHomeDraftContext(changed, "project-a", value.draft));
+});
+
+test("logical alias oracle cannot substitute the physical workspace for project identity", () => {
+	const scope = seed.pins[0];
+	const value = {
+		selected: [{ ...scope, location: "project", projectId: "logical-project" }],
+		draft: "Keep text",
+		samePanel: true,
+		sameComposer: true,
+		sameHistory: true,
+	};
+	assertAliasSelection(value, scope, "project", value.draft, "logical-project");
+	assert.throws(() => assertAliasSelection(value, scope, "project", value.draft, scope.workspaceId));
+	assert.throws(() => assertAliasSelection(value, scope, "project", value.draft));
 });
 
 test("sidebar oracle rejects wrong canonical scope despite identical visible title", () => {
@@ -101,11 +176,12 @@ test("fixture writes only the verified store-scoped completed default role, neve
 		kind: "value",
 		key: "default-chat-workspace",
 		value: JSON.stringify({
-			version: 8,
-			method: "createWorkspace",
-			params: { workspaceId: "sidebar-chats", name: "Chats" },
+			version: 1,
+			role: "default-chat-workspace",
+			workspaceId: "sidebar-chats",
 		}),
 	});
+	assert.deepEqual(defaultRoleEntry({ ...seed, handshake: { ...seed.handshake, protocolVersion: 10 } }), entry);
 	for (const changed of [
 		{ ...seed, defaultWorkspaceId: "other" },
 		{ ...seed, workspaceIds: ["other"] },

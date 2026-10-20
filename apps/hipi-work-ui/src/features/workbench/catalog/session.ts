@@ -4,15 +4,26 @@ import {
 	AppError,
 	type Conversation,
 	type ErrorCode,
+	type Params,
+	type ProjectCompletedCommand,
+	type ProjectPresentation,
 	type ReceiptView,
 	type Submit,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { parseProjectFolder } from "@hipi/work-runtime/files/protocol";
 import type { FileAuthority } from "../../../app/file-client.ts";
-import type { CatalogCommand } from "../command-recovery.ts";
+import type { CatalogCommand, LegacyCatalogCommand, ProjectCatalogCommand } from "../command-recovery.ts";
 import type { LocalState } from "../local-state.ts";
 import { canExecuteModel } from "../model-policy.ts";
+import {
+	admitProjectCommand,
+	assertAdoptionEvidence,
+	finishProjectCommand,
+	isProjectCatalogCommand,
+	matchesProjectCommand,
+} from "../projects/commands.ts";
+import { canCreateProjectless } from "../projects/identity.ts";
 import { reconcileReceipt } from "../receipt-reconciliation.ts";
 import { submitRequest } from "../submit-request.ts";
 import { matchesInitialGrant } from "./initial-context.ts";
@@ -23,8 +34,10 @@ import {
 	defaultChatWorkspaceId,
 	finishInitialConversation,
 	finishInitialWorkspace,
+	finishLogicalInitialConversation,
 	type InitialSend,
 	type InitialSendInput,
+	initialWorkspaceId,
 	releaseInitialDraft,
 	transferInitialSubmission,
 } from "./initial-send.ts";
@@ -42,6 +55,8 @@ export type CatalogState = {
 	busy: boolean;
 	failed: boolean;
 	notFound: boolean;
+	projectPending: boolean;
+	projectResult: ProjectCompletedCommand | null;
 	result: Conversation | Workspace | null;
 	resultMethod: CatalogCommand["method"] | null;
 	preparedTask: PreparedTask | null;
@@ -55,10 +70,16 @@ export type CatalogState = {
 	initialConsentGrantActive: boolean;
 	initialConsentCanRecoverDraft: boolean;
 };
+type ProjectPinInput = Params<"setProjectPinned">;
+export type ProjectPinLifecycle =
+	| { phase: "initiated" | "admitted" | "retired"; input: Readonly<ProjectPinInput> }
+	| { phase: "confirmed"; input: Readonly<ProjectPinInput>; result: Readonly<ProjectPresentation> };
 /** Owns immutable directory commands. A lost reply is resolved by exact read-only lookup. */
 export class CatalogSession {
 	private state: CatalogState;
 	private listeners = new Set<() => void>();
+	private projectPinListeners = new Set<(event: ProjectPinLifecycle) => void>();
+	private lifecycle = 0;
 	private request: AbortController | undefined;
 	private disposed = false;
 	private client: AppClient;
@@ -76,6 +97,8 @@ export class CatalogSession {
 			busy: false,
 			failed: false,
 			notFound: false,
+			projectPending: false,
+			projectResult: null,
 			result: null,
 			resultMethod: null,
 			preparedTask: saved.preparedTask,
@@ -102,6 +125,17 @@ export class CatalogSession {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	};
+	subscribeProjectPinLifecycle = (listener: (event: ProjectPinLifecycle) => void) => {
+		this.projectPinListeners.add(listener);
+		return () => {
+			this.projectPinListeners.delete(listener);
+		};
+	};
+	private projectPinEvent(event: ProjectPinLifecycle) {
+		if (this.disposed) return;
+		Object.freeze(event);
+		for (const listener of this.projectPinListeners) listener(event);
+	}
 	private publish(patch: Partial<CatalogState>) {
 		if (this.disposed) return;
 		this.state = { ...this.state, ...patch };
@@ -125,17 +159,19 @@ export class CatalogSession {
 	}
 	dispose() {
 		this.disposed = true;
+		this.lifecycle++;
 		this.request?.abort();
 		this.request = undefined;
 		this.liveConsentId = null;
 		this.listeners.clear();
+		this.projectPinListeners.clear();
 	}
 	private async run(work: (signal: AbortSignal) => Promise<void>) {
 		if (this.disposed || this.request || this.state.incompatible) return;
 		const controller = new AbortController();
 		this.request = controller;
 		const timeout = setTimeout(() => controller.abort(), 15000);
-		this.publish({ busy: true, failed: false, notFound: false, result: null, errorCode: null });
+		this.publish({ busy: true, failed: false, notFound: false, result: null, projectResult: null, errorCode: null });
 		let stopWaiting: (() => void) | undefined;
 		try {
 			await Promise.race([
@@ -167,7 +203,7 @@ export class CatalogSession {
 		}
 	}
 	private async finish(
-		command: CatalogCommand,
+		command: LegacyCatalogCommand,
 		result: Workspace | Conversation,
 		signal: AbortSignal,
 		discardPreparedTask = false,
@@ -232,6 +268,10 @@ export class CatalogSession {
 	private async lookup(signal: AbortSignal, discardPreparedTask = false) {
 		const command = this.state.pending;
 		if (!command) return;
+		if (isProjectCatalogCommand(command)) {
+			await this.lookupProject(command, signal);
+			return;
+		}
 		if (command.method === "createWorkspace") {
 			try {
 				await this.finish(
@@ -260,6 +300,164 @@ export class CatalogSession {
 		if (receipt.method !== command.method) throw new Error("COMMAND_MISMATCH");
 		await this.finish(command, receipt.result, signal, discardPreparedTask);
 	}
+	private async lookupProject(command: ProjectCatalogCommand, signal: AbortSignal) {
+		currentCatalogRecovery(this.local, command);
+		const receipt = await this.client.call("getProjectCommandResult", { requestId: command.params.requestId }, signal);
+		signal.throwIfAborted();
+		if (!receipt) {
+			this.publish({ notFound: true, projectPending: false });
+			return;
+		}
+		if (!matchesProjectCommand(command, receipt)) throw new Error("COMMAND_MISMATCH");
+		if (receipt.status === "pending") {
+			this.publish({ notFound: false, projectPending: true });
+			return;
+		}
+		if (receipt.method === "createProjectConversation") {
+			const created = receipt.result.conversation;
+			const conversation = await this.client.call(
+				"getConversation",
+				{ workspaceId: created.workspaceId, conversationId: created.conversationId },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (conversation.workspaceId !== created.workspaceId || conversation.conversationId !== created.conversationId)
+				throw new Error("SCOPE_MISMATCH");
+			if (this.state.initialSend) {
+				const next = await finishLogicalInitialConversation(
+					this.local,
+					{ request: command, initialSend: this.state.initialSend },
+					created,
+					signal,
+				);
+				this.publish({
+					pending: null,
+					initialSend: next.initialSend,
+					result: conversation,
+					resultMethod: command.method,
+					projectResult: receipt,
+					projectPending: false,
+					notFound: false,
+				});
+				return;
+			}
+			await finishProjectCommand(this.local, command, signal);
+			this.publish({
+				pending: null,
+				result: conversation,
+				resultMethod: command.method,
+				projectResult: receipt,
+				projectPending: false,
+				notFound: false,
+			});
+			return;
+		}
+		const currentPresentation =
+			receipt.method === "setProjectPinned"
+				? await this.client.call("getProjectPresentation", { projectId: receipt.params.projectId }, signal)
+				: null;
+		signal.throwIfAborted();
+		if (
+			receipt.method === "setProjectPinned" &&
+			currentPresentation &&
+			(currentPresentation.projectId !== receipt.params.projectId ||
+				currentPresentation.revision < receipt.result.revision)
+		)
+			throw new Error("RESULT_MISMATCH");
+		await finishProjectCommand(this.local, command, signal);
+		this.publish({
+			pending: null,
+			resultMethod: command.method,
+			projectResult: receipt,
+			projectPending: false,
+			notFound: false,
+		});
+		if (receipt.method === "setProjectPinned" && currentPresentation)
+			this.projectPinEvent({
+				phase: "confirmed",
+				input: Object.freeze({ ...receipt.params }),
+				result: Object.freeze({ ...currentPresentation }),
+			});
+	}
+	private async sendProject(command: ProjectCatalogCommand, signal: AbortSignal) {
+		currentCatalogRecovery(this.local, command);
+		if (command.method === "adoptLegacyDefaultWorkspace") assertAdoptionEvidence(this.local, command);
+		let rejection: AppError | undefined;
+		try {
+			switch (command.method) {
+				case "createProject":
+					await this.client.call(command.method, command.params, signal);
+					break;
+				case "createProjectConversation":
+					await this.client.call(command.method, command.params, signal);
+					break;
+				case "renameProject":
+					await this.client.call(command.method, command.params, signal);
+					break;
+				case "setProjectPinned":
+					await this.client.call(command.method, command.params, signal);
+					break;
+				case "reorderPinnedProject":
+					await this.client.call(command.method, command.params, signal);
+					break;
+				case "adoptLegacyDefaultWorkspace":
+					await this.client.call(command.method, command.params, signal);
+					break;
+			}
+		} catch (error) {
+			signal.throwIfAborted();
+			if (error instanceof AppError && error.code === "STORE_MISMATCH") throw error;
+			if (error instanceof AppError) rejection = error;
+		}
+		await this.lookupProject(command, signal);
+		if (
+			this.state.notFound &&
+			rejection &&
+			["IDEMPOTENCY_CONFLICT", "NOT_FOUND", "INVALID_REQUEST"].includes(rejection.code) &&
+			(command.method === "renameProject" ||
+				command.method === "setProjectPinned" ||
+				command.method === "reorderPinnedProject")
+		) {
+			await finishProjectCommand(this.local, command, signal);
+			this.publish({ pending: null, notFound: false, projectPending: false, failed: true, errorCode: rejection.code });
+			if (command.method === "setProjectPinned")
+				this.projectPinEvent({ phase: "retired", input: Object.freeze({ ...command.params }) });
+		}
+	}
+	private async verifyInitialCreation(task: InitialSend, signal: AbortSignal) {
+		const command = task.conversationCommand;
+		if (command.method === "createProjectConversation") {
+			const receipt = await this.client.call(
+				"getProjectCommandResult",
+				{ requestId: command.params.requestId },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (
+				!receipt ||
+				receipt.status !== "completed" ||
+				receipt.method !== command.method ||
+				!matchesProjectCommand(command, receipt) ||
+				receipt.result.conversation.workspaceId !== initialWorkspaceId(task) ||
+				receipt.result.conversation.conversationId !== task.conversationId
+			)
+				throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+			return;
+		}
+		const receipt = await this.client.call(
+			"getConversationCommandResult",
+			{ workspaceId: command.params.workspaceId, requestId: command.params.requestId },
+			signal,
+		);
+		signal.throwIfAborted();
+		if (
+			receipt?.method !== "createConversation" ||
+			receipt.result.workspaceId !== command.params.workspaceId ||
+			receipt.result.conversationId !== task.conversationId ||
+			receipt.result.title !== command.params.title
+		)
+			throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+	}
 	check = () =>
 		this.run(async (signal) => {
 			if (this.state.initialSend) await this.recoverInitial(signal);
@@ -280,9 +478,7 @@ export class CatalogSession {
 		if (task.context.createAttempted && !task.conversationId) return Promise.resolve();
 		return this.run(async (signal) => {
 			// Capture at the explicit click, before provenance reads or a queued admission can yield.
-			const key = task.conversationId
-				? `draft.${task.conversationCommand.params.workspaceId}.${task.conversationId}`
-				: task.sourceKey;
+			const key = task.conversationId ? `draft.${initialWorkspaceId(task)}.${task.conversationId}` : task.sourceKey;
 			const combination = combine
 				? { key, stored: this.local.storedValue(key), edited: this.local.valueSnapshot(key) }
 				: undefined;
@@ -305,20 +501,8 @@ export class CatalogSession {
 			if (!task.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
 			const conversationId = task.conversationId;
 			currentInitialSend(this.local, { request: null, initialSend: task });
-			const scope = { workspaceId: task.conversationCommand.params.workspaceId, conversationId };
-			const creation = await this.client.call(
-				"getConversationCommandResult",
-				{ workspaceId: scope.workspaceId, requestId: task.conversationCommand.params.requestId },
-				signal,
-			);
-			signal.throwIfAborted();
-			if (
-				creation?.method !== "createConversation" ||
-				creation.result.workspaceId !== scope.workspaceId ||
-				creation.result.conversationId !== scope.conversationId ||
-				creation.result.title !== task.conversationCommand.params.title
-			)
-				throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+			const scope = { workspaceId: initialWorkspaceId(task), conversationId };
+			await this.verifyInitialCreation(task, signal);
 			const conversation = await this.client.call("getConversation", scope, signal);
 			signal.throwIfAborted();
 			if (conversation.workspaceId !== scope.workspaceId || conversation.conversationId !== scope.conversationId)
@@ -362,7 +546,31 @@ export class CatalogSession {
 			return Promise.resolve();
 		const captured = structuredClone(command);
 		const preparedDraft = options?.preparedDraft;
+		const lifecycle = this.lifecycle;
+		let initiated = false;
+		let admitted = false;
 		return this.run(async (signal) => {
+			if (isProjectCatalogCommand(captured)) {
+				if (preparedDraft !== undefined) throw new Error("INVALID_PREPARED_TASK");
+				if (captured.method === "setProjectPinned") {
+					initiated = true;
+					this.projectPinEvent({ phase: "initiated", input: Object.freeze({ ...captured.params }) });
+				}
+				const pending = await admitProjectCommand(this.local, captured, signal);
+				admitted = true;
+				if (captured.method === "setProjectPinned")
+					this.projectPinEvent({ phase: "admitted", input: Object.freeze({ ...captured.params }) });
+				this.publish({
+					pending,
+					preparedTask: null,
+					submission: null,
+					receipt: null,
+					projectResult: null,
+					projectPending: false,
+				});
+				await this.sendProject(pending, signal);
+				return;
+			}
 			const saved = await admitCatalog(this.local, captured, preparedDraft, signal);
 			this.publish({
 				pending: captured,
@@ -373,13 +581,16 @@ export class CatalogSession {
 			});
 			signal.throwIfAborted();
 			await this.send(captured, signal);
+		}).finally(() => {
+			if (lifecycle === this.lifecycle && initiated && !admitted && captured.method === "setProjectPinned")
+				this.projectPinEvent({ phase: "retired", input: Object.freeze({ ...captured.params }) });
 		});
 	};
 	/** Explicit user retry only, after an exact lookup. Never a new identity or edited payload. */
 	retry = () => {
 		if (this.state.initialSend) {
 			if (this.state.initialSend.context && this.state.initialConsentInvalidated) return Promise.resolve();
-			if (!this.state.notFound && this.state.pending) return Promise.resolve();
+			if (!this.state.notFound && !this.state.projectPending && this.state.pending) return Promise.resolve();
 			return this.run(async (signal) => {
 				// Consent retries first reconcile every exact outcome; never replay from a stale missing-result flag.
 				if (this.state.initialSend?.context) await this.recoverInitial(signal);
@@ -387,15 +598,20 @@ export class CatalogSession {
 			});
 		}
 		const command = this.state.pending;
-		if (!command || !this.state.notFound) return Promise.resolve();
-		return this.run((signal) => this.send(command, signal));
+		if (!command || (!this.state.notFound && !this.state.projectPending)) return Promise.resolve();
+		return this.run((signal) =>
+			isProjectCatalogCommand(command) ? this.sendProject(command, signal) : this.send(command, signal),
+		);
 	};
 	/** One explicit Send authorizes this live create-and-submit chain. Mounting never calls it. */
 	sendInitial = (input: InitialSendInput) => {
 		if (this.state.pending || this.state.initialSend || this.state.incompatible || this.state.busy)
 			return Promise.resolve();
+		const captured = structuredClone(input);
 		return this.run(async (signal) => {
-			const saved = await admitInitialSend(this.local, input, signal);
+			const projectCatalog =
+				captured.projectId === null ? await this.client.call("getProjectCatalogState", {}, signal) : undefined;
+			const saved = await admitInitialSend(this.local, captured, signal, projectCatalog);
 			this.liveConsentId = saved.initialSend.context ? saved.initialSend.submissionId : null;
 			this.publish({
 				pending: saved.request,
@@ -412,6 +628,7 @@ export class CatalogSession {
 		while (this.state.initialSend && this.state.pending) {
 			const command = this.state.pending;
 			currentInitialSend(this.local, { request: command, initialSend: this.state.initialSend });
+
 			await this.lookup(signal);
 			signal.throwIfAborted();
 			if (this.state.pending === command) return;
@@ -422,6 +639,29 @@ export class CatalogSession {
 		while (this.state.initialSend && this.state.pending) {
 			const command = this.state.pending;
 			currentInitialSend(this.local, { request: command, initialSend: this.state.initialSend });
+			if (isProjectCatalogCommand(command)) {
+				if (command.method !== "createProjectConversation") throw new Error("INITIAL_SEND_COMMAND_MISMATCH");
+				if (command.params.projectId === null) {
+					const state = await this.client.call("getProjectCatalogState", {}, signal);
+					signal.throwIfAborted();
+					if (!canCreateProjectless(this.local, state)) throw new Error("PROJECT_DESTINATION_UNVERIFIED");
+				}
+				if (this.state.initialSend.context) {
+					await this.validateInitialContext(this.state.initialSend, signal);
+					if (!this.state.initialSend.context.createAttempted) {
+						const saved = await advanceInitialContext(
+							this.local,
+							{ request: command, initialSend: this.state.initialSend },
+							"create",
+							signal,
+						);
+						this.publish({ initialSend: saved.initialSend, initialConsentCanRecoverDraft: false });
+					}
+				}
+				await this.sendProject(command, signal);
+				if (this.state.pending === command) return;
+				continue;
+			}
 			if (command.method === "createConversation") {
 				const workspace = await this.client.call("getWorkspace", { workspaceId: command.params.workspaceId }, signal);
 				signal.throwIfAborted();
@@ -467,22 +707,9 @@ export class CatalogSession {
 		if (!task?.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
 		const expected = { request: this.state.pending, initialSend: task };
 		currentInitialSend(this.local, expected);
-		const scope = { workspaceId: task.conversationCommand.params.workspaceId, conversationId: task.conversationId };
+		const scope = { workspaceId: initialWorkspaceId(task), conversationId: task.conversationId };
 		// A saved target is only a recovery hint. Re-establish its exact creation provenance after any interruption.
-		const creation = await this.client.call(
-			"getConversationCommandResult",
-			{ workspaceId: scope.workspaceId, requestId: task.conversationCommand.params.requestId },
-			signal,
-		);
-		signal.throwIfAborted();
-		if (
-			!creation ||
-			creation.method !== "createConversation" ||
-			creation.result.workspaceId !== scope.workspaceId ||
-			creation.result.conversationId !== scope.conversationId ||
-			creation.result.title !== task.conversationCommand.params.title
-		)
-			throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
+		await this.verifyInitialCreation(task, signal);
 		const conversation = await this.client.call("getConversation", scope, signal);
 		signal.throwIfAborted();
 		if (conversation.workspaceId !== scope.workspaceId || conversation.conversationId !== scope.conversationId)
@@ -547,6 +774,14 @@ export class CatalogSession {
 			throw new Error("INITIAL_CONTEXT_INVALIDATED");
 		if (!this.fileAuthority?.getProject) throw new Error("INITIAL_CONTEXT_AUTHORITY_UNAVAILABLE");
 		const staged = context.staged;
+		if (task.conversationCommand.method === "createProjectConversation") {
+			const projectId = task.conversationCommand.params.projectId;
+			if (!projectId) throw new Error("INITIAL_CONTEXT_INVALIDATED");
+			const project = await this.client.call("getProject", { projectId }, signal);
+			signal.throwIfAborted();
+			if (project.projectId !== projectId || project.homeWorkspaceId !== staged.workspaceId)
+				await this.invalidateInitialContext(task, signal);
+		}
 		const folder = parseProjectFolder(await this.fileAuthority.getProject(staged.workspaceId), staged.workspaceId);
 		signal.throwIfAborted();
 		currentInitialSend(this.local, { request: this.state.pending, initialSend: task });
@@ -637,7 +872,7 @@ export class CatalogSession {
 	) {
 		if (!task.context || !task.conversationId) throw new Error("INITIAL_SEND_TARGET_UNVERIFIED");
 		const input: Submit = {
-			workspaceId: task.conversationCommand.params.workspaceId,
+			workspaceId: initialWorkspaceId(task),
 			conversationId: task.conversationId,
 			requestId: task.submissionId,
 			text: task.text,
@@ -723,7 +958,7 @@ export class CatalogSession {
 		}
 		await this.finishInitialContextReceipt(task, receipt, signal);
 	}
-	private async send(command: CatalogCommand, signal: AbortSignal) {
+	private async send(command: LegacyCatalogCommand, signal: AbortSignal) {
 		// Recheck on explicit retry too: a stale session never dispatches a displaced recovery record.
 		signal.throwIfAborted();
 		currentCatalogRecovery(this.local, command);

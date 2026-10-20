@@ -8,7 +8,7 @@ function assertPrerequisitesReleased(local: LocalState, input: Submit) {
 		saved.incompatible ||
 		(saved.initialSend?.context &&
 			(saved.initialSend.submissionId === input.requestId ||
-				(saved.initialSend.conversationCommand.params.workspaceId === input.workspaceId &&
+				(saved.initialSend.context.staged.workspaceId === input.workspaceId &&
 					(saved.initialSend.conversationId === null || saved.initialSend.conversationId === input.conversationId))))
 	)
 		throw new Error("INITIAL_CONTEXT_PREREQUISITE_REQUIRED");

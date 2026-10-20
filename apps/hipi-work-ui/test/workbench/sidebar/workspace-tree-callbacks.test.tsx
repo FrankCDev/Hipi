@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
-import type { Conversation } from "@hipi/work-runtime/contracts";
+import type { Conversation, SidebarView } from "@hipi/work-runtime/contracts";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { ActionMenuContent, ActionMenuItem, ActionMenuRadioGroup } from "../../../src/components/ui/action-menu.tsx";
 import { Button } from "../../../src/components/ui/button.tsx";
-import {
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuRadioGroup,
-} from "../../../src/components/ui/dropdown-menu.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
 import { WorkspaceTree } from "../../../src/features/workbench/sidebar/workspace-tree.tsx";
 
 type ListOptions = {
-	queryKey: string[];
+	view: SidebarView;
+	filter: string;
 	enabled: boolean;
-	queryPage: (cursor: string | undefined, signal: AbortSignal) => Promise<unknown>;
 };
 const fixture = vi.hoisted(() => ({
 	filter: "active",
@@ -53,9 +49,9 @@ vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
 vi.mock("../../../src/app/client-provider.tsx", () => ({ useAppClient: () => ({ call: fixture.call }) }));
-vi.mock("../../../src/features/workbench/catalog/use-pages.ts", () => ({
-	useCatalogPages: (options: ListOptions) => {
-		fixture.options = options;
+vi.mock("../../../src/features/workbench/sidebar/use-navigation.ts", () => ({
+	useNavigation: (view: SidebarView, filter: string, enabled: boolean) => {
+		fixture.options = { view, filter, enabled };
 		return { items: [] as Conversation[], hasData: true, isSuccess: true, isFetching: false, isPending: false };
 	},
 }));
@@ -80,7 +76,7 @@ function invoke(node: React.ReactNode): React.ReactNode {
 	assert.equal(typeof node.type, "function");
 	return Reflect.apply(node.type as (props: unknown) => React.ReactNode, undefined, [node.props]);
 }
-function fixtureTree(defaultWorkspaceId?: string) {
+function fixtureTree(defaultWorkspaceId?: string, extra: Partial<React.ComponentProps<typeof WorkspaceTree>> = {}) {
 	const client = { call: fixture.call, observe: vi.fn() };
 	const session = new CatalogSession(client, new LocalState());
 	const toggle = vi.fn();
@@ -100,6 +96,7 @@ function fixtureTree(defaultWorkspaceId?: string) {
 		onSelect: vi.fn(),
 		onNewConversation: draft,
 		onManageProjectFolder: manage,
+		...extra,
 	};
 	const render = (index = 0) => {
 		const children = only(WorkspaceTree(props), "ul").props.children;
@@ -198,31 +195,29 @@ test("archive visibility is changed by the project menu and opens only that coll
 	const children = only(actions, "div").props.children;
 	assert.ok(Array.isArray(children));
 	const menu = invoke(children[0]);
-	const content = only(menu, DropdownMenuContent);
+	const content = only(menu, ActionMenuContent);
 	assert.equal(content.props.side, "right");
 	assert.equal(content.props.align, "start");
 	assert.equal(content.props.sideOffset, 40);
 	assert.equal(content.props.alignOffset, -4);
 	assert.equal(content.props.collisionPadding, 12);
-	only(menu, DropdownMenuRadioGroup).props.onValueChange?.("archived");
+	only(menu, ActionMenuRadioGroup).props.onValueChange?.("archived");
 	ui.render();
-	assert.deepEqual(fixture.options?.queryKey, ["conversations", "project", "archived"]);
+	assert.deepEqual(fixture.options?.view, { kind: "workspace", workspaceId: "project" });
+	assert.equal(fixture.options?.filter, "archived");
 	assert.deepEqual(ui.toggle.mock.calls, [["project"]]);
 	assert.equal(ui.open.mock.calls.length, 0);
 	assert.equal(ui.draft.mock.calls.length, 0);
-	const signal = new AbortController().signal;
-	await fixture.options?.queryPage("page-two", signal);
-	assert.deepEqual(fixture.call.mock.calls, [
-		["listConversations", { workspaceId: "project", filter: "archived", cursor: "page-two" }, signal],
-	]);
+	assert.equal(fixture.call.mock.calls.length, 0, "Filter selection does not execute a command");
 });
 
-test("verified Recent is always readable, has no project navigation, and preserves exact identity outside loaded workspaces", () => {
-	const ui = fixtureTree("verified-default");
+test("global Recent is readable without a default workspace and has no project navigation", () => {
+	const ui = fixtureTree();
 	const recent = ui.render(1);
 	assert.equal(elements(recent, SidebarPreviewRow).length, 0);
 	assert.equal(elements(recent, "button").length, 0);
-	assert.deepEqual(fixture.options?.queryKey, ["conversations", "verified-default", "active"]);
+	assert.deepEqual(fixture.options?.view, { kind: "recent" });
+	assert.equal(fixture.options?.filter, "active");
 	assert.equal(fixture.options?.enabled, true);
 	assert.equal(ui.toggle.mock.calls.length, 0);
 	assert.equal(fixture.call.mock.calls.length, 0);
@@ -246,11 +241,45 @@ test("project folder dialog returns through the explicit dialog owner, not a hid
 	const children = only(actions, "div").props.children;
 	assert.ok(Array.isArray(children));
 	const menu = invoke(children[0]);
-	only(menu, DropdownMenuItem).props.onSelect?.(new Event("select"));
+	only(menu, ActionMenuItem).props.onSelect?.(new Event("select"));
 	assert.equal(ui.manage.mock.calls.length, 1);
 	assert.equal(ui.manage.mock.calls[0]?.[0].workspaceId, "project");
 	const restore: unknown = ui.manage.mock.calls[0]?.[1];
 	assert.ok(typeof restore === "function");
 	restore();
 	assert.deepEqual(returned.mock.calls, [["dialog"]]);
+});
+
+const logicalItem = {
+	project: { projectId: "logical", name: "Logical", revision: 2, homeWorkspaceId: "home-adapter" },
+	presentation: { projectId: "logical", pinned: false, revision: 3 },
+};
+test("logical branch identity and callbacks never substitute its home workspace", () => {
+	const ui = fixtureTree(undefined, { projects: [logicalItem] });
+	const tree = ui.render();
+	const branch = only(tree, "li");
+	assert.equal(branch.props["data-project-id" as keyof typeof branch.props], "logical");
+	assert.equal(branch.props["data-workspace-id" as keyof typeof branch.props], "home-adapter");
+	assert.deepEqual(fixture.options?.view, { kind: "project", projectId: "logical" });
+	const row = only(tree, SidebarPreviewRow);
+	const children =
+		typeof row.props.children === "function" ? row.props.children({ hovered: false }) : row.props.children;
+	const open = elements(children, "button").find((entry) => entry.props.className === "project-open");
+	assert.ok(open?.props.onClick);
+	Reflect.apply(open.props.onClick, undefined, []);
+	assert.deepEqual(ui.open.mock.calls, [["logical"]]);
+	ui.render(1);
+	assert.deepEqual(fixture.options?.view, { kind: "project_recent" });
+	assert.equal(fixture.call.mock.calls.length, 0);
+});
+
+test("logical catalog recovery fences project membership and retains only legacy Recent history", () => {
+	const ui = fixtureTree(undefined, { projects: [logicalItem], logicalReady: false });
+	const row = only(ui.render(), SidebarPreviewRow);
+	assert.deepEqual(fixture.options?.view, { kind: "project", projectId: "logical" });
+	assert.equal(fixture.options?.enabled, false);
+	assert.equal(row.props.renderActions, undefined);
+	assert.equal(row.props.preview({ close: vi.fn(), returnFocus: vi.fn() }), null);
+	ui.render(1);
+	assert.deepEqual(fixture.options?.view, { kind: "recent" });
 });

@@ -11,6 +11,7 @@ import {
 import type * as Query from "@tanstack/react-query";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type * as React from "react";
+import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { ThemeProvider } from "../../../src/app/theme/index.ts";
@@ -24,10 +25,12 @@ import {
 import { PinnedConversations } from "../../../src/features/workbench/sidebar/pinned-conversations.tsx";
 import { PresentationSession } from "../../../src/features/workbench/sidebar/presentation-session.ts";
 import { SidebarPreviewProvider } from "../../../src/features/workbench/sidebar/preview-provider.tsx";
+import { SidebarSelectionProvider } from "../../../src/features/workbench/sidebar/selection-provider.tsx";
 
 vi.mock("react", async () => ({
 	...(await vi.importActual<typeof React>("react")),
-	useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
+	useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown, serverSnapshot?: () => unknown) =>
+		(serverSnapshot ?? snapshot)(),
 }));
 vi.mock("@tanstack/react-query", async () => ({
 	...(await vi.importActual<typeof Query>("@tanstack/react-query")),
@@ -171,45 +174,57 @@ test("a stale direct pin callback cannot replace an unknown original request", a
 	session.dispose();
 });
 
-test.each(["en", "zh-CN"])("pinned rows retain the same canonical selection and shared actions in %s", (language) => {
-	locale = language;
-	const cache = new QueryClient();
-	cache.setQueryData(["pinned-conversations", "pages"], {
-		pages: [
-			{
-				items: [{ conversation, presentation: { ...original, revision: 1, pinned: true } }],
-				nextCursor: null,
-				orderGeneration: 1,
-				nextPinnedScope: null,
-			},
-		],
-		pageParams: [undefined],
-	});
-	const local = new LocalState();
-	const presentation = new PresentationSession(client, local);
-	const html = renderToStaticMarkup(
-		<ThemeProvider>
-			<QueryClientProvider client={cache}>
-				<SidebarPreviewProvider disabled={false} navigationKey="pin-fixture">
-					<PinnedConversations
-						catalog={new CatalogSession(client, local)}
-						presentation={presentation}
-						selectedWorkspace="project"
-						selectedConversation="chat"
-						onSelect={() => {}}
-					/>
-				</SidebarPreviewProvider>
-			</QueryClientProvider>
-		</ThemeProvider>,
-	);
-	assert.match(html, /class="pinned-conversations"/);
-	assert.match(html, /data-workspace-id="project" data-conversation-id="chat" aria-current="page"/);
-	assert.match(html, /conversation-actions-trigger/);
-	assert.match(html, language === "en" ? />Pinned<\/h3>/ : />已固定<\/h3>/);
-	assert.doesNotMatch(html, /role="dialog"|checkbox|pin-count/);
-	cache.clear();
-	presentation.dispose();
-});
+test.each(["en", "zh-CN"])(
+	"pinned rows retain canonical location and shared actions without SSR selection in %s",
+	(language) => {
+		locale = language;
+		const navigationRoot = createRef<HTMLElement>();
+		const cache = new QueryClient();
+		cache.setQueryData(["pinned-conversations", "pages"], {
+			pages: [
+				{
+					items: [{ conversation, presentation: { ...original, revision: 1, pinned: true } }],
+					nextCursor: null,
+					orderGeneration: 1,
+					nextPinnedScope: null,
+				},
+			],
+			pageParams: [undefined],
+		});
+		const local = new LocalState();
+		const presentation = new PresentationSession(client, local);
+		const html = renderToStaticMarkup(
+			<ThemeProvider>
+				<QueryClientProvider client={cache}>
+					<aside ref={navigationRoot}>
+						<SidebarSelectionProvider
+							scope={conversation}
+							preferredLocation={{ kind: "pinned" }}
+							rootRef={navigationRoot}
+						>
+							<SidebarPreviewProvider disabled={false} navigationKey="pin-fixture">
+								<PinnedConversations
+									catalog={new CatalogSession(client, local)}
+									presentation={presentation}
+									onSelect={() => {}}
+								/>
+							</SidebarPreviewProvider>
+						</SidebarSelectionProvider>
+					</aside>
+				</QueryClientProvider>
+			</ThemeProvider>,
+		);
+		assert.match(html, /class="pinned-conversations"/);
+		assert.match(html, /data-workspace-id="project" data-conversation-id="chat" data-sidebar-location="pinned"/);
+		assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="false"/);
+		assert.doesNotMatch(html, /aria-current=|data-sidebar-location-workspace=/);
+		assert.match(html, /conversation-actions-trigger/);
+		assert.match(html, language === "en" ? />Pinned<\/h3>/ : />已固定<\/h3>/);
+		assert.doesNotMatch(html, /role="dialog"|checkbox|pin-count/);
+		cache.clear();
+		presentation.dispose();
+	},
+);
 
 test("an unresolved pin exposes only exact lookup and explicit unchanged retry, with no extra confirmation dialog", async () => {
 	const failed: AppClient = {
@@ -232,4 +247,72 @@ test("an unresolved pin exposes only exact lookup and explicit unchanged retry, 
 	assert.match(html, /Retry original pin change/);
 	assert.doesNotMatch(html, /role="dialog"/);
 	session.dispose();
+});
+
+test("mixed pins render server project/conversation order without regrouping and keep canonical conversation scope", () => {
+	const cache = new QueryClient();
+	const project = {
+		kind: "project" as const,
+		project: { projectId: "logical", name: "Renamed logical", revision: 2, homeWorkspaceId: "adapter" },
+		presentation: { projectId: "logical", pinned: true, revision: 1 },
+	};
+	cache.setQueryData(["sidebar-pins", "pages"], {
+		pages: [
+			{
+				items: [
+					project,
+					{
+						kind: "conversation",
+						conversation,
+						presentation: { ...original, revision: 1, pinned: true },
+						membership: { workspaceId: "project", conversationId: "chat", projectId: "logical", revision: 1 },
+					},
+				],
+				nextCursor: null,
+				nextPinKey: null,
+				orderRevision: 8,
+			},
+		],
+		pageParams: [undefined],
+	});
+	const local = new LocalState();
+	const presentation = new PresentationSession(client, local);
+	const root = createRef<HTMLElement>();
+	const html = renderToStaticMarkup(
+		<ThemeProvider>
+			<QueryClientProvider client={cache}>
+				<aside ref={root}>
+					<SidebarSelectionProvider scope={conversation} preferredLocation={{ kind: "pinned" }} rootRef={root}>
+						<SidebarPreviewProvider disabled={false} navigationKey="mixed">
+							<PinnedConversations
+								mixed
+								catalog={new CatalogSession(client, local)}
+								presentation={presentation}
+								onSelect={() => {}}
+								renderProject={(item, action) => {
+									assert.equal(action?.item.group, "pinned");
+									assert.match(action?.item.id ?? "", /logical/);
+									return (
+										<li key={item.project.projectId} data-pinned-project="">
+											{item.project.name}
+										</li>
+									);
+								}}
+							/>
+						</SidebarPreviewProvider>
+					</SidebarSelectionProvider>
+				</aside>
+			</QueryClientProvider>
+		</ThemeProvider>,
+	);
+	assert.ok(html.indexOf("Renamed logical") < html.indexOf("A real task"));
+	assert.match(html, /data-workspace-id="project" data-conversation-id="chat" data-sidebar-location="pinned"/);
+	assert.doesNotMatch(html, /data-workspace-id="adapter"/);
+	assert.equal(
+		vi.mocked(client.call).mock.calls.length,
+		0,
+		"SSR and closed previews do not request per-row project metadata",
+	);
+	cache.clear();
+	presentation.dispose();
 });

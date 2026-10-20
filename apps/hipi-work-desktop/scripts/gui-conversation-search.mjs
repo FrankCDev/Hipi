@@ -29,12 +29,12 @@ export async function exerciseConversationSearch(cdp, directory, scope) {
 	await cdp.request("Input.insertText", { text: draft });
 	assert.equal(await read("document.querySelector('.composer textarea').value"), draft);
 	await read(
-		`void (window.__hipiSearchContinuity={opener:document.querySelector('.sidebar-search-trigger'),sidebar:document.querySelector('.sidebar'),main:document.querySelector('.main-shell'),panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),ids:[...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId)})`,
+		`void (window.__hipiSearchContinuity={projectIds:[...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId),opener:document.querySelector('.sidebar-search-trigger'),sidebar:document.querySelector('.sidebar'),main:document.querySelector('.main-shell'),panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),ids:[...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId)})`,
 	);
 	const continuity = async (history = true) =>
 		assert.equal(
 			await read(
-				`(()=>{const b=window.__hipiSearchContinuity;return b.sidebar===document.querySelector('.sidebar')&&b.main===document.querySelector('.main-shell')&&b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===${JSON.stringify(draft)}&&document.querySelectorAll('.workspace-branch').length===2&&${history ? "JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId))" : "true"}})()`,
+				`(()=>{const b=window.__hipiSearchContinuity;return b.sidebar===document.querySelector('.sidebar')&&b.main===document.querySelector('.main-shell')&&b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===${JSON.stringify(draft)}&&JSON.stringify(b.projectIds)===JSON.stringify([...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId))&&${history ? "JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId))" : "true"}})()`,
 			),
 			true,
 			"Search must retain app owners, unsent draft and canonical history",
@@ -76,7 +76,7 @@ export async function exerciseConversationSearch(cdp, directory, scope) {
 		await query();
 		await nativeEditorKey(cdp, "Enter");
 		await check(
-			`!document.querySelector('.conversation-search-dialog')&&document.querySelector('.message-scroll')?.dataset.readingMode==='search'&&document.querySelector('.workspace-branch[data-workspace-id="${scope.workspaceId}"] .conversation-link[data-conversation-id="${scope.conversationId}"]')?.getAttribute('aria-current')==='page'`,
+			`!document.querySelector('.conversation-search-dialog')&&document.querySelector('.message-scroll')?.dataset.readingMode==='search'&&document.querySelector('.recent-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]')?.getAttribute('aria-current')==='page'`,
 			"actual result activation retains canonical conversation in anchored search mode",
 		);
 		await check(

@@ -8,11 +8,17 @@ import { ProjectPreviewCard } from "../../../src/features/workbench/sidebar/proj
 const state = vi.hoisted(() => ({
 	locale: "en",
 	more: false,
+	count: 1,
+	coverage: "ready" as "building" | "refreshing" | "ready",
 	error: false,
 	folderError: false,
 	folder: undefined as ProjectFolder | undefined,
-	options: [] as { queryKey: string[]; queryFn: (context: { signal: AbortSignal }) => Promise<unknown> }[],
-	call: vi.fn(async () => ({ items: [], nextCursor: null })),
+	options: [] as {
+		queryKey: string[];
+		enabled?: boolean;
+		queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
+	}[],
+	call: vi.fn(async (): Promise<unknown> => ({ items: [], nextCursor: null })),
 	getProject: vi.fn(async () => undefined),
 }));
 vi.mock("../../../src/app/preferences.tsx", () => ({
@@ -28,7 +34,7 @@ vi.mock("@tanstack/react-query", () => ({
 		return options.queryKey[0] === "projectFolder"
 			? { data: state.folder, isError: state.folderError }
 			: {
-					data: { items: [{ workspaceId: "project" }], nextCursor: state.more ? "next" : null },
+					data: { count: state.count, partial: state.more || state.coverage !== "ready", state: state.coverage },
 					isError: state.error,
 					isPending: false,
 				};
@@ -38,6 +44,8 @@ beforeEach(() => {
 	state.options = [];
 	state.locale = "en";
 	state.more = false;
+	state.count = 1;
+	state.coverage = "ready";
 	state.error = false;
 	state.folderError = false;
 	state.folder = {
@@ -114,4 +122,60 @@ test("the touch menu carries the same metadata without nesting card buttons insi
 	assert.match(html, /1 chat/);
 	assert.match(html, /~\/Work\/Example/);
 	assert.doesNotMatch(html, /<button/);
+});
+
+test("logical preview counts project membership but folder access uses only its home workspace adapter", async () => {
+	const project = { projectId: "logical", name: "Logical name", revision: 4, homeWorkspaceId: "project" };
+	const html = renderToStaticMarkup(ProjectPreviewCard({ project }));
+	assert.match(html, /Logical name/);
+	assert.match(html, /~\/Work\/Example/);
+	const signal = new AbortController().signal;
+	state.call.mockResolvedValueOnce({ matchedAtLeast: 3, complete: true, coverage: { state: "ready" } });
+	const options = state.options.find((entry) => entry.queryKey[0] === "sidebar-navigation");
+	assert.deepEqual(options?.queryKey, ["sidebar-navigation", "project-summary", "logical", "all"]);
+	assert.deepEqual(await options?.queryFn({ signal }), { count: 3, partial: false, state: "ready" });
+	assert.deepEqual(state.call.mock.calls, [
+		["getProjectConversationSummary", { projectId: "logical", filter: "all" }, signal],
+	]);
+});
+
+test("logical preview fences unreadied membership rather than presenting physical counts", () => {
+	const html = renderToStaticMarkup(
+		ProjectPreviewCard({
+			project: { projectId: "logical", name: "Logical", revision: 4, homeWorkspaceId: "project" },
+			logicalReady: false,
+		}),
+	);
+	assert.doesNotMatch(html, /1 chat/);
+	assert.match(html, /common.loading/);
+	const options = state.options.find((entry) => entry.queryKey[0] === "sidebar-navigation");
+	assert.equal(options?.enabled, false);
+	assert.equal(
+		state.options.some((entry) => entry.queryKey[0] === "conversations"),
+		false,
+	);
+	assert.equal(state.call.mock.calls.length, 0);
+});
+
+test("logical summary presents exact totals including pins, bounded lower counts and no false zero while building", () => {
+	const project = { projectId: "logical", name: "Logical", revision: 1, homeWorkspaceId: "project" };
+	state.count = 3;
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project })), /3 chats/);
+	state.more = true;
+	state.count = 128;
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project })), /At least 128 chats/);
+	state.locale = "zh-CN";
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project })), /至少 128 个聊天/);
+	state.coverage = "building";
+	state.count = 0;
+	const building = renderToStaticMarkup(ProjectPreviewCard({ project }));
+	assert.match(building, /common.loading/);
+	assert.doesNotMatch(building, /0 个聊天/);
+	state.locale = "en";
+	state.coverage = "refreshing";
+	const refreshing = renderToStaticMarkup(ProjectPreviewCard({ project }));
+	assert.doesNotMatch(refreshing, /0 chats/);
+	state.coverage = "ready";
+	state.more = false;
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project })), /0 chats/);
 });

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -37,16 +37,20 @@ import {
 } from "./extensions/lifecycle-read.ts";
 import { FileServiceError } from "./files/contracts.ts";
 import { fileIdentifier } from "./files/protocol.ts";
+import type { NavigationInvalidation } from "./navigation/contracts.ts";
+import { NavigationProjection } from "./navigation/projection.ts";
+import { NAVIGATION_SCHEMA, validateNavigationStore } from "./navigation/schema.ts";
 import { type ProjectFolderBinding, type ProjectFolderRecord, parseProjectFolderRecord } from "./project-folders.ts";
+import { ProjectCatalog, type ProjectFailpoint } from "./projects/catalog.ts";
+import type { ProjectRequest } from "./projects/contracts.ts";
+import type { ProjectCreationPorts } from "./projects/ports.ts";
+import { initializeProjectStore, validateProjectStore } from "./projects/schema.ts";
 import { SearchProjection } from "./search/index.ts";
 import { SEARCH_SCHEMA, validateSearchStore } from "./search/schema.ts";
-import {
-	checkSearchAbort,
-	historyAroundMatch,
-	parseLocator,
-	type SearchReader,
-	type SearchSource,
-} from "./search/storage.ts";
+import { checkSearchAbort, historyAroundMatch, parseLocator, type SearchSource } from "./search/storage.ts";
+import { type SidebarPinFailpoint, SidebarPins } from "./sidebar-pins/catalog.ts";
+import type { SidebarPinRequest } from "./sidebar-pins/contracts.ts";
+import { initializeSidebarPinStore, validateSidebarPinStore } from "./sidebar-pins/schema.ts";
 import { checkDatabasePath, StoreOwnerLease } from "./store-owner.ts";
 
 async function readDocument(storage: Storage, kind: string, key?: string) {
@@ -97,6 +101,9 @@ export class StoreCatalog {
 	readonly #database: DatabaseSync;
 	readonly #presentations: ConversationPresentations;
 	readonly #search: SearchProjection;
+	readonly #navigation: NavigationProjection;
+	readonly #projects: ProjectCatalog;
+	readonly #pins: SidebarPins;
 	#closed = false;
 	#projection: Promise<unknown> = Promise.resolve();
 	private constructor(
@@ -105,16 +112,50 @@ export class StoreCatalog {
 		database: DatabaseSync,
 		storeId: string,
 		failpoint?: (point: PresentationFailpoint) => void | Promise<void>,
+		projectFailpoint?: (point: ProjectFailpoint) => void | Promise<void>,
+		sidebarPinFailpoint?: (point: SidebarPinFailpoint) => void | Promise<void>,
 	) {
 		this.#root = root;
 		this.#owner = owner;
 		this.#database = database;
 		this.storeId = storeId;
+		this.#pins = new SidebarPins(
+			database,
+			storeId,
+			{
+				getProject: (id) => this.#projects.get(id),
+				getProjectPresentation: (id) => this.#projects.presentation(id),
+				getConversation: (scope) => this.getConversation(scope),
+				recordArchive: (conversation) => this.#presentations.recordArchive(conversation),
+				getConversationPresentation: (scope) => this.#presentations.current(scope),
+				getMembership: (scope) => this.#projects.ensureMembership(scope),
+			},
+			sidebarPinFailpoint,
+		);
+		this.#projects = new ProjectCatalog(
+			database,
+			storeId,
+			{
+				getProjectConversationSummary: (input) => this.#navigation.projectSummary(input),
+				getWorkspace: (input) => this.getWorkspace(input),
+				verifyWorkspace: (workspaceId) => this.#readWorkspace(workspaceId, async () => undefined),
+				getConversation: (scope) => this.getConversation(scope),
+				getConversationCommandResult: (input) => this.getConversationCommandResult(input),
+				prepareWorkspace: async (workspaceId) => {
+					const result = this.#projection.then(() => this.#listConversations({ workspaceId, filter: "all" }, 1));
+					this.#projection = result.catch(() => undefined);
+					return !(await result).projectionIncomplete && this.#projects.recordDirectory(workspaceId);
+				},
+			},
+			projectFailpoint,
+			this.#pins,
+		);
 		this.#presentations = new ConversationPresentations(
 			database,
 			storeId,
 			(scope) => this.getConversation(scope),
 			failpoint,
+			this.#pins,
 		);
 		this.#search = new SearchProjection(database, storeId, {
 			nextWorkspace: (after) => {
@@ -128,7 +169,7 @@ export class StoreCatalog {
 			prepareWorkspace: async (workspaceId) => {
 				const result = this.#projection.then(() => this.#listConversations({ workspaceId, filter: "all" }, 1));
 				this.#projection = result.catch(() => undefined);
-				return !(await result).projectionIncomplete;
+				return !(await result).projectionIncomplete && this.#projects.recordDirectory(workspaceId);
 			},
 			nextConversation: (workspaceId, after) => {
 				const row = database
@@ -142,10 +183,39 @@ export class StoreCatalog {
 			},
 			read: (scope, operation) => this.#readSearchSource(scope, operation),
 		});
+		this.#navigation = new NavigationProjection(database, storeId, {
+			nextWorkspace: (after) => {
+				const row = database
+					.prepare(
+						"SELECT workspace_id AS workspaceId,name FROM workspaces WHERE ready=1 AND workspace_id>? ORDER BY workspace_id LIMIT 1",
+					)
+					.get(after);
+				return row ? parseResult("getWorkspace", row) : undefined;
+			},
+			prepareWorkspace: async (workspaceId) => {
+				const result = this.#projection.then(() => this.#listConversations({ workspaceId, filter: "all" }, 1));
+				this.#projection = result.catch(() => undefined);
+				return !(await result).projectionIncomplete && this.#projects.recordDirectory(workspaceId);
+			},
+			nextConversation: (workspaceId, after) => {
+				const row = database
+					.prepare(
+						"SELECT value,ordinal FROM conversations WHERE workspace_id=? AND public_id>? ORDER BY public_id LIMIT 1",
+					)
+					.get(workspaceId, after);
+				if (!row) return undefined;
+				if (typeof row.value !== "string") throw new AppError("INDEX_RECOVERY_REQUIRED");
+				return { conversation: parseResult("getConversation", JSON.parse(row.value)), ordinal: count(row.ordinal) };
+			},
+			read: (scope, operation) => this.#readSearchSource(scope, operation, true),
+			hasWorkspace: (workspaceId) => this.registered(workspaceId),
+		});
 	}
 	static async open(
 		root: string,
 		failpoint?: (point: PresentationFailpoint) => void | Promise<void>,
+		projectFailpoint?: (point: ProjectFailpoint) => void | Promise<void>,
+		sidebarPinFailpoint?: (point: SidebarPinFailpoint) => void | Promise<void>,
 	): Promise<StoreCatalog> {
 		const catalogPath = join(root, "catalog.sqlite");
 		await checkDatabasePath(catalogPath);
@@ -171,6 +241,8 @@ export class StoreCatalog {
 					throw new AppError("STORE_MISMATCH");
 				if (database.prepare("SELECT 1 FROM sqlite_schema WHERE name='identity' AND type='table'").get()) {
 					const row = database.prepare("SELECT version FROM identity WHERE singleton=1").get();
+					if (row?.version === 11 || row?.version === 12) validateProjectStore(database);
+					if (row?.version === 12) validateSidebarPinStore(database);
 					if (
 						row &&
 						row.version !== 1 &&
@@ -180,15 +252,31 @@ export class StoreCatalog {
 						row.version !== 6 &&
 						row.version !== 7 &&
 						row.version !== 8 &&
-						row.version !== 9
+						row.version !== 9 &&
+						row.version !== 10 &&
+						row.version !== 11 &&
+						row.version !== 12
 					)
 						throw new AppError("STORE_MISMATCH");
 					if (
-						(row?.version === 6 || row?.version === 7 || row?.version === 8 || row?.version === 9) &&
+						(row?.version === 6 ||
+							row?.version === 7 ||
+							row?.version === 8 ||
+							row?.version === 9 ||
+							row?.version === 10 ||
+							row?.version === 11 ||
+							row?.version === 12) &&
 						!database.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders' AND type='table'").get()
 					)
 						throw new AppError("STORE_MISMATCH");
-					if (row?.version === 7 || row?.version === 8 || row?.version === 9) {
+					if (
+						row?.version === 7 ||
+						row?.version === 8 ||
+						row?.version === 9 ||
+						row?.version === 10 ||
+						row?.version === 11 ||
+						row?.version === 12
+					) {
 						for (const name of ["conversation_presentations", "presentation_state", "presentation_commands"]) {
 							if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'").get(name))
 								throw new AppError("STORE_MISMATCH");
@@ -199,8 +287,14 @@ export class StoreCatalog {
 								.get()
 						)
 							throw new AppError("STORE_MISMATCH");
-						validatePresentationStore(database, row.version === 9);
-						if (row.version === 8 || row.version === 9) {
+						validatePresentationStore(database, row.version >= 9);
+						if (
+							row.version === 8 ||
+							row.version === 9 ||
+							row.version === 10 ||
+							row.version === 11 ||
+							row.version === 12
+						) {
 							for (const name of ["search_state", "search_sources", "search_chunks"]) {
 								if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'").get(name))
 									throw new AppError("STORE_MISMATCH");
@@ -213,6 +307,19 @@ export class StoreCatalog {
 								throw new AppError("STORE_MISMATCH");
 							try {
 								validateSearchStore(database);
+							} catch {
+								throw new AppError("STORE_MISMATCH");
+							}
+						}
+						if (row.version === 10 || row.version === 11 || row.version === 12) {
+							if (
+								!database
+									.prepare("SELECT 1 FROM sqlite_schema WHERE name='navigation_recent' AND type='index'")
+									.get()
+							)
+								throw new AppError("STORE_MISMATCH");
+							try {
+								validateNavigationStore(database);
 							} catch {
 								throw new AppError("STORE_MISMATCH");
 							}
@@ -257,7 +364,10 @@ export class StoreCatalog {
 					identity.version !== 6 &&
 					identity.version !== 7 &&
 					identity.version !== 8 &&
-					identity.version !== 9) ||
+					identity.version !== 9 &&
+					identity.version !== 10 &&
+					identity.version !== 11 &&
+					identity.version !== 12) ||
 				identity.root !== root
 			)
 				throw new AppError("STORE_MISMATCH");
@@ -282,7 +392,26 @@ export class StoreCatalog {
 					database.exec(PRESENTATION_ORDER_SCHEMA);
 					database.exec("UPDATE identity SET version=9 WHERE singleton=1");
 				}
-				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 9)
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version === 9) {
+					database.exec(NAVIGATION_SCHEMA);
+					database
+						.prepare("INSERT INTO navigation_state VALUES (1,?,0,0,?,'',NULL,'',NULL,NULL,NULL,1)")
+						.run(randomUUID(), randomUUID());
+					database.exec("UPDATE identity SET version=10 WHERE singleton=1");
+				}
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version === 10) {
+					initializeProjectStore(database, { pristine: !existing });
+					// One-time migration, not a repeated project-list inventory scan. No role inference.
+					database.exec(
+						"INSERT INTO projects SELECT workspace_id,name,1,workspace_id,'legacy','ready' FROM workspaces WHERE ready=1",
+					);
+					database.exec("UPDATE identity SET version=11 WHERE singleton=1");
+				}
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version === 11) {
+					initializeSidebarPinStore(database);
+					database.exec("UPDATE identity SET version=12 WHERE singleton=1");
+				}
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 12)
 					throw new AppError("STORE_MISMATCH");
 				database.exec("COMMIT");
 			} catch (error) {
@@ -299,9 +428,18 @@ export class StoreCatalog {
 					"UPDATE search_state SET cycle=?,generation=?,active=1,workspace_after='',workspace_id=NULL,conversation_after='',current_id=NULL,revision=revision+1 WHERE singleton=1",
 				)
 				.run(randomUUID(), randomUUID());
-			const catalog = new StoreCatalog(root, owner, database, storeId, failpoint);
+			const catalog = new StoreCatalog(
+				root,
+				owner,
+				database,
+				storeId,
+				failpoint,
+				projectFailpoint,
+				sidebarPinFailpoint,
+			);
 			catalog.listCustomProviders();
 			await catalog.#recover();
+			catalog.#navigation.start();
 			return catalog;
 		} catch (error) {
 			if (connectionCloseFailed) throw error;
@@ -315,10 +453,35 @@ export class StoreCatalog {
 			throw error;
 		}
 	}
+	executeSidebarPin(request: SidebarPinRequest) {
+		if (this.#closed) throw new AppError("CLOSED");
+		return this.#pins.execute(request);
+	}
+	executeProject(request: ProjectRequest, creation: ProjectCreationPorts) {
+		if (this.#closed) throw new AppError("CLOSED");
+		return this.#projects.execute(request, creation);
+	}
+	stopProjectWork(): void {
+		this.#projects.stop();
+	}
 	getConversationPresentation(
 		input: Params<"getConversationPresentation">,
 	): Promise<Result<"getConversationPresentation">> {
 		return this.#presentations.get(input);
+	}
+	invalidateNavigation(metadata?: NavigationInvalidation): void {
+		this.#navigation.invalidate(metadata);
+	}
+	refreshSidebarProjection(
+		input: Params<"refreshSidebarProjection">,
+		signal?: AbortSignal,
+	): Promise<Result<"refreshSidebarProjection">> {
+		return this.#navigation.refresh(input, signal);
+	}
+	async listSidebarConversations(
+		input: Params<"listSidebarConversations">,
+	): Promise<Result<"listSidebarConversations">> {
+		return this.#navigation.list(input);
 	}
 	listPinnedConversations(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">> {
 		return this.#presentations.list(input);
@@ -540,9 +703,11 @@ export class StoreCatalog {
 		return this.#database.prepare("SELECT ready FROM workspaces WHERE workspace_id=?").get(workspaceId)?.ready === 1;
 	}
 	ready(workspace: Workspace): void {
-		this.#database
-			.prepare("UPDATE workspaces SET ready=1 WHERE workspace_id=? AND name=?")
+		const changed = this.#database
+			.prepare("UPDATE workspaces SET ready=1 WHERE workspace_id=? AND name=? AND ready=0")
 			.run(workspace.workspaceId, workspace.name);
+		if (changed.changes) this.#navigation.inventoryChanged();
+		this.#projects.recordWorkspace(workspace.workspaceId);
 	}
 	async getWorkspace(input: Params<"getWorkspace">): Promise<Workspace> {
 		const row = this.#database
@@ -591,14 +756,23 @@ export class StoreCatalog {
 	}
 	async #readSearchSource<T>(
 		scope: { workspaceId: string; conversationId: string },
-		operation: (storage: SearchReader, source: SearchSource) => Promise<T>,
+		operation: (storage: Storage, source: SearchSource & { unversioned?: string }) => Promise<T>,
+		navigation = false,
 	): Promise<T> {
 		scope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 		return this.#readWorkspace(scope.workspaceId, async (storage) => {
 			const workspace = await this.getWorkspace(scope);
 			const head = await readDocument(storage, "hipi.workspace-directory");
-			let source: SearchSource;
+			let source: SearchSource & { unversioned?: string };
 			if (head?.initialized === true) {
+				if (navigation) {
+					if (typeof head.generation !== "string" || !head.generation)
+						throw new AppError("INDEX_RECOVERY_REQUIRED");
+					const prepared = this.#database
+						.prepare("SELECT generation FROM directory_checkpoints WHERE workspace_id=?")
+						.get(scope.workspaceId);
+					if (prepared?.generation !== head.generation) throw new AppError("CURSOR_STALE");
+				}
 				const identity = await this.#featureScope(storage, scope.workspaceId, scope.conversationId);
 				const record = await readDocument(storage, "hipi.conversation-metadata", scope.conversationId);
 				const value = record?.value;
@@ -624,6 +798,19 @@ export class StoreCatalog {
 				const legacy = await readDocument(storage, "hipi.workspace");
 				if (!legacy || !Array.isArray(legacy.conversations) || legacy.conversations.length > 16)
 					throw new AppError("INDEX_RECOVERY_REQUIRED");
+				const canonical = legacy.conversations.map((entry) => {
+					if (!entry || typeof entry !== "object" || Array.isArray(entry))
+						throw new AppError("INDEX_RECOVERY_REQUIRED");
+					const row = parseResult("getConversation", {
+						workspaceId: scope.workspaceId,
+						conversationId: entry.publicId,
+						title: entry.title,
+						revision: 1,
+						createdAt: null,
+						archivedAt: null,
+					});
+					return [row.conversationId, count(entry.durableId), row.title];
+				});
 				const item = legacy.conversations.find(
 					(entry) =>
 						entry &&
@@ -631,7 +818,8 @@ export class StoreCatalog {
 						!Array.isArray(entry) &&
 						entry.publicId === scope.conversationId,
 				);
-				if (!item || typeof item !== "object" || Array.isArray(item)) throw new AppError("NOT_FOUND");
+				if (!item || typeof item !== "object" || Array.isArray(item))
+					throw new AppError(navigation ? "CURSOR_STALE" : "NOT_FOUND");
 				const durableId = count(item.durableId);
 				if (!durableId || !(await storage.conversation(durableId as ConversationId, BACKGROUND_CONTEXT)))
 					throw new AppError("INDEX_RECOVERY_REQUIRED");
@@ -649,6 +837,7 @@ export class StoreCatalog {
 					revision: 1,
 					archived: false,
 					generation: `legacy_${scope.workspaceId}`,
+					unversioned: createHash("sha256").update(JSON.stringify(canonical)).digest("hex"),
 					durableId,
 				};
 			}
@@ -925,11 +1114,39 @@ export class StoreCatalog {
 									archivedAt: null,
 								});
 							});
-				for (const [ordinal, item] of items.entries())
+				this.#database.exec("BEGIN IMMEDIATE");
+				try {
 					this.#database
-						.prepare("INSERT OR REPLACE INTO conversations VALUES (?,?,?,?,?,?)")
-						.run(item.workspaceId, item.conversationId, ordinal, item.revision, 0, JSON.stringify(item));
-				return { items, nextCursor: null };
+						.prepare("DELETE FROM directory_checkpoints WHERE workspace_id=?")
+						.run(workspace.workspaceId);
+					for (const [ordinal, item] of items.entries()) {
+						this.#projects.recordConversation(item);
+						this.#database
+							.prepare("INSERT OR REPLACE INTO conversations VALUES (?,?,?,?,?,?)")
+							.run(item.workspaceId, item.conversationId, ordinal, item.revision, 0, JSON.stringify(item));
+					}
+					// Legacy metadata is authoritative but old derived rows may belong to a replaced file.
+					// Reclaim only one bounded chunk; navigation cannot publish until reconciliation finishes.
+					const ids = old.conversations.map((entry) => {
+						if (!entry || typeof entry !== "object" || Array.isArray(entry) || typeof entry.publicId !== "string")
+							throw new AppError("INDEX_RECOVERY_REQUIRED");
+						return entry.publicId;
+					});
+					const removed = this.#database
+						.prepare(
+							"DELETE FROM conversations WHERE rowid IN (SELECT rowid FROM conversations WHERE workspace_id=? AND public_id NOT IN (SELECT value FROM json_each(?)) LIMIT 128)",
+						)
+						.run(workspace.workspaceId, JSON.stringify(ids));
+					this.#database.exec("COMMIT");
+					return {
+						items,
+						nextCursor: null,
+						...(Number(removed.changes) === 128 ? { projectionIncomplete: true } : {}),
+					};
+				} catch (error) {
+					this.#database.exec("ROLLBACK");
+					throw error;
+				}
 			}
 			if (
 				head.workspaceId !== workspace.workspaceId ||
@@ -997,7 +1214,8 @@ export class StoreCatalog {
 					const put = this.#database.prepare(
 						"INSERT INTO conversations VALUES (?,?,?,?,?,?) ON CONFLICT(workspace_id,public_id) DO UPDATE SET ordinal=excluded.ordinal,revision=excluded.revision,archived=excluded.archived,value=excluded.value WHERE excluded.revision>=conversations.revision",
 					);
-					for (const { conversation, ordinal } of values)
+					for (const { conversation, ordinal } of values) {
+						this.#projects.recordConversation(conversation);
 						put.run(
 							input.workspaceId,
 							conversation.conversationId,
@@ -1006,6 +1224,7 @@ export class StoreCatalog {
 							Number(conversation.archivedAt !== null),
 							JSON.stringify(conversation),
 						);
+					}
 					this.#database
 						.prepare("UPDATE directory_checkpoints SET seq=? WHERE workspace_id=?")
 						.run(end, input.workspaceId);
@@ -1052,6 +1271,8 @@ export class StoreCatalog {
 
 	async close(): Promise<void> {
 		if (this.#closed) return;
+		await this.#projects.close();
+		await this.#navigation.close();
 		await this.#search.close();
 		await this.#projection;
 		try {

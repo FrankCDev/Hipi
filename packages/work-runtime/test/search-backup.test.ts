@@ -11,7 +11,7 @@ import { verifyBackup } from "../src/maintenance/verify.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
 for (const previousVersion of [7, 8])
-	test(`populated schema${previousVersion} upgrades to9 preserving pins, search and receipts; backup remains nonexecuting`, async () => {
+	test(`populated schema${previousVersion} upgrades to12 preserving pins, search and receipts; backup remains nonexecuting`, async () => {
 		const parent = await realpath(await mkdtemp(join(tmpdir(), "hipi-search-backup-")));
 		const source = join(parent, "source"),
 			path = join(source, "catalog.sqlite");
@@ -40,6 +40,9 @@ for (const previousVersion of [7, 8])
 				receipts = before.prepare("SELECT * FROM presentation_commands").all();
 				presentations = before.prepare("SELECT * FROM conversation_presentations").all();
 				chunks = before.prepare("SELECT * FROM search_chunks").all();
+				before.exec(
+					"DROP TABLE sidebar_pin_commands; DROP TABLE sidebar_pin_order; DROP TABLE sidebar_pin_state; DROP TABLE project_commands; DROP TABLE project_memberships; DROP TABLE project_presentations; DROP TABLE project_presentation_state; DROP TABLE project_catalog_state; DROP TABLE projects; DROP TABLE navigation_sources; DROP TABLE navigation_publication; DROP TABLE navigation_state",
+				);
 				if (previousVersion === 7)
 					before.exec("DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state");
 				before.exec("ALTER TABLE presentation_state DROP COLUMN order_generation");
@@ -76,12 +79,12 @@ for (const previousVersion of [7, 8])
 			} finally {
 				upgraded.close();
 			}
-			assert.equal(inspectCatalog(path).catalogSchema, 9);
+			assert.equal(inspectCatalog(path).catalogSchema, 12);
 			const bytes = await readFile(path);
 			const backup = await backupStore({ source, destination: join(parent, "backup") });
-			assert.equal(backup.manifest.catalogSchema, 9);
+			assert.equal(backup.manifest.catalogSchema, 12);
 			assert.deepEqual(await readFile(path), bytes);
-			assert.equal((await verifyBackup({ directory: backup.directory })).manifest.catalogSchema, 9);
+			assert.equal((await verifyBackup({ directory: backup.directory })).manifest.catalogSchema, 12);
 			const restored = await restoreStore({ source: backup.directory, destination: join(parent, "archive") });
 			await assert.rejects(openTestRuntime(restored.directory), { code: "STORE_MISMATCH" });
 			const invalid = new DatabaseSync(path);

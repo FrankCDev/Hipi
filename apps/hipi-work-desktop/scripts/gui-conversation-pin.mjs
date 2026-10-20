@@ -3,7 +3,11 @@ import { capture, click, evaluate, hover, until } from "./gui-flow.mjs";
 
 export function assertPinState(state, scope, pinned) {
 	assert.equal(state.workspaces, 2, "Pin cannot create or remove a workspace");
-	assert.equal(state.canonical.length, 1, "Pin is a shortcut, never another conversation");
+	assert.equal(
+		state.canonical.length,
+		pinned ? 0 : 1,
+		"Pinned conversations must be excluded from project and Recent lists",
+	);
 	for (const row of state.canonical) {
 		assert.equal(row.workspaceId, scope.workspaceId);
 		assert.equal(row.conversationId, scope.conversationId);
@@ -41,8 +45,8 @@ export async function exerciseConversationPin(cdp, directory, scope, title, reop
 			}
 		},
 		reopened
-			? "cold restart retains the exact pinned shortcut and canonical conversation"
-			: "original two-workspace conversation has no pin",
+			? "cold restart retains only the exact canonical pinned row"
+			: "original canonical conversation has no pin",
 	);
 	assert.equal(
 		await evaluate(

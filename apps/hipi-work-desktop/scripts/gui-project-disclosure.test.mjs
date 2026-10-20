@@ -75,26 +75,33 @@ test("named project creation targets New project and restores that exact trigger
 	await assert.rejects(waitForOverlayClosed(cdp, projectCreationTrigger, undefined, 1), /focus restored: New project/);
 });
 
-test("current project distinguishes direct project navigation from a contained conversation and rejects ambiguity", () => {
-	const branch = {
-		dataset: { current: "false", containsCurrent: "true", workspaceId: "A" },
-		querySelector: () => ({ textContent: "A" }),
-	};
-	let branches = [branch];
-	const document = {
-		querySelectorAll: (selector) => {
-			assert.equal(selector, '.workspace-branch:is([data-current="true"],[data-contains-current="true"])');
-			return branches;
-		},
-	};
+test("current project reads canonical row ownership independently of the global Recent container", () => {
+	const branch = { dataset: { current: "false", containsCurrent: "true", workspaceId: "A" } };
+	const row = { dataset: { workspaceId: "A", conversationId: "one" } };
+	let branches = [branch],
+		rows = [row];
+	const document = { querySelectorAll: (selector) => (selector.startsWith(".workspace-branch") ? branches : rows) };
 	assert.equal(currentProject(document), "A");
+	branches = [];
+	assert.equal(currentProject(document), "A", "Global Recent has no workspace selection marker");
+	rows = [row, row];
+	assert.equal(currentProject(document), null);
+	rows = [row];
+	branches = [branch];
 	branch.dataset.current = "true";
 	assert.equal(currentProject(document), null);
 	branch.dataset.containsCurrent = "false";
+	assert.equal(currentProject(document), null, "Direct project and conversation cannot both own selection");
+	rows = [];
 	assert.equal(currentProject(document), "A");
 	branches = [branch, branch];
 	assert.equal(currentProject(document), null);
 	branches = [];
+	assert.equal(currentProject(document), null);
+	branches = [branch];
+	rows = [row];
+	branch.dataset.current = "false";
+	branch.dataset.workspaceId = "B";
 	assert.equal(currentProject(document), null);
 });
 
@@ -142,6 +149,8 @@ test("project selector identifies exact names independently of selected or first
 test("disclosure rejects selection, draft, message identity, mounted-node and drawer changes", () => {
 	const expected = {
 		selected: "A",
+		conversationId: "one",
+		projectIds: ["B"],
 		draft: "keep",
 		keys: ["message:user", "message:assistant"],
 		navigationOpen: "true",
@@ -150,6 +159,8 @@ test("disclosure rejects selection, draft, message identity, mounted-node and dr
 	assert.doesNotThrow(() => assertDisclosureContinuity(valid, expected));
 	for (const [key, value] of Object.entries({
 		selected: "B",
+		conversationId: "other",
+		projectIds: ["replacement"],
 		draft: "",
 		keys: ["message:replayed"],
 		navigationOpen: "false",

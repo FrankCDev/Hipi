@@ -1,0 +1,25 @@
+.sidebar-initial-loading {
+	display: grid;
+	gap: 16px;
+	padding: 12px 8px;
+}
+
+.sidebar-loading-heading,
+.sidebar-loading-row {
+	height: 16px;
+	border-radius: 5px;
+	background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
+}
+
+.sidebar-loading-heading {
+	width: 34%;
+	margin-bottom: 8px;
+}
+
+.sidebar-loading-row {
+	width: 78%;
+}
+
+.sidebar-loaded-sections[hidden] {
+	display: none;
+}

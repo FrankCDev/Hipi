@@ -333,3 +333,31 @@ test("source reads never expose a mismatched hash or foreign scope", async () =>
 	assert.equal(f.session.getSnapshot().source, null);
 	assert.equal(f.session.getSnapshot().failed, true);
 });
+
+test("protocol 8 pack recovery preserves its original lookup digest and only explicitly retries the same payload", async () => {
+	const storage = new MemoryStorage();
+	const local = new LocalState("store", storage);
+	const key = "command.tool-packs.conversation.workspace.conversation";
+	const pending = await pendingCommand(command);
+	const raw = JSON.stringify({ version: 1, pending: { ...pending, command: { ...command, version: 8 } } });
+	local.write(key, raw);
+	const f = fixture(new LocalState("store", storage));
+	assert.equal(f.session.getSnapshot().incompatible, false);
+	await f.session.refresh();
+	assert.equal(f.local.read(key), raw);
+	assert.deepEqual(f.calls.filter((call) => call.method === "getToolPackCommandResult").at(-1)?.params, pending.lookup);
+	assert.equal(
+		f.calls.some((call) => call.method === "setToolPackEnabled"),
+		false,
+	);
+	await f.session.retry();
+	assert.deepEqual(
+		f.calls.filter((call) => call.method === "setToolPackEnabled").map((call) => call.params),
+		[command.params],
+	);
+	assert.equal(f.local.read(key), raw);
+	assert.equal(
+		new ToolPackSession(f.client, new LocalState("other", storage), workspaceId, "conversation").getSnapshot().pending,
+		null,
+	);
+});
