@@ -1,0 +1,81 @@
+.file-workbench .pierre-file-tree {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	--trees-bg-override: var(--surface);
+	--trees-fg-override: var(--text);
+	--trees-fg-muted-override: var(--muted);
+	--trees-border-color-override: var(--line);
+	--trees-accent-override: var(--focus);
+	--trees-selected-bg-override: var(--brand-soft);
+	--trees-selected-fg-override: var(--text);
+	--trees-bg-muted-override: color-mix(in srgb, var(--text) 5%, var(--surface));
+	--trees-font-family-override: var(--font-ui);
+	--trees-font-size-override: 13px;
+	--trees-item-padding-x-override: 3px;
+	--trees-item-margin-x-override: 0px;
+	--trees-padding-inline-override: 0px;
+	--trees-level-gap-override: 0px;
+	--trees-item-row-gap-override: 5px;
+	--trees-git-lane-width-override: 20px;
+	--trees-border-radius-override: 0px;
+}
+.pierre-file-tree > file-tree-container {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+}
+.pierre-file-tree-filter {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	padding: 4px 6px;
+}
+.pierre-file-tree-filter input {
+	width: 100%;
+	min-width: 0;
+	height: 28px;
+	padding: 0 8px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 12px;
+}
+.pierre-file-tree-filter input:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+.pierre-file-tree-menu {
+	display: flex;
+	flex-direction: column;
+	min-width: 8rem;
+	max-width: calc(100vw - 16px);
+	max-height: calc(100dvh - 16px);
+	overflow: auto;
+}
+.pierre-file-tree-menu button {
+	color: inherit;
+	background: transparent;
+	border: 0;
+	text-align: start;
+	cursor: default;
+}
+.pierre-file-tree-menu button:hover,
+.pierre-file-tree-menu button:focus-visible {
+	background: var(--color-accent);
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+.pierre-file-tree-feedback {
+	margin: 0;
+	padding: 6px 10px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.pierre-file-tree-feedback:empty {
+	display: none;
+}

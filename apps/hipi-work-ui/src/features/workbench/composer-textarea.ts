@@ -1,4 +1,4 @@
-export const COMPOSER_ROWS = { min: 3, max: 8 } as const;
+export const COMPOSER_ROWS = { min: 2, max: 8 } as const;
 
 /** CSS uses border-box; scrollHeight includes padding but excludes borders. */
 export function composerTextareaSize(scrollHeight: number, lineHeight: number, padding: number, border: number) {

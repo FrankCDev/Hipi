@@ -19,6 +19,7 @@ const en = {
 		"This conversation already has a different draft. Your original goal is preserved below; it has not been sent or overwritten.",
 	"workbench.handoffKeep": "Keep the existing conversation draft",
 	"workbench.handoffOriginal": "Original goal",
+	"workbench.initialSendUnconfirmed": "This send is not yet confirmed. Check its status before sending again.",
 	"workbench.welcomeEyebrow": "A little clarity. A lot of possibility.",
 	"workbench.welcomeBody":
 		"Give related work a shared home. Start a conversation, bring the right context, and build toward a clear result.",
@@ -60,6 +61,7 @@ const zh: Record<keyof typeof en, string> = {
 	"workbench.handoffConflict": "这个会话已有另一份草稿。下面保留了原始目标，没有发送或覆盖任何内容。",
 	"workbench.handoffKeep": "保留会话中现有的草稿",
 	"workbench.handoffOriginal": "原始目标",
+	"workbench.initialSendUnconfirmed": "这次发送尚未确认。请先核对状态，不要重复发送。",
 	"workbench.welcomeEyebrow": "把想法，变成下一步。",
 	"workbench.welcomeBody": "为相关工作创建一个空间。开始会话、提供合适的上下文，一起把目标变成清晰的成果。",
 	"workbench.workspaceBody": "工作区已就绪。开始一段会话，把目标变成清晰的下一步。",

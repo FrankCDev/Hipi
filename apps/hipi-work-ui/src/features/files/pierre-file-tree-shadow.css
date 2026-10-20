@@ -1,0 +1,33 @@
+:host {
+	color-scheme: inherit;
+}
+[data-file-tree-virtualized-scroll="true"] {
+	padding-block: 4px;
+	overscroll-behavior: contain;
+}
+[data-item-section="content"] {
+	white-space: pre;
+}
+[data-hipi-kind="blocked"],
+[data-hipi-kind="pending"],
+[data-hipi-kind="empty"] {
+	color: var(--muted);
+	cursor: default;
+}
+[data-hipi-kind]:not([data-hipi-kind="file"]):not([data-hipi-kind="directory"]) [data-item-section="content"] {
+	display: none;
+}
+[data-hipi-kind]:not([data-hipi-kind="file"]):not([data-hipi-kind="directory"]) [data-item-section="decoration"] {
+	flex: 1;
+	text-align: start;
+	justify-content: start;
+	overflow: hidden;
+	white-space: pre;
+}
+[data-hipi-kind="pending"] [data-item-section="icon"],
+[data-hipi-kind="empty"] [data-item-section="icon"],
+[data-hipi-kind="failed"] [data-item-section="icon"],
+[data-hipi-kind="previous"] [data-item-section="icon"],
+[data-hipi-kind="next"] [data-item-section="icon"] {
+	visibility: hidden;
+}

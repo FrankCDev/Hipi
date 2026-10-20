@@ -1,12 +1,9 @@
-import { Ellipsis } from "lucide-react";
-import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
-import { usePreferences } from "../../app/preferences.tsx";
-import { Button } from "../../components/ui/button.tsx";
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../../components/ui/popover.tsx";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
+import { Popover, PopoverAnchor, PopoverContent } from "../../components/ui/popover.tsx";
 import { ConversationPreviewInteraction, type PreviewMode } from "./conversation-preview-interaction.ts";
 
 export type PreviewActions = (controls: {
-	onPreview: () => void;
+	previewContent: ReactNode;
 	onMenuOpen: () => void;
 	onOverlayChange: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus: () => void;
@@ -30,22 +27,21 @@ export function SidebarPreviewRow({
 	dialogOpen?: boolean;
 	titleId: string;
 	children: ReactNode;
-	preview: (close: () => void, returnFocus: () => HTMLButtonElement | null) => ReactNode;
+	preview: () => ReactNode;
 	renderActions?: PreviewActions;
 }) {
-	const { t } = usePreferences();
-	const actionId = useId();
 	const [mode, setMode] = useState<PreviewMode>("closed");
 	const [interaction] = useState(() => new ConversationPreviewInteraction(setMode));
 	const trigger = useRef<HTMLButtonElement>(null);
 	const row = useRef<HTMLDivElement>(null);
 	const card = useRef<HTMLDivElement>(null);
 	const restoringFocus = useRef(false);
+	const previewContent = preview();
 	useEffect(() => () => interaction.cancelPending(), [interaction]);
 	useEffect(() => interaction.setOverlayOpen("dialog", dialogOpen), [dialogOpen, interaction]);
 	const returnFocus = () => {
 		restoringFocus.current = true;
-		trigger.current?.focus();
+		(trigger.current ?? row.current?.querySelector("button"))?.focus();
 		restoringFocus.current = false;
 	};
 	return (
@@ -102,38 +98,13 @@ export function SidebarPreviewRow({
 					}}
 				>
 					{children}
-					{renderActions ? (
-						renderActions({
-							onPreview: () => {
-								interaction.activate();
-								if (interaction.mode === "pinned") card.current?.focus();
-							},
-							triggerRef: trigger,
-							onMenuOpen: () => interaction.close("navigate"),
-							onOverlayChange: (owner, open) => interaction.setOverlayOpen(owner, open),
-							onReturnFocus: returnFocus,
-						})
-					) : (
-						<PopoverTrigger asChild>
-							<Button
-								ref={trigger}
-								variant="ghost"
-								size="icon-sm"
-								className="sidebar-preview-trigger"
-								aria-labelledby={`${actionId} ${titleId}`}
-								onClick={(event) => {
-									event.preventDefault();
-									interaction.activate();
-									if (interaction.mode === "pinned") card.current?.focus();
-								}}
-							>
-								<Ellipsis size={16} aria-hidden="true" />
-								<span className="sr-only" id={actionId}>
-									{t("nav.preview")}
-								</span>
-							</Button>
-						</PopoverTrigger>
-					)}
+					{renderActions?.({
+						previewContent,
+						triggerRef: trigger,
+						onMenuOpen: () => interaction.close("navigate"),
+						onOverlayChange: (owner, open) => interaction.setOverlayOpen(owner, open),
+						onReturnFocus: returnFocus,
+					})}
 				</div>
 			</PopoverAnchor>
 			<PopoverContent
@@ -160,10 +131,7 @@ export function SidebarPreviewRow({
 					else interaction.close("navigate");
 				}}
 			>
-				{preview(
-					() => interaction.close("navigate"),
-					() => trigger.current,
-				)}
+				{previewContent}
 			</PopoverContent>
 		</Popover>
 	);

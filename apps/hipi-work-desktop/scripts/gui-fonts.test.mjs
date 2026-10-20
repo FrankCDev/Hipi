@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFontLayout, renderedFonts } from "./gui-fonts.mjs";
 
-const fixture = { workspace: "GUI 工作区", text: "真实桌面 中文流式验证", conversation: "GUI 会话" };
+const fixture = {
+	workspace: "Chats",
+	text: "真实桌面 中文流式验证",
+	prompt: "GUI 会话\n真实桌面 中文流式验证",
+	conversation: "GUI 会话",
+};
 const bundled = { familyName: "Noto Sans SC", isCustomFont: true, glyphCount: 10 };
 function renderer(fonts, visible = true) {
 	const calls = [];
@@ -28,7 +33,7 @@ function renderer(fonts, visible = true) {
 			if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
 			if (method === "DOM.querySelector")
 				return {
-					nodeId: params.selector === ".project-name" ? 2 : params.selector === ".toolbar-conversation" ? 4 : 3,
+					nodeId: params.selector === ".conversation-link" ? 2 : params.selector === ".toolbar-conversation" ? 4 : 3,
 				};
 			if (method === "CSS.getPlatformFontsForNode") return { fonts };
 			assert.ok(["DOM.enable", "CSS.enable"].includes(method), "No rendering or input overrides allowed");
@@ -41,7 +46,7 @@ test("Chinese fixture evidence records actual node fonts and strips unrelated pr
 	const cdp = renderer([{ ...bundled, postScriptName: "not exported", arbitrary: "not exported" }]);
 	const result = await renderedFonts(cdp, fixture, "linux");
 	assert.deepEqual(result, [
-		{ target: "workspace", fonts: [bundled], bundled: true },
+		{ target: "sidebar-conversation", fonts: [bundled], bundled: true },
 		{ target: "user-message", fonts: [bundled], bundled: true },
 		{ target: "conversation-title", fonts: [bundled], bundled: true },
 	]);
@@ -54,9 +59,12 @@ test("Chinese fixture evidence records actual node fonts and strips unrelated pr
 test("a failed target retains observed font and fixed layout diagnostics before throwing", async () => {
 	const observations = [];
 	const system = { familyName: "Arial", isCustomFont: false, glyphCount: 4 };
-	await assert.rejects(renderedFonts(renderer([system]), fixture, "linux", observations), /glyphs: workspace/);
+	await assert.rejects(
+		renderedFonts(renderer([system]), fixture, "linux", observations),
+		/glyphs: sidebar-conversation/,
+	);
 	assert.equal(observations.length, 3);
-	assert.equal(observations[0].target, "workspace");
+	assert.equal(observations[0].target, "sidebar-conversation");
 	assert.equal(observations[0].layout.fontWeight, "400");
 	assert.equal(observations[0].layout.faces[0].status, "unloaded");
 	assert.deepEqual(observations[0].fonts, [system]);
@@ -93,9 +101,9 @@ test("font diagnostics read fixed style controls and only the shipped resource w
 				},
 			],
 		},
-		".project-name",
+		".conversation-link",
 	);
-	assert.deepEqual(queried, [".project-name", ".toolbar-conversation", ".conversation-link"]);
+	assert.deepEqual(queried, [".conversation-link", ".toolbar-conversation", ".conversation-link"]);
 	assert.equal(value.faces.length, 1);
 	assert.equal(value.resource.length, 1);
 	assert.equal(value.resource[0].responseStatus, 200);

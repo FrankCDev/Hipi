@@ -13,19 +13,18 @@ import {
 	readToolPacks,
 } from "./gui-tool-packs.mjs";
 
-const dialog = '.capabilities-dialog[role="dialog"]';
-const panel = `${dialog} .capabilities-section[data-section="tool-packs"]`;
+const dialog = '.conversation-options-dialog[role="dialog"][data-section="tool-packs"]';
+const panel = `${dialog} [data-slot="dialog-body"]`;
 
 function toolPackSurface() {
 	const heading = { textContent: "Tool packs" };
-	const title = { textContent: "Conversation capabilities" };
-	const attributes = { "aria-current": "page", "aria-controls": "capability-section" };
-	const navigation = { getAttribute: (name) => attributes[name] };
+	const title = { textContent: "Tool packs" };
+	const attributes = { section: "tool-packs" };
 	const shell = {
+		dataset: attributes,
 		querySelector: (selector) => {
 			if (selector === '[data-slot="dialog-title"]') return title;
-			assert.equal(selector, '.capabilities-navigation button[data-section="tool-packs"]');
-			return navigation;
+			throw new Error(`Unexpected selector: ${selector}`);
 		},
 	};
 	const sections = [];
@@ -34,7 +33,7 @@ function toolPackSurface() {
 		textContent: "No tool packs on this page.",
 		children: sections,
 		closest: (selector) => {
-			assert.equal(selector, dialog);
+			assert.equal(selector, '.conversation-options-dialog[role="dialog"]');
 			return shell;
 		},
 		querySelector: (selector) => (selector === ":scope > .capabilities-section-heading > h3" ? heading : null),
@@ -79,7 +78,7 @@ test("mouse close targets the capability X and both routes require closed dialog
 								return state.dialog;
 							},
 							querySelectorAll: (selector) => {
-								assert.equal(selector, "button.capabilities-trigger");
+								assert.equal(selector, "button.composer-add-trigger");
 								return state.triggers;
 							},
 							activeElement: state.active,
@@ -132,16 +131,13 @@ test("tool-pack evidence requires its selected section in the sole correctly tit
 			dialogs.push({});
 		},
 		({ title }) => {
-			title.textContent = "Tool packs";
-		},
-		({ heading }) => {
-			heading.textContent = "File access & approvals";
+			title.textContent = "File access & approvals";
 		},
 		({ attributes }) => {
-			attributes["aria-current"] = undefined;
+			attributes.section = undefined;
 		},
 		({ attributes }) => {
-			attributes["aria-controls"] = "another-section";
+			attributes.section = "files";
 		},
 	]) {
 		const surface = toolPackSurface();
@@ -209,14 +205,14 @@ test("cold restart performs only read controls and validates retained uninstalle
 	const helpers = {
 		async click(_cdp, selector, label) {
 			clicked.push({ selector, label });
-			if (selector === ".capabilities-trigger") {
+			if (selector === ".composer-add-trigger") {
 				assert.equal(label, undefined);
 				assert.equal(open, false);
 				open = true;
 				return;
 			}
 			assert.equal(open, true);
-			if (selector === `${dialog} .capabilities-navigation button[data-section="tool-packs"]`) {
+			if (selector === ".composer-add-menu .capability-tools-trigger") {
 				assert.equal(label, undefined);
 				return;
 			}
@@ -253,7 +249,7 @@ test("cold restart performs only read controls and validates retained uninstalle
 		},
 		async assertNoAlerts() {},
 		async inspectModal(_cdp, selector, placement) {
-			assert.equal(selector, ".capabilities-dialog");
+			assert.equal(selector, dialog);
 			assert.equal(placement, "right");
 			return { titleReachable: true, closeReachable: true, scrolledToBottom: true };
 		},
@@ -273,8 +269,8 @@ test("cold restart performs only read controls and validates retained uninstalle
 	assert.equal(result.escapeFocus, true);
 	assert.ok(clicked.some(({ label }) => label === "Read full source"));
 	assert.deepEqual(clicked.slice(0, 2), [
-		{ selector: ".capabilities-trigger", label: undefined },
-		{ selector: `${dialog} .capabilities-navigation button[data-section="tool-packs"]`, label: undefined },
+		{ selector: ".composer-add-trigger", label: undefined },
+		{ selector: ".composer-add-menu .capability-tools-trigger", label: undefined },
 	]);
 	assert.equal(escapes, 1, "The capability surface closes directly, without an obsolete settings parent");
 	assert.equal(open, false);

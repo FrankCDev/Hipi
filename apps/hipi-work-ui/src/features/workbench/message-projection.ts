@@ -10,6 +10,7 @@ export class MessageProjection<T> {
 	private readonly publish: (value: T) => void;
 	private readonly blocked: () => boolean;
 	private readonly reportPaused: (paused: boolean) => void;
+	private readonly reducedMotion: () => boolean;
 	private paused = false;
 
 	constructor(
@@ -17,11 +18,13 @@ export class MessageProjection<T> {
 		publish: (value: T) => void,
 		blocked: () => boolean,
 		reportPaused: (paused: boolean) => void = () => {},
+		reducedMotion: () => boolean = () => false,
 	) {
 		this.latest = initial;
 		this.publish = publish;
 		this.blocked = blocked;
 		this.reportPaused = reportPaused;
+		this.reducedMotion = reducedMotion;
 	}
 
 	update(value: T, streaming: boolean) {
@@ -29,7 +32,7 @@ export class MessageProjection<T> {
 		this.latest = value;
 		this.pending = true;
 		if (this.blocked()) this.setPaused(true);
-		else if (!streaming) this.flush();
+		else if (!streaming || this.reducedMotion()) this.flush();
 		else if (this.timer === undefined) {
 			this.timer = setTimeout(() => this.flush(), MESSAGE_DISPLAY_INTERVAL_MS);
 		}
@@ -60,6 +63,12 @@ export class MessageProjection<T> {
 		clearTimeout(this.timer);
 		this.timer = undefined;
 	}
+}
+
+export function prefersReducedMotion(): boolean {
+	if (typeof document === "undefined") return false;
+	const preference = document.documentElement.dataset.reducedMotion;
+	return preference ? preference === "on" : (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
 }
 
 export function selectionIntersects(root: HTMLElement | null, selection: Selection | null): boolean {

@@ -90,7 +90,7 @@ function ImagePreview({
 }
 
 /** Dispatch only on the service's validated format, never on extension or an arbitrary URL. */
-export function DocumentPreviewPane({ session }: { session: PreviewSession }) {
+export function DocumentPreviewPane({ session, onClose }: { session: PreviewSession; onClose?: () => void }) {
 	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
 	const { files } = useFiles();
 	const roots = useQuery({
@@ -117,10 +117,10 @@ export function DocumentPreviewPane({ session }: { session: PreviewSession }) {
 	if (!state.target) return null;
 	const handle = state.handle;
 	return (
-		<section className="file-buffer" aria-label={l["preview.open"]}>
+		<section className="file-buffer file-preview-buffer" aria-label={l["preview.open"]}>
 			<div className="file-heading">
 				<h3 className="file-path">{state.target.path}</h3>
-				<Button size="sm" variant="ghost" onClick={() => session.clear()}>
+				<Button size="sm" variant="ghost" onClick={onClose ?? (() => session.clear())}>
 					{l["preview.close"]}
 				</Button>
 			</div>

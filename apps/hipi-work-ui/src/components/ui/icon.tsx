@@ -16,11 +16,23 @@ const paths = {
 	check: "m5 12 4 4L19 6",
 } as const;
 
-/** Small, owned stroke icon vocabulary. Decorative by default; name the parent action. */
-export function Icon({ name, size = 18, style }: { name: keyof typeof paths; size?: number; style?: CSSProperties }) {
+/** Owned 24-unit stroke vocabulary, separate from Lucide. Name the parent action. */
+export function Icon({
+	name,
+	size = 18,
+	className,
+	style,
+}: {
+	name: keyof typeof paths;
+	size?: number;
+	className?: string;
+	style?: CSSProperties;
+}) {
 	return (
 		<svg
 			aria-hidden="true"
+			data-slot="icon"
+			data-icon-size={size}
 			width={size}
 			height={size}
 			viewBox="0 0 24 24"
@@ -29,7 +41,8 @@ export function Icon({ name, size = 18, style }: { name: keyof typeof paths; siz
 			strokeWidth="1.6"
 			strokeLinecap="round"
 			strokeLinejoin="round"
-			style={style}
+			className={className}
+			style={{ width: size, height: size, ...style }}
 		>
 			<path d={paths[name]} />
 		</svg>

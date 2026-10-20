@@ -24,6 +24,8 @@ export type EditorSnapshot = {
 	diskTarget?: FileTarget;
 	unknown?: string;
 	artifactRequest?: ArtifactReference;
+	/** Recovery does not authorize another automatic write until the user edits or saves. */
+	autosavePaused?: boolean;
 };
 /** Owns only the unsaved editor buffer. Runtime versions remain authoritative. */
 export class EditorSession {
@@ -32,6 +34,7 @@ export class EditorSession {
 	private pending?: AbortController;
 	private generation = 0;
 	private closed = false;
+	private submittedText?: string;
 	private client: FileClient;
 	constructor(client: FileClient) {
 		this.client = client;
@@ -55,13 +58,14 @@ export class EditorSession {
 	get protected() {
 		return (
 			this.state.unknown !== undefined ||
+			this.state.error === "VERSION_CONFLICT" ||
 			this.state.operation === "save" ||
 			(!!this.state.document && this.state.document.text !== this.state.document.baseline.text)
 		);
 	}
 	edit(text: string) {
-		if (this.state.document && this.state.operation !== "save")
-			this.publish({ ...this.state, document: { ...this.state.document, text } });
+		if (this.state.document && this.state.document.text !== text)
+			this.publish({ ...this.state, autosavePaused: false, document: { ...this.state.document, text } });
 	}
 	cancel() {
 		this.pending?.abort();
@@ -70,10 +74,9 @@ export class EditorSession {
 		this.publish({
 			...this.state,
 			operation: undefined,
-			...(this.state.operation === "save"
-				? { error: "WRITE_OUTCOME_UNKNOWN", unknown: this.state.document?.text }
-				: {}),
+			...(this.state.operation === "save" ? { error: "WRITE_OUTCOME_UNKNOWN", unknown: this.submittedText } : {}),
 		});
+		this.submittedText = undefined;
 	}
 	clear() {
 		this.cancel();
@@ -124,7 +127,10 @@ export class EditorSession {
 					error: error instanceof FileServiceError ? error.code : "IO_ERROR",
 				});
 		} finally {
-			if (this.pending === controller) this.pending = undefined;
+			if (this.pending === controller) {
+				this.pending = undefined;
+				this.submittedText = undefined;
+			}
 		}
 	}
 	async save() {
@@ -145,7 +151,15 @@ export class EditorSession {
 		const generation = ++this.generation;
 		const controller = new AbortController();
 		this.pending = controller;
-		this.publish({ ...this.state, operation: "save", error: undefined, disk: undefined, diskTarget: undefined });
+		this.submittedText = document.text;
+		this.publish({
+			...this.state,
+			operation: "save",
+			error: undefined,
+			disk: undefined,
+			diskTarget: undefined,
+			autosavePaused: false,
+		});
 		try {
 			const baseline = await this.client.saveText(
 				document.target,
@@ -165,7 +179,10 @@ export class EditorSession {
 				...(code === "WRITE_OUTCOME_UNKNOWN" ? { unknown: document.text } : {}),
 			});
 		} finally {
-			if (this.pending === controller) this.pending = undefined;
+			if (this.pending === controller) {
+				this.pending = undefined;
+				this.submittedText = undefined;
+			}
 		}
 	}
 	async compare() {
@@ -184,6 +201,7 @@ export class EditorSession {
 					document: { ...document, baseline: disk, text: this.state.document?.text ?? document.text },
 					disk,
 					diskTarget: document.target,
+					autosavePaused: true,
 				});
 			} else this.publish({ ...this.state, disk, diskTarget: document.target, operation: undefined });
 		} catch (error) {
@@ -211,7 +229,7 @@ export class EditorSession {
 			document.target.path !== diskTarget.path
 		)
 			return false;
-		this.publish({ document: { ...document, baseline: disk }, disk, diskTarget });
+		this.publish({ document: { ...document, baseline: disk }, disk, diskTarget, autosavePaused: true });
 		return true;
 	}
 	/** Explicit discard is required before replacing the buffer, including after a conflict. */
@@ -225,6 +243,7 @@ export class EditorSession {
 		this.closed = true;
 		this.pending?.abort();
 		this.pending = undefined;
+		this.submittedText = undefined;
 		this.generation++;
 		this.listeners.clear();
 		this.state = {};

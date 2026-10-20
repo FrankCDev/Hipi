@@ -102,27 +102,17 @@ test("connecting displays an honest transitional notice without a redundant reco
 	assert.doesNotMatch(html, /重新连接并核对/);
 });
 
-test("preview row owns the selection surface and preserves navigation plus a named ellipsis trigger", () => {
+test("preview row owns the selection surface without inventing a second navigation action", () => {
 	const html = renderToStaticMarkup(
 		<PreferencesProvider>
-			<ConversationPreview
-				conversation={conversation}
-				workspaceName="Workspace"
-				selected
-				onSelect={() => {}}
-				onDetails={() => {}}
-			/>
+			<ConversationPreview conversation={conversation} workspaceName="Workspace" selected onSelect={() => {}} />
 		</PreferencesProvider>,
 	);
 	assert.match(html, /aria-current="page"/);
 	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="true"/);
 	assert.match(html, /class="conversation-link"/);
-	assert.match(html, /lucide-ellipsis/);
-	assert.doesNotMatch(html, /conversation-preview-trigger|conversation-link selected/);
-	assert.match(html, /aria-haspopup="dialog"/);
-	assert.match(html, /aria-expanded="false"/);
-	assert.match(html, /aria-labelledby="[^"]+ [^"]+"/);
-	assert.equal((html.match(/<button /g) ?? []).length, 2);
+	assert.doesNotMatch(html, /lucide-ellipsis|conversation-preview-trigger|conversation-link selected/);
+	assert.equal((html.match(/<button /g) ?? []).length, 1);
 	assert.doesNotMatch(html, /当前无执行|执行中|connected|title="/);
 });
 
@@ -154,11 +144,11 @@ test("recorded cancellation stays distinct from completed cancellation and canno
 	}
 });
 
-test("running model exposes execution cancellation separately from observation", () => {
+test("running model does not duplicate the composer's execution stop control", () => {
 	fixture.executionState = "running";
 	try {
 		const html = renderPane("connected");
-		assert.match(html, />取消执行<\/button>/);
+		assert.doesNotMatch(html, />取消执行<\/button>/);
 		assert.doesNotMatch(html, /恢复整个工作区/);
 	} finally {
 		fixture.executionState = "ready";

@@ -1,4 +1,5 @@
 import { AppError, LIMITS } from "@hipi/work-runtime/contracts";
+import { Square } from "lucide-react";
 import { type ReactNode, useId, useLayoutEffect, useRef } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -7,7 +8,6 @@ import { Textarea } from "../../components/ui/textarea.tsx";
 import { ComposerKeyboard } from "./composer-keyboard.ts";
 import { COMPOSER_ROWS, resizeComposerTextarea } from "./composer-textarea.ts";
 import { ReceiptRecovery } from "./conversation-receipt.tsx";
-import { ConversationStarters } from "./conversation-starters.tsx";
 import type { ConversationController } from "./use-conversation.ts";
 
 export function ConversationComposer({
@@ -24,10 +24,8 @@ export function ConversationComposer({
 	const hintId = useId();
 	const textarea = useRef<HTMLTextAreaElement>(null);
 	const keyboard = useRef(new ComposerKeyboard());
-	const focusDraft = useRef(false);
 	const { draft, setDraft, submit, blocked, composing, mutation, receipt, errorCode } = controller;
-	const snapshot = controller.observation.snapshot;
-	const empty = snapshot && !snapshot.messages.length && !snapshot.historyCursor && !snapshot.running;
+	const stopping = controller.model.data?.executionState === "running";
 	const contextRequired =
 		errorCode === "CONTEXT_AUTHORIZATION_REQUIRED" ||
 		(controller.execution.error instanceof AppError &&
@@ -37,11 +35,6 @@ export function ConversationComposer({
 		// Only measure the committed controlled value, never each streamed response render.
 		if (element && element.value === draft) {
 			resizeComposerTextarea(element);
-			if (focusDraft.current) {
-				focusDraft.current = false;
-				element.focus();
-				element.setSelectionRange(draft.length, draft.length);
-			}
 		}
 	}, [draft]);
 	useLayoutEffect(() => {
@@ -59,18 +52,6 @@ export function ConversationComposer({
 	}, []);
 	return (
 		<div className="composer-wrap">
-			{empty && (
-				<ConversationStarters
-					hasDraft={draft.length > 0}
-					disabled={blocked}
-					onSelect={(text) => {
-						// Do not replace user input if an event arrives after the visible state changed.
-						if (draft.length || blocked) return;
-						focusDraft.current = true;
-						setDraft(text);
-					}}
-				/>
-			)}
 			{contextRequired && (
 				<p className="notice" role="alert">
 					{t("permissions.context.required")}
@@ -145,24 +126,22 @@ export function ConversationComposer({
 				<div className="composer-actions">
 					<div className="composer-controls">{controls}</div>
 					<Button
-						type="submit"
-						form={`${inputId}-form`}
+						type={stopping ? "button" : "submit"}
+						form={stopping ? undefined : `${inputId}-form`}
 						size="icon"
 						className="composer-submit"
-						disabled={!draft.trim() || blocked}
-						aria-label={t(mutation.isPending ? "work.sending" : "work.send")}
-						title={t(mutation.isPending ? "work.sending" : "work.send")}
+						data-action={stopping ? "stop" : "send"}
+						disabled={stopping ? controller.execution.isPending || controller.model.isError : !draft.trim() || blocked}
+						onClick={stopping ? () => controller.execution.mutate("cancel") : undefined}
+						aria-label={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
+						title={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
 					>
-						<Icon name="arrowUp" size={18} />
+						{stopping ? <Square size={13} fill="currentColor" aria-hidden="true" /> : <Icon name="arrowUp" size={18} />}
 					</Button>
 				</div>
 			</div>
-			<p className="composer-hint" id={hintId}>
-				<span>
-					{t("work.composer.shortcuts")}
-					{" · "}
-				</span>
-				{t(controller.storageAvailable ? "work.draftNote" : "work.draftUnsaved")}
+			<p className="sr-only" id={hintId}>
+				{t("work.composer.shortcuts")}
 			</p>
 		</div>
 	);

@@ -108,3 +108,24 @@ test("range intersection detects crossing selection even when endpoints are outs
 	assert.equal(selectionIntersects(null, selection), false);
 	assert.equal(selectionIntersects(root, null), false);
 });
+
+test("reduced motion publishes streaming snapshots immediately without bypassing selection", () => {
+	let selected = false;
+	const seen: string[] = [];
+	const projection = new MessageProjection(
+		"",
+		(value) => seen.push(value),
+		() => selected,
+		() => {},
+		() => true,
+	);
+	projection.update("visible immediately", true);
+	assert.deepEqual(seen, ["visible immediately"]);
+	selected = true;
+	projection.update("selected pending", true);
+	assert.deepEqual(seen, ["visible immediately"]);
+	selected = false;
+	projection.flush();
+	assert.deepEqual(seen, ["visible immediately", "selected pending"]);
+	projection.dispose();
+});

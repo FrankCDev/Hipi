@@ -1,194 +1,81 @@
-import type { FileRoot, FileTarget } from "@hipi/work-runtime/files";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-	ChevronRight,
-	Eye,
-	FileText,
-	Folder,
-	FolderOpen,
-	FolderPlus,
-	RefreshCw,
-	Save,
-	Shield,
-	ShieldX,
-	TriangleAlert,
-} from "lucide-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { FileText, Folder, FolderOpen, FolderPlus, PanelRight, RefreshCw, Shield, ShieldX } from "lucide-react";
+import { type SyntheticEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useFiles } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
-import { CodeDiff, CodeEditor } from "./code-editor.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { DocumentPreviewPane } from "./document-preview.tsx";
-import type { EditorSession, EditorSnapshot } from "./editor-session.ts";
+import { FileBuffer } from "./file-buffer.tsx";
 import { fileLabels } from "./file-labels.ts";
-import { previewLabels } from "./preview-labels.ts";
-import { PreviewSession } from "./preview-session.ts";
+import { FileSplitView } from "./file-split-view.tsx";
+import { FileTabs } from "./file-tabs.tsx";
+import { FileTree } from "./file-tree.tsx";
+import type { FileTreeMemory } from "./file-tree-model.ts";
+import type { FileWorkspaceSession, FileWorkspaceSnapshot } from "./file-workspace-session.ts";
+import "./file-workspace.css";
 
-export function fileTarget(root: FileRoot, path: string): FileTarget {
-	return { workspaceId: root.workspaceId, rootId: root.rootId, path };
-}
+export { fileTarget } from "./file-tree-model.ts";
 
-type Guard = (action: () => void) => void;
+const emptyWorkspace: FileWorkspaceSnapshot = { tabs: [], limitReached: false };
 const noSubscription = () => () => {};
-const noPreview = () => undefined;
-const noEditor = (): EditorSnapshot | undefined => undefined;
-function Directory({
-	root,
-	path,
-	open,
-	preview,
-	selected,
-}: {
-	root: FileRoot;
-	path: string;
-	open: (target: FileTarget, writable: boolean) => void;
-	preview?: (target: FileTarget) => void;
-	selected?: FileTarget;
-}) {
-	const { files } = useFiles();
-	const { locale } = usePreferences();
-	const l = fileLabels(locale);
-	const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-	const [expanded, setExpanded] = useState<string | null>(null);
-	const cursor = cursors.at(-1);
-	const query = useQuery({
-		queryKey: ["files", root.workspaceId, root.rootId, path, cursor],
-		queryFn: ({ signal }) => {
-			if (!files) throw new Error("Unavailable");
-			return files.list(fileTarget(root, path), cursor, signal);
-		},
-		gcTime: 0,
-	});
-	return (
-		<div className="file-directory">
-			{query.isPending && <output className="file-loading">{l.loading}</output>}
-			{query.isError && (
-				<div role="alert" className="file-state" data-tone="error">
-					{l.failed}
-					<Button variant="outline" size="sm" onClick={() => void query.refetch()}>
-						{l.retry}
-					</Button>
-				</div>
-			)}
-			{query.data?.entries.length === 0 && <p className="file-directory-empty">{l.empty}</p>}
-			<ul>
-				{query.data?.entries.map((entry) => (
-					<li key={entry.path}>
-						<div
-							className="file-entry-row"
-							data-selected={selected?.rootId === root.rootId && selected.path === entry.path ? "true" : undefined}
-						>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="file-entry"
-								title={entry.name}
-								disabled={entry.kind === "blocked"}
-								aria-current={selected?.rootId === root.rootId && selected.path === entry.path ? "true" : undefined}
-								aria-expanded={entry.kind === "directory" ? expanded === entry.path : undefined}
-								onClick={() => {
-									if (entry.kind === "directory") setExpanded(expanded === entry.path ? null : entry.path);
-									else open(fileTarget(root, entry.path), root.writable);
-								}}
-							>
-								{entry.kind === "directory" ? (
-									<>
-										<ChevronRight aria-hidden="true" className="file-chevron" />
-										<Folder aria-hidden="true" />
-									</>
-								) : entry.kind === "blocked" ? (
-									<ShieldX aria-hidden="true" />
-								) : (
-									<FileText aria-hidden="true" />
-								)}
-								<span>{entry.name}</span>
-							</Button>
-							{entry.kind === "blocked" && <span className="file-entry-status">{l["state.blocked"]}</span>}
-							{entry.kind === "file" && preview && (
-								<Button
-									size="sm"
-									variant="ghost"
-									className="file-preview-action"
-									title={entry.name}
-									onClick={() => preview(fileTarget(root, entry.path))}
-								>
-									<Eye aria-hidden="true" />
-									{previewLabels(locale)["preview.open"]}
-								</Button>
-							)}
-						</div>
-						{entry.kind === "directory" && expanded === entry.path && (
-							<Directory root={root} path={entry.path} open={open} preview={preview} selected={selected} />
-						)}
-					</li>
-				))}
-			</ul>
-			<div className="file-actions">
-				{cursors.length > 1 && (
-					<Button
-						size="sm"
-						variant="ghost"
-						onClick={() => {
-							setExpanded(null);
-							setCursors((c) => c.slice(0, -1));
-						}}
-					>
-						{l.previous}
-					</Button>
-				)}
-				{query.data?.nextCursor && (
-					<Button
-						size="sm"
-						variant="ghost"
-						onClick={() => {
-							const next = query.data.nextCursor;
-							if (next) {
-								setExpanded(null);
-								setCursors((c) => [...c, next]);
-							}
-						}}
-					>
-						{l.next}
-					</Button>
-				)}
-			</div>
-		</div>
-	);
-}
+const noWorkspace = () => emptyWorkspace;
+type Decision = { action: () => boolean; paths: string[] };
+type RootLifetime = { active: boolean };
+
+/** Presentation never creates editor owners. Hiding this surface releases preview resources only. */
 export function FileWorkbench({
 	workspaceId,
 	session,
-	guard,
+	visible = true,
 }: {
 	workspaceId: string;
-	session?: EditorSession;
-	guard: Guard;
+	session?: FileWorkspaceSession;
+	visible?: boolean;
+	guard?: (action: () => void) => void;
 }) {
 	const { files, fileAuthority, previews } = useFiles();
-	const previewSession = useMemo(
-		() => (previews && workspaceId ? new PreviewSession(previews) : undefined),
-		[previews, workspaceId],
-	);
-	useEffect(() => () => previewSession?.dispose(), [previewSession]);
-	const previewState = useSyncExternalStore(
-		previewSession?.subscribe ?? noSubscription,
-		previewSession?.snapshot ?? noPreview,
-		previewSession?.snapshot ?? noPreview,
-	);
-	const editorState = useSyncExternalStore(
-		session?.subscribe ?? noSubscription,
-		session?.snapshot ?? noEditor,
-		session?.snapshot ?? noEditor,
-	);
-	useEffect(() => {
-		if (editorState?.artifactRequest) previewSession?.clear();
-	}, [editorState?.artifactRequest, previewSession]);
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
 	const cache = useQueryClient();
-	const [expandedRoot, setExpandedRoot] = useState<string | null>(null);
+	const state = useSyncExternalStore(
+		session?.subscribe ?? noSubscription,
+		session?.snapshot ?? noWorkspace,
+		session?.snapshot ?? noWorkspace,
+	);
+	const tabs = state.tabs.filter((tab) => tab.target.workspaceId === workspaceId);
+	const active = tabs.find((tab) => tab.id === state.activeId) ?? tabs[0];
+	const [treeOpen, setTreeOpen] = useState(session?.layout.treeOpen ?? true);
+	const [treeWidth, setTreeWidth] = useState(session?.layout.treeWidth ?? 240);
+	const treeToggle = useRef<HTMLButtonElement>(null);
+	const [rootId, setRootId] = useState<string>();
+	const [accessOpen, setAccessOpen] = useState(false);
 	const [manage, setManage] = useState<"pending" | "failed" | null>(null);
+	const [decision, setDecision] = useState<Decision>();
+	const currentDecision = useRef<Decision | undefined>(undefined);
+	const decide = (next?: Decision) => {
+		currentDecision.current = next;
+		setDecision(next);
+	};
+	const [closing, setClosing] = useState(false);
+	const authorityLease = useMemo(
+		() => ({
+			active: true,
+			pending: false,
+			closing: false,
+			files,
+			fileAuthority,
+			session,
+			workspaceId,
+			cache,
+			roots: new Map<string, RootLifetime>(),
+		}),
+		[files, fileAuthority, session, workspaceId, cache],
+	);
+	const currentAuthorityLease = useRef(authorityLease);
+	currentAuthorityLease.current = authorityLease;
+	const fallbackTrees = useRef(new Map<string, FileTreeMemory>());
 	const roots = useQuery({
 		queryKey: ["fileRoots", workspaceId],
 		queryFn: ({ signal }) => {
@@ -197,349 +84,447 @@ export function FileWorkbench({
 		},
 		enabled: !!files && !!workspaceId,
 	});
+	const selectedRoot = roots.data?.find((root) => root.rootId === rootId) ?? roots.data?.[0];
+	const currentRoots = useRef(roots.data);
+	currentRoots.current = roots.data;
+	if (roots.data) {
+		const ids = new Set(roots.data.filter((root) => root.workspaceId === workspaceId).map((root) => root.rootId));
+		for (const [id, lifetime] of authorityLease.roots) {
+			if (!ids.has(id)) {
+				lifetime.active = false;
+				authorityLease.roots.delete(id);
+			}
+		}
+		for (const id of ids) if (!authorityLease.roots.has(id)) authorityLease.roots.set(id, { active: true });
+	}
+	// Row callbacks retain the observed root lifetime, not a later replacement with the same ID.
+	const renderedRootLifetimes = new Map(authorityLease.roots);
+	const activeRootId = active?.target.rootId;
+	useEffect(() => {
+		if (activeRootId) setRootId(activeRootId);
+	}, [activeRootId]);
+	useEffect(() => {
+		if (!visible) session?.suspendPreviews();
+		else if (session && active?.kind === "preview") session.resumePreview(active.id);
+	}, [session, visible, active?.id, active?.kind]);
+	useEffect(() => () => session?.suspendPreviews(), [session]);
+	useEffect(() => {
+		authorityLease.active = true;
+		setManage(null);
+		setClosing(false);
+		currentDecision.current = undefined;
+		setDecision(undefined);
+		return () => {
+			authorityLease.active = false;
+		};
+	}, [authorityLease]);
 	const mutateAuthority = async (action: () => Promise<void>) => {
-		if (manage === "pending") return;
+		if (authorityLease.pending || !authorityLease.active || currentAuthorityLease.current !== authorityLease) return;
+		authorityLease.pending = true;
 		setManage("pending");
 		try {
 			await action();
+			if (!authorityLease.active || currentAuthorityLease.current !== authorityLease) return;
 			await cache.invalidateQueries({ queryKey: ["fileRoots", workspaceId] });
+			if (!authorityLease.active || currentAuthorityLease.current !== authorityLease) return;
 			setManage(null);
 		} catch {
-			setManage("failed");
+			if (authorityLease.active && currentAuthorityLease.current === authorityLease) setManage("failed");
+		} finally {
+			authorityLease.pending = false;
 		}
 	};
+	const revoke = (id: string, rootLifetime: RootLifetime | undefined) => {
+		const isCurrent = () =>
+			authorityLease.active &&
+			currentAuthorityLease.current === authorityLease &&
+			rootLifetime?.active === true &&
+			authorityLease.roots.get(id) === rootLifetime &&
+			!!currentRoots.current?.some((root) => root.workspaceId === workspaceId && root.rootId === id);
+		if (!fileAuthority || !isCurrent() || authorityLease.pending) return;
+		const affectedTabs = () =>
+			(session?.snapshot().tabs ?? []).filter(
+				(tab) => tab.target.workspaceId === workspaceId && tab.target.rootId === id,
+			);
+		const prepare = (): Decision => {
+			const affected = affectedTabs();
+			const reviewed = new Map(
+				affected.flatMap((tab) =>
+					tab.kind === "editor" && tab.editor.protected ? [[tab.editor, tab.editor.snapshot()] as const] : [],
+				),
+			);
+			let committed = false;
+			return {
+				paths: affected.map((tab) => tab.target.path),
+				action: () => {
+					if (committed) return true;
+					if (!isCurrent()) return true;
+					if (authorityLease.pending) return false;
+					const current = affectedTabs();
+					if (
+						current.some(
+							(tab) =>
+								tab.kind === "editor" && tab.editor.protected && reviewed.get(tab.editor) !== tab.editor.snapshot(),
+						)
+					) {
+						decide(prepare());
+						return false;
+					}
+					committed = true;
+					void mutateAuthority(() => {
+						session?.discard(current.map((tab) => tab.id));
+						return fileAuthority.revokeRoot(workspaceId, id);
+					});
+					return true;
+				},
+			};
+		};
+		const review = prepare();
+		if (affectedTabs().some((tab) => tab.kind === "editor" && tab.editor.protected)) decide(review);
+		else review.action();
+	};
+	const close = async (ids: string[]) => {
+		const isCurrent = () => authorityLease.active && currentAuthorityLease.current === authorityLease;
+		if (!session || authorityLease.closing || !isCurrent()) return;
+		const requested = session
+			.snapshot()
+			.tabs.filter((tab) => tab.target.workspaceId === workspaceId && ids.includes(tab.id))
+			.map((tab) => tab.id);
+		if (!requested.length) return;
+		authorityLease.closing = true;
+		setClosing(true);
+		const blocked = await session.close(requested);
+		authorityLease.closing = false;
+		if (!isCurrent()) return;
+		setClosing(false);
+		const affected = () => session.snapshot().tabs.filter((tab) => blocked.includes(tab.id));
+		const prepare = (): Decision => {
+			const tabs = affected();
+			const reviewed = new Map(
+				tabs.flatMap((tab) =>
+					tab.kind === "editor" && tab.editor.protected ? [[tab.editor, tab.editor.snapshot()] as const] : [],
+				),
+			);
+			let committed = false;
+			return {
+				action: () => {
+					if (committed || !isCurrent()) return true;
+					if (
+						affected().some(
+							(tab) =>
+								tab.kind === "editor" && tab.editor.protected && reviewed.get(tab.editor) !== tab.editor.snapshot(),
+						)
+					) {
+						decide(prepare());
+						return false;
+					}
+					committed = true;
+					session.discard(affected().map((tab) => tab.id));
+					return true;
+				},
+				paths: tabs.map((tab) => tab.target.path),
+			};
+		};
+		if (affected().length) decide(prepare());
+	};
+	const pinFromInteraction = (event: SyntheticEvent) => {
+		if (
+			!session ||
+			!active ||
+			active.pinned ||
+			!authorityLease.active ||
+			currentAuthorityLease.current !== authorityLease ||
+			session.snapshot().activeId !== active.id ||
+			event.nativeEvent
+				.composedPath()
+				.some((node) => node instanceof Element && node.hasAttribute("data-tab-preview-pin-exempt"))
+		)
+			return;
+		session.pin(active.id);
+	};
+	const memory = () => {
+		if (!selectedRoot) return { expanded: [""], cursors: {}, scrollTop: 0 };
+		if (session) return session.treeMemory(selectedRoot);
+		const key = JSON.stringify([selectedRoot.workspaceId, selectedRoot.rootId]);
+		let value = fallbackTrees.current.get(key);
+		if (!value) {
+			value = { expanded: [""], cursors: {}, scrollTop: 0 };
+			fallbackTrees.current.set(key, value);
+		}
+		return value;
+	};
+	const access = (
+		<div className="file-access-body">
+			{fileAuthority && (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={manage === "pending"}
+					onClick={() => void mutateAuthority(() => fileAuthority.chooseRoot(workspaceId))}
+				>
+					<FolderPlus size={16} aria-hidden />
+					{l.choose}
+				</Button>
+			)}
+			<ul className="file-access-list">
+				{roots.data?.map((root) => (
+					<li className="file-access-row" key={root.rootId}>
+						<div>
+							<span className="file-access-name">{root.displayName ?? l.root}</span>
+							<span className="file-access-kind">{root.writable ? l["access.readWrite"] : l.readonly}</span>
+						</div>
+						{fileAuthority && (
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={manage === "pending"}
+								onClick={() => revoke(root.rootId, renderedRootLifetimes.get(root.rootId))}
+							>
+								{l.revoke}
+							</Button>
+						)}
+					</li>
+				))}
+			</ul>
+			{manage === "failed" && <p role="alert">{l.failed}</p>}
+		</div>
+	);
 	return (
 		<aside className="file-workbench" aria-label={l.title}>
 			{!files ? (
 				<div className="file-state file-state-empty">
-					<ShieldX aria-hidden="true" />
+					<ShieldX aria-hidden />
 					<h3>{l["state.unavailable"]}</h3>
 					<p>{l.unavailable}</p>
 				</div>
 			) : !workspaceId ? (
 				<div className="file-state file-state-empty">
-					<Folder aria-hidden="true" />
+					<Folder aria-hidden />
 					<h3>{l["state.noWorkspace"]}</h3>
 					<p>{l.noWorkspace}</p>
 				</div>
 			) : (
 				<>
-					{(fileAuthority || !!roots.data?.length) && (
-						<details className="file-access" open={roots.data?.length === 0}>
-							<summary>
-								<Shield aria-hidden="true" />
-								<span>{l["access.title"]}</span>
-								<ChevronRight aria-hidden="true" className="file-chevron" />
-							</summary>
-							<div className="file-access-body">
-								{fileAuthority && (
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={manage === "pending"}
-										onClick={() => void mutateAuthority(() => fileAuthority.chooseRoot(workspaceId))}
-									>
-										<FolderPlus aria-hidden="true" />
-										{l.choose}
-									</Button>
-								)}
-								<ul className="file-access-list">
-									{roots.data?.map((root) => (
-										<li className="file-access-row" key={root.rootId}>
-											<div>
-												<span className="file-access-name">{root.displayName ?? l.root}</span>
-												<span className="file-access-kind">{root.writable ? l["access.readWrite"] : l.readonly}</span>
-											</div>
-											{fileAuthority && (
-												<Button
-													size="sm"
-													variant="ghost"
-													disabled={manage === "pending"}
-													onClick={() =>
-														guard(() => {
-															session?.clear();
-															previewSession?.clear();
-															void mutateAuthority(() => fileAuthority.revokeRoot(workspaceId, root.rootId));
-														})
-													}
-												>
-													{l.revoke}
-												</Button>
-											)}
-										</li>
-									))}
-								</ul>
-							</div>
-						</details>
-					)}
-					{manage === "failed" && (
-						<p className="file-state" data-tone="error" role="alert">
-							{l.failed}
-						</p>
-					)}
-					<div className="file-browser-heading">
-						<h3>{l["browse.title"]}</h3>
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							aria-label={l.refresh}
-							title={l.refresh}
-							disabled={roots.isFetching}
-							onClick={() => {
-								void roots.refetch();
-								void cache.invalidateQueries({ queryKey: ["files", workspaceId] });
-							}}
-						>
-							<RefreshCw aria-hidden="true" />
-						</Button>
-					</div>
-					{roots.isPending && <output className="file-loading">{l.loading}</output>}
-					{roots.isError && (
-						<p className="file-state" data-tone="error" role="alert">
-							{l.failed}
-						</p>
-					)}
-					{roots.data?.length === 0 && (
-						<div className="file-state file-state-empty">
-							<FolderOpen aria-hidden="true" />
-							<h3>{l["empty.title"]}</h3>
-							<p>{l.noRoots}</p>
-						</div>
-					)}
-					<div className="file-tree">
-						{roots.data?.map((root) => (
-							<section key={root.rootId}>
-								<div className="file-root">
-									<Button
-										variant="ghost"
-										size="sm"
-										className="file-root-toggle"
-										aria-expanded={expandedRoot === root.rootId}
-										onClick={() => setExpandedRoot(expandedRoot === root.rootId ? null : root.rootId)}
-									>
-										<ChevronRight aria-hidden="true" className="file-chevron" />
-										<Folder aria-hidden="true" />
-										<span>{root.displayName ?? l.root}</span>
-									</Button>
-									{!root.writable && <span className="file-access-kind">{l.readonly}</span>}
-								</div>
-								{expandedRoot === root.rootId && (
-									<Directory
-										root={root}
-										path=""
-										selected={previewState?.target ?? editorState?.document?.target}
-										preview={
-											previewSession
-												? (target) =>
-														guard(() => {
-															session?.clear();
-															void previewSession.open(target);
-														})
-												: undefined
-										}
-										open={(target, writable) =>
-											guard(() => {
-												session?.clear();
-												previewSession?.clear();
-												void session?.open(target, writable);
-											})
-										}
-									/>
-								)}
-							</section>
-						))}
-					</div>
-				</>
-			)}
-			{session &&
-				!previewState?.target &&
-				(editorState?.document ||
-					editorState?.operation ||
-					editorState?.error ||
-					editorState?.unknown !== undefined ||
-					(files && workspaceId && !!roots.data?.length)) && <FileBuffer session={session} guard={guard} />}
-			{previewSession && <DocumentPreviewPane session={previewSession} />}
-		</aside>
-	);
-}
-function FileBuffer({ session, guard }: { session: EditorSession; guard: Guard }) {
-	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
-	const { locale } = usePreferences();
-	const l = fileLabels(locale);
-	const [diff, setDiff] = useState(false);
-	const [adopt, setAdopt] = useState(false);
-	const document = state.document;
-	const error =
-		state.unknown !== undefined
-			? l.unknown
-			: state.error === "VERSION_CONFLICT"
-				? l.conflict
-				: state.error === "LIMIT_EXCEEDED"
-					? l.limit
-					: ["UNSUPPORTED_ENCODING", "BLOCKED_RESOURCE"].includes(state.error ?? "")
-						? l.blocked
-						: state.error === "BUSY"
-							? l.busy
-							: l.failed;
-	return (
-		<section className="file-buffer">
-			{(state.error || state.unknown !== undefined) && (
-				<div
-					role="alert"
-					className="file-state file-state-alert"
-					data-tone={state.unknown !== undefined || state.error === "VERSION_CONFLICT" ? "warning" : "error"}
-				>
-					<TriangleAlert aria-hidden="true" />
-					<div>
-						<strong>
-							{state.unknown !== undefined
-								? l["state.unknown"]
-								: state.error === "VERSION_CONFLICT"
-									? l["state.conflict"]
-									: l["state.failed"]}
-						</strong>
-						<p>{error}</p>
-					</div>
-				</div>
-			)}
-			{state.operation && (
-				<div className="file-actions file-operation">
-					<output>{l[`operation.${state.operation}`]}</output>
-					<Button variant="outline" size="sm" onClick={() => session.cancel()}>
-						{l.cancel}
-					</Button>
-				</div>
-			)}
-			{!document ? (
-				!state.operation &&
-				!state.error &&
-				state.unknown === undefined && (
-					<div className="file-state file-state-empty">
-						<FileText aria-hidden="true" />
-						<h3>{l["empty.selection"]}</h3>
-						<p>{l.open}</p>
-					</div>
-				)
-			) : (
-				<>
-					<header className="file-document-header">
-						<div className="file-document-title">
-							<FileText aria-hidden="true" />
-							<h3 className="file-path">{document.target.path}</h3>
-						</div>
-						<div className="file-document-status">
-							<span data-dirty={document.text !== document.baseline.text ? "true" : undefined}>
-								{document.text === document.baseline.text ? l.clean : l.dirty}
-							</span>
-							{!document.writable && <span className="file-access-kind">{l.readonly}</span>}
-						</div>
-					</header>
-					{document.artifactReference && (
-						<output className="small-copy block">
-							{l["artifact.current"]}{" "}
-							{document.artifactReference.expectedRevision
-								? l[
-										(state.disk?.revision ?? document.baseline.revision) === document.artifactReference.expectedRevision
-											? "artifact.matches"
-											: "artifact.changed"
-									]
-								: l["artifact.noRevision"]}
-						</output>
-					)}
-					<p className="small-copy file-memory-note">{l.memory}</p>
-					<div className="file-editor-toolbar">
-						<fieldset className="file-action-group">
-							<legend className="sr-only">{l["toolbar.edit"]}</legend>
+					<header className="file-workspace-toolbar">
+						<span className="file-workspace-path" title={active?.target.path}>
+							{active?.target.path ?? l.title}
+						</span>
+						<div className="file-workspace-tools">
 							<Button
-								size="sm"
-								disabled={
-									!document.writable ||
-									!!state.operation ||
-									state.unknown !== undefined ||
-									state.error === "VERSION_CONFLICT" ||
-									document.text === document.baseline.text
-								}
-								onClick={() => void session.save()}
-							>
-								<Save aria-hidden="true" />
-								{l.save}
-							</Button>
-							<Button
-								size="sm"
+								ref={treeToggle}
+								size="icon-sm"
 								variant="ghost"
-								disabled={!!state.operation}
-								onClick={() => guard(() => session.reload())}
-							>
-								{l.reload}
-							</Button>
-						</fieldset>
-						<fieldset className="file-action-group">
-							<legend className="sr-only">{l["toolbar.compare"]}</legend>
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={!!state.operation}
+								aria-label={l["tree.toggle"]}
+								aria-pressed={treeOpen}
+								title={l["tree.toggle"]}
 								onClick={() => {
-									void session.compare();
-									setDiff(true);
+									const open = !treeOpen;
+									setTreeOpen(open);
+									if (session) session.layout.treeOpen = open;
 								}}
 							>
-								{l.compare}
+								<PanelRight size={16} aria-hidden />
 							</Button>
-							{state.disk && (state.error === "VERSION_CONFLICT" || state.unknown !== undefined) && (
-								<Dialog open={adopt} onOpenChange={setAdopt}>
-									<DialogTrigger asChild>
-										<Button size="sm" variant="outline" disabled={!!state.operation}>
-											{l.adopt}
-										</Button>
-									</DialogTrigger>
-									<DialogContent closeLabel={l.cancel}>
-										<DialogTitle>{l.adopt}</DialogTitle>
-										<DialogDescription>{l.adoptNote}</DialogDescription>
-										<Button
-											disabled={!!state.operation}
-											onClick={() => {
-												session.adoptComparedRevision();
-												setAdopt(false);
-											}}
-										>
-											{l.adoptConfirm}
-										</Button>
-									</DialogContent>
-								</Dialog>
-							)}
-						</fieldset>
-					</div>
-					<fieldset className="file-view-switch">
-						<legend className="sr-only">{l["toolbar.view"]}</legend>
-						<Button size="sm" variant="ghost" aria-pressed={!diff} onClick={() => setDiff(false)}>
-							{l.edit}
-						</Button>
-						<Button size="sm" variant="ghost" aria-pressed={diff} onClick={() => setDiff(true)}>
-							{l.diff}
-						</Button>
-					</fieldset>
-					{diff ? (
-						<>
-							<p className="small-copy file-baseline-note">{state.disk ? l.disk : l.baseline}</p>
-							<CodeDiff
-								before={state.disk?.text ?? document.diffBaseline.text}
-								after={document.text}
-								left={l.left}
-								right={l.right}
-							/>
-						</>
-					) : (
-						<CodeEditor
-							key={`${document.target.workspaceId}/${document.target.rootId}/${document.target.path}`}
-							text={document.text}
-							onChange={(text) => session.edit(text)}
-							readOnly={!document.writable || state.operation === "save"}
-							label={l.editor}
-						/>
-					)}
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								aria-label={l["access.title"]}
+								title={l["access.title"]}
+								onClick={() => setAccessOpen(true)}
+							>
+								<Shield size={16} aria-hidden />
+							</Button>
+						</div>
+					</header>
+					{state.limitReached && <output className="file-workspace-notice">{l["tabs.limit"]}</output>}
+					<FileSplitView
+						treeOpen={treeOpen}
+						width={treeWidth}
+						onCollapse={() => {
+							setTreeOpen(false);
+							if (session) session.layout.treeOpen = false;
+							treeToggle.current?.focus({ preventScroll: true });
+						}}
+						onResize={(width) => {
+							setTreeWidth(width);
+							if (session) session.layout.treeWidth = width;
+						}}
+						content={
+							<>
+								{session && tabs.length > 0 && (
+									<FileTabs
+										tabs={tabs}
+										activeId={active?.id}
+										session={session}
+										close={(ids) => void close(ids)}
+										closing={closing}
+									/>
+								)}
+								{active ? (
+									<section
+										className="file-tab-panel"
+										id={`file-tab-content-${active.id}`}
+										role="tabpanel"
+										aria-labelledby={`file-tab-${active.id}`}
+										onPointerDownCapture={pinFromInteraction}
+										onKeyDownCapture={pinFromInteraction}
+									>
+										{active.kind === "editor" ? (
+											<FileBuffer
+												key={active.id}
+												tab={active}
+												retry={() => void session?.retry(active.id)}
+												guard={(action) => {
+													const editor = active.editor;
+													const isCurrent = () =>
+														authorityLease.active &&
+														currentAuthorityLease.current === authorityLease &&
+														session
+															?.snapshot()
+															.tabs.some(
+																(tab) =>
+																	tab.id === active.id &&
+																	tab.kind === "editor" &&
+																	tab.editor === editor &&
+																	tab.target.workspaceId === workspaceId,
+															);
+													if (!isCurrent() || editor.snapshot().operation) return;
+													const prepare = (): Decision => {
+														const reviewed = editor.snapshot();
+														let committed = false;
+														return {
+															action: () => {
+																if (committed || !isCurrent()) return true;
+																if (editor.protected && editor.snapshot() !== reviewed) {
+																	decide(prepare());
+																	return false;
+																}
+																if (editor.snapshot().operation) return false;
+																committed = true;
+																action();
+																return true;
+															},
+															paths: [active.target.path],
+														};
+													};
+													const review = prepare();
+													if (editor.protected) decide(review);
+													else review.action();
+												}}
+											/>
+										) : (
+											<DocumentPreviewPane session={active.preview} onClose={() => void close([active.id])} />
+										)}
+									</section>
+								) : roots.data?.length === 0 ? (
+									<div className="file-state file-state-empty">
+										<FolderOpen aria-hidden />
+										<h3>{l["empty.title"]}</h3>
+										<p>{l.noRoots}</p>
+										{fileAuthority && access}
+									</div>
+								) : (
+									<div className="file-state file-state-empty">
+										<FileText aria-hidden />
+										<h3>{l["empty.selection"]}</h3>
+										<p>{l.open}</p>
+									</div>
+								)}
+							</>
+						}
+						tree={
+							<>
+								<div className="file-browser-heading">
+									{(roots.data?.length ?? 0) > 1 ? (
+										<Select value={selectedRoot?.rootId} onValueChange={setRootId}>
+											<SelectTrigger size="sm" aria-label={l["tree.root"]}>
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												{roots.data?.map((root) => (
+													<SelectItem key={root.rootId} value={root.rootId}>
+														{root.displayName ?? l.root}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									) : (
+										<h3 title={selectedRoot?.displayName}>{selectedRoot?.displayName ?? l["browse.title"]}</h3>
+									)}
+									<Button
+										size="icon-xs"
+										variant="ghost"
+										aria-label={l.refresh}
+										title={l.refresh}
+										disabled={roots.isFetching}
+										onClick={() => {
+											void roots.refetch();
+											void cache.invalidateQueries({ queryKey: ["files", workspaceId] });
+										}}
+									>
+										<RefreshCw size={16} aria-hidden />
+									</Button>
+								</div>
+								{roots.isPending && <output className="file-loading">{l.loading}</output>}
+								{roots.isError && (
+									<p className="file-state" role="alert">
+										{l.failed}
+									</p>
+								)}
+								{selectedRoot && (
+									<FileTree
+										key={`${workspaceId}:${selectedRoot.rootId}`}
+										root={selectedRoot}
+										files={files}
+										memory={memory()}
+										selected={active?.target}
+										open={(target, writable, pinned) => void session?.open(target, writable, { pinned })}
+										preview={previews && session ? (target) => void session.openPreview(target) : undefined}
+									/>
+								)}
+							</>
+						}
+					/>
 				</>
 			)}
-		</section>
+			<Dialog open={accessOpen} onOpenChange={setAccessOpen}>
+				<DialogContent closeLabel={l["dialog.close"]}>
+					<DialogTitle>{l["access.title"]}</DialogTitle>
+					<DialogDescription>{l["access.description"]}</DialogDescription>
+					{access}
+				</DialogContent>
+			</Dialog>
+			<Dialog
+				open={!!decision}
+				onOpenChange={(open) => {
+					if (!open) decide();
+				}}
+			>
+				<DialogContent closeLabel={l.stay}>
+					<DialogTitle>{l.leave}</DialogTitle>
+					<DialogDescription>{l.leaveNote}</DialogDescription>
+					<ul className="file-discard-paths">
+						{decision?.paths.map((path) => (
+							<li key={path}>{path}</li>
+						))}
+					</ul>
+					<div className="file-actions">
+						<Button variant="outline" onClick={() => decide()}>
+							{l.stay}
+						</Button>
+						<Button
+							variant="destructive"
+							onClick={() => {
+								if (!decision || currentDecision.current !== decision) return;
+								const committed = decision.action();
+								if (committed !== false && currentDecision.current === decision) decide();
+							}}
+						>
+							{l.discard}
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+		</aside>
 	);
 }

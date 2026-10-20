@@ -4,8 +4,9 @@
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "../../lib/cn.ts";
+import "./control-primitives.css";
 
-function TooltipProvider({ delayDuration = 0, ...props }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
+function TooltipProvider({ delayDuration = 200, ...props }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
 	return <TooltipPrimitive.Provider data-slot="tooltip-provider" delayDuration={delayDuration} {...props} />;
 }
 
@@ -19,7 +20,8 @@ function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimiti
 
 function TooltipContent({
 	className,
-	sideOffset = 0,
+	sideOffset = 2,
+	collisionPadding = 8,
 	children,
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
@@ -28,14 +30,11 @@ function TooltipContent({
 			<TooltipPrimitive.Content
 				data-slot="tooltip-content"
 				sideOffset={sideOffset}
-				className={cn(
-					"z-50 w-fit origin-(--radix-tooltip-content-transform-origin) rounded-md bg-foreground px-3 py-1.5 text-xs text-balance text-background",
-					className,
-				)}
+				collisionPadding={collisionPadding}
+				className={cn("ui-tooltip z-50 w-fit origin-(--radix-tooltip-content-transform-origin) text-center", className)}
 				{...props}
 			>
 				{children}
-				<TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
 			</TooltipPrimitive.Content>
 		</TooltipPrimitive.Portal>
 	);

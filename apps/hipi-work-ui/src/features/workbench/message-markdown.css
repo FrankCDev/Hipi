@@ -1,0 +1,225 @@
+/* Original message presentation. All colors and code fonts inherit the configured region. */
+.message-text.markdown-body {
+	min-width: 0;
+	font-size: var(--font-ui-size);
+	line-height: 1.625;
+}
+.message-text.markdown-body > * {
+	margin-block: 0;
+}
+.message-text.markdown-body > * + * {
+	margin-block-start: 1.1em;
+}
+.message-text.markdown-body[data-markdown-tone="user"] > p {
+	margin-block: 0;
+}
+.message-text.markdown-body .markdown-user-code {
+	padding: 8px;
+	border: 0;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.message-text.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+	margin-block: 1.6em 0.65em;
+	font-weight: 600;
+	line-height: 1.35;
+	letter-spacing: -0.015em;
+	text-wrap: pretty;
+}
+.message-text.markdown-body h1 {
+	font-size: 1.75em;
+}
+.message-text.markdown-body h2 {
+	font-size: 1.4em;
+}
+.message-text.markdown-body h3 {
+	font-size: 1.2em;
+}
+.message-text.markdown-body :where(h4, h5, h6) {
+	font-size: 1em;
+}
+.message-text.markdown-body > :first-child {
+	margin-block-start: 0;
+}
+.message-text.markdown-body > :last-child {
+	margin-block-end: 0;
+}
+.message-text.markdown-body :where(ul, ol) {
+	margin-block: 0.75em;
+	padding-inline-start: 1.65em;
+	padding-inline-end: 0;
+}
+.message-text.markdown-body li {
+	padding-inline-start: 0.2em;
+}
+.message-text.markdown-body li + li {
+	margin-block-start: 0.35em;
+}
+.message-text.markdown-body li > :where(p, ul, ol) {
+	margin-block: 0.5em;
+}
+.message-text.markdown-body ul ul {
+	list-style-type: circle;
+}
+.message-text.markdown-body :where(ul, ol).contains-task-list {
+	list-style: none;
+	padding-inline-start: 0;
+}
+.message-text.markdown-body blockquote {
+	margin-inline: 0;
+	border-inline-start: 3px solid var(--line);
+	padding-inline-start: 1em;
+	color: var(--text);
+}
+.message-text.markdown-body blockquote > * + * {
+	margin-block-start: 0.75em;
+}
+.message-text.markdown-body hr {
+	border: 0;
+	border-block-start: 1px solid var(--line);
+	margin-block: 1.5em;
+}
+.message-text.markdown-body strong {
+	font-weight: 650;
+}
+.message-text.markdown-body :not(pre) > code {
+	padding: 0.15em 0.35em;
+	border-radius: 0.3em;
+	background: var(--canvas);
+	font-family: var(--font-code);
+	font-size: var(--font-code-size);
+	overflow-wrap: anywhere;
+}
+.message-text.markdown-body .markdown-code-block {
+	min-width: 0;
+	max-width: 100%;
+	border: 1px solid var(--line);
+	border-radius: 20px;
+	/* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: CSS Borders Level 4; unsupported engines retain border-radius. */
+	corner-shape: superellipse(1.1);
+	background: color-mix(in srgb, var(--text) 3%, var(--surface));
+	margin-block: 1.25em;
+}
+.markdown-code-block .markdown-code-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	min-width: 0;
+	min-height: 48px;
+	padding: 6px 6px 6px 16px;
+	color: var(--muted);
+	font-family: var(--messages-font, var(--font-ui));
+	font-size: 13px;
+	font-weight: 500;
+}
+.markdown-code-language {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.markdown-code-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.35em;
+	min-width: 0;
+	max-width: 100%;
+	margin-inline-start: auto;
+}
+.markdown-code-header .markdown-code-copy {
+	height: auto;
+	min-height: 2em;
+	padding: 0.3em 0.5em;
+	font: inherit;
+	color: var(--muted);
+}
+.markdown-code-header .markdown-code-copy:hover:not(:disabled) {
+	color: var(--text);
+	background: var(--brand-soft);
+}
+.markdown-code-header .markdown-code-copy:disabled {
+	color: var(--muted);
+	background: transparent;
+}
+.markdown-code-header .markdown-code-error {
+	flex-basis: 100%;
+	max-width: 24em;
+	margin: 0;
+	color: var(--danger);
+}
+.message-text.markdown-body .markdown-code-scroll {
+	max-width: 100%;
+	margin: 0;
+	padding: 0 16px 12px;
+	border: 0;
+	border-radius: 0 0 20px 20px;
+	background: transparent;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	white-space: pre;
+	overflow-wrap: normal;
+	word-break: normal;
+	tab-size: 4;
+}
+.message-text.markdown-body .markdown-code-scroll pre {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	overflow: visible;
+}
+.message-text.markdown-body .markdown-code-scroll code {
+	padding: 0;
+	border-radius: 0;
+	background: transparent;
+	font-family: var(--font-code);
+	font-size: var(--font-code-size);
+	line-height: max(1.5em, 20px);
+}
+@media (min-width: 768px) {
+	.markdown-code-block .markdown-code-header {
+		padding-inline-start: 20px;
+	}
+	.message-text.markdown-body .markdown-code-scroll {
+		padding-inline: 20px;
+	}
+}
+.message-text.markdown-body .markdown-table {
+	max-width: 100%;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+}
+.message-text.markdown-body .markdown-table table {
+	width: max-content;
+	min-width: 100%;
+	border-collapse: collapse;
+	font-size: inherit;
+	line-height: 1.5;
+}
+.message-text.markdown-body .markdown-table :where(th, td) {
+	max-width: 32em;
+	padding: 0.7em 1em;
+	border: 0;
+	border-block-end: 1px solid var(--line);
+	text-align: start;
+	vertical-align: top;
+	overflow-wrap: anywhere;
+}
+.message-text.markdown-body .markdown-table th {
+	font-weight: 600;
+	border-block-end-width: 2px;
+}
+.message-text.markdown-body .markdown-table [data-align="center"] {
+	text-align: center;
+}
+.message-text.markdown-body .markdown-table [data-align="right"] {
+	text-align: right;
+}
+.markdown-code-scroll:focus-visible,
+.markdown-table:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}

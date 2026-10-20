@@ -21,6 +21,31 @@ class MemoryStorage implements BrowserStorage {
 }
 const input: Submit = { workspaceId: "w", conversationId: "c", requestId: "r", text: "original" };
 
+test("file dock ratio is a bounded store-scoped preference, not an editor or permission record", () => {
+	const storage = new MemoryStorage();
+	const local = new LocalState("store-a", storage);
+	assert.equal(local.write("file-panel.ratio", "0.625000"), true);
+	assert.equal(new LocalState("store-a", storage).read("file-panel.ratio"), "0.625000");
+	assert.equal(new LocalState("store-b", storage).read("file-panel.ratio"), null);
+	for (const invalid of ["-1", "1.001", "NaN", "Infinity", "1e-1", "0.1234567", " 0.5", ""])
+		assert.equal(new LocalState("test", new MemoryStorage()).write("file-panel.ratio", invalid), false);
+	assert.equal(local.hasUnsavedWork(), false);
+});
+
+test("new-chat model preference is bounded, store-scoped data rather than credentials", () => {
+	const storage = new MemoryStorage();
+	const local = new LocalState("store-a", storage);
+	const value = JSON.stringify(["faux", "model-one"]);
+	assert.equal(local.write("new-chat-model", value), true);
+	assert.equal(new LocalState("store-a", storage).read("new-chat-model"), value);
+	assert.equal(new LocalState("store-b", storage).read("new-chat-model"), null);
+	for (const invalid of ['"model"', '["provider"]', '["","model"]', '{"apiKey":"not-a-preference"}']) {
+		const other = new LocalState("other", new MemoryStorage());
+		assert.equal(other.write("new-chat-model", invalid), false);
+	}
+	assert.equal(local.hasUnsavedWork(), false);
+});
+
 test("project expansion restores per store without changing drafts or pending submissions", () => {
 	const storage = new MemoryStorage();
 	const local = new LocalState("store-a", storage);

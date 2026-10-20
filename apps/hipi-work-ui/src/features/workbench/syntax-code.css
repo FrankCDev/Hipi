@@ -1,0 +1,11 @@
+.markdown-syntax-token {
+	color: var(--syntax-light, inherit);
+}
+:root[data-theme="dark"] .markdown-syntax-token {
+	color: var(--syntax-dark, inherit);
+}
+@media (forced-colors: active) {
+	.markdown-syntax-token {
+		color: inherit;
+	}
+}

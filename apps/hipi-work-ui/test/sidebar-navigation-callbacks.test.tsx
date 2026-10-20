@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import type { Conversation } from "@hipi/work-runtime/contracts";
+import { type AppClient, type Conversation, type Method, parseResult } from "@hipi/work-runtime/contracts";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog, DialogContent } from "../src/components/ui/dialog.tsx";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../src/components/ui/dropdown-menu.tsx";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+} from "../src/components/ui/dropdown-menu.tsx";
 import { Popover, PopoverContent } from "../src/components/ui/popover.tsx";
 import { ConversationActions } from "../src/features/workbench/catalog-controls.tsx";
 import { CatalogPagination } from "../src/features/workbench/catalog-pagination.tsx";
@@ -65,8 +70,9 @@ vi.mock("react", async () => {
 });
 vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en", t: (key: string) => key }) }));
 vi.mock("@tanstack/react-query", () => ({
-	useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+	useQueryClient: () => cache,
 }));
+const cache = { setQueryData: vi.fn(), invalidateQueries: vi.fn() };
 
 function drive<T>(scope: string, render: () => T) {
 	hooks.scope = scope;
@@ -95,6 +101,7 @@ function element<C extends React.ElementType>(node: React.ReactNode, type: C) {
 beforeEach(() => {
 	hooks.cells.clear();
 	hooks.commits = [];
+	vi.clearAllMocks();
 	vi.useFakeTimers();
 });
 afterEach(() => {
@@ -120,7 +127,7 @@ function rowAndActions() {
 				selected: true,
 				titleId: "task-title",
 				children: null,
-				preview: () => null,
+				preview: () => <span>Actual title and project metadata</span>,
 				renderActions: (value) => {
 					controls = value;
 					return null;
@@ -175,25 +182,189 @@ test("production menu-to-dialog callbacks exclude previews until dialog closes a
 	assert.equal(element(ui.renderRow(), Popover).props.open, true, "deliberate later keyboard focus can still preview");
 });
 
-test("production View details selection hands menu ownership to a pinned preview without stealing its focus", () => {
+test("touch menu exposes the same read-only preview with no duplicate View details action", () => {
 	const ui = rowAndActions();
 	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
-	const preview = elements(ui.renderActions(), DropdownMenuItem).find((item) =>
+	const menu = ui.renderActions();
+	assert.deepEqual(
+		element(menu, DropdownMenuLabel).props.children,
+		element(ui.renderRow(), PopoverContent).props.children,
+	);
+	assert.match(JSON.stringify(element(menu, DropdownMenuLabel).props.children), /Actual title and project metadata/);
+	const preview = elements(menu, DropdownMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("View details"),
 	);
-	assert.ok(preview?.props.onSelect);
-	preview.props.onSelect(new Event("select"));
+	assert.equal(preview, undefined);
+	assert.equal(elements(menu, DropdownMenuItem).length, 2);
 	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(false);
 	const close = new Event("close", { cancelable: true });
 	element(ui.renderActions(), DropdownMenuContent).props.onCloseAutoFocus?.(close);
 	assert.equal(close.defaultPrevented, true);
-	assert.equal(ui.returned.mock.calls.length, 0);
-	assert.equal(element(ui.renderRow(), Popover).props.open, true);
-	element(ui.renderRow(), Popover).props.onOpenChange?.(false);
-	element(ui.renderRow(), PopoverContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
 	assert.equal(ui.returned.mock.calls.length, 1);
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+});
+
+for (const method of ["archiveConversation", "restoreConversation"] as const) {
+	test(`${method} is a direct immutable guarded command, without a second confirmation dialog`, async () => {
+		const local = new LocalState();
+		const calls: { method: Method; params: unknown }[] = [];
+		const source = { ...conversation, archivedAt: method === "restoreConversation" ? 100 : null };
+		const result = { ...source, revision: 2, archivedAt: method === "archiveConversation" ? 200 : null };
+		const client: AppClient = {
+			call: async (name, params) => {
+				calls.push({ method: name, params });
+				return parseResult(name, result);
+			},
+			observe: vi.fn(),
+		};
+		const session = new CatalogSession(client, local);
+		const actions: (() => void)[] = [];
+		const render = () =>
+			drive(method, () =>
+				ConversationActions({
+					conversation: source,
+					session,
+					guard: (action) => actions.push(action),
+				}),
+			);
+		const item = elements(render(), DropdownMenuItem).find((entry) =>
+			JSON.stringify(entry.props.children).includes(
+				method === "archiveConversation" ? "Archive conversation" : "Restore conversation",
+			),
+		);
+		assert.ok(item?.props.onSelect);
+		item.props.onSelect(new Event("select"));
+		assert.equal(element(render(), Dialog).props.open, false);
+		assert.equal(calls.length, 0, "Dirty file guard must settle before any command is admitted");
+		assert.equal(local.read("command.catalog"), null);
+		source.title = "Later UI label";
+		source.revision = 9;
+		const finished = new Promise<void>((resolve) => {
+			const unsubscribe = session.subscribe(() => {
+				if (!session.getSnapshot().busy) {
+					unsubscribe();
+					resolve();
+				}
+			});
+		});
+		actions[0]?.();
+		await finished;
+		await Promise.resolve();
+		assert.deepEqual(
+			calls.map((call) => call.method),
+			[method, "getConversation"],
+		);
+		assert.deepEqual(calls[0]?.params, {
+			workspaceId: "project",
+			conversationId: "task",
+			requestId: (calls[0]?.params as { requestId: string }).requestId,
+			expectedRevision: 1,
+		});
+		assert.equal(session.getSnapshot().pending, null);
+		assert.equal(cache.setQueryData.mock.calls.length, 1);
+		session.dispose();
+	});
+}
+
+test("an unknown archive keeps its original recovery record and never reports optimistic success", async () => {
+	const calls: Method[] = [];
+	const local = new LocalState();
+	const session = new CatalogSession(
+		{
+			call: async (method) => {
+				calls.push(method);
+				if (method === "getConversationCommandResult") return parseResult(method, null);
+				throw new Error("Lost archive response");
+			},
+			observe: vi.fn(),
+		},
+		local,
+	);
+	const render = () =>
+		drive("unknown", () =>
+			ConversationActions({
+				conversation,
+				session,
+				guard: (action) => action(),
+			}),
+		);
+	const archive = elements(render(), DropdownMenuItem).find((entry) =>
+		JSON.stringify(entry.props.children).includes("Archive conversation"),
+	);
+	assert.ok(archive?.props.onSelect);
+	const finished = new Promise<void>((resolve) => {
+		const unsubscribe = session.subscribe(() => {
+			if (!session.getSnapshot().busy) {
+				unsubscribe();
+				resolve();
+			}
+		});
+	});
+	archive.props.onSelect(new Event("select"));
+	await finished;
+	await Promise.resolve();
+	assert.deepEqual(calls, ["archiveConversation", "getConversationCommandResult"]);
+	assert.equal(session.getSnapshot().pending?.method, "archiveConversation");
+	assert.match(local.read("command.catalog") ?? "", /archiveConversation/);
+	assert.equal(cache.setQueryData.mock.calls.length, 0);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	assert.equal(element(render(), Dialog).props.open, false);
+	assert.equal(
+		elements(render(), DropdownMenuItem).every((item) => item.props.disabled),
+		true,
+	);
+	archive.props.onSelect(new Event("select"));
+	await Promise.resolve();
+	assert.deepEqual(
+		calls,
+		["archiveConversation", "getConversationCommandResult"],
+		"A stale callback cannot replace the unknown request",
+	);
+	session.dispose();
+});
+
+test("a cancelled dirty-file guard does not send or persist the archive", () => {
+	const call = vi.fn();
+	const local = new LocalState();
+	const session = new CatalogSession({ call, observe: vi.fn() }, local);
+	const output = drive("cancelled", () => ConversationActions({ conversation, session, guard: () => {} }));
+	const archive = elements(output, DropdownMenuItem).find((entry) =>
+		JSON.stringify(entry.props.children).includes("Archive conversation"),
+	);
+	assert.ok(archive?.props.onSelect);
+	archive.props.onSelect(new Event("select"));
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(local.read("command.catalog"), null);
+	assert.equal(session.getSnapshot().busy, false);
+	session.dispose();
+});
+
+test("a delayed dirty-file callback cannot mutate a disposed catalog or report old success", async () => {
+	const call = vi.fn();
+	const session = new CatalogSession({ call, observe: vi.fn() }, new LocalState());
+	let continueAfterGuard: (() => void) | undefined;
+	const output = drive("disposed", () =>
+		ConversationActions({
+			conversation,
+			session,
+			guard: (action) => {
+				continueAfterGuard = action;
+			},
+		}),
+	);
+	const archive = elements(output, DropdownMenuItem).find((entry) =>
+		JSON.stringify(entry.props.children).includes("Archive conversation"),
+	);
+	assert.ok(archive?.props.onSelect);
+	archive.props.onSelect(new Event("select"));
+	session.dispose();
+	assert.ok(continueAfterGuard);
+	continueAfterGuard();
+	await Promise.resolve();
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(cache.setQueryData.mock.calls.length, 0);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
 });
 
 test("First page retains origin focus while busy and restores list focus when the control disappears", () => {

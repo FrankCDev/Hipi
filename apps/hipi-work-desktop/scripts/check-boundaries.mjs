@@ -19,6 +19,7 @@ async function visit(path) {
 		else {
 			assert.ok(
 				[
+					"@hipi/work-runtime/appearance",
 					"@hipi/work-runtime/contracts",
 					"@hipi/work-runtime/credentials",
 					"@hipi/work-runtime/files",

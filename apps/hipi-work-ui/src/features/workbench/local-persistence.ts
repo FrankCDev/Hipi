@@ -1,5 +1,5 @@
 import { LIMITS, PROTOCOL_VERSION, parseRequest, type Submit } from "@hipi/work-runtime/contracts";
-import { validPanelWidth } from "./file-panel-controller.ts";
+import { validPanelRatio, validPanelWidth } from "./file-panel-controller.ts";
 
 export type BrowserStorage = Pick<Storage, "getItem" | "setItem" | "key" | "length">;
 export type SavedValue = {
@@ -8,16 +8,37 @@ export type SavedValue = {
 	value: string;
 	revision?: string;
 	handoffRequestId?: string;
+	handoffRevision?: string;
 };
-export type SavedEntry = SavedValue | { kind: "pending"; key: string; input: Submit; confirmed: boolean };
+export type SavedPending = {
+	kind: "pending";
+	key: string;
+	input: Submit;
+	confirmed: boolean;
+	draftRevision?: string | null;
+};
+export type SavedEntry = SavedValue | SavedPending;
 
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
 const scope = "[a-zA-Z0-9_-]{1,128}\\.[a-zA-Z0-9_-]{1,128}";
 const draftKey = new RegExp(`^draft\\.${scope}$`);
-const taskDraftKey = /^task-draft\.[a-zA-Z0-9_-]{1,128}$/;
+const taskDraftKey = /^(task-draft\.[a-zA-Z0-9_-]{1,128}|chat-draft\.global)$/;
 
 export function validTaskDraft(key: string, value: string): boolean {
 	return taskDraftKey.test(key) && value.length <= LIMITS.text;
+}
+function validModelPreference(value: string): boolean {
+	if (value.length > 1024) return false;
+	try {
+		const parts: unknown = JSON.parse(value);
+		return (
+			Array.isArray(parts) &&
+			parts.length === 2 &&
+			parts.every((part) => typeof part === "string" && part.length > 0 && part.length <= 256)
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function browserStorage(): BrowserStorage | undefined {
@@ -65,12 +86,15 @@ export class LocalPersistence {
 					("handoffRequestId" in entry &&
 						(typeof entry.handoffRequestId !== "string" ||
 							!id.test(entry.handoffRequestId) ||
-							!draftKey.test(entry.key)))
+							!draftKey.test(entry.key))) ||
+					("handoffRevision" in entry &&
+						(typeof entry.handoffRevision !== "string" || !id.test(entry.handoffRevision) || !draftKey.test(entry.key)))
 				)
 					return null;
 				if (
 					(entry.key === "file-panel.open" && (entry.value === "true" || entry.value === "false")) ||
 					(entry.key === "file-panel.width" && validPanelWidth(entry.value)) ||
+					(entry.key === "file-panel.ratio" && validPanelRatio(entry.value)) ||
 					(draftKey.test(entry.key) && entry.value.length <= LIMITS.text) ||
 					validTaskDraft(entry.key, entry.value) ||
 					(/^command\.tool-packs\.(workspace\.[a-zA-Z0-9_-]{1,128}|conversation\.[a-zA-Z0-9_-]{1,128}\.[a-zA-Z0-9_-]{1,128})$/.test(
@@ -79,6 +103,8 @@ export class LocalPersistence {
 						entry.value.length <= 12000) ||
 					(/^command\.(catalog|permissions\.[a-zA-Z0-9_-]{1,128}\.[a-zA-Z0-9_-]{1,128})$/.test(entry.key) &&
 						entry.value.length <= 30000) ||
+					(entry.key === "default-chat-workspace" && entry.value.length <= 2000) ||
+					(entry.key === "new-chat-model" && validModelPreference(entry.value)) ||
 					(/^workspace-expanded\.[a-zA-Z0-9_-]{1,128}$/.test(entry.key) &&
 						(entry.value === "true" || entry.value === "false")) ||
 					((entry.key === "workspace" || entry.key === "conversation") && (entry.value === "" || id.test(entry.value)))
@@ -91,13 +117,19 @@ export class LocalPersistence {
 						...("handoffRequestId" in entry && typeof entry.handoffRequestId === "string"
 							? { handoffRequestId: entry.handoffRequestId }
 							: {}),
+						...("handoffRevision" in entry && typeof entry.handoffRevision === "string"
+							? { handoffRevision: entry.handoffRevision }
+							: {}),
 					};
 			}
 			if (
 				entry.kind === "pending" &&
 				"input" in entry &&
 				"confirmed" in entry &&
-				typeof entry.confirmed === "boolean"
+				typeof entry.confirmed === "boolean" &&
+				(!("draftRevision" in entry) ||
+					entry.draftRevision === null ||
+					(typeof entry.draftRevision === "string" && id.test(entry.draftRevision)))
 			) {
 				const request = parseRequest({ version: PROTOCOL_VERSION, method: "submit", params: entry.input });
 				if (
@@ -105,7 +137,15 @@ export class LocalPersistence {
 					entry.key !== `${request.params.workspaceId}.${request.params.conversationId}`
 				)
 					return null;
-				return { kind: "pending", key: entry.key, input: request.params, confirmed: entry.confirmed };
+				return {
+					kind: "pending",
+					key: entry.key,
+					input: request.params,
+					confirmed: entry.confirmed,
+					...("draftRevision" in entry && (entry.draftRevision === null || typeof entry.draftRevision === "string")
+						? { draftRevision: entry.draftRevision }
+						: {}),
+				};
 			}
 		} catch {
 			/* Corrupt or incompatible local data is never sent to the runtime. */
@@ -128,9 +168,20 @@ export class LocalPersistence {
 		if (raw !== null && (entry?.kind !== "value" || entry.key !== key)) throw new Error("Invalid local state");
 		return entry?.kind === "value" ? entry : null;
 	}
-	clearDraft(key: string, expected: string, revision: string): boolean {
+	readPending(key: string): SavedPending | null {
+		const raw = this.#storage.getItem(`${this.#prefix}pending.${key}`);
+		const entry = this.#parse(raw);
+		if (raw !== null && (entry?.kind !== "pending" || entry.key !== key)) throw new Error("Invalid local state");
+		return entry?.kind === "pending" ? entry : null;
+	}
+	clearDraft(key: string, expected: string, revision: string, expectedRevision?: string | null): boolean {
 		const entry = this.#parse(this.#storage.getItem(`${this.#prefix}value.${key}`));
-		if (entry?.kind !== "value" || entry.value !== expected) return false;
+		if (
+			entry?.kind !== "value" ||
+			entry.value !== expected ||
+			(expectedRevision !== undefined && entry.revision !== expectedRevision)
+		)
+			return false;
 		this.save({ ...entry, value: "", revision });
 		return true;
 	}
@@ -148,7 +199,8 @@ export class LocalPersistence {
 				throw new Error("Cannot confirm a different pending request");
 			if (
 				previous.input.requestId === entry.input.requestId &&
-				JSON.stringify(previous.input) !== JSON.stringify(entry.input)
+				(JSON.stringify(previous.input) !== JSON.stringify(entry.input) ||
+					previous.draftRevision !== entry.draftRevision)
 			)
 				throw new Error("Pending request payload is immutable");
 			if (!previous.confirmed && previous.input.requestId !== entry.input.requestId)

@@ -4,23 +4,23 @@ import { test } from "vitest";
 import { themeVariables } from "../src/app/theme/application.ts";
 import { defaultConfig, fonts } from "../src/app/theme/config.ts";
 
-test("CJK fallback precedes generics without changing Latin preference order", () => {
-	const originalLatin = {
-		system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif',
+test("platform UI and code faces precede the licensed CJK fallback and terminal generic", () => {
+	const platformStacks = {
+		system: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
 		serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, serif',
-		mono: '"SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", monospace',
+		mono: 'ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
 	};
 	for (const name of ["system", "serif", "mono"] as const) {
 		const stack = fonts[name];
 		assert.equal(stack.split('"Hipi Noto Sans SC"').length, 2);
-		assert.equal(stack.replace('"Hipi Noto Sans SC", ', ""), originalLatin[name]);
+		assert.equal(stack.replace('"Hipi Noto Sans SC", ', ""), platformStacks[name]);
 		const families = stack.split(",").map((family) => family.trim());
 		const fallback = families.indexOf('"Hipi Noto Sans SC"');
-		const generic =
-			/^(system-ui|ui-sans-serif|ui-serif|ui-monospace|ui-rounded|sans-serif|serif|monospace|cursive|fantasy|math)$/;
-		assert.ok(fallback < families.findIndex((family) => generic.test(family)));
-		assert.equal(fallback === 0, name === "system");
+		assert.equal(fallback, families.length - 2);
 	}
+	assert.doesNotMatch(fonts.system, /system-ui/);
+	assert.ok(fonts.system.startsWith("-apple-system, BlinkMacSystemFont"));
+	assert.ok(fonts.mono.startsWith('ui-monospace, "SFMono-Regular", "SF Mono", Menlo'));
 	const variables = themeVariables({
 		...defaultConfig(),
 		uiFont: "serif",
@@ -53,6 +53,7 @@ test("local-only face matches CJK and punctuation, keeping Latin mono and serif 
 	for (const character of "中文，。龜") assert.equal(matches(character.codePointAt(0) ?? 0), true);
 	const defaultStack = css.match(/--font-ui:([^;]+);/)?.[1] ?? "";
 	assert.ok(defaultStack.indexOf('"Hipi Noto Sans SC"') < defaultStack.indexOf("sans-serif"));
-	assert.match(defaultStack, /"Microsoft YaHei", "Hipi Noto Sans SC",\s*sans-serif/);
+	assert.match(defaultStack, /-apple-system,\s*BlinkMacSystemFont,\s*"Segoe UI",\s*"Hipi Noto Sans SC",\s*sans-serif/);
+	assert.doesNotMatch(defaultStack, /system-ui/);
 	assert.match(css, /--font-code:[^;]*"Hipi Noto Sans SC", monospace;/);
 });

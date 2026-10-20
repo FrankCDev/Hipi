@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { codeMirrorLicenseAssets } from "./codemirror-licenses.mjs";
 import { fontAssets } from "./font-assets.mjs";
+import { pierreLicenseAssets } from "./pierre-licenses.mjs";
 
 export const requiredFiles = [
 	...fontAssets.map((asset) => asset.payload),
+	...pierreLicenseAssets.map((asset) => asset.payload),
+	...codeMirrorLicenseAssets.map((asset) => asset.payload),
 	"dist/main.mjs",
 	"dist/preload.cjs",
 	"dist/runtime.mjs",
@@ -75,7 +79,12 @@ export async function inventory(root) {
 
 export async function assertPackagingInputs(root, sourceSnapshot) {
 	const files = ["package-lock.json", "apps/hipi-work-desktop/package.json"];
-	const directories = ["apps/hipi-work-desktop/branding", "apps/hipi-work-desktop/packaging"];
+	const directories = [
+		"apps/hipi-work-desktop/branding",
+		"apps/hipi-work-desktop/packaging",
+		"apps/hipi-work-ui/vendor/pierre",
+		"apps/hipi-work-ui/vendor/codemirror",
+	];
 	for (const directory of directories) {
 		for (const file of await filesUnder(join(root, directory))) files.push(`${directory}/${file}`);
 	}

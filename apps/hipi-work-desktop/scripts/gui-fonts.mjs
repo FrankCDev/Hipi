@@ -45,7 +45,7 @@ export async function renderedFonts(cdp, fixture, platform = process.platform, o
 	await cdp.request("CSS.enable");
 	const initialLayout = (
 		await cdp.request("Runtime.evaluate", {
-			expression: `(${readFontLayout.toString()})(document,getComputedStyle,performance,'.project-name')`,
+			expression: `(${readFontLayout.toString()})(document,getComputedStyle,performance,'.conversation-link')`,
 			returnByValue: true,
 		})
 	).result?.value;
@@ -59,8 +59,8 @@ export async function renderedFonts(cdp, fixture, platform = process.platform, o
 	const result = [];
 	const missingBundled = [];
 	for (const [target, selector, text] of [
-		["workspace", ".project-name", fixture.workspace],
-		["user-message", ".message-user .message-text", fixture.text],
+		["sidebar-conversation", ".conversation-link", fixture.conversation],
+		["user-message", ".message-user .message-text", fixture.prompt],
 		["conversation-title", ".toolbar-conversation", fixture.conversation],
 	]) {
 		const observation = { target, initialLayout };

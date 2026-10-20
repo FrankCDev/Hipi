@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import {
+	type AppearanceClient,
+	AppearanceError,
+	type AppearanceStatus,
+	type InstalledFontCatalog,
+} from "@hipi/work-runtime/appearance";
 import type { ModelCatalog } from "@hipi/work-runtime/contracts";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import { defaultConfig, type ThemeConfig } from "../src/app/theme/config.ts";
+import { defaultAppearance, defaultConfig, exportAppearanceShare } from "../src/app/theme/config.ts";
 import type * as ThemeModule from "../src/app/theme/index.ts";
 import { ThemeStore, themeStorageKey } from "../src/app/theme/store.ts";
 import { Button } from "../src/components/ui/button.tsx";
-import { Dialog, DialogContent } from "../src/components/ui/dialog.tsx";
+import { Dialog } from "../src/components/ui/dialog.tsx";
 import { Input } from "../src/components/ui/input.tsx";
 import { Textarea } from "../src/components/ui/textarea.tsx";
 import { SettingsForm } from "../src/features/settings/appearance-settings.tsx";
@@ -74,6 +80,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("../src/app/client-provider.tsx", () => ({ useAppClient: () => ({ call: vi.fn() }) }));
 vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: store.current.locale }) }));
+vi.mock("../src/app/appearance-provider.tsx", () => ({ useAppearance: () => appearance }));
 vi.mock("../src/app/theme/index.ts", async (original) => ({
 	...(await original<typeof ThemeModule>()),
 	useThemeSettings: () => theme,
@@ -85,6 +92,7 @@ const catalog: ModelCatalog = {
 };
 const saved = new Map<string, string>();
 let store: ThemeStore;
+let appearance: { client?: AppearanceClient; status?: AppearanceStatus } = {};
 const theme = {
 	get config() {
 		return store.current;
@@ -98,14 +106,14 @@ const theme = {
 	preview: (value: unknown) => store.setPreview(value),
 	cancel: vi.fn(() => store.cancel()),
 	save: vi.fn(() => store.save()),
-	export: () => store.export(),
+	update: vi.fn((value: unknown) => store.update(value)),
+	export: () => exportAppearanceShare(store.current),
 };
 class FocusTarget {
 	isConnected = true;
 	focus = vi.fn();
 }
 const active = new FocusTarget();
-const changed = vi.fn();
 const closed = vi.fn();
 const restored = vi.fn();
 type Node = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;
@@ -126,14 +134,15 @@ function click(tree: React.ReactNode, predicate: (node: Node) => boolean) {
 }
 function driveForm() {
 	hooks.cursor = 0;
-	const tree = SettingsForm({ onSave: theme.save, onCancel: theme.cancel, onDirtyChange: changed });
+	const tree = SettingsForm();
 	for (const commit of hooks.commits.splice(0)) commit();
 	return tree;
 }
-function driveDialog(open = true) {
+function driveDialog(open = true, initialCategory?: "general" | "appearance" | "models" | "runtime") {
 	hooks.cursor = 0;
 	const tree = SettingsDialog({
 		open,
+		initialCategory,
 		onOpenChange: closed,
 		onRestoreFocus: restored,
 		credentialSettings: null,
@@ -148,24 +157,18 @@ function input(tree: React.ReactNode, value: string) {
 		target: { value },
 	} as React.ChangeEvent<HTMLInputElement>);
 }
-function markDirty(tree: React.ReactNode) {
-	const owner = find(tree, (node) => typeof node.props.onDirtyChange === "function");
-	(owner.props.onDirtyChange as (dirty: boolean) => void)(true);
-}
-function selectTheme(tree: React.ReactNode, value: string) {
-	const choice = find(tree, (node) => node.props.settingId === "theme");
-	(choice.props.onChange as (value: string) => void)(value);
-}
-function editJson(tree: React.ReactNode, value: string) {
-	const textarea = find(tree, (node) => node.type === Textarea);
-	(textarea.props.onChange as React.ChangeEventHandler<HTMLTextAreaElement>)({
-		target: { value },
-	} as React.ChangeEvent<HTMLTextAreaElement>);
+function selectTheme(tree: React.ReactNode, mode: string) {
+	const control = find(
+		tree,
+		(node) => node.type === "input" && node.props.type === "radio" && node.props.value === mode,
+	);
+	(control.props.onChange as () => void)();
 }
 function cleanup() {
 	for (const cell of hooks.cells) cell?.cleanup?.();
 	hooks.cells = [];
 	hooks.commits = [];
+	appearance = {};
 }
 beforeEach(() => {
 	hooks.cells = [];
@@ -181,243 +184,519 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	vi.stubGlobal("HTMLElement", FocusTarget);
 	vi.stubGlobal("document", { activeElement: active });
+	vi.stubGlobal("window", {});
 });
 afterEach(() => {
 	cleanup();
 	vi.unstubAllGlobals();
 });
 
-test("search indexes actual localized settings and returned model identities, not invented account controls", () => {
+test("search indexes only localized supported settings and runtime identities", () => {
 	const entries = settingsSearchEntries(store.current, catalog);
 	assert.equal(searchSettings(entries, "  ＴＨＥＭＥ  ")[0]?.id, "theme");
 	assert.ok(searchSettings(entries, "appearance code").some((entry) => entry.id === "codeFont"));
 	assert.equal(searchSettings(entries, "runtime-model-1")[0]?.label, "Runtime model one");
 	assert.equal(searchSettings(entries, "English")[0]?.value, "English");
 	assert.equal(searchSettings(entries, " ").length, 0);
-	assert.deepEqual(
-		searchSettings(entries, "billing").map((entry) => entry.id),
-		["providers"],
-	);
-	for (const query of ["subscription", "password", "nonexistent-setting"])
+	for (const query of ["subscription", "password", "nonexistent-setting", "JSON"])
 		assert.equal(searchSettings(entries, query).length, 0);
 	const chinese = settingsSearchEntries(defaultConfig());
 	assert.equal(searchSettings(chinese, "代码字体")[0]?.id, "codeFont");
 	assert.equal(searchSettings(chinese, "凭据")[0]?.category, "models");
 });
 
-test("appearance preview is dirty until save, save updates the baseline, and unmount cancels only later preview", () => {
+test("theme changes persist immediately and neither page navigation nor unmount rolls them back", () => {
 	selectTheme(driveForm(), "dark");
-	let tree = driveForm();
 	assert.equal(store.current.mode, "dark");
-	assert.equal(changed.mock.lastCall?.[0], true);
-	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").mode, "system");
-	click(tree, (node) => node.props.className === "settings-save");
-	tree = driveForm();
-	assert.equal(changed.mock.lastCall?.[0], false);
 	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").mode, "dark");
-	selectTheme(tree, "light");
-	driveForm();
-	cleanup();
-	assert.equal(store.current.mode, "dark");
-	assert.equal(theme.save.mock.calls.length, 1);
-});
-
-test("inline appearance Cancel restores focus to its replacement button after resetting the form", () => {
-	const owner = find(driveDialog(), (node) => typeof node.props.onDirtyChange === "function");
-	assert.equal(typeof owner.type, "function");
-	const appearance = owner.type as (props: {
-		revision: number;
-		onDirtyChange: (dirty: boolean) => void;
-	}) => React.ReactNode;
-	cleanup();
-	const render = (button: FocusTarget) => {
-		hooks.cursor = 0;
-		const tree = appearance({ revision: 0, onDirtyChange: changed });
-		const form = find(tree, (node) => node.type === SettingsForm);
-		const ref = form.props.cancelRef as React.RefObject<FocusTarget>;
-		ref.current = button;
-		for (const commit of hooks.commits.splice(0)) commit();
-		return form;
-	};
-	const oldButton = new FocusTarget();
-	const original = render(oldButton);
-	assert.equal(oldButton.focus.mock.calls.length, 0);
-	store.setPreview({ ...store.current, mode: "dark" });
-	(original.props.onCancel as () => void)();
-	oldButton.isConnected = false;
-	const newButton = new FocusTarget();
-	const replacement = render(newButton);
-	assert.notEqual(original.key, replacement.key);
-	assert.equal(store.current.mode, "system");
-	assert.equal(oldButton.focus.mock.calls.length, 0);
-	assert.deepEqual(newButton.focus.mock.calls, [[{ preventScroll: true }]]);
-	assert.equal(closed.mock.calls.length, 0);
-});
-
-test("unapplied JSON cannot be silently saved or cleared by an unrelated appearance preview", () => {
-	const next: ThemeConfig = { ...store.current, mode: "dark" };
-	editJson(driveForm(), JSON.stringify(next));
-	let tree = driveForm();
-	assert.equal(changed.mock.lastCall?.[0], true);
-	assert.equal(find(tree, (node) => node.props.className === "settings-save").props.disabled, true);
-	selectTheme(tree, "light");
-	tree = driveForm();
-	assert.equal(find(tree, (node) => node.props.className === "settings-save").props.disabled, true);
-	click(tree, (node) => node.type === Button && node.props.children === "Preview JSON");
-	tree = driveForm();
-	assert.equal(store.current.mode, "dark");
-	assert.equal(find(tree, (node) => node.props.className === "settings-save").props.disabled, false);
-	click(tree, (node) => node.props.className === "settings-save");
-	driveForm();
-	assert.equal(changed.mock.lastCall?.[0], false);
-});
-
-test("invalid regional inputs remain dirty without changing the applied theme or allowing save", () => {
 	const tree = driveForm();
-	const field = find(tree, (node) => node.type === Input && node.props.placeholder === "#RRGGBB");
-	(field.props.onChange as React.ChangeEventHandler<HTMLInputElement>)({
-		target: { value: "#000000" },
-	} as React.ChangeEvent<HTMLInputElement>);
-	const invalid = driveForm();
-	assert.deepEqual(store.current.regions, {});
-	assert.equal(changed.mock.lastCall?.[0], true);
-	assert.equal(find(invalid, (node) => node.props.className === "settings-save").props.disabled, true);
-	click(invalid, (node) => node.props.className === "settings-save");
-	assert.equal(theme.save.mock.calls.length, 0);
-});
-
-test("an imported file completing after the form unmounts cannot apply a stale theme", async () => {
-	let resolveFile: ((value: string) => void) | undefined;
-	const text = new Promise<string>((resolve) => {
-		resolveFile = resolve;
-	});
-	const field = find(driveForm(), (node) => node.type === Input && node.props.type === "file");
-	(field.props.onChange as React.ChangeEventHandler<HTMLInputElement>)({
-		target: { value: "selected.json", files: [{ size: 100, text: () => text }] },
-	} as unknown as React.ChangeEvent<HTMLInputElement>);
-	assert.equal(changed.mock.lastCall?.[0], false);
-	driveForm();
-	assert.equal(changed.mock.lastCall?.[0], true);
-	cleanup();
-	assert.ok(resolveFile);
-	resolveFile(JSON.stringify({ ...store.current, mode: "dark" }));
-	await text;
-	await Promise.resolve();
-	assert.equal(store.current.mode, "system");
-	assert.equal(theme.save.mock.calls.length, 0);
-});
-
-test("category navigation keeps edits on cancellation and discards only after an explicit choice", () => {
-	markDirty(driveDialog());
-	click(driveDialog(), (node) => node.type === Button && node.props["data-category"] === "models");
-	let tree = driveDialog();
 	assert.equal(
-		find(tree, (node) => node.type === Button && node.props["data-category"] === "appearance").props["aria-current"],
-		"page",
-	);
-	assert.ok(find(tree, (node) => node.props.className === "settings-unsaved-dialog"));
-	click(tree, (node) => node.type === Button && node.props.children === "Keep editing");
-	tree = driveDialog();
-	assert.equal(
-		nodes(tree).some((node) => node.props.className === "settings-unsaved-dialog"),
+		nodes(tree).some((node) => node.props.className === "settings-savebar"),
 		false,
 	);
 	assert.equal(theme.cancel.mock.calls.length, 0);
-	click(tree, (node) => node.type === Button && node.props["data-category"] === "models");
-	click(driveDialog(), (node) => node.type === Button && node.props.children === "Discard changes");
+	cleanup();
+	assert.equal(store.current.mode, "dark");
+	assert.equal(new ThemeStore({ getItem: (key) => saved.get(key) ?? null, setItem: () => {} }).current.mode, "dark");
+});
+
+test("invalid color picks revert the native control without persisting an unreadable palette", () => {
+	const tree = driveForm();
+	const picker = find(tree, (node) => node.type === "input" && node.props["aria-label"] === "Light Foreground");
+	const value = defaultAppearance("light").background;
+	const target = { value };
+	(picker.props.onChange as (event: { target: { value: string }; currentTarget: { value: string } }) => void)({
+		target,
+		currentTarget: target,
+	});
+	assert.deepEqual(store.current.appearance, {});
+	assert.equal(target.value, defaultAppearance("light").foreground);
+	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").appearance.light, undefined);
+	assert.ok(find(driveForm(), (node) => node.props.role === "alert"));
+});
+
+test("font-size input commits on blur, Enter and completed spinner changes; invalid input reverts", () => {
+	const owner = find(driveForm(), (node) => node.props.type === "number" && node.props.label === "UI font size");
+	assert.equal(typeof owner.type, "function");
+	const component = owner.type as (props: Record<string, unknown>) => React.ReactNode;
+	cleanup();
+	const render = () => {
+		hooks.cursor = 0;
+		const tree = component({ ...owner.props, value: String(store.current.uiFontSize) });
+		for (const commit of hooks.commits.splice(0)) commit();
+		return find(tree, (node) => node.type === Input);
+	};
+	let control = render();
+	assert.equal(control.props.min, 11);
+	assert.equal(control.props.max, 16);
+	assert.equal(control.props.step, 1);
+	const change = (value: string) => {
+		(control.props.onChange as (event: { target: { value: string } }) => void)({ target: { value } });
+		control = render();
+	};
+	change("15");
+	assert.equal(store.current.uiFontSize, 14);
+	(control.props.onBlur as (event: { currentTarget: { value: string } }) => void)({ currentTarget: { value: "15" } });
+	assert.equal(store.current.uiFontSize, 15);
+	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").uiFontSize, 15);
+	change("99999");
+	(control.props.onBlur as (event: { currentTarget: { value: string } }) => void)({
+		currentTarget: { value: "99999" },
+	});
+	assert.equal(store.current.uiFontSize, 15);
+	assert.equal(render().props.value, "15");
+	const preventDefault = vi.fn();
+	(control.props.onKeyDown as (event: Record<string, unknown>) => void)({
+		key: "Enter",
+		nativeEvent: { isComposing: true },
+		preventDefault,
+		currentTarget: { value: "15.5" },
+	});
+	assert.equal(store.current.uiFontSize, 15);
+	(control.props.onKeyDown as (event: Record<string, unknown>) => void)({
+		key: "Enter",
+		nativeEvent: { isComposing: false },
+		preventDefault,
+		currentTarget: { value: "15.5" },
+	});
+	assert.equal(store.current.uiFontSize, 15.5);
+	(control.props.onPointerDown as (event: { currentTarget: { value: string } }) => void)({
+		currentTarget: { value: "15.5" },
+	});
+	(control.props.onPointerUp as (event: { currentTarget: { value: string } }) => void)({
+		currentTarget: { value: "16" },
+	});
+	assert.equal(store.current.uiFontSize, 16);
+});
+
+test("validated share import persists without global save and never imports the source locale", () => {
+	let tree = driveForm();
+	click(tree, (node) => node.type === Button && node.props["aria-label"] === "Import theme");
+	tree = driveForm();
+	const textarea = find(tree, (node) => node.type === Textarea);
+	(textarea.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "invalid" } });
+	tree = driveForm();
+	assert.equal(find(tree, (node) => node.type === Button && node.props.children === "Import").props.disabled, true);
+	(find(tree, (node) => node.type === Textarea).props.onChange as (event: { target: { value: string } }) => void)({
+		target: { value: exportAppearanceShare({ ...defaultConfig(), mode: "dark", uiFontSize: 15 }) },
+	});
+	tree = driveForm();
+	click(tree, (node) => node.type === Button && node.props.children === "Import");
+	assert.equal(store.current.mode, "dark");
+	assert.equal(store.current.uiFontSize, 15);
+	assert.equal(store.current.locale, "en");
+	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").mode, "dark");
+	assert.equal(find(driveForm(), (node) => node.type === Dialog).props.open, false);
+});
+
+test("copy does not report success before clipboard write completes and reports denial honestly", async () => {
+	let finish: (() => void) | undefined;
+	const pending = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn(() => pending) } });
+	click(driveForm(), (node) => node.type === Button && node.props["aria-label"] === "Copy theme");
+	assert.equal(
+		nodes(driveForm()).some((node) => node.props.children === "Theme copied"),
+		false,
+	);
+	assert.ok(finish);
+	finish();
+	await pending;
+	await Promise.resolve();
+	assert.ok(find(driveForm(), (node) => node.props.children === "Theme copied"));
+	vi.stubGlobal("navigator", {
+		clipboard: {
+			writeText: vi.fn(async () => {
+				throw new Error("denied");
+			}),
+		},
+	});
+	click(driveForm(), (node) => node.type === Button && node.props["aria-label"] === "Copy theme");
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.ok(
+		find(
+			driveForm(),
+			(node) => node.props.children === "Could not copy the theme. Try again when clipboard access is available.",
+		),
+	);
+});
+
+test("category navigation and Back never add a dirty guard or cancel committed preferences", () => {
+	click(driveDialog(), (node) => node.type === Button && node.props["data-category"] === "models");
+	let tree = driveDialog();
+	assert.equal(
+		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
+		"page",
+	);
+	assert.equal(hooks.catalogEnabled, true);
+	click(tree, (node) => node.type === Button && node.props.className === "settings-back");
+	assert.deepEqual(closed.mock.calls, [[false]]);
+	assert.equal(theme.cancel.mock.calls.length, 0);
+	driveDialog(false);
+	assert.equal(restored.mock.calls.length, 1);
 	tree = driveDialog();
 	assert.equal(
 		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
 		"page",
 	);
-	assert.equal(theme.cancel.mock.calls.length, 1);
-	assert.equal(closed.mock.calls.length, 0);
-	assert.equal(hooks.catalogEnabled, true);
 });
 
-test("close is guarded, rejecting the guard retains settings, and discard closes exactly once", () => {
-	markDirty(driveDialog());
-	let tree = driveDialog();
-	(tree.props.onOpenChange as (open: boolean) => void)(false);
-	tree = driveDialog();
-	const nested = nodes(tree)
-		.filter((node) => node.type === Dialog)
-		.at(-1);
-	assert.ok(nested);
-	(nested.props.onOpenChange as (open: boolean) => void)(false);
-	assert.equal(closed.mock.calls.length, 0);
-	tree = driveDialog();
-	(tree.props.onOpenChange as (open: boolean) => void)(false);
-	click(driveDialog(), (node) => node.type === Button && node.props.children === "Discard changes");
-	assert.deepEqual(closed.mock.calls, [[false]]);
-	assert.equal(theme.cancel.mock.calls.length, 1);
-});
-
-test("search preserves pending navigation and Escape clears search before dismissal, without swallowing IME text", () => {
-	markDirty(driveDialog());
+test("search replaces the category list and chooses an exact destination with no default keyboard selection", () => {
 	input(driveDialog(), "credentials");
 	let tree = driveDialog();
+	assert.equal(
+		nodes(tree).some((node) => node.props.className === "settings-page-nav"),
+		false,
+	);
+	assert.equal(find(tree, (node) => node.type === Input).props["aria-activedescendant"], undefined);
+	const key = (key: string) => {
+		(find(tree, (node) => node.type === Input).props.onKeyDown as (event: Record<string, unknown>) => void)({
+			key,
+			nativeEvent: { isComposing: false },
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		});
+		tree = driveDialog();
+	};
+	key("Enter");
+	assert.equal(find(tree, (node) => node.type === Input).props.value, "credentials");
 	click(
 		tree,
 		(node) => node.props.className === "settings-search-result" && node.props["data-setting"] === "credentials",
 	);
 	tree = driveDialog();
-	click(tree, (node) => node.type === Button && node.props.children === "Keep editing");
-	tree = driveDialog();
-	assert.equal(find(tree, (node) => node.type === Input).props.value, "credentials");
-	const modal = find(tree, (node) => node.type === DialogContent && node.props.className === "unified-settings-dialog");
-	const preventDefault = vi.fn();
-	(modal.props.onEscapeKeyDown as (event: Partial<KeyboardEvent>) => void)({ preventDefault, isComposing: true });
-	assert.equal(find(driveDialog(), (node) => node.type === Input).props.value, "credentials");
-	(modal.props.onEscapeKeyDown as (event: Partial<KeyboardEvent>) => void)({ preventDefault, isComposing: false });
-	assert.equal(find(driveDialog(), (node) => node.type === Input).props.value, "");
-	assert.equal(preventDefault.mock.calls.length, 2);
-	assert.equal(closed.mock.calls.length, 0);
-});
-
-test("unmodified category changes and same-category search jumps keep the modal open", () => {
-	input(driveDialog(), "regional");
-	click(
-		driveDialog(),
-		(node) => node.props.className === "settings-search-result" && node.props["data-setting"] === "regions",
-	);
-	let tree = driveDialog();
 	assert.equal(find(tree, (node) => node.type === Input).props.value, "");
 	assert.equal(
-		nodes(tree).some((node) => node.props.className === "settings-unsaved-dialog"),
-		false,
-	);
-	click(tree, (node) => node.type === Button && node.props["data-category"] === "runtime");
-	tree = driveDialog();
-	assert.equal(
-		find(tree, (node) => node.type === Button && node.props["data-category"] === "runtime").props["aria-current"],
+		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
 		"page",
 	);
+	assert.equal(find(tree, (node) => node.type === SettingsForm).props.selectedSetting, "credentials");
 	assert.equal(closed.mock.calls.length, 0);
-	assert.equal(theme.cancel.mock.calls.length, 0);
 });
 
-test("modal lifecycle restores its caller focus and clearing a search preserves the current category", () => {
+test("Escape clears search without leaving the page and does not swallow IME composition", () => {
+	input(driveDialog(), "font");
 	let tree = driveDialog();
-	click(tree, (node) => node.type === Button && node.props["data-category"] === "models");
-	input(driveDialog(), "unmatched-query");
-	tree = driveDialog();
-	assert.ok(find(tree, (node) => node.props.className === "settings-search-empty"));
-	click(tree, (node) => node.type === Button && node.props["aria-label"] === "Clear search");
-	tree = driveDialog();
-	assert.equal(
-		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
-		"page",
-	);
-	const modal = find(tree, (node) => node.type === DialogContent && node.props.className === "unified-settings-dialog");
+	const search = find(tree, (node) => node.type === Input);
 	const preventDefault = vi.fn();
-	(modal.props.onCloseAutoFocus as (event: { preventDefault: () => void }) => void)({ preventDefault });
-	assert.equal(preventDefault.mock.calls.length, 1);
-	assert.equal(restored.mock.calls.length, 1);
-	driveDialog(false);
+	const onKeyDown = search.props.onKeyDown as (event: Record<string, unknown>) => void;
+	onKeyDown({ key: "Escape", nativeEvent: { isComposing: true }, preventDefault, stopPropagation: vi.fn() });
+	assert.equal(find(driveDialog(), (node) => node.type === Input).props.value, "font");
+	onKeyDown({ key: "Escape", nativeEvent: { isComposing: false }, preventDefault, stopPropagation: vi.fn() });
 	tree = driveDialog();
+	assert.equal(find(tree, (node) => node.type === Input).props.value, "");
+	assert.equal(preventDefault.mock.calls.length, 1);
+	assert.equal(closed.mock.calls.length, 0);
+});
+
+test("opening from a model command uses its explicit category while preserving category scroll offsets", () => {
+	let tree = driveDialog(true, "models");
 	assert.equal(
 		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
 		"page",
 	);
+	const pane = { scrollTop: 125, querySelectorAll: () => [] };
+	const content = find(tree, (node) => node.props.className === "settings-page-content");
+	(content.props.ref as React.RefObject<typeof pane>).current = pane;
+	click(tree, (node) => node.type === Button && node.props["data-category"] === "runtime");
+	tree = driveDialog();
+	assert.equal(pane.scrollTop, 0);
+	pane.scrollTop = 80;
+	click(tree, (node) => node.type === Button && node.props["data-category"] === "models");
+	driveDialog();
+	assert.equal(pane.scrollTop, 125);
+	driveDialog(false);
+	tree = driveDialog(true, "appearance");
+	tree = driveDialog(true, "appearance");
+	assert.equal(
+		find(tree, (node) => node.type === Button && node.props["data-category"] === "appearance").props["aria-current"],
+		"page",
+	);
+});
+
+test("Advanced reset is conditional and preserves visual mode, colors, UI font and language", () => {
+	assert.equal(
+		nodes(driveForm()).some((node) => node.props.className === "settings-advanced-reset"),
+		false,
+	);
+	const colors = defaultAppearance("dark");
+	store.update({
+		...store.current,
+		mode: "dark",
+		uiFont: "serif",
+		customUiFont: "Georgia",
+		uiFontSize: 15,
+		codeFontSize: 17,
+		contentFont: "mono",
+		reducedMotion: "on",
+		appearance: { dark: colors },
+	});
+	click(driveForm(), (node) => node.props.className === "settings-advanced-reset");
+	assert.equal(store.current.uiFontSize, defaultConfig().uiFontSize);
+	assert.equal(store.current.codeFontSize, defaultConfig().codeFontSize);
+	assert.equal(store.current.contentFont, "inherit");
+	assert.equal(store.current.reducedMotion, "system");
+	assert.equal(store.current.mode, "dark");
+	assert.equal(store.current.uiFont, "serif");
+	assert.equal(store.current.customUiFont, "Georgia");
+	assert.deepEqual(store.current.appearance, { dark: colors });
+	assert.equal(store.current.locale, "en");
+	assert.equal(
+		nodes(driveForm()).some((node) => node.props.className === "settings-advanced-reset"),
+		false,
+	);
+});
+
+test("browser installed font selection stays explicit and persists exact family/style without a Save step", async () => {
+	const regular = {
+		family: "Example Mono",
+		fullName: "Example Mono Regular",
+		postscriptName: "ExampleMono-Regular",
+		style: "Regular",
+	};
+	const bold = { ...regular, fullName: "Example Mono Bold", postscriptName: "ExampleMono-Bold", style: "Bold" };
+	let calls = 0;
+	appearance = {
+		client: {
+			localFontsSupported: true,
+			status: async () => {
+				throw new Error("not called by form");
+			},
+			setBackdrop: async () => {
+				throw new Error("not called by form");
+			},
+			subscribe: () => () => {},
+			listFonts: async () => {
+				calls++;
+				return {
+					truncated: false,
+					families: [
+						{ family: "Example Mono", faces: [regular, bold], monospace: true },
+						{
+							family: "Example Sans",
+							faces: [{ ...regular, family: "Example Sans", postscriptName: "ExampleSans" }],
+							monospace: false,
+						},
+					],
+				};
+			},
+		},
+	};
+	let tree = driveForm();
+	assert.equal(calls, 0);
+	const unopened = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	(unopened.props.onOpenChange as (open: boolean) => void)(true);
+	tree = driveForm();
+	await Promise.resolve();
+	assert.equal(calls, 0);
+	click(tree, (node) => node.type === Button && node.props.children === "Choose installed fonts");
+	await Promise.resolve();
+	await Promise.resolve();
+	tree = driveForm();
+	assert.equal(calls, 1);
+	const font = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	(font.props.onChange as (value: string) => void)("installed:Example Mono");
+	assert.deepEqual(store.current.localFontFaces.ui, regular);
+	const style = find(driveForm(), (node) => node.props.label === "Font style");
+	(style.props.onChange as (value: string) => void)("ExampleMono-Bold");
+	assert.deepEqual(store.current.localFontFaces.ui, bold);
+	const code = find(driveForm(), (node) => node.props.label === "Code font" && Array.isArray(node.props.options));
+	assert.ok((code.props.options as { value: string }[]).some((option) => option.value === "installed:Example Mono"));
+	assert.equal(
+		(code.props.options as { value: string }[]).some((option) => option.value === "installed:Example Sans"),
+		false,
+	);
+	assert.equal(JSON.parse(saved.get(themeStorageKey) ?? "").localFontFaces.ui.postscriptName, "ExampleMono-Bold");
+});
+
+const nativeStatus: AppearanceStatus = {
+	version: 1,
+	platform: "linux",
+	backdrop: "unsupported",
+	backdropEnabled: false,
+	reducedTransparency: false,
+	fontSmoothing: false,
+};
+function fontClient(listFonts: AppearanceClient["listFonts"]): AppearanceClient {
+	return {
+		localFontsSupported: true,
+		status: async () => nativeStatus,
+		setBackdrop: async () => nativeStatus,
+		subscribe: () => () => {},
+		listFonts,
+	};
+}
+function openFont() {
+	const font = find(driveForm(), (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	(font.props.onOpenChange as (open: boolean) => void)(true);
+	driveForm();
+}
+async function settleFonts() {
+	for (let index = 0; index < 6; index++) await Promise.resolve();
+}
+test("native picker opens the bounded query, survives StrictMode replay and remounts from its cached catalog", async () => {
+	const face = {
+		family: "Native Sans",
+		fullName: "Native Sans Regular",
+		postscriptName: "NativeSans",
+		style: "Regular",
+	};
+	const catalog: InstalledFontCatalog = {
+		families: [{ family: face.family, faces: [face], monospace: false }],
+		truncated: false,
+	};
+	let finish: (value: InstalledFontCatalog) => void = () => {};
+	let signal: AbortSignal | undefined;
+	const list = vi.fn((active?: AbortSignal) => {
+		signal = active;
+		return new Promise<InstalledFontCatalog>((resolve) => {
+			finish = resolve;
+		});
+	});
+	const client = fontClient(list);
+	appearance = { client, status: nativeStatus };
+	const initial = driveForm();
+	assert.equal(list.mock.calls.length, 0);
+	assert.equal(
+		nodes(initial).some((node) => node.props.children === "Choose installed fonts"),
+		false,
+	);
+	openFont();
+	// Replay actual form effects with state retained, matching StrictMode setup→cleanup→setup.
+	for (const cell of hooks.cells) {
+		if (cell?.deps) {
+			cell.cleanup?.();
+			cell.cleanup = undefined;
+			cell.deps = undefined;
+		}
+	}
+	driveForm();
+	await settleFonts();
+	assert.equal(list.mock.calls.length, 1);
+	assert.equal(signal?.aborted, false);
+	assert.ok(find(driveForm(), (node) => node.props["data-font-catalog-state"] === "pending"));
+	finish(catalog);
+	await settleFonts();
+	let tree = driveForm();
+	assert.equal(
+		find(tree, (node) => node.props["data-font-catalog-state"] === "ready").props["data-font-family-count"],
+		1,
+	);
+	const font = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	(font.props.onChange as (value: string) => void)("installed:Native Sans");
+	assert.deepEqual(store.current.localFontFaces.ui, face);
+	cleanup();
+	await settleFonts();
+	appearance = { client, status: nativeStatus };
+	const reopenedStyle = find(driveForm(), (node) => node.props.label === "Font style");
+	(reopenedStyle.props.onOpenChange as (open: boolean) => void)(true);
+	driveForm();
+	await settleFonts();
+	tree = driveForm();
+	assert.equal(list.mock.calls.length, 1);
+	assert.ok(find(tree, (node) => node.props["data-font-catalog-state"] === "ready"));
+	assert.equal(find(tree, (node) => node.props.label === "Font style").props.value, "NativeSans");
+});
+test("native picker keeps failure explicit across remount, retries once and ignores a replaced client's late catalog", async () => {
+	let calls = 0;
+	let finish: (value: InstalledFontCatalog) => void = () => {};
+	let oldSignal: AbortSignal | undefined;
+	const client = fontClient((signal) => {
+		calls++;
+		if (calls === 1) return Promise.reject(new AppearanceError("DENIED"));
+		oldSignal = signal;
+		return new Promise((resolve) => {
+			finish = resolve;
+		});
+	});
+	appearance = { client, status: nativeStatus };
+	openFont();
+	await settleFonts();
+	assert.equal(
+		find(driveForm(), (node) => node.props["data-font-catalog-state"] === "error").props["data-font-error"],
+		"DENIED",
+	);
+	cleanup();
+	await settleFonts();
+	appearance = { client, status: nativeStatus };
+	openFont();
+	await settleFonts();
+	assert.equal(calls, 1);
+	click(driveForm(), (node) => node.type === Button && node.props.children === "Retry font list");
+	await settleFonts();
+	assert.equal(calls, 2);
+	const freshList = vi.fn(async () => ({ families: [], truncated: false }));
+	const fresh = fontClient(freshList);
+	appearance = { client: fresh, status: nativeStatus };
+	const switching = driveForm();
+	assert.equal(
+		nodes(switching).some((node) => node.props["data-font-error"] === "DENIED"),
+		false,
+	);
+	await settleFonts();
+	assert.equal(oldSignal?.aborted, true);
+	assert.equal(freshList.mock.calls.length, 0);
+	finish({ families: [], truncated: true });
+	await settleFonts();
+	assert.ok(find(driveForm(), (node) => node.props["data-font-catalog-state"] === "idle"));
+	openFont();
+	await settleFonts();
+	const ready = find(driveForm(), (node) => node.props["data-font-catalog-state"] === "ready");
+	assert.equal(ready.props["data-font-catalog-truncated"], false);
+	assert.equal(freshList.mock.calls.length, 1);
+	appearance = { client: fresh, status: { ...nativeStatus, platform: "macos" } };
+	driveForm();
+	await settleFonts();
+	assert.equal(freshList.mock.calls.length, 1);
+	assert.ok(find(driveForm(), (node) => node.props["data-font-catalog-state"] === "idle"));
+	openFont();
+	await settleFonts();
+	assert.equal(freshList.mock.calls.length, 2);
+});
+
+test("native-only settings reflect actual host support and honor reduced-transparency status", () => {
+	assert.equal(
+		nodes(driveForm()).some((node) => node.props.settingId === "translucentSidebar"),
+		false,
+	);
+	appearance.status = {
+		version: 1,
+		platform: "macos",
+		backdrop: "vibrancy",
+		backdropEnabled: false,
+		reducedTransparency: true,
+		fontSmoothing: true,
+	};
+	const tree = driveForm();
+	const toggle = find(tree, (node) => node.type === "input" && node.props["aria-label"] === "Translucent sidebar");
+	assert.equal(toggle.props.disabled, true);
+	assert.ok(find(tree, (node) => node.props.settingId === "fontSmoothing"));
+	const cursor = find(
+		tree,
+		(node) => node.type === "input" && node.props["aria-label"] === "Use pointer cursor for controls",
+	);
+	(cursor.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+	assert.equal(store.current.pointerCursor, false);
 });

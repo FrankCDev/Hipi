@@ -42,10 +42,12 @@ export function AgentPermissionManagement({
 	archived,
 	detailsOpen,
 	onOpenDetails,
+	onContextRestoreFocus,
 	children,
 }: AgentPermissionsProps & {
 	detailsOpen: boolean;
 	onOpenDetails: MouseEventHandler<HTMLButtonElement>;
+	onContextRestoreFocus?: () => void;
 	children: (view: { content: ReactNode; attention: ReactNode; contextAction: ContextAction }) => ReactNode;
 }) {
 	const client = useAppClient();
@@ -440,6 +442,9 @@ export function AgentPermissionManagement({
 					if (contextTrigger.current?.isConnected) {
 						event.preventDefault();
 						contextTrigger.current.focus();
+					} else if (onContextRestoreFocus) {
+						event.preventDefault();
+						onContextRestoreFocus();
 					}
 				}}
 			/>

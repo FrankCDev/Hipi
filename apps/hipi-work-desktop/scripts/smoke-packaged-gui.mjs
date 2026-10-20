@@ -21,6 +21,10 @@ import { captureWindowsIdentity, readWindowsDialogs } from "./gui-windows-dialog
 import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export function baselineResponseArguments(scenario) {
+	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario), "Unknown fixed GUI scenario");
+	return scenario === "baseline" ? ["--smoke-response=baseline-stream", "--smoke-scenario=baseline"] : [];
+}
 export async function createGuiProfile(temporaryParent = realpathSync(tmpdir())) {
 	// Match smokeProfile's exact canonicalizer, including Windows path spelling.
 	return realpathSync(await mkdtemp(join(temporaryParent, "Hipi GUI profile-")));
@@ -33,7 +37,7 @@ export function sourceProvenanceEvidence(provenance) {
 export async function assertScenarioWorkspaceDatabases(storeRoot, scenario) {
 	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario));
 	const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
-	assert.equal(workspaces.length, scenario === "baseline" ? 2 : 1, "Unexpected exact scenario workspace count");
+	assert.equal(workspaces.length, scenario === "long-history" ? 1 : 2, "Unexpected exact scenario workspace count");
 	for (const workspace of workspaces) {
 		for (const database of ["owner.sqlite", "workspace.sqlite"]) {
 			const path = join(storeRoot, workspace.name, database);
@@ -206,6 +210,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 				[
 					"--provider=deterministic",
 					`--smoke-data-root=${profile}`,
+					...baselineResponseArguments(scenario),
 					`--user-data-dir=${join(profile, "profile")}`,
 					"--remote-debugging-port=0",
 					"--enable-logging=file",

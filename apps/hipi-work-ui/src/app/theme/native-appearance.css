@@ -1,0 +1,36 @@
+body {
+	-webkit-font-smoothing: var(--font-smoothing, antialiased);
+}
+button:not(:disabled),
+select,
+summary,
+[role="button"]:not([aria-disabled="true"]) {
+	cursor: var(--action-cursor, pointer);
+}
+/* Only the host's confirmed material result can make the renderer transparent. */
+:root[data-native-backdrop="on"],
+:root[data-native-backdrop="on"] body,
+:root[data-native-backdrop="on"] #root {
+	background: transparent;
+}
+:root[data-native-backdrop="on"] .sidebar {
+	background: color-mix(
+		in srgb,
+		var(--sidebar-background, var(--sidebar)) var(--native-sidebar-tint, 100%),
+		transparent
+	);
+}
+/* Keep the work owner mounted/inert but do not paint it underneath the settings navigation. */
+:root[data-native-backdrop="on"] .work-shell[data-settings-open="true"] > .sidebar,
+:root[data-native-backdrop="on"] .work-shell[data-settings-open="true"] > .main-shell {
+	visibility: hidden;
+}
+:root[data-native-backdrop="on"] .settings-route[data-settings-page] {
+	background: transparent;
+}
+:root[data-native-backdrop="on"] .settings-page-sidebar {
+	background: color-mix(in srgb, var(--sidebar) var(--native-settings-sidebar-tint, 100%), transparent);
+}
+:root[data-native-backdrop="on"] .settings-page-main {
+	background: var(--surface);
+}

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { Op } from "@earendil-works/chord/delta";
 import type { Models } from "@earendil-works/pi-ai";
 import {
 	AgentDoc,
@@ -58,6 +59,7 @@ import { ToolPackLifecycle } from "./extensions/lifecycle.ts";
 import type { TrustedAgentFileService } from "./files/service.ts";
 import { readHistory, readMessageText, textEnd, textOf, visibleEntry } from "./history.ts";
 import type { CredentialPort } from "./model-provider.ts";
+import { StreamIdentity } from "./stream-identity.ts";
 
 type Catalog = {
 	workspaceId: string;
@@ -877,9 +879,11 @@ export class PiWorkspace implements WorkspacePort {
 		const abort = () => controller.abort(signal?.reason);
 		signal?.addEventListener("abort", abort, { once: true });
 		let released = false;
+		let identity: StreamIdentity | undefined;
 		const release = () => {
 			if (released) return;
 			released = true;
+			identity?.dispose();
 			this.#observers--;
 			signal?.removeEventListener("abort", abort);
 			controller.abort();
@@ -887,6 +891,7 @@ export class PiWorkspace implements WorkspacePort {
 		try {
 			const conversation = await this.#conversation(scope);
 			const watch = await conversation.watch({ ...context, abortSignal: controller.signal });
+			identity = new StreamIdentity(conversation.id);
 			let cachedUpper = -1;
 			let cachedHistory: HistoryPage = { ...scope, messages: [], nextCursor: null };
 			let version = 0;
@@ -907,7 +912,7 @@ export class PiWorkspace implements WorkspacePort {
 					/* Consumer diagnostics cannot retain a watch. */
 				}
 			});
-			const emit = async (view: ConversationView) => {
+			const emit = async (view: ConversationView, ops?: readonly Op[]) => {
 				if (released || controller.signal.aborted) return;
 				// Head markers are prepended, so the last active entry is not necessarily the newest ID.
 				const upper = view.entries.reduce((max, entry) => Math.max(max, entry.id), 0);
@@ -922,7 +927,10 @@ export class PiWorkspace implements WorkspacePort {
 					kind: "snapshot",
 					epoch: this.#epoch,
 					version: ++version,
-					snapshot: this.#project(scope, view, cachedHistory),
+					snapshot: {
+						...this.#project(scope, view, cachedHistory),
+						...identity?.project(view, cachedHistory, ops),
+					},
 				};
 				if (!fitsPayloadBudget(frame)) throw new AppError("CAPACITY_EXCEEDED");
 				await cancelWait(Promise.resolve(listener(frame)), controller.signal);
@@ -935,9 +943,9 @@ export class PiWorkspace implements WorkspacePort {
 				}
 				void watch.stop();
 			});
-			watch.start(async (view) => {
+			watch.start(async (view, ops) => {
 				await initial;
-				await emit(view);
+				await emit(view, ops);
 			});
 			return {
 				dispose: async () => {

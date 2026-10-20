@@ -1,5 +1,6 @@
 import { LIMITS, parseRequest } from "@hipi/work-runtime/contracts";
 import type { CatalogCommand } from "./command-recovery.ts";
+import { type InitialSend, readInitialSendRecovery } from "./initial-send.ts";
 import type { SavedValue } from "./local-persistence.ts";
 import type { LocalState } from "./local-state.ts";
 
@@ -13,6 +14,7 @@ export type PreparedTask = {
 export type CatalogRecoveryRecord = {
 	request: CatalogCommand | null;
 	preparedTask: PreparedTask | null;
+	initialSend: InitialSend | null;
 	incompatible: boolean;
 };
 const id = /^[a-zA-Z0-9_-]{1,128}$/;
@@ -34,10 +36,12 @@ function catalogCommand(value: unknown): CatalogCommand {
 
 /** Prepared input belongs to the same immutable catalog recovery record, never to a UI lifetime. */
 export function readCatalogRecovery(raw: string | null): CatalogRecoveryRecord {
-	if (raw === null) return { request: null, preparedTask: null, incompatible: false };
+	if (raw === null) return { request: null, preparedTask: null, initialSend: null, incompatible: false };
 	try {
 		if (raw.length > 30000) throw new Error("INVALID_CATALOG_RECOVERY");
 		const saved: unknown = JSON.parse(raw);
+		if (saved && typeof saved === "object" && "version" in saved && saved.version === 3)
+			return { ...readInitialSendRecovery(saved), preparedTask: null, incompatible: false };
 		if (
 			!saved ||
 			typeof saved !== "object" ||
@@ -48,7 +52,7 @@ export function readCatalogRecovery(raw: string | null): CatalogRecoveryRecord {
 		)
 			throw new Error("INVALID_CATALOG_RECOVERY");
 		const request = saved.request === null ? null : catalogCommand(saved.request);
-		if (!("preparedTask" in saved)) return { request, preparedTask: null, incompatible: false };
+		if (!("preparedTask" in saved)) return { request, preparedTask: null, initialSend: null, incompatible: false };
 		const task = saved.preparedTask;
 		if (
 			request?.method !== "createConversation" ||
@@ -79,10 +83,11 @@ export function readCatalogRecovery(raw: string | null): CatalogRecoveryRecord {
 				sourceRevision: task.sourceRevision,
 				conversationId: task.conversationId,
 			},
+			initialSend: null,
 			incompatible: false,
 		};
 	} catch {
-		return { request: null, preparedTask: null, incompatible: true };
+		return { request: null, preparedTask: null, initialSend: null, incompatible: true };
 	}
 }
 
@@ -127,10 +132,10 @@ export function admitCatalog(
 	return local.withAdmission(recoveryKey, () => {
 		signal.throwIfAborted();
 		const previous = readCatalogRecovery(local.storedValue(recoveryKey)?.value ?? null);
-		if (previous.incompatible || previous.request) throw new Error("CATALOG_RECOVERY_EXISTS");
+		if (previous.incompatible || previous.request || previous.initialSend) throw new Error("CATALOG_RECOVERY_EXISTS");
 		// One atomic storage write must contain both command and captured prompt before any dispatch.
 		saveRecovery(local, command, preparedTask);
-		return { request: command, preparedTask, incompatible: false };
+		return { request: command, preparedTask, initialSend: null, incompatible: false };
 	});
 }
 
@@ -149,6 +154,7 @@ export function finishCatalog(
 	return local.withAdmission(recoveryKey, () => {
 		signal.throwIfAborted();
 		const saved = currentCatalogRecovery(local, command);
+		if (saved.initialSend) throw new Error("INITIAL_SEND_REQUIRES_OWNERSHIP_TRANSFER");
 		let task = saved.preparedTask;
 		if (task) {
 			if (!conversationId || (task.conversationId !== null && task.conversationId !== conversationId))

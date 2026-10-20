@@ -1,5 +1,7 @@
 const en = {
 	actions: "Conversation actions",
+	projectActions: "Project actions",
+	recent: "Recent",
 	preview: "View details",
 	settings: "Workbench settings",
 	expandProject: "Expand project",
@@ -54,6 +56,8 @@ const en = {
 } as const;
 const zh: Record<keyof typeof en, string> = {
 	actions: "会话操作",
+	projectActions: "项目操作",
+	recent: "最近",
 	preview: "查看详情",
 	settings: "工作台设置",
 	expandProject: "展开项目",

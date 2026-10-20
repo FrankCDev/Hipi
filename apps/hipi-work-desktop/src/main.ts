@@ -1,6 +1,8 @@
 import { writeSync } from "node:fs";
+import { release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AppearanceError } from "@hipi/work-runtime/appearance";
 import { AppError, parseRequest } from "@hipi/work-runtime/contracts";
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { parseFileRequest } from "@hipi/work-runtime/files/protocol";
@@ -9,16 +11,27 @@ import {
 	app,
 	BrowserWindow,
 	dialog,
+	type IpcMainEvent,
 	ipcMain,
 	Menu,
 	MenuItem,
 	type MessageBoxOptions,
+	nativeTheme,
 	protocol,
 	type SaveDialogOptions,
 	safeStorage,
 	session,
 	utilityProcess,
 } from "electron";
+import {
+	APPEARANCE_CHANNEL,
+	APPEARANCE_UPDATED,
+	decodeAppearanceRequest,
+	decodeFontRequest,
+	FONT_CANCEL_CHANNEL,
+	FONT_CHANNEL,
+} from "./appearance-protocol.ts";
+import { WindowAppearanceService } from "./appearance-service.ts";
 import { type CredentialCryptoStage, createCredentialCrypto } from "./credential-crypto.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
 import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
@@ -27,13 +40,16 @@ import { DesktopDiagnostics, DiagnosticExporter, finishFailedStartup, writeDiagn
 import { filePickerLabels } from "./file-messages.ts";
 import { manageFileRoots } from "./file-picker.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./file-protocol.ts";
+import { FontRequests } from "./font-requests.ts";
 import type { HostConnection } from "./host-connection.ts";
 import { hostMessages } from "./host-messages.ts";
+import { NativeFontService } from "./native-fonts.ts";
 import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL, previewInvocation } from "./preview-protocol.ts";
 import { CHANNEL, decode, encode, exact, identifier, MAX_ACTIVE, observation } from "./protocol.ts";
 import { createRendererAssetHandler } from "./renderer-assets.ts";
 import { runtimeResource } from "./runtime-resource.ts";
 import { trustedSender } from "./sender.ts";
+import { smokeRuntimeArguments } from "./smoke-model-fixture.ts";
 import { prepareDesktopLaunch } from "./smoke-profile.ts";
 import { RuntimeSupervisor } from "./supervisor.ts";
 import { WindowLifecycle } from "./window-lifecycle.ts";
@@ -233,10 +249,14 @@ async function start(mode: "production" | "deterministic") {
 	session.defaultSession.setPermissionCheckHandler(() => false);
 	supervisor = new RuntimeSupervisor(
 		(generation) =>
-			utilityProcess.fork(runtimeResource(root), [join(app.getPath("userData"), `${mode}-store`), generation, mode], {
-				serviceName: "Hipi Work runtime",
-				stdio: "ignore",
-			}),
+			utilityProcess.fork(
+				runtimeResource(root),
+				smokeRuntimeArguments(join(app.getPath("userData"), `${mode}-store`), generation, mode, process.argv),
+				{
+					serviceName: "Hipi Work runtime",
+					stdio: "ignore",
+				},
+			),
 		(event) => {
 			diagnostics.record(event === "shutdown-timeout" ? "SHUTDOWN_TIMEOUT" : "RUNTIME_UNAVAILABLE");
 			if (event === "shutdown-timeout") dialog.showErrorBox("Hipi Work", text["host.shutdown.unknown"]);
@@ -284,6 +304,57 @@ async function start(mode: "production" | "deterministic") {
 		if (!recoveringStartup) exporter.close();
 	});
 	const owner = window.webContents;
+	const appearance = new WindowAppearanceService(
+		window,
+		process.platform,
+		release(),
+		() => nativeTheme.prefersReducedTransparency,
+	);
+	const fonts = new NativeFontService(process.platform);
+	const fontRequests = new FontRequests((signal) => fonts.list(signal));
+	ipcMain.handle(APPEARANCE_CHANNEL, (event, raw: unknown) => {
+		if (!trustedSender(event, owner, PAGE)) return { ok: false, error: "DENIED" };
+		try {
+			return { ok: true, result: appearance.request(decodeAppearanceRequest(raw)) };
+		} catch (error) {
+			return { ok: false, error: error instanceof AppearanceError ? error.code : "FAILED" };
+		}
+	});
+	ipcMain.handle(FONT_CHANNEL, async (event, raw: unknown) => {
+		if (!trustedSender(event, owner, PAGE)) return { ok: false, error: "DENIED" };
+		try {
+			const id = decodeFontRequest(raw);
+			const result = await fontRequests.request(id, () => !owner.isDestroyed() && trustedSender(event, owner, PAGE));
+			return { ok: true, result };
+		} catch (error) {
+			return { ok: false, error: error instanceof AppearanceError ? error.code : "FAILED" };
+		}
+	});
+	const cancelFontAccess = (event: IpcMainEvent, raw: unknown) => {
+		if (!trustedSender(event, owner, PAGE)) return;
+		try {
+			fontRequests.cancel(decodeFontRequest(raw));
+		} catch {
+			/* A malformed cancellation cannot address an owned child. */
+		}
+	};
+	ipcMain.on(FONT_CANCEL_CHANNEL, cancelFontAccess);
+	const appearanceUpdated = () => {
+		try {
+			const status = appearance.refresh();
+			if (!owner.isDestroyed() && owner.mainFrame.url === PAGE) owner.send(APPEARANCE_UPDATED, status);
+		} catch {
+			// Closed windows cannot receive appearance updates.
+		}
+	};
+	nativeTheme.on("updated", appearanceUpdated);
+	owner.once("destroyed", () => {
+		fontRequests.reset();
+		nativeTheme.off("updated", appearanceUpdated);
+		ipcMain.removeHandler(APPEARANCE_CHANNEL);
+		ipcMain.removeHandler(FONT_CHANNEL);
+		ipcMain.removeListener(FONT_CANCEL_CHANNEL, cancelFontAccess);
+	});
 	let rendererLifetime = 0;
 	let fileCalls = 0;
 	let picking = false;
@@ -418,6 +489,12 @@ async function start(mode: "production" | "deterministic") {
 	const subscriptions = new Map<string, { ack(): void; dispose(): void }>();
 	const clearRenderer = () => {
 		rendererLifetime++;
+		fontRequests.reset();
+		try {
+			appearance.reset();
+		} catch {
+			// Renderer teardown must continue even if the OS rejects a material update.
+		}
 		for (const cancel of previewCalls.values()) cancel();
 		previewCalls.clear();
 		for (const [id, handle] of previewHandles) releasePreview(id, handle.connection, handle.storeId);

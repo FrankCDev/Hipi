@@ -37,11 +37,21 @@ Both packages retain their original license files in the installed dependency tr
 
 ## File editor dependencies
 
-- @codemirror/state 6.5.2, @codemirror/view 6.38.6, @codemirror/commands 6.8.1 and @codemirror/merge 6.11.1, MIT, https://codemirror.net/ — editor state, view, commands and explicit-baseline comparison. These are used directly, without a React wrapper or copied editor implementation.
-- Installation used `--ignore-scripts`; the lockfile added 13 MIT packages, with no existing resolved version changes or new install lifecycle scripts. The dependency packages' development `prepare` commands were not executed.
+- @codemirror/state 6.5.2, @codemirror/view 6.38.6 and @codemirror/commands 6.8.1, MIT, https://codemirror.net/ — Markdown editor state, view and commands. These are used directly, without a React wrapper or copied editor implementation. The former MergeView dependency was replaced by the public Pierre comparison renderer.
+- @codemirror/lang-markdown 6.5.2, @codemirror/language 6.13.1 and @lezer/highlight 1.2.5, MIT, https://codemirror.net/ — local Markdown parsing, semantic syntax highlighting and language-aware editing. Original notices and exact installed-closure inventory are retained in [vendor/codemirror](vendor/codemirror/README.md) and must accompany distributions under `third-party/codemirror`. No grammar network loader or remote preview is configured.
+- The initial CodeMirror installation used `--ignore-scripts` and added 13 MIT packages, with no existing resolved version changes or new install lifecycle scripts at that stage. The dependency packages' development `prepare` commands were not executed.
 - All resolved versions and integrity hashes are in the root lockfile. Original license files remain with the installed packages; distribution must preserve these notices. This dependency review does not establish native IME, accessibility, browser performance or three-platform acceptance.
 
 CodeMirror is MIT-licensed, Copyright (C) 2018–2022 by Marijn Haverbeke and others. The permission and warranty terms of the MIT license reproduced below apply; individual package copyright years are retained in their original LICENSE files.
+
+## Pierre and syntax highlighting
+
+- @pierre/diffs 1.5.2 and @pierre/trees 1.0.0-beta.6, Apache-2.0, Copyright 2025 Pierre Computer Company, https://github.com/pierrecomputer/pierre — ordinary text/code editor, read-only comparison and virtualized file tree.
+- shiki 4.5.0, MIT, Copyright 2021 Pine Wu and 2023 Anthony Fu, https://github.com/shikijs/shiki — bundled syntax tokenization using the JavaScript regular-expression engine.
+- Original licenses and notices for the installed dependency closure, including Pierre's Primer theme notice, are retained in [vendor/pierre](vendor/pierre/README.md). The hash inventory identifies each source. All installs used `--ignore-scripts`; no installation lifecycle scripts were run.
+- Application-owned adapters preserve runtime file authority, compare-and-save revisions, input bounds and recovery. The reference application's private implementation and assets are not included. Its exact bundled dependency versions are unknown.
+
+Distributions must include `third-party/pierre` with these notices. File rendering uses bundled finite grammars and a semantic CSS-variable theme, not a remote highlighting service. Selecting the same library does not establish native IME, accessibility or performance acceptance.
 
 MIT License
 

@@ -1,18 +1,18 @@
 import { EditorState, StateEffect, StateField, type Text } from "@codemirror/state";
 import { FILE_LIMITS } from "@hipi/work-runtime/files";
 
-const rejected = StateEffect.define<boolean>();
+export const rejectedEditorInput = StateEffect.define<boolean>();
 export const inputLimitExceeded = StateField.define<boolean>({
 	create: () => false,
 	update: (value, transaction) => {
-		for (const effect of transaction.effects) if (effect.is(rejected)) return effect.value;
+		for (const effect of transaction.effects) if (effect.is(rejectedEditorInput)) return effect.value;
 		return transaction.docChanged ? false : value;
 	},
 });
 /** UTF-8 count short-circuits before allocating an encoded copy of an oversized paste. */
-function withinLimit(text: Text): boolean {
-	if (text.length > FILE_LIMITS.bytes) return false;
-	let bytes = 0;
+export function withinEditorInputLimit(text: Text, extraBytes = 0): boolean {
+	if (text.length + extraBytes > FILE_LIMITS.bytes) return false;
+	let bytes = extraBytes;
 	for (const chunk of text) {
 		for (const character of chunk) {
 			const point = character.codePointAt(0) ?? 0;
@@ -25,7 +25,7 @@ function withinLimit(text: Text): boolean {
 export const boundedEditorInput = [
 	inputLimitExceeded,
 	EditorState.transactionFilter.of((transaction) => {
-		if (!transaction.docChanged || withinLimit(transaction.newDoc)) return transaction;
-		return { effects: rejected.of(true) };
+		if (!transaction.docChanged || withinEditorInputLimit(transaction.newDoc)) return transaction;
+		return { effects: rejectedEditorInput.of(true) };
 	}),
 ];

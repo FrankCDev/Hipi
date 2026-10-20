@@ -7,7 +7,7 @@ import { ConversationCapabilities } from "../src/features/conversation-capabilit
 
 const fixture = vi.hoisted(() => ({
 	open: false,
-	section: "files" as "files" | "tool-packs",
+	section: null as "files" | "tool-packs" | null,
 	locale: "en",
 	permissionOwners: 0,
 	packOwners: 0,
@@ -20,8 +20,7 @@ vi.mock("react", async () => {
 	const actual = await vi.importActual<typeof React>("react");
 	return {
 		...actual,
-		useState: (initial: unknown) =>
-			actual.useState(initial === false ? fixture.open : initial === "files" ? fixture.section : initial),
+		useState: (initial: unknown) => actual.useState(initial === null ? fixture.section : initial),
 	};
 });
 vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: fixture.locale }) }));
@@ -33,6 +32,12 @@ vi.mock("../src/components/ui/dialog.tsx", () => ({
 	DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
 	DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
 	DialogBody: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+vi.mock("../src/components/ui/dropdown-menu.tsx", () => ({
+	DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+	DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+	DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div role="menu">{children}</div>,
+	DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock("../src/features/agent-permissions/agent-permissions.tsx", () => ({
 	AgentPermissionManagement: ({
@@ -81,19 +86,21 @@ function render() {
 }
 beforeEach(() => {
 	fixture.open = false;
-	fixture.section = "files";
+	fixture.section = null;
 	fixture.locale = "en";
 	fixture.permissionOwners = 0;
 	fixture.packOwners = 0;
 });
-test("the compact conversation entry names all capabilities and retains its stable safety hook", () => {
+test("acquisition has one plus menu while permissions remain a separate control", () => {
 	const html = render();
 	assert.match(html, /class="permission-controls capabilities-controls"/);
 	assert.match(html, /aria-label="Conversation capabilities"/);
-	assert.match(html, />Capabilities<\/span>/);
+	assert.match(html, /aria-label="Add files and tools"/);
+	assert.match(html, /role="menu"/);
+	assert.match(html, />Permissions<\/span>/);
 	assert.match(html, />File context<\/button>/);
 	assert.match(html, />Tools<\/button>/);
-	assert.match(html, /Allow this conversation to read selected live files/);
+	assert.doesNotMatch(html, />Capabilities<\/span>/);
 	assert.doesNotMatch(html, /type="file"|Upload|selected tools/);
 	assert.match(html, /Pending file approval/);
 	assert.doesNotMatch(html, /File management body|Tool pack management body/);
@@ -103,9 +110,10 @@ test("the compact conversation entry names all capabilities and retains its stab
 });
 test("the file section embeds one permission body and does not activate tool-pack reads", () => {
 	fixture.open = true;
+	fixture.section = "files";
 	const html = render();
 	assert.match(html, /File access &amp; approvals/);
-	assert.match(html, /Tool packs/);
+	assert.doesNotMatch(html, /capabilities-nav/);
 	assert.match(html, /File management body/);
 	assert.doesNotMatch(html, /Tool pack management body|Pending file approval/);
 	assert.equal(fixture.permissionOwners, 1);
@@ -120,16 +128,17 @@ test("tool packs activates only its own read surface while file approval attenti
 	assert.match(html, /Tool pack management body/);
 	assert.doesNotMatch(html, /File management body/);
 	assert.equal((html.match(/Pending file approval/g) ?? []).length, 1);
-	assert.match(html, /data-section="tool-packs" aria-current="page"/);
+	assert.doesNotMatch(html, /aria-current="page"/);
 	assert.equal(fixture.permissionVisible, false);
 	assert.equal(fixture.packActive, true);
 });
 test("closing from tool packs suspends that surface without removing either management owner", () => {
-	fixture.section = "tool-packs";
+	fixture.section = null;
 	fixture.locale = "zh-CN";
 	const html = render();
 	assert.match(html, /aria-label="会话能力"/);
-	assert.match(html, />能力<\/span>/);
+	assert.match(html, />权限<\/span>/);
+	assert.match(html, /aria-label="添加文件与工具"/);
 	assert.match(html, />文件上下文<\/button>/);
 	assert.match(html, />工具<\/button>/);
 	assert.equal(fixture.permissionOwners, 1);

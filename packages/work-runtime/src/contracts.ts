@@ -177,12 +177,20 @@ export type ReceiptView = Receipt & {
 };
 /** Text lengths and offsets count UTF-16 code units, matching JavaScript string slicing. */
 export type TextPreview = { text: string; textLength: number; truncated: boolean };
-export type Message = TextPreview & { id: string; role: "user" | "assistant"; interrupted?: true };
+export type Message = TextPreview & {
+	id: string;
+	role: "user" | "assistant";
+	interrupted?: true;
+	/** Observer-local presentation continuity, never a history identifier or command authority. */
+	streamId?: string;
+};
 export type Snapshot = Scope & {
 	messages: Message[];
 	partial: string;
 	partialLength: number;
 	partialTruncated: boolean;
+	/** Present only while this observer can identify the current generation episode. */
+	partialId?: string;
 	running: boolean;
 	historyCursor: string | null;
 };
@@ -611,20 +619,31 @@ function preview(value: unknown, length: unknown, truncated: unknown, max: numbe
 }
 function parseMessage(value: unknown): Message {
 	const m = object(value);
-	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted"]);
+	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId"]);
 	if (m.interrupted !== undefined && (m.interrupted !== true || m.role !== "assistant"))
 		throw new AppError("INVALID_REQUEST");
+	if (m.streamId !== undefined && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	if (m.role !== "user" && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	return {
 		id: string(m.id, 256),
 		role: m.role,
 		...preview(m.text, m.textLength, m.truncated, LIMITS.messagePreview),
 		...(m.interrupted === true ? { interrupted: true as const } : {}),
+		...(m.streamId === undefined ? {} : { streamId: streamIdentity(m.streamId) }),
 	};
+}
+function streamIdentity(value: unknown): string {
+	const result = string(value, 36);
+	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(result))
+		throw new AppError("INVALID_REQUEST");
+	return result;
 }
 function messages(value: unknown): Message[] {
 	if (!Array.isArray(value) || value.length > LIMITS.historyMessages) throw new AppError("INVALID_REQUEST");
-	return value.map(parseMessage);
+	const result = value.map(parseMessage);
+	const identities = result.flatMap((message) => (message.streamId ? [message.streamId] : []));
+	if (new Set(identities).size !== identities.length) throw new AppError("INVALID_REQUEST");
+	return result;
 }
 function cursor(value: unknown): string | null {
 	return value === null ? null : string(value, LIMITS.cursor);
@@ -638,18 +657,23 @@ export function parseSnapshot(value: unknown): Snapshot {
 		"partial",
 		"partialLength",
 		"partialTruncated",
+		"partialId",
 		"running",
 		"historyCursor",
 	]);
 	if (typeof p.running !== "boolean") throw new AppError("INVALID_REQUEST");
 	const partial = preview(p.partial, p.partialLength, p.partialTruncated, LIMITS.partialPreview);
+	const committed = messages(p.messages);
+	const partialId = p.partialId === undefined ? undefined : streamIdentity(p.partialId);
+	if (partialId && committed.some((message) => message.streamId === partialId)) throw new AppError("INVALID_REQUEST");
 	return {
 		...parseScope(p),
 		partial: partial.text,
 		partialLength: partial.textLength,
 		partialTruncated: partial.truncated,
+		...(partialId === undefined ? {} : { partialId }),
 		running: p.running,
-		messages: messages(p.messages),
+		messages: committed,
 		historyCursor: cursor(p.historyCursor),
 	};
 }

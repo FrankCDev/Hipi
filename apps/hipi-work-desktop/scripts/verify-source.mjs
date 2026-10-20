@@ -7,15 +7,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const groups = [
 	[
 		"apps/hipi-work-desktop/test",
-		"credentials lifecycle host host-messages diagnostics previews files startup-assets runtime-recovery runtime-resource",
+		"credentials lifecycle host host-messages diagnostics previews files startup-assets runtime-recovery runtime-resource appearance native-fonts smoke-model-fixture",
 	],
 	[
 		"packages/work-runtime/test",
-		"dev-server-openai core workspace-cache node-cache node-unsafe history history-fork transport previews-service agent-contracts agent-capacity capacity-contracts capacity-archival extension-pack extension-lifecycle extension-checkpoint extension-tools tool-pack-contracts tool-pack-transport-runtime tool-activity-contracts feature-readonly tool-activities tool-activities-runtime document-checkpoints model-provider document-parsers dev-server files-transport files-host-access transport-runtime catalog identity credentials-http previews-http history-contracts files files-snapshot runtime-model files-agent agent-tools model-gate transport-auth",
+		"dev-server-openai core workspace-cache node-cache node-unsafe history history-fork transport previews-service agent-contracts agent-capacity capacity-contracts capacity-archival extension-pack extension-lifecycle extension-checkpoint extension-tools tool-pack-contracts tool-pack-transport-runtime tool-activity-contracts feature-readonly tool-activities tool-activities-runtime document-checkpoints model-provider document-parsers dev-server files-transport files-host-access transport-runtime catalog identity credentials-http previews-http history-contracts files files-snapshot runtime-model files-agent agent-tools model-gate transport-auth stream-identity stream-identity-runtime",
 	],
 	[
 		"apps/hipi-work-ui/test",
-		"history-reads conversation-dynamic-layout conversation-virtualizer file-client bounded-read composer-input desktop-client conversation-history-controller theme-application message-projection local-state receipt-reconciliation preview-client conversation-preview-interaction connection local-persistence conversation-measurement-policy file-editor-session artifact-editor reopen-request preview-session editor-input-limit theme-settings execution-outcome",
+		"history-reads conversation-dynamic-layout conversation-virtualizer file-client bounded-read composer-input desktop-client conversation-history-controller message-projection local-state receipt-reconciliation preview-client conversation-preview-interaction connection local-persistence conversation-measurement-policy file-editor-session artifact-editor reopen-request preview-session editor-input-limit execution-outcome conversation-scroll-intent conversation-reading-position conversation-transcript clipboard-feedback markdown-segments streaming-text-buffer response-announcement syntax-highlight file-search-replacement",
 	],
 ];
 const nodeTests = groups.flatMap(([directory, names]) =>
@@ -31,13 +31,17 @@ nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-work-experience.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-settings-route.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-disclosure.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/smoke-packaged-gui.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-fonts.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-appearance.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-windows-dialogs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/font-assets.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/pierre-licenses.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/codemirror-licenses.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
@@ -46,7 +50,6 @@ nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
-nodeTests.push("apps/hipi-work-ui/test/conversation-navigation.test.ts");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
@@ -63,6 +66,8 @@ const storageTests = [
 ];
 const uiTests = [
 	"activity-approval-presentation",
+	"activity-transcript",
+	"conversation-selection-interaction",
 	"file-canvas-presentation",
 	"work-experience-presentation",
 	"prepared-task-entry",
@@ -72,6 +77,14 @@ const uiTests = [
 	"retained-context-consent",
 	"file-panel",
 	"file-workbench",
+	"file-search",
+	"file-line-navigation",
+	"file-tab-actions",
+	"markdown-presentation",
+	"markdown-file-interaction",
+	"file-workspace-layout",
+	"file-splitter-interaction",
+	"file-revocation-interaction",
 	"appearance-settings",
 	"settings-dialog",
 	"settings-workflow",
@@ -83,24 +96,36 @@ const uiTests = [
 	"conversation-model-refresh",
 	"document-preview",
 	"input-group",
+	"shared-control-primitives",
 	"workspace-tree",
 	"workspace-navigation-interaction",
 	"catalog-pages",
 	"sidebar-navigation-callbacks",
+	"workspace-tree-callbacks",
 	"message-markdown",
+	"syntax-code",
+	"user-message-content",
 	"conversation-preview",
 	"tool-activities",
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
 uiTests.push("apps/hipi-work-ui/test/agent-permissions.test.ts");
 uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
+uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
+uiTests.push("apps/hipi-work-ui/test/theme-settings.test.ts");
+uiTests.push("apps/hipi-work-ui/test/theme-application.test.ts");
 uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
+uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/command-recovery.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-packs.test.ts");
 uiTests.push("apps/hipi-work-ui/test/artifact-navigation.test.ts");
+uiTests.push("apps/hipi-work-ui/test/file-tree-adapter.test.ts");
+uiTests.push("apps/hipi-work-ui/test/file-workspace-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/pierre-editor.test.ts");
+uiTests.push("apps/hipi-work-ui/test/markdown-line-endings.test.ts");
 // Node 24 may silently ignore nonexistent test paths. Check every explicit file first.
 await requireFiles(root, [...nodeTests, ...uiTests, ...storageTests]);
 function run(script, args = [], cwd = root) {

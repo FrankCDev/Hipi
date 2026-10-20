@@ -7,11 +7,13 @@ import { createFileRuntime } from "./file-runtime.ts";
 import { command, encode, identifier } from "./protocol.ts";
 import { diagnoseRuntimeOperation, runtimeDiagnosticReporter } from "./runtime-diagnostics.ts";
 import { createRuntimeRouter } from "./runtime-router.ts";
+import { runtimeSmokeFixture } from "./smoke-model-fixture.ts";
 
-const [directory, rawGeneration, provider] = process.argv.slice(2);
+const [directory, rawGeneration, provider, ...fixtureArguments] = process.argv.slice(2);
 if (!directory || (provider !== "deterministic" && provider !== "production"))
 	throw new Error("Explicit provider mode is required");
 const generation = identifier(rawGeneration);
+const responseFixture = runtimeSmokeFixture(directory, provider, fixtureArguments);
 const parent = process.parentPort;
 if (!parent) throw new Error("Electron utility parentPort is required");
 const credentials = new CredentialRpc(generation, (raw) => parent.postMessage(raw));
@@ -30,6 +32,7 @@ async function startRuntime() {
 		() =>
 			provider === "deterministic"
 				? openTestRuntime(directory, {
+						responseFixture,
 						resume: true,
 						agentFiles: () => agentFiles,
 						onError: () => report({ category: "operation", phase: "unknown" }),

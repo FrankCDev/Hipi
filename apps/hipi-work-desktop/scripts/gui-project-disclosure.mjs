@@ -32,7 +32,7 @@ export function currentProject(document) {
 	if (branches.length !== 1) return null;
 	const branch = branches[0];
 	if (branch.dataset.current === "true" && branch.dataset.containsCurrent === "true") return null;
-	return branch.querySelector(".project-name")?.textContent ?? null;
+	return branch.dataset.workspaceId ?? null;
 }
 
 export function assertDisclosureContinuity(actual, expected) {
@@ -44,7 +44,12 @@ export function assertDisclosureContinuity(actual, expected) {
 	assert.equal(actual.navigationOpen, expected.navigationOpen, "Disclosure closed the navigation drawer");
 }
 
-export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture, reopened) {
+export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture, reopened, expectedScope) {
+	assert.match(
+		expectedScope?.workspaceId ?? "",
+		/^[A-Za-z0-9_-]{1,128}$/,
+		"Actual receipt workspace identity required",
+	);
 	const { evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts } = helpers;
 	const second = "GUI disclosure empty project";
 	const creator = '.nav-section-heading button[aria-label="New workspace"]';
@@ -59,7 +64,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			`({
 		selected: (${currentProject.toString()})(document),
 		draft: document.querySelector('.composer textarea')?.value,
-		keys: [...document.querySelectorAll('[data-message-key^="message:"]')].map(e => e.dataset.messageKey),
+		keys: [...document.querySelectorAll('[data-message-id]')].map(e => 'message:' + e.dataset.messageId),
 		navigationOpen: document.querySelector('.work-shell').dataset.navigationOpen,
 		sameConversation: window.__hipiDisclosureConversation === document.querySelector('.conversation-panel'),
 		sameComposer: window.__hipiDisclosureComposer === document.querySelector('.composer textarea')
@@ -93,15 +98,19 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			await locate(second);
 			await waitForOverlayClosed(cdp, creator);
 		}
-		const a = await locate(fixture.workspace);
+		const a = `.workspace-branch[data-workspace-id="${expectedScope.workspaceId}"]`;
 		const b = await locate(second);
-		if (
+		const secondId = await evaluate(cdp, `document.querySelector(${JSON.stringify(b)}).dataset.workspaceId`);
+		assert.match(secondId, /^[A-Za-z0-9_-]{1,128}$/);
+		assert.notEqual(secondId, expectedScope.workspaceId);
+		assert.equal(
 			await evaluate(
 				cdp,
-				`document.querySelector(${JSON.stringify(`${a} .project-toggle`)}).getAttribute('aria-expanded') === 'false'`,
-			)
-		)
-			await click(cdp, `${a} .project-toggle`);
+				`document.querySelectorAll(${JSON.stringify(a)}).length === 1 && document.querySelector(${JSON.stringify(a)}).classList.contains('recent-conversations')`,
+			),
+			true,
+			"Original receipt must identify the unique default Recent branch",
+		);
 		await click(cdp, `${a} .conversation-link`, fixture.conversation);
 		await until(
 			() => evaluate(cdp, `!!document.querySelector('.composer textarea')`),
@@ -121,7 +130,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			true,
 		);
 		const expected = await read();
-		assert.equal(expected.selected, fixture.workspace);
+		assert.equal(expected.selected, expectedScope.workspaceId);
 		assert.equal(expected.draft, "A draft stays while B unfolds");
 		assert.ok(expected.keys.length >= 2);
 		for (const width of [1440, 640]) {
@@ -183,7 +192,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			() =>
 				evaluate(
 					cdp,
-					`document.querySelector(${JSON.stringify(b)}).dataset.current === 'true' && document.querySelector(${JSON.stringify(b)}).dataset.containsCurrent === 'false' && (${currentProject.toString()})(document) === ${JSON.stringify(second)} && !document.querySelector('.composer textarea') && !document.querySelector('.toolbar-conversation')`,
+					`document.querySelector(${JSON.stringify(b)}).dataset.current === 'true' && document.querySelector(${JSON.stringify(b)}).dataset.containsCurrent === 'false' && (${currentProject.toString()})(document) === ${JSON.stringify(secondId)} && document.querySelector('.prepared-task-input')?.value === '' && !document.querySelector('.toolbar-conversation') && !document.querySelector('[data-message-id]')`,
 				),
 			"empty project explicitly opened",
 		);
@@ -196,14 +205,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 			await resize(1440);
 			if (await evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationOpen === 'true'`))
 				await pressKey(cdp, "Escape");
-			const a = await locate(fixture.workspace);
-			if (
-				await evaluate(
-					cdp,
-					`document.querySelector(${JSON.stringify(`${a} .project-toggle`)}).getAttribute('aria-expanded') === 'false'`,
-				)
-			)
-				await click(cdp, `${a} .project-toggle`);
+			const a = `.workspace-branch[data-workspace-id="${expectedScope.workspaceId}"]`;
 			await click(cdp, `${a} .conversation-link`, fixture.conversation);
 			await until(
 				() => evaluate(cdp, `!!document.querySelector('.composer textarea')`),

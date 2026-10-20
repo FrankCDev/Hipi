@@ -91,7 +91,11 @@ const zh = {
 	"nav.workspaceDescription": "为相关工作与会话命名。",
 	"nav.conversationDescription": "用简短的名称描述这次工作。",
 	"work.jumpLatest": "回到最新消息",
-	"work.generating": "正在生成回复…",
+	"work.generating": "思考中",
+	"work.showMore": "展开",
+	"work.showLess": "收起",
+	"work.responseStarted": "回复已开始",
+	"work.responseComplete": "回复完成",
 	"receipt.details": "会话详情",
 	"receipt.recoveryTitle": "提交结果待核对",
 	"connection.storeMismatch": "运行时的数据目录已改变。请断开并重新连接；原工作区的草稿和待核对请求不会迁移。",
@@ -132,6 +136,7 @@ const zh = {
 	"connection.connect": "连接",
 	"connection.disconnect": "断开连接",
 	"connection.confirmDisconnect": "确认断开",
+	"connection.reviewChanged": "确认期间文件工作状态已改变。请重新查看提示，再确认是否断开。",
 	"connection.leaveNote":
 		"断开不会取消运行时执行。浏览器存储可用时，草稿和待核对请求将在重新连接到同一数据目录后恢复。令牌不会保存。",
 	"connection.invalid": "请使用运行时提供的 http://127.0.0.1 地址和令牌。",
@@ -284,7 +289,11 @@ const en: Record<Key, string> = {
 	"nav.workspaceDescription": "Give related work and conversations a shared home.",
 	"nav.conversationDescription": "Give this work a short, recognizable title.",
 	"work.jumpLatest": "Jump to latest",
-	"work.generating": "Generating a response…",
+	"work.generating": "Thinking",
+	"work.showMore": "Show more",
+	"work.showLess": "Show less",
+	"work.responseStarted": "Response started",
+	"work.responseComplete": "Response complete",
 	"receipt.details": "Conversation details",
 	"receipt.recoveryTitle": "Check submission outcome",
 	"connection.storeMismatch":
@@ -328,6 +337,8 @@ const en: Record<Key, string> = {
 	"connection.connect": "Connect",
 	"connection.disconnect": "Disconnect",
 	"connection.confirmDisconnect": "Confirm disconnect",
+	"connection.reviewChanged":
+		"File work changed while this confirmation was open. Review the warning before confirming again.",
 	"connection.leaveNote":
 		"Disconnecting does not cancel execution. When browser storage is available, drafts and pending requests restore after reconnecting to the same store. Tokens are never saved.",
 	"connection.invalid": "Use the runtime's http://127.0.0.1 address and token.",

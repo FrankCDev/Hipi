@@ -9,8 +9,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { ApprovalCard } from "../src/features/agent-permissions/approval-card.tsx";
 import type { ActivityState } from "../src/features/tool-activities/activity-session.ts";
+import { ActivityTranscriptProvider } from "../src/features/tool-activities/activity-transcript.tsx";
 import { activityLabels } from "../src/features/tool-activities/labels.ts";
-import { ToolActivities } from "../src/features/tool-activities/tool-activities.tsx";
+import { ActivityHistoryAction, ToolActivities } from "../src/features/tool-activities/tool-activities.tsx";
 
 const fixture = vi.hoisted(() => ({ state: { busy: false, failed: false } as ActivityState, locale: "en" }));
 vi.mock("../src/app/client-provider.tsx", () => ({ useAppClient: () => ({}) }));
@@ -52,20 +53,25 @@ function activityMarkup(connected = true, running = false) {
 		/>,
 	);
 }
-test("idle and empty scanned pages retain a named compact disclosure without implying completion", () => {
+test("idle and empty scanned pages do not add composer chrome; progressive details retains history access", () => {
 	for (const page of [
 		undefined,
 		{ items: [], nextCursor: "more-records", coverage: "tasks" as const, membershipFence: "fence" },
 	]) {
 		fixture.state = { busy: false, failed: false, page };
 		const html = activityMarkup(true, true);
-		assert.match(html, /data-state="idle"/);
-		assert.match(html, /View activity/);
-		assert.match(html, /aria-haspopup="dialog"/);
-		assert.match(html, /aria-expanded="false"/);
-		assert.match(html, /aria-controls=/);
+		assert.doesNotMatch(html, /activity-context|View activity/);
 		assert.doesNotMatch(html, /No activity in this scanned page|Records not yet read|Execution completed|Last read/);
 	}
+	const details = renderToStaticMarkup(
+		<ActivityTranscriptProvider scope={scope} connected running={false}>
+			<ActivityHistoryAction />
+		</ActivityTranscriptProvider>,
+	);
+	assert.match(details, /View activity/);
+	assert.match(details, /aria-haspopup="dialog"/);
+	assert.match(details, /aria-expanded="false"/);
+	assert.match(details, /aria-controls=/);
 	assert.equal(
 		activityLabels("en")["activity.empty"],
 		"No activity in this scanned page. More records may be available on the next page.",

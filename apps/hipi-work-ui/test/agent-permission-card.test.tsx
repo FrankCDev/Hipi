@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { parseAgentContext, parseFileOperation, parseToolApproval } from "@hipi/work-runtime/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "vitest";
+import { ThemeProvider } from "../src/app/theme/provider.tsx";
 import { ApprovalCard } from "../src/features/agent-permissions/approval-card.tsx";
 
 const scope = { workspaceId: "workspace", conversationId: "conversation" };
@@ -59,18 +60,22 @@ const operation = parseFileOperation({
 });
 function render(status: typeof approval.status = "pending", locale = "en", revoked = false, atCapacity = false) {
 	return renderToStaticMarkup(
-		<ApprovalCard
-			approval={{ ...approval, status }}
-			operation={operation}
-			contexts={[{ ...grant, status: revoked ? "revoked" : "active" }]}
-			now={2}
-			locale={locale}
-			disabled={false}
-			approveDisabled={atCapacity}
-			reconcileDisabled={false}
-			onDecide={() => {}}
-			onReconcile={() => {}}
-		/>,
+		// The application supplies this through PreferencesProvider. Keep the
+		// actual themed diff renderer in this isolated approval-card fixture.
+		<ThemeProvider>
+			<ApprovalCard
+				approval={{ ...approval, status }}
+				operation={operation}
+				contexts={[{ ...grant, status: revoked ? "revoked" : "active" }]}
+				now={2}
+				locale={locale}
+				disabled={false}
+				approveDisabled={atCapacity}
+				reconcileDisabled={false}
+				onDecide={() => {}}
+				onReconcile={() => {}}
+			/>
+		</ThemeProvider>,
 	);
 }
 test("review card exposes bound identity, truncation and honest read-only outcome", () => {
@@ -86,6 +91,7 @@ test("review card exposes bound identity, truncation and honest read-only outcom
 	])
 		assert.ok(html.includes(text), text);
 	assert.match(html, /<summary>Review proposed diff<\/summary>/);
+	assert.match(html, /class="file-diff pierre-diff"/);
 	assert.doesNotMatch(html, /disabled=""/);
 });
 test("all nonpending or revoked approvals render disabled decision buttons, with bilingual labels", () => {

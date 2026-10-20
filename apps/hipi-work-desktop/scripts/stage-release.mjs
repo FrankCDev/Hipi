@@ -2,7 +2,21 @@ import { cp, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/p
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import maintenance from "../packaging/linux-maintenance.cjs";
+import {
+	assertCodeMirrorDependencies,
+	codeMirrorInventorySha256,
+	codeMirrorPackageForOwner,
+	codeMirrorPackages,
+	readCodeMirrorLicenseFiles,
+} from "./codemirror-licenses.mjs";
 import { assertFontAsset, fontAssets } from "./font-assets.mjs";
+import {
+	assertPierreDependencies,
+	pierreInventorySha256,
+	pierrePackageForOwner,
+	pierrePackages,
+	readPierreLicenseFiles,
+} from "./pierre-licenses.mjs";
 import {
 	allowedPayload,
 	assertBrandIcon,
@@ -42,6 +56,12 @@ if (JSON.stringify(sourceSnapshot.bundles) !== JSON.stringify(await inventory(jo
 	throw new Error("Build output differs from the recorded source snapshot; run build-release.mjs again");
 }
 await requireFiles(desktop, requiredFiles);
+await assertPierreDependencies(root, lock);
+await assertCodeMirrorDependencies(root, lock);
+await readPierreLicenseFiles(join(root, "apps/hipi-work-ui/vendor/pierre"));
+await readPierreLicenseFiles(join(desktop, "dist/third-party/pierre"));
+await readCodeMirrorLicenseFiles(join(root, "apps/hipi-work-ui/vendor/codemirror"));
+await readCodeMirrorLicenseFiles(join(desktop, "dist/third-party/codemirror"));
 const payload = (await filesUnder(join(desktop, "dist"))).map((file) => `dist/${file}`);
 for (const file of payload) {
 	// Build diagnostics are intentionally never shipped. Everything else must be reviewed.
@@ -58,6 +78,8 @@ for (const file of payload.filter(allowedPayload)) {
 	await mkdir(dirname(join(stage, file)), { recursive: true });
 	await cp(join(desktop, file), join(stage, file));
 }
+await readPierreLicenseFiles(join(stage, "dist/third-party/pierre"));
+await readCodeMirrorLicenseFiles(join(stage, "dist/third-party/codemirror"));
 await cp(join(root, "LICENSE"), join(stage, "LICENSE"));
 await writeFile(
 	join(stage, "package.json"),
@@ -111,14 +133,26 @@ while (queue.length) {
 	if (seen.has(location)) continue;
 	seen.add(location);
 	const info = JSON.parse(await readFile(join(location, "package.json"), "utf8"));
+	const key = relative(root, location).replaceAll("\\", "/");
+	const locked = lock.packages[key];
+	const pierre = pierrePackageForOwner(key, info, locked);
+	const codeMirror = codeMirrorPackageForOwner(key, info, locked);
+	const reviewedOwner = pierre ?? codeMirror;
+	const reviewedDirectory = pierre ? "pierre" : "codemirror";
 	const id = `${info.name.replaceAll("/", "__")}@${info.version}`;
-	const publicFiles = (await readdir(location)).filter((file) =>
-		/^(?:licen[sc]e|copying|notice)(?:[._-].*)?$/i.test(file),
-	);
-	const licenseFiles = [];
+	const publicFiles = reviewedOwner
+		? []
+		: (await readdir(location)).filter((file) => /^(?:licen[sc]e|copying|notice)(?:[._-].*)?$/i.test(file));
+	const licenseFiles = reviewedOwner
+		? reviewedOwner.notices.map((notice) => `dist/third-party/${reviewedDirectory}/${notice.file}`)
+		: [];
 	const workspaceOwned = !location.replaceAll("\\", "/").includes("/node_modules/");
 	if (workspaceOwned && publicFiles.length === 0) licenseFiles.push("LICENSE");
-	let licenseSource = workspaceOwned && publicFiles.length === 0 ? "repository-root-license" : "package-distribution";
+	let licenseSource = reviewedOwner
+		? `dist/third-party/${reviewedDirectory}/inventory.json#${reviewedOwner.path}`
+		: workspaceOwned && publicFiles.length === 0
+			? "repository-root-license"
+			: "package-distribution";
 	if (info.name === "isarray" && info.version === "1.0.0" && publicFiles.length === 0) {
 		const readme = await readFile(join(location, "README.md"), "utf8");
 		const start = readme.indexOf("## License\n");
@@ -154,8 +188,6 @@ while (queue.length) {
 		await cp(join(location, file), join(stage, target));
 		licenseFiles.push(target);
 	}
-	const key = relative(root, location).replaceAll("\\", "/");
-	const locked = lock.packages[key];
 	dependencies.push({
 		name: info.name,
 		version: info.version,
@@ -191,6 +223,18 @@ const provenance = {
 	vite: manifest.devDependencies.vite,
 	lockSha256: sha256(await readFile(join(root, "package-lock.json"))),
 	modelCatalogPin: JSON.parse(await readFile(join(desktop, "packaging/model-catalog.json"), "utf8")),
+	pierreLicenseInventory: {
+		file: "dist/third-party/pierre/inventory.json",
+		sha256: pierreInventorySha256,
+		scope: "reviewed-installed-closure; bundled owners listed separately in dependency-licenses.json",
+		installedPackageCount: pierrePackages.length,
+	},
+	codeMirrorLicenseInventory: {
+		file: "dist/third-party/codemirror/inventory.json",
+		sha256: codeMirrorInventorySha256,
+		scope: "reviewed-installed-closure; bundled owners listed separately in dependency-licenses.json",
+		installedPackageCount: codeMirrorPackages.length,
+	},
 	...(linuxMaintenance ? { linuxMaintenanceRuntime: linuxMaintenance } : {}),
 	sourceSnapshotSha256: sourceSnapshot.sourceSnapshotSha256,
 	sourceSnapshot: sourceSnapshot.sourceSnapshot,

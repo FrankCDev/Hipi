@@ -1,0 +1,254 @@
+/* Original sidebar construction; layout tokens follow the desktop reference. */
+nav .workspace-tree {
+	gap: 4px;
+	font-size: calc(var(--font-ui-size) - 1px);
+}
+
+.workspace-tree .sidebar-preview-row {
+	height: 36px;
+	min-height: 36px;
+	padding-inline: 8px;
+	gap: 8px;
+	border-radius: 9999px;
+}
+
+.workspace-tree .project-row {
+	gap: 0;
+	padding-inline: 4px 8px;
+}
+
+.workspace-tree .project-toggle,
+.workspace-tree .project-open {
+	height: 36px;
+	min-height: 36px;
+	font: inherit;
+	color: inherit;
+}
+
+.workspace-tree .project-toggle {
+	flex: 0 0 16px;
+	padding: 0;
+}
+
+.workspace-tree .project-open {
+	gap: 8px;
+	padding: 0 8px 0 0;
+}
+
+.workspace-tree .project-name {
+	font-weight: 430;
+}
+
+.workspace-tree .project-conversations {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.workspace-tree .conversation-list {
+	display: grid;
+	gap: 0;
+}
+
+.workspace-tree .project-conversations .conversation-link {
+	min-height: 36px;
+	height: 36px;
+	padding: 0 0 0 36px;
+	font: inherit;
+}
+
+.workspace-tree .sidebar-row-actions {
+	display: flex;
+	align-items: center;
+	flex: 0 0 auto;
+	gap: 0;
+	height: 36px;
+}
+
+.workspace-tree .project-actions-trigger,
+.workspace-tree .project-new-conversation,
+.workspace-tree .recent-actions-trigger,
+.workspace-tree .conversation-actions-trigger {
+	flex: 0 0 28px;
+	width: 28px;
+	height: 28px;
+	min-height: 28px;
+	margin: 0;
+	padding: 0;
+	color: var(--muted);
+	border-radius: 10px;
+	transition:
+		opacity 150ms,
+		color 150ms;
+}
+
+.workspace-tree .sidebar-preview-row:has([data-state="open"]),
+.workspace-tree .sidebar-preview-row[data-selected="true"] {
+	background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
+}
+
+.workspace-tree .sidebar-row-actions > button:hover,
+.workspace-tree .conversation-actions-trigger:hover {
+	color: var(--text);
+	background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.workspace-tree .project-archive-label {
+	margin: 4px 0;
+	padding-inline: 36px 8px;
+	color: var(--muted);
+	font-size: calc(var(--font-ui-size) - 2px);
+}
+
+.workspace-tree .recent-conversations {
+	margin-top: 16px;
+}
+
+.workspace-tree .recent-conversations-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	min-height: 36px;
+	padding-inline: 8px;
+}
+
+.workspace-tree .recent-conversations-heading h3 {
+	margin: 0;
+	font: inherit;
+	color: var(--muted);
+}
+
+.workspace-tree .recent-conversations .conversation-link {
+	padding-inline-start: 0;
+}
+
+.workspace-tree .recent-conversations .project-archive-label {
+	padding-inline-start: 8px;
+}
+
+.workspace-tree .recent-conversations :is(.nav-feedback, .catalog-pagination) {
+	margin-inline-start: 8px;
+}
+
+.workspace-tree .nav-feedback,
+.workspace-tree .catalog-pagination {
+	margin-inline: 28px 8px;
+}
+
+.workspace-tree .project-pagination button {
+	font: inherit;
+	color: var(--muted);
+}
+
+[data-slot="popover-content"].conversation-preview-card {
+	width: min(360px, calc(100vw - 24px));
+	border: 0.5px solid var(--line);
+	border-radius: 12px;
+	padding: 10px;
+	box-shadow: 0 8px 24px var(--shadow);
+}
+
+.conversation-preview-card .preview-heading,
+.sidebar-menu-preview .preview-heading {
+	display: flex;
+	flex-direction: row;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.sidebar-menu-preview h2,
+[data-slot="popover-content"].conversation-preview-card h2 {
+	margin: 0;
+	font-size: var(--font-ui-size);
+	line-height: 1.43;
+	font-weight: 500;
+}
+
+.conversation-preview-card .preview-title,
+.sidebar-menu-preview .preview-title {
+	flex: 1;
+	min-width: 0;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 3;
+	overflow: hidden;
+}
+
+.conversation-preview-card .preview-created,
+.sidebar-menu-preview .preview-created {
+	display: block;
+	flex-shrink: 0;
+	color: var(--muted);
+	font-size: calc(var(--font-ui-size) - 2px);
+	line-height: 1.67;
+	white-space: nowrap;
+}
+
+.conversation-preview-card .preview-workspace,
+.sidebar-menu-preview .preview-workspace {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 8px 0 0;
+	color: var(--muted);
+	font-size: calc(var(--font-ui-size) - 1px);
+	font-weight: 430;
+}
+
+.conversation-preview-card .project-preview-title,
+.sidebar-menu-preview .project-preview-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+[data-slot="dropdown-menu-content"].conversation-action-menu,
+[data-slot="dropdown-menu-content"].project-action-menu {
+	width: min(320px, calc(100vw - 24px));
+}
+
+[data-slot="dropdown-menu-label"].sidebar-menu-preview {
+	padding: 8px;
+	overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .recent-actions-trigger,
+	.workspace-tree .conversation-actions-trigger {
+		opacity: 0;
+	}
+
+	.workspace-tree .sidebar-preview-row:hover .sidebar-row-actions,
+	.workspace-tree .sidebar-preview-row:focus-within .sidebar-row-actions,
+	.workspace-tree .sidebar-row-actions:has([data-state="open"]),
+	.workspace-tree .recent-conversations-heading:hover .recent-actions-trigger,
+	.workspace-tree .recent-conversations-heading:focus-within .recent-actions-trigger,
+	.workspace-tree .recent-actions-trigger[data-state="open"],
+	.workspace-tree .sidebar-preview-row:hover .conversation-actions-trigger,
+	.workspace-tree .sidebar-preview-row:focus-within .conversation-actions-trigger,
+	.workspace-tree .conversation-actions-trigger[data-state="open"] {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .workspace-tree .project-actions-trigger,
+	:root:not([data-reduced-motion="off"]) .workspace-tree .project-new-conversation,
+	:root:not([data-reduced-motion="off"]) .workspace-tree .recent-actions-trigger,
+	:root:not([data-reduced-motion="off"]) .workspace-tree .conversation-actions-trigger {
+		transition: none;
+	}
+}
+
+:root[data-reduced-motion="on"] .workspace-tree button {
+	transition: none;
+}
+
+@media (any-pointer: coarse) {
+	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .recent-actions-trigger,
+	.workspace-tree .conversation-actions-trigger {
+		opacity: 1;
+	}
+}

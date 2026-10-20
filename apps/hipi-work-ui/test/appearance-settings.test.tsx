@@ -21,16 +21,21 @@ test("production provider restores locale from versioned storage for existing UI
 		<PreferencesProvider>
 			<TranslationProbe />
 			<AppearanceSettings />
-			<SettingsForm onSave={() => {}} onCancel={() => {}} />
+			<SettingsForm />
 		</PreferencesProvider>,
 	);
 	assert.match(html, /lang="en">Cancel/);
 	assert.match(html, /Appearance and language/);
-	assert.match(html, /aria-haspopup="dialog"/);
+	assert.doesNotMatch(html, /aria-haspopup="dialog"/);
 	assert.match(html, /role="combobox"/);
-	assert.match(html, /Export current JSON/);
-	assert.match(html, /Preview JSON/);
-	assert.match(html, /Code editor and diff/);
+	assert.match(html, /Copy theme/);
+	assert.match(html, /Import theme/);
+	assert.match(html, /Code font size/);
+	assert.match(html, /aria-label="UI font size"[^>]*min="11"[^>]*max="16"[^>]*step="1"/);
+	assert.match(html, /aria-label="Code font size"[^>]*min="8"[^>]*max="24"[^>]*step="1"[^>]*value="12"/);
+	assert.match(html, /class="settings-control-group settings-mode-group"/);
+	assert.match(html, /<details class="settings-advanced" data-setting="advanced">/);
+	assert.doesNotMatch(html, /settings-savebar|Settings JSON/);
 });
 test("bad saved data renders recovery notice and original export, while denied storage renders honest memory notice", () => {
 	vi.stubGlobal("window", { localStorage: { getItem: (key: string) => (key === themeStorageKey ? "broken" : null) } });
@@ -38,7 +43,7 @@ test("bad saved data renders recovery notice and original export, while denied s
 		renderToStaticMarkup(
 			<PreferencesProvider>
 				<AppearanceSettings />
-				<SettingsForm onSave={() => {}} onCancel={() => {}} />
+				<SettingsForm />
 			</PreferencesProvider>,
 		);
 	assert.match(render(), /已保存配置无效/);

@@ -15,11 +15,15 @@ import {
 import { Input } from "../../components/ui/input.tsx";
 import { ReopenRequest } from "./reopen-request.ts";
 
+export type DisconnectConfirmation = { warning?: string; commit: () => boolean };
+
 export function ConnectionActions({
 	disconnect,
+	prepareDisconnect,
 	onOpen,
 }: {
 	disconnect: () => void;
+	prepareDisconnect?: () => DisconnectConfirmation;
 	onOpen: (workspace: Workspace, conversation: Conversation) => void;
 }) {
 	const client = useAppClient();
@@ -27,6 +31,15 @@ export function ConnectionActions({
 	const conversationInputId = useId();
 	const { t } = usePreferences();
 	const [reopen, setReopen] = useState(false);
+	const [disconnecting, setDisconnecting] = useState<DisconnectConfirmation | null>(null);
+	const [changed, setChanged] = useState(false);
+	const prepare = () =>
+		prepareDisconnect?.() ?? {
+			commit: () => {
+				disconnect();
+				return true;
+			},
+		};
 	const [workspaceId, setWorkspaceId] = useState("");
 	const [conversationId, setConversationId] = useState("");
 	const [request] = useState(() => new ReopenRequest());
@@ -98,7 +111,13 @@ export function ConnectionActions({
 					</form>
 				</DialogContent>
 			</Dialog>
-			<Dialog>
+			<Dialog
+				open={disconnecting !== null}
+				onOpenChange={(open) => {
+					setChanged(false);
+					setDisconnecting(open ? prepare() : null);
+				}}
+			>
 				<DialogTrigger asChild>
 					<Button variant="ghost" className="w-full justify-start">
 						{t("connection.disconnect")}
@@ -107,11 +126,26 @@ export function ConnectionActions({
 				<DialogContent closeLabel={t("common.close")}>
 					<DialogTitle className="text-lg font-semibold">{t("connection.disconnect")}</DialogTitle>
 					<DialogDescription className="small-copy">{t("connection.leaveNote")}</DialogDescription>
+					{disconnecting?.warning && <p className="notice">{disconnecting.warning}</p>}
+					{changed && (
+						<p className="notice" role="alert">
+							{t("connection.reviewChanged")}
+						</p>
+					)}
 					<div className="flex justify-end gap-2">
 						<DialogClose asChild>
 							<Button variant="ghost">{t("common.cancel")}</Button>
 						</DialogClose>
-						<Button onClick={disconnect}>{t("connection.confirmDisconnect")}</Button>
+						<Button
+							onClick={() => {
+								if (!disconnecting?.commit()) {
+									setDisconnecting(prepare());
+									setChanged(true);
+								} else setDisconnecting(null);
+							}}
+						>
+							{t("connection.confirmDisconnect")}
+						</Button>
 					</div>
 				</DialogContent>
 			</Dialog>

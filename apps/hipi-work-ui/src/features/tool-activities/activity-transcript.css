@@ -1,0 +1,33 @@
+.inline-activity {
+	margin-block: 12px;
+	color: var(--muted);
+	font-size: var(--font-ui-size);
+}
+.inline-activity-toggle {
+	max-width: 100%;
+	justify-content: flex-start;
+	padding-inline: 0;
+	font-weight: 400;
+}
+.inline-activity-toggle > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.inline-activity-count,
+.inline-activity-phase {
+	color: var(--muted);
+	font-size: 0.85em;
+}
+.inline-activity-details {
+	margin-block-start: 8px;
+	padding-inline-start: 14px;
+	border-inline-start: 1px solid var(--line);
+	display: grid;
+	gap: 8px;
+}
+.inline-activity-details > article {
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	padding: 8px;
+}

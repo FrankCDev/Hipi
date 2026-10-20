@@ -7,24 +7,43 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { smokeProfile } from "../src/smoke-profile.ts";
-import { assertScenarioWorkspaceDatabases, createGuiProfile, sourceProvenanceEvidence } from "./smoke-packaged-gui.mjs";
+import {
+	assertScenarioWorkspaceDatabases,
+	baselineResponseArguments,
+	createGuiProfile,
+	sourceProvenanceEvidence,
+} from "./smoke-packaged-gui.mjs";
 
-test("baseline validates both exact owned workspace databases while other scenarios retain one", async () => {
+test("known stream response is opt-in only for the isolated baseline scenario", () => {
+	assert.deepEqual(baselineResponseArguments("baseline"), [
+		"--smoke-response=baseline-stream",
+		"--smoke-scenario=baseline",
+	]);
+	for (const scenario of ["long-history", "file-workbench"]) assert.deepEqual(baselineResponseArguments(scenario), []);
+	for (const scenario of [undefined, "normal", "production", "baseline-other"])
+		assert.throws(() => baselineResponseArguments(scenario), /Unknown fixed GUI scenario/);
+});
+
+test("baseline and file flow validate both exact owned workspace databases; long history retains one", async () => {
 	const root = await createGuiProfile();
 	try {
 		for (const workspace of ["a", "b"]) {
 			await mkdir(join(root, workspace));
 			for (const file of ["owner.sqlite", "workspace.sqlite"]) await writeFile(join(root, workspace, file), "fixture");
 		}
-		await assertScenarioWorkspaceDatabases(root, "baseline");
-		for (const scenario of ["long-history", "file-workbench"])
+		for (const scenario of ["baseline", "file-workbench"]) await assertScenarioWorkspaceDatabases(root, scenario);
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "long-history"), /workspace count/);
+		await mkdir(join(root, "unexpected-third"));
+		for (const scenario of ["baseline", "file-workbench", "long-history"])
 			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /workspace count/);
+		await rm(join(root, "unexpected-third"), { recursive: true });
 		await rm(join(root, "b", "workspace.sqlite"));
-		await assert.rejects(assertScenarioWorkspaceDatabases(root, "baseline"), /ENOENT/);
+		for (const scenario of ["baseline", "file-workbench"])
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /ENOENT/);
 		await rm(join(root, "b"), { recursive: true });
-		await assert.rejects(assertScenarioWorkspaceDatabases(root, "baseline"), /workspace count/);
+		for (const scenario of ["baseline", "file-workbench"])
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /workspace count/);
 		await assertScenarioWorkspaceDatabases(root, "long-history");
-		await assertScenarioWorkspaceDatabases(root, "file-workbench");
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

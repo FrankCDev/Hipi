@@ -1,37 +1,51 @@
 .capability-actions {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
-	gap: 0.25rem;
+	gap: 4px;
 	min-width: 0;
 }
-
 .capability-actions > button {
-	min-height: 2rem;
-	border-radius: 999px;
-	font-size: 0.8125rem;
+	height: 28px;
+	min-height: 28px;
+	border-radius: 6px;
+	font-size: 13px;
 	color: var(--muted);
 }
-
 .capability-actions > button:hover:not(:disabled),
 .capability-actions > button[aria-expanded="true"] {
 	background: var(--brand-soft);
 	color: var(--text);
 }
-
-.capability-actions > .capabilities-trigger {
-	padding-inline: 0.5rem;
+.composer-add-trigger {
+	width: 28px;
+	padding: 0;
 }
-
-.capability-actions > .capabilities-trigger > span {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	overflow: hidden;
-	clip-path: inset(50%);
-	white-space: nowrap;
+.permission-mode-trigger {
+	gap: 4px;
+	padding: 4px 6px;
 }
-
+.composer-add-menu {
+	width: min(260px, calc(100vw - 24px));
+}
+.conversation-options-dialog {
+	width: min(640px, calc(100vw - 32px));
+	max-width: 640px;
+	max-height: calc(100dvh - 48px);
+	border-radius: 16px;
+}
+.conversation-options-dialog > [data-slot="dialog-title"] {
+	padding-right: 24px;
+}
+.conversation-options-dialog [data-slot="dialog-body"] {
+	display: grid;
+	gap: 12px;
+	font-size: 13px;
+}
 .context-consent-dialog {
 	overscroll-behavior: contain;
+}
+@container composer-footer (max-width: 475px) {
+	.permission-mode-trigger > span {
+		display: none;
+	}
 }

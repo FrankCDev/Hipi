@@ -28,6 +28,7 @@ function renderTree(
 	nextCursor: string | null = "next-page",
 	search = "",
 	selectedConversation = "conversation-id",
+	defaultWorkspaceId?: string,
 ) {
 	const cache = new QueryClient();
 	cache.setQueryData(["conversations", "workspace-id", "active", "pages"], {
@@ -59,14 +60,14 @@ function renderTree(
 						name: `My project ${index}`,
 					}))}
 					selectedWorkspace="workspace-id"
+					defaultWorkspaceId={defaultWorkspaceId}
 					selectedConversation={selectedConversation}
 					search={search}
 					isExpanded={() => expanded}
 					onToggle={() => {}}
 					onOpenProject={() => {}}
 					onSelect={() => {}}
-					onDetails={() => {}}
-					onCreate={async () => {}}
+					onNewConversation={() => {}}
 				/>
 			</PreferencesProvider>
 		</QueryClientProvider>,
@@ -86,13 +87,13 @@ test("current conversation and its containing project have distinct surfaces wit
 	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
 	assert.match(html, />收起项目<\/span>/);
 	assert.match(html, />打开项目<\/span>/);
-	assert.match(html, /aria-label="新建会话"/);
+	assert.match(html, /aria-label="新建会话: My project 0"/);
 	assert.match(html, /aria-label="会话操作: My conversation"/);
 	assert.match(html, /aria-haspopup="menu"/);
 	assert.equal(
 		(html.match(/lucide-ellipsis/g) ?? []).length,
 		2,
-		"one preview action per workspace and one menu per conversation",
+		"one management menu per workspace and one menu per conversation",
 	);
 	assert.doesNotMatch(html, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*<button\b/);
 });
@@ -146,7 +147,7 @@ test("a catalog page is rendered without the old lifetime slice and pagination r
 	assert.match(html, /My project 19/);
 	const expanded = renderTree(true);
 	assert.match(expanded, /加载更多/);
-	assert.match(expanded, /已归档会话|会话列表/);
+	assert.match(expanded, /项目操作: My project 0/);
 	assert.match(expanded, /会话操作: My conversation/);
 	assert.doesNotMatch(expanded, /重命名会话/);
 	assert.doesNotMatch(expanded, />归档会话</);
@@ -158,30 +159,35 @@ test("single-page conversation lists omit inert pagination without hiding their 
 	assert.match(html, /会话操作: My conversation/);
 });
 
-test("project filters are native radio groups and counts explicitly describe the visible loaded items", () => {
+test("healthy project lists contain no persistent filter bar, counts or creation dialog", () => {
 	const html = renderTree(true);
-	assert.match(html, /<fieldset class="conversation-filter-tabs"><legend class="sr-only">会话列表<\/legend>/);
-	assert.match(html, /type="radio"[^>]*aria-label="当前会话"[^>]*checked=""/);
-	assert.match(html, /type="radio"[^>]*aria-label="已归档会话"/);
-	const names = [...html.matchAll(/type="radio"[^>]*name="([^"]+)"/g)].map((match) => match[1]);
-	assert.equal(names.length, 2);
-	assert.equal(names[0], names[1]);
-	assert.doesNotMatch(html, /project-page-summary|project-match-count/);
-	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">已加载并显示: <\/span>1<\/span>/);
+	assert.doesNotMatch(
+		html,
+		/conversation-filter-tabs|project-list-toolbar|project-page-summary|project-match-count|project-page-count|role="dialog"/,
+	);
+	assert.match(html, /project-actions-trigger/);
+	assert.match(html, /project-new-conversation/);
 	assert.match(html, /class="project-pagination"/);
 });
 
-test("search counts visible matches without replacing the loaded count or injecting the current conversation", () => {
+test("search keeps bounded pagination without counters or injecting the current conversation", () => {
 	const html = renderTree(true, 1, "next-page", "not on this page");
-	assert.match(
-		html,
-		/<button[^>]*class="[^"]*project-match-count[^>]*"[^>]*aria-label="已显示条目中的匹配: 0"[^>]*>0<\/button>/,
-	);
-	assert.doesNotMatch(html, /project-page-summary/);
-	assert.match(html, /class="subtle-count project-page-count"><span class="sr-only">已加载并显示: <\/span>1<\/span>/);
+	assert.doesNotMatch(html, /project-page-summary|project-match-count|project-page-count/);
 	assert.match(html, /没有匹配的会话/);
 	assert.doesNotMatch(html, /class="conversation-link"/);
 	assert.match(html, /加载更多/);
+});
+
+test("only the verified default workspace becomes Recent and remains available outside the project catalog window", () => {
+	const known = renderTree(false, 1, null, "", "conversation-id", "workspace-id");
+	assert.match(known, /recent-conversations-heading/);
+	assert.match(known, />最近<\/h3>/);
+	assert.match(known, /class="conversation-link"/);
+	assert.doesNotMatch(known, /project-row|project-toggle|project-open|project-new-conversation|My project 0/);
+	const outsideWindow = renderTree(false, 1, null, "", "conversation-id", "verified-default");
+	assert.match(outsideWindow, /My project 0/);
+	assert.match(outsideWindow, /recent-conversations-heading/);
+	assert.equal((outsideWindow.match(/class="project-toggle"/g) ?? []).length, 1);
 });
 
 test("selected conversation remains mounted when it is outside the displayed directory page", () => {

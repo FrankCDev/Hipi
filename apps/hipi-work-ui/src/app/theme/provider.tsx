@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { applyTheme } from "./application.ts";
-import type { ThemeConfig } from "./config.ts";
+import { exportAppearanceShare } from "./config.ts";
+import { applyLocalFontFaces } from "./local-font-faces.ts";
 import { ThemeStore } from "./store.ts";
 
 function browserStore() {
@@ -19,7 +20,15 @@ function useThemeController() {
 		setConfig(store.current);
 	}, [store]);
 	useEffect(() => {
-		return applyTheme(config, document.documentElement, window.matchMedia?.("(prefers-color-scheme: dark)"));
+		return applyLocalFontFaces(config.localFontFaces);
+	}, [config.localFontFaces]);
+	useEffect(() => {
+		return applyTheme(
+			config,
+			document.documentElement,
+			window.matchMedia?.("(prefers-color-scheme: dark)"),
+			window.matchMedia?.("(prefers-reduced-motion: reduce)"),
+		);
 	}, [config]);
 	return {
 		config,
@@ -37,14 +46,15 @@ function useThemeController() {
 			setConfig(store.current);
 			return result;
 		},
-		update(value: ThemeConfig) {
-			const result = store.setPreview(value);
+		update(value: unknown) {
+			const result = store.update(value);
 			if (result.ok) {
-				setStatus(store.save());
+				setStatus(result.status);
 				setConfig(store.current);
 			}
+			return result;
 		},
-		export: () => store.export(),
+		export: () => exportAppearanceShare(store.current),
 	};
 }
 const Context = createContext<ReturnType<typeof useThemeController> | null>(null);

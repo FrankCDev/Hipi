@@ -8,6 +8,16 @@
 
 输入、保存和预览仍受应用自己的文件授权、字节限制、版本检查与资源生命周期管理。安装 CodeMirror 不等于完成 IME、无障碍或大文件性能验收。
 
+### 2026-10-20：编辑器、差异与树的公共组件栈
+
+普通文本/代码改用固定 `@pierre/diffs 1.5.2` 的公开 `Editor` / `TextDocument` / `CodeView`，比较视图改用该库的只读 `FileDiff`。Markdown 继续使用上述 CodeMirror 三个编辑包；不再使用的 `@codemirror/merge` 已从直接依赖移除。文件树使用固定 `@pierre/trees 1.0.0-beta.6`。Pierre 两包为 Apache-2.0，来源为 [官方仓库](https://github.com/pierrecomputer/pierre) 和 npm 同名发布包。参考产品实际打包版本未知，不能声称精确版本一致。
+
+直接固定 `shiki 4.5.0`（MIT），与 Pierre 已解析版本共用。普通文件适配器显式选择 JavaScript 引擎、禁用可选 worker pool，只登记静态导入的 CSS、HTML、JavaScript、JSON、Python、shell、TypeScript、YAML 语法；未支持扩展名退回纯文本。主题由原始应用语义令牌适配生成。没有 CDN、远端语法/主题地址或放宽 CSP。依赖本身仍含未选用的加载器；最终 Vite 本地产物图与打包后离线加载需要发布门禁验证，不以此源码检查代替。
+
+三包的安装依赖闭包共 55 个已安装条目，包括共享和仅类型依赖，不等于最终浏览器打包数量。已检查全部条目的许可证与 `preinstall` / `install` / `postinstall`：许可证为 Apache-2.0、MIT、ISC 或 BSD-3-Clause，没有上述安装脚本。精确版本、integrity 与原始 LICENSE/NOTICE 的 SHA-256 在 [依赖清单](../../apps/hipi-work-ui/vendor/pierre/inventory.json)；原始通知及来源在 [保留目录](../../apps/hipi-work-ui/vendor/pierre/README.md)。`lru_map` 的完整 MIT 通知来自其 npm README，Pierre 主题的 Primer 通知亦保留。执行的安装/卸载均带 `--ignore-scripts`。
+
+编辑器适配层不拥有第二个保存状态机。128 KiB 事务界限在公共 `TextDocument` 扩展点、进入撤销历史之前检查；标签仅持有内存视图/历史状态。CAS、保存结果未知、冲突恢复与权限仍由现有文件会话拥有。恢复核对/采用版本不会触发自动保存，必须再次编辑或明确保存后才恢复。以上说明不是安全公告扫描、完整浏览器行为或三平台验收结论。
+
 ## 文档解析
 
 - `mammoth 1.13.0`，BSD-2-Clause：[官方仓库与安全说明](https://github.com/mwilliamson/mammoth.js)。只用 Buffer 的纯文本提取，不采用 HTML 转换。外部资源禁用不等于资源耗尽防护，需要独立工作线程、预检和超时终止。

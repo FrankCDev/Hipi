@@ -4,6 +4,7 @@ import {
 	browserStorage,
 	LocalPersistence,
 	type SavedEntry,
+	type SavedPending,
 	type SavedValue,
 	validTaskDraft,
 } from "./local-persistence.ts";
@@ -14,6 +15,7 @@ export class LocalState {
 	navigation: NavigationIndex = { workspaces: [], conversations: [] };
 	readonly #values = new Map<string, SavedValue>();
 	readonly #pending = new Map<string, Submit>();
+	readonly #pendingDraftRevisions = new Map<string, string | null>();
 	readonly #unconfirmed = new Set<string>();
 	readonly #confirmed = new Set<string>();
 	readonly #persistence: LocalPersistence | undefined;
@@ -37,6 +39,8 @@ export class LocalState {
 				if (entry.kind === "value") this.#values.set(entry.key, entry);
 				else {
 					this.#pending.set(entry.key, entry.input);
+					if (entry.draftRevision !== undefined)
+						this.#pendingDraftRevisions.set(entry.input.requestId, entry.draftRevision);
 					if (entry.confirmed) this.#confirmed.add(entry.input.requestId);
 					else this.#unconfirmed.add(entry.input.requestId);
 				}
@@ -69,14 +73,15 @@ export class LocalState {
 	}
 	write(key: string, value: string): boolean {
 		if (!this.#active || !this.#leaseActive()) return false;
-		if (key.startsWith("task-draft.") && !validTaskDraft(key, value)) return false;
+		if ((key.startsWith("task-draft.") || key === "chat-draft.global") && !validTaskDraft(key, value)) return false;
 		const previous = this.#values.get(key);
 		const entry: SavedValue = {
 			kind: "value",
 			key,
 			value,
-			...(key.startsWith("draft.") || key.startsWith("task-draft.") ? { revision: crypto.randomUUID() } : {}),
+			...(key.startsWith("draft.") || validTaskDraft(key, value) ? { revision: crypto.randomUUID() } : {}),
 			...(previous?.handoffRequestId ? { handoffRequestId: previous.handoffRequestId } : {}),
+			...(previous?.handoffRevision ? { handoffRevision: previous.handoffRevision } : {}),
 		};
 		this.#values.set(key, entry);
 		return this.#save(entry);
@@ -108,8 +113,51 @@ export class LocalState {
 		return value ? { ...value } : null;
 	}
 	/** Serialize browser tabs' read/check/write admission; the network call follows only after this resolves. */
-	async rememberForSubmission(key: string, input: Submit): Promise<void> {
-		return this.withAdmission(key, () => this.remember(key, input));
+	async rememberForSubmission(
+		key: string,
+		input: Submit,
+		options?: { onlyIfNew?: boolean; draftRevision?: string | null },
+	): Promise<boolean> {
+		const captured = { ...input };
+		const onlyIfNew = options?.onlyIfNew;
+		const draft = this.valueSnapshot(`draft.${key}`);
+		// Capture before waiting for admission, including absence. Later edits never acquire this Send's ownership.
+		const draftRevision =
+			options?.draftRevision !== undefined
+				? options.draftRevision
+				: draft?.value === captured.text
+					? (draft.revision ?? null)
+					: null;
+		return this.withAdmission(key, () => {
+			const previous = this.storedPending(key);
+			if (onlyIfNew && previous?.input.requestId === captured.requestId) {
+				if (JSON.stringify(previous.input) !== JSON.stringify(captured))
+					throw new Error("Pending request payload is immutable");
+				this.#pending.set(key, { ...previous.input });
+				if (previous.draftRevision !== undefined)
+					this.#pendingDraftRevisions.set(captured.requestId, previous.draftRevision);
+				return false;
+			}
+			this.remember(key, captured, draftRevision);
+			return true;
+		});
+	}
+	/** Reads pending ownership from the same store before any retry or initial-send transfer. */
+	storedPending(key: string): SavedPending | null {
+		if (!this.#active || !this.#leaseActive()) throw new Error("Connection is closed");
+		if (this.#persistence) return this.#persistence.readPending(key);
+		if (this.#requiresPersistence) throw new Error("Recovery storage is unavailable");
+		const input = this.#pending.get(key);
+		const draftRevision = input ? this.#pendingDraftRevisions.get(input.requestId) : undefined;
+		return input
+			? {
+					kind: "pending",
+					key,
+					input: { ...input },
+					confirmed: this.#confirmed.has(input.requestId),
+					...(draftRevision !== undefined ? { draftRevision } : {}),
+				}
+			: null;
 	}
 	async withAdmission<T>(key: string, work: () => T): Promise<T> {
 		const admitted = () => {
@@ -126,24 +174,43 @@ export class LocalState {
 	clearDraft(key: string, expected: string): boolean {
 		const previous = this.#values.get(key);
 		if (!this.#active || !this.#leaseActive() || previous?.value !== expected) return false;
+		const pending = this.#pending.get(key.replace(/^draft\./, ""));
+		const expectedRevision = pending ? this.#pendingDraftRevisions.get(pending.requestId) : undefined;
+		if (expectedRevision !== undefined && previous.revision !== expectedRevision) return false;
 		const revision = crypto.randomUUID();
 		this.#values.set(key, { ...previous, value: "", revision });
 		if (!this.#persistence) return !this.#requiresPersistence;
 		try {
-			return this.#persistence.clearDraft(key, expected, revision);
+			return this.#persistence.clearDraft(key, expected, revision, expectedRevision);
 		} catch {
 			this.storageAvailable = false;
 			return false;
 		}
 	}
-	remember(key: string, input: Submit) {
+	remember(key: string, input: Submit, draftRevision?: string | null) {
 		if (!this.#active || !this.#leaseActive()) throw new Error("Connection is closed");
 		const previous = this.#pending.get(key);
 		if (previous?.requestId === input.requestId && JSON.stringify(previous) !== JSON.stringify(input))
 			throw new Error("Pending request payload is immutable");
-		if (!this.#save({ kind: "pending", key, input, confirmed: this.#confirmed.has(input.requestId) }))
+		const stored = this.storedPending(key);
+		const capturedRevision =
+			stored?.input.requestId === input.requestId
+				? stored.draftRevision
+				: draftRevision !== undefined
+					? draftRevision
+					: this.#values.get(`draft.${key}`)?.revision;
+		if (
+			!this.#save({
+				kind: "pending",
+				key,
+				input,
+				confirmed: this.#confirmed.has(input.requestId),
+				...(capturedRevision !== undefined ? { draftRevision: capturedRevision } : {}),
+			})
+		)
 			throw new Error("Cannot preserve pending request for recovery");
 		this.#pending.set(key, { ...input });
+		if (capturedRevision !== undefined) this.#pendingDraftRevisions.set(input.requestId, capturedRevision);
 		this.#unconfirmed.add(input.requestId);
 	}
 	confirmed(requestId: string) {
@@ -161,7 +228,14 @@ export class LocalState {
 					this.storageAvailable = false;
 					continue;
 				}
-				this.#save({ kind: "pending", key, input, confirmed: true });
+				const draftRevision = this.#pendingDraftRevisions.get(input.requestId);
+				this.#save({
+					kind: "pending",
+					key,
+					input,
+					confirmed: true,
+					...(draftRevision !== undefined ? { draftRevision } : {}),
+				});
 			} catch {
 				this.storageAvailable = false;
 			}
@@ -175,7 +249,7 @@ export class LocalState {
 			this.#unconfirmed.size > 0 ||
 			[...this.#values].some(
 				([key, entry]) =>
-					((key.startsWith("draft.") || key.startsWith("task-draft.")) && entry.value.length > 0) ||
+					((key.startsWith("draft.") || validTaskDraft(key, entry.value)) && entry.value.length > 0) ||
 					(key.startsWith("command.") && entry.value !== JSON.stringify({ version: 2, request: null })),
 			)
 		);

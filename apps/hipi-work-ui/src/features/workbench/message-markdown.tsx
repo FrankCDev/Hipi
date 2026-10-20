@@ -1,8 +1,9 @@
-import { Component, memo, type ReactNode, useState } from "react";
+import { Component, createContext, memo, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { ClipboardCopy } from "./clipboard-copy.tsx";
 import {
 	inertDestination,
 	MAX_RICH_TEXT_UNITS,
@@ -11,6 +12,11 @@ import {
 	ORIGINAL_PAGE_UNITS,
 	originalPage,
 } from "./markdown-policy.ts";
+import { isOpenCodeFence, markdownSegments } from "./markdown-segments.ts";
+import { markdownLabels } from "./message-markdown-labels.ts";
+import { SyntaxCode } from "./syntax-code.tsx";
+import { useStreamingText } from "./use-streaming-text.ts";
+import "./message-markdown.css";
 
 const allowedElements = [
 	"p",
@@ -42,6 +48,8 @@ const allowedElements = [
 	"input",
 ];
 const plugins = [remarkGfm];
+type MarkdownTone = "user" | "assistant";
+const SourceContext = createContext({ source: "", streaming: false, tone: "assistant" as MarkdownTone });
 const components: Components = {
 	a: ({ children, href }) => (
 		<span className="markdown-link">
@@ -51,12 +59,88 @@ const components: Components = {
 	),
 	img: ({ alt }) => <ImagePlaceholder alt={alt ?? ""} />,
 	input: ({ checked }) => <TaskMarker checked={checked ?? false} />,
-	table: ({ children }) => (
-		<div className="markdown-table">
-			<table>{children}</table>
-		</div>
+	table: ({ children }) => <MarkdownTable>{children}</MarkdownTable>,
+	th: ({ children, style }) => (
+		<th scope="col" data-align={style?.textAlign}>
+			{children}
+		</th>
 	),
+	td: ({ children, style }) => <td data-align={style?.textAlign}>{children}</td>,
+	pre: ({ children, node }) => {
+		const code = node?.children[0];
+		if (code?.type !== "element" || code.tagName !== "code") return <pre>{children}</pre>;
+		const classes = Array.isArray(code.properties.className) ? code.properties.className : [];
+		const language = classes
+			.find((value) => typeof value === "string" && /^language-[\w+#.-]{1,40}$/u.test(value))
+			?.toString()
+			.slice("language-".length);
+		const text = code.children.map((child) => (child.type === "text" ? child.value : "")).join("");
+		return (
+			<CodeBlock
+				text={text}
+				language={language}
+				startLine={node?.position?.start.line}
+				endLine={node?.position?.end.line}
+			>
+				{children}
+			</CodeBlock>
+		);
+	},
 };
+
+function MarkdownTable({ children }: { children: ReactNode }) {
+	const { locale } = usePreferences();
+	return (
+		// biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll a wide table.
+		<section className="markdown-table" aria-label={markdownLabels(locale)["markdown.table"]} tabIndex={0}>
+			<table>{children}</table>
+		</section>
+	);
+}
+
+function CodeBlock({
+	text,
+	language,
+	children,
+	startLine,
+	endLine,
+}: {
+	text: string;
+	language?: string;
+	children: ReactNode;
+	startLine?: number;
+	endLine?: number;
+}) {
+	const { locale } = usePreferences();
+	const labels = markdownLabels(locale);
+	const context = useContext(SourceContext);
+	if (context.tone === "user") return <pre className="markdown-user-code">{children}</pre>;
+	const unfinished =
+		context.streaming && (!startLine || !endLine || isOpenCodeFence(context.source, startLine, endLine));
+	return (
+		<div className="markdown-code-block">
+			<div className="markdown-code-header">
+				<span className="markdown-code-language">{language ?? labels["markdown.code"]}</span>
+				<ClipboardCopy
+					text={text}
+					label={labels["markdown.copyCode"]}
+					disabled={unfinished}
+					disabledLabel={labels["markdown.copyAfterStreaming"]}
+					className="markdown-code-copy"
+					containerClassName="markdown-code-actions"
+					errorClassName="markdown-code-error"
+					iconOnly
+				/>
+			</div>
+			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll long code lines. */}
+			<section className="markdown-code-scroll" aria-label={labels["markdown.code"]} tabIndex={0}>
+				<pre>
+					<SyntaxCode text={text} language={language} />
+				</pre>
+			</section>
+		</div>
+	);
+}
 
 function TaskMarker({ checked }: { checked: boolean }) {
 	const { t } = usePreferences();
@@ -118,9 +202,18 @@ class MarkdownBoundary extends Component<
 	}
 }
 
-function RichText({ source, streaming }: { source: string; streaming: boolean }) {
+const MarkdownBlock = memo(function MarkdownBlock({
+	source,
+	streaming,
+	tone,
+}: {
+	source: string;
+	streaming: boolean;
+	tone: MarkdownTone;
+}) {
+	const context = useMemo(() => ({ source, streaming, tone }), [source, streaming, tone]);
 	return (
-		<div className="message-text markdown-body">
+		<SourceContext.Provider value={context}>
 			<Markdown
 				allowedElements={allowedElements}
 				skipHtml
@@ -130,34 +223,54 @@ function RichText({ source, streaming }: { source: string; streaming: boolean })
 			>
 				{markdownDisplaySource(source, streaming)}
 			</Markdown>
-		</div>
+		</SourceContext.Provider>
 	);
-}
+});
 
 export const MessageMarkdown = memo(function MessageMarkdown({
 	source,
 	streaming = false,
+	streamId = "",
+	tone = "assistant",
 }: {
 	source: string;
 	streaming?: boolean;
+	streamId?: string;
+	tone?: MarkdownTone;
 }) {
 	const { t } = usePreferences();
+	const root = useRef<HTMLDivElement>(null);
+	const display = useStreamingText({ source, streaming, identity: streamId }, root);
+	const segments = useMemo(
+		() => (display.source.length > MAX_RICH_TEXT_UNITS ? [] : markdownSegments(display.source)),
+		[display.source],
+	);
 	const fallback = (
 		<>
 			<p className="small-copy">{t("markdown.fallback")}</p>
-			<OriginalText source={source} />
+			<OriginalText source={display.source} />
 		</>
 	);
-	if (source.length > (streaming ? MAX_STREAMING_RICH_TEXT_UNITS : MAX_RICH_TEXT_UNITS)) return fallback;
+	const overCeiling =
+		display.source.length > MAX_RICH_TEXT_UNITS ||
+		(display.streaming &&
+			segments.some((segment) => !segment.settled && segment.source.length > MAX_STREAMING_RICH_TEXT_UNITS));
 	return (
-		<>
-			<MarkdownBoundary source={source} fallback={fallback}>
-				<RichText source={source} streaming={streaming} />
-			</MarkdownBoundary>
-			<details className="message-original">
-				<summary>{t("markdown.original")}</summary>
-				<OriginalText source={source} />
-			</details>
-		</>
+		<div ref={root} className={overCeiling ? undefined : "message-text markdown-body"} data-markdown-tone={tone}>
+			{overCeiling ? (
+				fallback
+			) : (
+				<MarkdownBoundary source={display.source} fallback={fallback}>
+					{segments.map((segment) => (
+						<MarkdownBlock
+							key={`${display.identity}:${segment.key}`}
+							source={segment.source}
+							streaming={display.streaming && !segment.settled}
+							tone={tone}
+						/>
+					))}
+				</MarkdownBoundary>
+			)}
+		</div>
 	);
 });

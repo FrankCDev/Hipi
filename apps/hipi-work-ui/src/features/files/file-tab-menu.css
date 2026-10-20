@@ -1,0 +1,19 @@
+.file-tab-context-menu {
+	--radix-dropdown-menu-content-available-width: var(--radix-context-menu-content-available-width);
+	--radix-dropdown-menu-content-available-height: var(--radix-context-menu-content-available-height);
+	min-width: 160px;
+	overflow: auto;
+	z-index: 50;
+}
+.file-tab-context-item {
+	outline: none;
+	cursor: default;
+	user-select: none;
+}
+.file-tab-context-item[data-highlighted] {
+	background: var(--brand-soft);
+}
+.file-tab-context-item[data-disabled] {
+	opacity: 0.5;
+	pointer-events: none;
+}

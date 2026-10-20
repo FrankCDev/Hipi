@@ -1,24 +1,34 @@
-import { AppError, type Conversation, type ModelReference, type Workspace } from "@hipi/work-runtime/contracts";
-import { useId, useRef, useState, useSyncExternalStore } from "react";
+import { AppError, type Conversation, type Workspace } from "@hipi/work-runtime/contracts";
+import { Ellipsis, SquarePen } from "lucide-react";
+import { useId, useRef, useState } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
 import type { CatalogSession } from "./catalog-session.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
-import { CreateDialog } from "./create-dialog.tsx";
-import { SidebarPreviewRow } from "./sidebar-preview-row.tsx";
+import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
+import "./sidebar.css";
 
 type TreeProps = {
 	catalog: CatalogSession;
 	guard: (action: () => void) => void;
 	workspaces: Workspace[];
+	defaultWorkspaceId?: string | null;
 	selectedWorkspace: string;
 	selectedConversation: string;
 	search: string;
@@ -26,21 +36,27 @@ type TreeProps = {
 	onToggle: (id: string) => void;
 	onOpenProject: (id: string) => void;
 	onSelect: (conversation: Conversation) => void;
-	onDetails: (conversation: Conversation, returnFocus: HTMLButtonElement | null) => void;
-	onCreate: (workspaceId: string, title: string, model?: ModelReference, initialDraft?: string) => Promise<void>;
-	preparedDraft?: (workspaceId: string) => string;
-	onPreparedDraftChange?: (workspaceId: string, value: string) => void;
+	onNewConversation: (workspaceId: string) => void;
 };
 
 /** Each expanded branch shows a bounded catalog window, never execution streams. */
 export function WorkspaceTree(props: TreeProps) {
-	const { t } = usePreferences();
+	const { t, locale } = usePreferences();
+	const recent = props.defaultWorkspaceId
+		? (props.workspaces.find((workspace) => workspace.workspaceId === props.defaultWorkspaceId) ?? {
+				workspaceId: props.defaultWorkspaceId,
+				name: catalogLabels(locale).recent,
+			})
+		: undefined;
 	return (
 		<nav aria-label={t("nav.workspaces")}>
 			<ul className="workspace-tree">
-				{props.workspaces.map((workspace) => (
-					<WorkspaceBranch key={workspace.workspaceId} {...props} workspace={workspace} />
-				))}
+				{props.workspaces
+					.filter((workspace) => workspace.workspaceId !== props.defaultWorkspaceId)
+					.map((workspace) => (
+						<WorkspaceBranch key={workspace.workspaceId} {...props} workspace={workspace} />
+					))}
+				{recent && <WorkspaceBranch key={recent.workspaceId} {...props} workspace={recent} />}
 			</ul>
 		</nav>
 	);
@@ -53,17 +69,11 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const headingId = useId();
 	const disclosureId = useId();
 	const openId = useId();
-	const filterName = useId();
-	const expanded = props.isExpanded(workspace.workspaceId);
+	const recent = workspace.workspaceId === props.defaultWorkspaceId;
+	const expanded = recent || props.isExpanded(workspace.workspaceId);
 	const region = useRef<HTMLElement>(null);
-	const [createOpen, setCreateOpen] = useState(false);
 	const [filter, setFilter] = useState<"active" | "archived">("active");
 	const cl = catalogLabels(locale);
-	const catalogState = useSyncExternalStore(
-		props.catalog.subscribe,
-		props.catalog.getSnapshot,
-		props.catalog.getSnapshot,
-	);
 	const conversations = useCatalogPages({
 		queryKey: ["conversations", workspace.workspaceId, filter],
 		itemKey: (item: Conversation) => item.conversationId,
@@ -81,91 +91,93 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const containsCurrent = props.selectedWorkspace === workspace.workspaceId && !!props.selectedConversation;
 	const current = props.selectedWorkspace === workspace.workspaceId && !props.selectedConversation;
 	return (
-		<li className="workspace-branch" data-current={current} data-contains-current={containsCurrent}>
-			<SidebarPreviewRow
-				className="project-row"
-				selected={current}
-				containsCurrent={containsCurrent}
-				dialogOpen={createOpen}
-				titleId={headingId}
-				preview={() => (
-					<>
-						<PopoverHeader>
-							<PopoverTitle>{workspace.name}</PopoverTitle>
-						</PopoverHeader>
-						{conversations.hasData && (
-							<dl className="conversation-preview-summary">
-								<dt>{cl.filter}</dt>
-								<dd>{filter === "active" ? cl.active : cl.archived}</dd>
-								<dt>{cl.loaded}</dt>
-								<dd>{new Intl.NumberFormat(locale).format(conversations.items.length)}</dd>
-							</dl>
-						)}
-						<details className="preview-identifiers">
-							<summary>{cl.identifiers}</summary>
-							<dl className="conversation-preview-metadata">
-								<dt>{t("common.workspaceId")}</dt>
-								<dd>{workspace.workspaceId}</dd>
-							</dl>
-						</details>
-					</>
-				)}
-			>
-				<button
-					type="button"
-					className="project-toggle"
-					aria-expanded={expanded}
-					aria-controls={regionId}
-					aria-labelledby={`${disclosureId} ${headingId}`}
-					title={expanded ? cl.collapseProject : cl.expandProject}
-					onClick={() => props.onToggle(workspace.workspaceId)}
-				>
-					<span id={disclosureId} className="sr-only">
-						{expanded ? cl.collapseProject : cl.expandProject}
-					</span>
-					<span className="project-chevron" data-expanded={expanded}>
-						<Icon name="chevron" size={12} />
-					</span>
-				</button>
-				<button
-					type="button"
-					className="project-open"
-					aria-current={current ? "page" : undefined}
-					aria-labelledby={`${openId} ${headingId}`}
-					title={cl.openProject}
-					onClick={() => props.onOpenProject(workspace.workspaceId)}
-				>
-					<span id={openId} className="sr-only">
-						{cl.openProject}
-					</span>
-					<span className="project-icon">
-						<Icon name="folder" size={16} />
-					</span>
-					<span id={headingId} className="project-name">
-						{workspace.name}
-					</span>
-					{conversations.hasData && (
-						<span className="subtle-count project-page-count">
-							<span className="sr-only">{cl.loaded}: </span>
-							{new Intl.NumberFormat(locale).format(conversations.items.length)}
-						</span>
+		<li
+			className={`workspace-branch${recent ? " recent-conversations" : ""}`}
+			data-workspace-id={workspace.workspaceId}
+			data-current={current}
+			data-contains-current={containsCurrent}
+		>
+			{recent ? (
+				<div className="recent-conversations-heading">
+					<h3 id={headingId}>{cl.recent}</h3>
+					<ProjectConversationMenu name={cl.recent} filter={filter} onFilterChange={setFilter} />
+				</div>
+			) : (
+				<SidebarPreviewRow
+					className="project-row"
+					selected={current}
+					containsCurrent={containsCurrent}
+					titleId={headingId}
+					preview={() => (
+						<>
+							<PopoverHeader>
+								<PopoverTitle className="project-preview-title">
+									<Icon name="folder" size={16} />
+									{workspace.name}
+								</PopoverTitle>
+							</PopoverHeader>
+						</>
 					)}
-				</button>
-				<CreateDialog
-					kind="conversation"
-					workspaceId={workspace.workspaceId}
-					draft={props.preparedDraft?.(workspace.workspaceId)}
-					onDraftChange={
-						props.onPreparedDraftChange
-							? (value) => props.onPreparedDraftChange?.(workspace.workspaceId, value)
-							: undefined
-					}
-					disabled={catalogState.busy || !!catalogState.pending || catalogState.incompatible}
-					compact
-					onOpenChange={setCreateOpen}
-					onCreate={(title, model, initialDraft) => props.onCreate(workspace.workspaceId, title, model, initialDraft)}
-				/>
-			</SidebarPreviewRow>
+					renderActions={(controls) => (
+						<div className="sidebar-row-actions">
+							<ProjectConversationMenu
+								name={workspace.name}
+								filter={filter}
+								controls={controls}
+								onFilterChange={(value) => {
+									setFilter(value);
+									if (!expanded) props.onToggle(workspace.workspaceId);
+								}}
+							/>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								className="project-new-conversation"
+								aria-label={`${t("nav.newConversation")}: ${workspace.name}`}
+								title={t("nav.newConversation")}
+								onClick={() => props.onNewConversation(workspace.workspaceId)}
+							>
+								<SquarePen size={16} aria-hidden="true" />
+							</Button>
+						</div>
+					)}
+				>
+					<button
+						type="button"
+						className="project-toggle"
+						aria-expanded={expanded}
+						aria-controls={regionId}
+						aria-labelledby={`${disclosureId} ${headingId}`}
+						title={expanded ? cl.collapseProject : cl.expandProject}
+						onClick={() => props.onToggle(workspace.workspaceId)}
+					>
+						<span id={disclosureId} className="sr-only">
+							{expanded ? cl.collapseProject : cl.expandProject}
+						</span>
+						<span className="project-chevron" data-expanded={expanded}>
+							<Icon name="chevron" size={12} />
+						</span>
+					</button>
+					<button
+						type="button"
+						className="project-open"
+						aria-current={current ? "page" : undefined}
+						aria-labelledby={`${openId} ${headingId}`}
+						title={cl.openProject}
+						onClick={() => props.onOpenProject(workspace.workspaceId)}
+					>
+						<span id={openId} className="sr-only">
+							{cl.openProject}
+						</span>
+						<span className="project-icon">
+							<Icon name="folder" size={16} />
+						</span>
+						<span id={headingId} className="project-name">
+							{workspace.name}
+						</span>
+					</button>
+				</SidebarPreviewRow>
+			)}
 			<section
 				ref={region}
 				id={regionId}
@@ -175,44 +187,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				tabIndex={-1}
 				aria-busy={expanded && conversations.isFetching}
 			>
-				<div className="project-list-toolbar">
-					<fieldset className="conversation-filter-tabs">
-						<legend className="sr-only">{cl.filter}</legend>
-						{(["active", "archived"] as const).map((value) => (
-							<label key={value} className="conversation-filter-tab" data-selected={filter === value}>
-								<input
-									type="radio"
-									className="sr-only"
-									name={filterName}
-									value={value}
-									aria-label={cl[value]}
-									checked={filter === value}
-									onChange={() => setFilter(value)}
-								/>
-								<span>{cl[value === "active" ? "activeShort" : "archivedShort"]}</span>
-							</label>
-						))}
-					</fieldset>
-					{conversations.hasData && props.search.trim() && (
-						<TooltipProvider>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										variant="ghost"
-										size="sm"
-										className="project-match-count"
-										aria-label={`${cl.pageMatches}: ${new Intl.NumberFormat(locale).format(visible.length)}`}
-									>
-										{new Intl.NumberFormat(locale).format(visible.length)}
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent side="right">
-									{cl.pageMatches}: {new Intl.NumberFormat(locale).format(visible.length)}
-								</TooltipContent>
-							</Tooltip>
-						</TooltipProvider>
-					)}
-				</div>
+				{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
 				{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
 				{expanded && conversations.hasData && conversations.isFetching && !conversations.isLoadingMore && (
 					<output className="nav-feedback catalog-refresh-status">{cl.refreshing}</output>
@@ -247,13 +222,12 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 							<li key={conversation.conversationId} className="conversation-nav-item">
 								<ConversationPreview
 									conversation={conversation}
-									workspaceName={workspace.name}
+									workspaceName={recent ? undefined : workspace.name}
 									selected={
 										props.selectedWorkspace === workspace.workspaceId &&
 										props.selectedConversation === conversation.conversationId
 									}
 									onSelect={() => props.onSelect(conversation)}
-									onDetails={(returnFocus) => props.onDetails(conversation, returnFocus)}
 									renderActions={(controls) => (
 										<ConversationActions
 											conversation={conversation}
@@ -272,11 +246,67 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						<p>
 							{props.search.trim() ? t("nav.noResults") : filter === "archived" ? cl.emptyArchived : t("nav.empty")}
 						</p>
-						{!props.search.trim() && filter === "active" && <p className="nav-empty-hint">{cl.emptyHint}</p>}
 					</div>
 				)}
 				{expanded && <CatalogPagination pages={conversations} listRef={region} />}
 			</section>
 		</li>
+	);
+}
+
+function ProjectConversationMenu({
+	name,
+	filter,
+	onFilterChange,
+	controls,
+}: {
+	name: string;
+	filter: "active" | "archived";
+	onFilterChange: (filter: "active" | "archived") => void;
+	controls?: Parameters<PreviewActions>[0];
+}) {
+	const { locale } = usePreferences();
+	const cl = catalogLabels(locale);
+	return (
+		<DropdownMenu
+			onOpenChange={(open) => {
+				controls?.onOverlayChange("menu", open);
+				if (open) controls?.onMenuOpen();
+			}}
+		>
+			<DropdownMenuTrigger asChild>
+				<Button
+					ref={controls?.triggerRef}
+					variant="ghost"
+					size="icon-sm"
+					className={controls ? "project-actions-trigger" : "recent-actions-trigger"}
+					aria-label={`${controls ? cl.projectActions : cl.filter}: ${name}`}
+				>
+					<Ellipsis size={16} aria-hidden="true" />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				align="end"
+				className="project-action-menu"
+				onCloseAutoFocus={(event) => {
+					if (!controls) return;
+					event.preventDefault();
+					controls.onReturnFocus();
+				}}
+			>
+				<DropdownMenuLabel className="sidebar-menu-preview">{controls?.previewContent ?? name}</DropdownMenuLabel>
+				<DropdownMenuSeparator />
+				<DropdownMenuRadioGroup
+					aria-label={cl.filter}
+					value={filter}
+					onValueChange={(value) => {
+						if (value === "active" || value === "archived") onFilterChange(value);
+					}}
+				>
+					<DropdownMenuRadioItem value="active">{cl.active}</DropdownMenuRadioItem>
+					<DropdownMenuRadioItem value="archived">{cl.archived}</DropdownMenuRadioItem>
+				</DropdownMenuRadioGroup>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }

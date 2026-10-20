@@ -1,0 +1,20 @@
+.file-markdown-preview {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+	padding: 20px;
+	color: var(--text);
+	background: var(--surface);
+	font-family: var(--font-ui);
+	overflow-wrap: anywhere;
+}
+.file-markdown-preview:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+.file-markdown-preview > .markdown-body {
+	max-width: 72ch;
+	margin-inline: auto;
+}

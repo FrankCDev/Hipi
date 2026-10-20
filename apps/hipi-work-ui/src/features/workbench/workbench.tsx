@@ -1,7 +1,7 @@
 import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Settings, SquarePen } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { BrandMark } from "../../components/brand-mark.tsx";
@@ -10,8 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../com
 import { Icon } from "../../components/ui/icon.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../../components/ui/input-group.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
-import { EditorSession } from "../files/editor-session.ts";
 import { fileLabels } from "../files/file-labels.ts";
+import { FileWorkspaceSession } from "../files/file-workspace-session.ts";
 import { SettingsDialog } from "../settings/index.ts";
 import { ToolPacksDialog } from "../tool-packs/index.ts";
 import { artifactNavigation } from "./artifact-navigation.ts";
@@ -20,11 +20,10 @@ import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
 import { CatalogSession } from "./catalog-session.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
-import { navigateConversation } from "./conversation-navigation.ts";
 import { ConversationPane } from "./conversation-pane.tsx";
 import { CreateDialog } from "./create-dialog.tsx";
 import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
-import { FilePanelController } from "./file-panel-controller.ts";
+import { FILE_PANEL, FilePanelController, panelLayout } from "./file-panel-controller.ts";
 import { filePanelLabels } from "./file-panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
@@ -36,12 +35,19 @@ import { WorkspaceTree } from "./workspace-tree.tsx";
 
 export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const client = useAppClient();
-	const { files } = useFiles();
-	const session = useMemo(() => (files ? new EditorSession(files) : undefined), [files]);
+	const { files, previews } = useFiles();
+	const session = useMemo(() => (files ? new FileWorkspaceSession(files, previews) : undefined), [files, previews]);
+	const connectionLease = useMemo(() => ({ client, session, active: true }), [client, session]);
+	const currentConnection = useRef(connectionLease);
+	currentConnection.current = connectionLease;
 	useEffect(() => {
+		connectionLease.active = true;
 		session?.activate();
-		return () => session?.dispose();
-	}, [session]);
+		return () => {
+			connectionLease.active = false;
+			session?.dispose();
+		};
+	}, [session, connectionLease]);
 	const [leave, setLeave] = useState<(() => void) | null>(null);
 	const guard = (action: () => void) => {
 		if (session?.protected) setLeave(() => action);
@@ -62,13 +68,24 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const panelId = useId();
 	const area = useRef<HTMLElement>(null);
 	const areaWidth = useWorkAreaWidth(area);
+	const filePanelFullWidth =
+		panelState.open &&
+		panelState.fullWidth &&
+		areaWidth !== null &&
+		!panelLayout(areaWidth, panelState.width, panelState.ratio).overlay;
+	const retainedConversationWidth =
+		filePanelFullWidth && areaWidth !== null
+			? areaWidth - panelLayout(areaWidth, panelState.width, panelState.ratio).width - FILE_PANEL.handle
+			: undefined;
 	const { t, locale } = usePreferences();
 	const [selectedWorkspace, setSelectedWorkspace] = useState(() => local.read("workspace") ?? "");
 	const [selectedConversation, setSelectedConversation] = useState(() => local.read("conversation") ?? "");
 	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
+	const navigationRevision = useRef(0);
 	useEffect(() => {
 		currentScope.current = { workspaceId: selectedWorkspace, conversationId: selectedConversation };
-	}, [selectedWorkspace, selectedConversation]);
+		session?.setWorkspace(selectedWorkspace);
+	}, [selectedWorkspace, selectedConversation, session]);
 	const [navigationOpen, setNavigationOpen] = useState(false);
 	const [navigationCollapsed, setNavigationCollapsed] = useState(false);
 	const [narrow, setNarrow] = useState(false);
@@ -85,10 +102,13 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	const settingsToolbarTrigger = useRef<HTMLButtonElement>(null);
+	const [settingsCategory, setSettingsCategory] = useState<"general" | "appearance" | "models" | "runtime">("general");
+	const [composerFocusRevision, setComposerFocusRevision] = useState(0);
+	const settingsTrigger = useRef<HTMLButtonElement>(null);
 	const settingsReturn = useRef<HTMLButtonElement | null>(null);
 	const detailsTrigger = useRef<HTMLButtonElement>(null);
 	const detailsReturn = useRef<HTMLButtonElement | null>(null);
+	const initialSubmissionNavigation = useRef("");
 	const isExpanded = (id: string) =>
 		expanded[id] ??
 		(local.read(`workspace-expanded.${id}`) === "true" ||
@@ -98,7 +118,14 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		local.write(`workspace-expanded.${id}`, String(value));
 	};
 	const navigationToggle = useRef<HTMLButtonElement>(null);
+	const sidebarCollapse = useRef<HTMLButtonElement>(null);
+	const navigationFocus = useRef<"sidebar" | "header" | null>(null);
 	const navigationClose = useRef<HTMLButtonElement>(null);
+	useLayoutEffect(() => {
+		if (navigationFocus.current === "header" && navigationCollapsed) navigationToggle.current?.focus();
+		if (navigationFocus.current === "sidebar" && !navigationCollapsed) sidebarCollapse.current?.focus();
+		navigationFocus.current = null;
+	}, [navigationCollapsed]);
 	useEffect(() => {
 		if (!navigationOpen) return;
 		navigationClose.current?.focus();
@@ -121,16 +148,18 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, [navigationOpen]);
 	const [search, setSearch] = useState("");
 	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
+	const preparedKey = (workspaceId: string) => (workspaceId ? `task-draft.${workspaceId}` : "chat-draft.global");
 	const preparedDraft = (workspaceId: string) =>
-		preparedDrafts[workspaceId] ?? local.read(`task-draft.${workspaceId}`) ?? "";
+		preparedDrafts[preparedKey(workspaceId)] ?? local.read(preparedKey(workspaceId)) ?? "";
 	const changePreparedDraft = (workspaceId: string, value: string) => {
-		local.write(`task-draft.${workspaceId}`, value);
-		setPreparedDrafts((current) => ({ ...current, [workspaceId]: value }));
+		local.write(preparedKey(workspaceId), value);
+		setPreparedDrafts((current) => ({ ...current, [preparedKey(workspaceId)]: value }));
 	};
 	const navigationList = useRef<HTMLDivElement>(null);
 	const cl = catalogLabels(locale);
 	const wl = workbenchLabels(locale);
-	const catalogBlocked = catalogState.busy || !!catalogState.pending || catalogState.incompatible;
+	const catalogBlocked =
+		catalogState.busy || !!catalogState.pending || !!catalogState.initialSend || catalogState.incompatible;
 	const workspaces = useCatalogPages({
 		queryKey: ["workspaces"],
 		queryPage: (cursor, signal) => client.call("listWorkspaces", cursor ? { cursor } : {}, signal),
@@ -159,22 +188,25 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	}, [local, session]);
 	const selected = selectedQuery.data;
 	const workspace = workspaceQuery.data;
-	const selectWorkspace = (id: string) =>
-		guard(() => {
-			session?.clear();
-			setSelectedWorkspace(id);
-			if (id) setProjectExpanded(id, true);
-			setDetailsOpen(false);
-			setSelectedConversation("");
-			setNavigationOpen(false);
-			setSearch("");
-			local.write("workspace", id);
-			local.write("conversation", "");
-		});
+	const selectWorkspace = (id: string) => {
+		navigationRevision.current++;
+		session?.setWorkspace(id);
+		currentScope.current = { workspaceId: id, conversationId: "" };
+		setSelectedWorkspace(id);
+		if (id) setProjectExpanded(id, true);
+		setDetailsOpen(false);
+		setSelectedConversation("");
+		setNavigationOpen(false);
+		setSearch("");
+		local.write("workspace", id);
+		local.write("conversation", "");
+	};
 	const selectConversation = (item: Conversation, onSelected?: () => void) => {
 		const select = () => {
 			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
-			if (item.workspaceId !== selectedWorkspace) session?.clear();
+			navigationRevision.current++;
+			session?.setWorkspace(item.workspaceId);
+			currentScope.current = { workspaceId: item.workspaceId, conversationId: item.conversationId };
 			setDetailsOpen(false);
 			setProjectExpanded(item.workspaceId, true);
 			setSelectedWorkspace(item.workspaceId);
@@ -183,10 +215,48 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			local.write("conversation", item.conversationId);
 			setNavigationOpen(false);
 		};
-		navigateConversation({ changesWorkspace: item.workspaceId !== selectedWorkspace, guard, select, onSelected });
+		select();
+		onSelected?.();
 	};
-	const applyCatalogResult = () => {
+	const openNewConversation = (requestedWorkspaceId: string) => {
+		const workspaceId = requestedWorkspaceId === catalog.defaultWorkspaceId() ? "" : requestedWorkspaceId;
+		const open = () => {
+			navigationRevision.current++;
+			session?.setWorkspace(workspaceId);
+			currentScope.current = { workspaceId, conversationId: "" };
+			setSelectedWorkspace(workspaceId);
+			setSelectedConversation("");
+			setDetailsOpen(false);
+			setNavigationOpen(false);
+			setComposerFocusRevision((value) => value + 1);
+			if (workspaceId) setProjectExpanded(workspaceId, true);
+			local.write("workspace", workspaceId);
+			local.write("conversation", "");
+		};
+		open();
+	};
+	const applyCatalogResult = (origin?: number) => {
+		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
 		const state = catalog.getSnapshot();
+		if (state.submission && !state.busy && state.result && "conversationId" in state.result) {
+			const result = state.result;
+			if (
+				state.submission.workspaceId === result.workspaceId &&
+				state.submission.conversationId === result.conversationId &&
+				initialSubmissionNavigation.current !== state.submission.requestId
+			) {
+				initialSubmissionNavigation.current = state.submission.requestId;
+				setPreparedDrafts((current) => ({
+					...current,
+					[preparedKey(result.workspaceId)]: local.read(preparedKey(result.workspaceId)) ?? "",
+					"chat-draft.global": local.read("chat-draft.global") ?? "",
+				}));
+				void cache.invalidateQueries({ queryKey: ["workspaces"] });
+				void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
+				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
+			}
+			return;
+		}
 		if (state.pending || state.failed || state.incompatible || state.handoffConflict) return;
 		const result = state.result;
 		if (!result) return;
@@ -196,17 +266,24 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			if (state.resultMethod === "createConversation") {
 				setPreparedDrafts((current) => ({
 					...current,
-					[result.workspaceId]: local.read(`task-draft.${result.workspaceId}`) ?? "",
+					[preparedKey(result.workspaceId)]: local.read(preparedKey(result.workspaceId)) ?? "",
+					"chat-draft.global": local.read("chat-draft.global") ?? "",
 				}));
-				selectConversation(result);
+				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
 			}
 		} else {
 			cache.setQueryData(["workspace", result.workspaceId], result);
 			void cache.invalidateQueries({ queryKey: ["workspaces"] });
-			selectWorkspace(result.workspaceId);
+			if (origin === undefined || navigationRevision.current === origin) selectWorkspace(result.workspaceId);
 		}
 	};
+	const resolveCatalog = async (operation: () => Promise<void>) => {
+		const origin = navigationRevision.current;
+		await operation();
+		applyCatalogResult(origin);
+	};
 	const createWorkspace = async (name: string) => {
+		const origin = navigationRevision.current;
 		await catalog.execute({
 			version: PROTOCOL_VERSION,
 			method: "createWorkspace",
@@ -214,25 +291,23 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		});
 		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
 			throw new Error("UNCONFIRMED");
-		applyCatalogResult();
+		applyCatalogResult(origin);
 	};
-	const createConversation = async (
-		workspaceId: string,
-		title: string,
-		model?: ModelReference,
-		initialDraft?: string,
-	) => {
-		await catalog.execute(
-			{
-				version: PROTOCOL_VERSION,
-				method: "createConversation",
-				params: { workspaceId, requestId: crypto.randomUUID(), title, ...(model ? { model } : {}) },
-			},
-			initialDraft === undefined ? undefined : { preparedDraft: initialDraft },
-		);
-		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
+	const sendInitial = async (text: string, model: ModelReference) => {
+		const origin = navigationRevision.current;
+		await catalog.sendInitial({
+			workspaceId: selectedWorkspace || null,
+			text,
+			title: text.trim().split("\n")[0]?.slice(0, 128) ?? "",
+			model,
+			sourceKey: preparedKey(selectedWorkspace),
+		});
+		applyCatalogResult(origin);
+		if (
+			!catalog.getSnapshot().submission &&
+			(catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
+		)
 			throw new Error("UNCONFIRMED");
-		applyCatalogResult();
 	};
 
 	return (
@@ -241,12 +316,13 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			data-navigation-mode={narrow ? "narrow" : "desktop"}
 			data-navigation-open={navigationOpen}
 			data-navigation-collapsed={navigationCollapsed}
+			data-settings-open={settingsOpen}
 		>
 			<aside
 				className="sidebar"
 				id="work-navigation"
 				aria-label={t("nav.workspaces")}
-				inert={narrow ? !navigationOpen : navigationCollapsed}
+				inert={settingsOpen || (narrow ? !navigationOpen : navigationCollapsed)}
 			>
 				<div className="sidebar-brand-row">
 					<button
@@ -261,14 +337,15 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						</span>
 					</button>
 					<Button
+						ref={sidebarCollapse}
 						className="sidebar-collapse"
 						variant="ghost"
 						size="icon-sm"
 						aria-label={wl["workbench.hideNavigation"]}
 						title={wl["workbench.hideNavigation"]}
 						onClick={() => {
+							navigationFocus.current = "header";
 							setNavigationCollapsed(true);
-							navigationToggle.current?.focus();
 						}}
 					>
 						<Icon name="panel" size={17} />
@@ -289,18 +366,16 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 				</div>
 				<section className="conversation-nav">
 					<div className="workspace-create">
-						{workspace ? (
-							<CreateDialog
-								disabled={catalogBlocked}
-								kind="conversation"
-								workspaceId={selectedWorkspace}
-								draft={preparedDraft(selectedWorkspace)}
-								onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
-								onCreate={(title, model, draft) => createConversation(selectedWorkspace, title, model, draft)}
-							/>
-						) : (
-							<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
-						)}
+						<Button
+							variant="ghost"
+							className="new-conversation-trigger"
+							onClick={() =>
+								openNewConversation(selectedWorkspace === catalog.defaultWorkspaceId() ? "" : selectedWorkspace)
+							}
+						>
+							<SquarePen size={16} aria-hidden="true" />
+							{t("nav.newConversation")}
+						</Button>
 					</div>
 					<label className="sr-only" htmlFor={searchInputId}>
 						{t("nav.search")}
@@ -342,9 +417,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					</p>
 					<div className="nav-section-heading">
 						<span>{t("nav.workspaces")}</span>
-						{workspace && (
-							<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
-						)}
+						<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
 					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
 						{workspaces.isPending && !workspaces.hasData && (
@@ -383,7 +456,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						<WorkspaceTree
 							workspaces={workspaces.items}
 							catalog={catalog}
-							guard={guard}
+							guard={(action) => action()}
 							selectedWorkspace={selectedWorkspace}
 							selectedConversation={selectedConversation}
 							search={search}
@@ -391,42 +464,31 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							onToggle={(id) => setProjectExpanded(id, !isExpanded(id))}
 							onOpenProject={selectWorkspace}
 							onSelect={selectConversation}
-							onCreate={createConversation}
-							preparedDraft={preparedDraft}
-							onPreparedDraftChange={changePreparedDraft}
-							onDetails={(item, returnFocus) => {
-								selectConversation(item, () => {
-									detailsReturn.current = returnFocus;
-									setDetailsOpen(true);
-								});
-							}}
+							onNewConversation={openNewConversation}
+							defaultWorkspaceId={catalog.defaultWorkspaceId()}
 						/>
 						<CatalogPagination pages={workspaces} listRef={navigationList} />
-						<CatalogRecovery session={catalog} onResolved={applyCatalogResult} />
+						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
 					</div>
 				</section>
 				<div className="sidebar-footer">
 					<Button
+						ref={settingsTrigger}
 						variant="ghost"
 						className="sidebar-settings-trigger"
 						aria-label={cl.settings}
-						aria-haspopup="dialog"
-						aria-expanded={settingsOpen}
 						onClick={(event) => {
 							settingsReturn.current = event.currentTarget;
+							setSettingsCategory("general");
 							setSettingsOpen(true);
 						}}
 					>
 						<Settings size={17} aria-hidden="true" />
 						{wl["workbench.settings"]}
 					</Button>
-					<span className="runtime-label sidebar-runtime-note">
-						<span className="status-dot" />
-						{t("app.localRuntime")}
-					</span>
 				</div>
 			</aside>
-			<div className="main-shell" inert={navigationOpen}>
+			<div className="main-shell" inert={navigationOpen || settingsOpen}>
 				<header className="app-toolbar">
 					<div className="toolbar-path">
 						<Button
@@ -439,7 +501,10 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							aria-controls="work-navigation"
 							onClick={() => {
 								if (narrow) setNavigationOpen((value) => !value);
-								else setNavigationCollapsed((value) => !value);
+								else {
+									navigationFocus.current = navigationCollapsed ? "sidebar" : "header";
+									setNavigationCollapsed((value) => !value);
+								}
 							}}
 						>
 							<Icon name="panel" />
@@ -452,7 +517,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							) : (
 								<span className="toolbar-project-title">{workspace?.name ?? "Hipi Work"}</span>
 							)}
-							{workspace && selected && (
+							{workspace && selected && workspace.workspaceId !== catalog.defaultWorkspaceId() && (
 								<button
 									type="button"
 									className="toolbar-project-link"
@@ -480,7 +545,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<Icon name="folder" size={15} />
 							{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
 						</Button>
-						{selected && <ConversationActions conversation={selected} session={catalog} guard={guard} />}
+						{selected && <ConversationActions conversation={selected} session={catalog} guard={(action) => action()} />}
 						{selected && (
 							<Button
 								ref={detailsTrigger}
@@ -496,28 +561,13 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 								<Icon name="info" />
 							</Button>
 						)}
-						<Button
-							ref={settingsToolbarTrigger}
-							variant="ghost"
-							size="icon"
-							className="workbench-settings-trigger"
-							aria-label={cl.settings}
-							aria-haspopup="dialog"
-							aria-expanded={settingsOpen}
-							onClick={(event) => {
-								settingsReturn.current = event.currentTarget;
-								setSettingsOpen(true);
-							}}
-						>
-							<Settings size={18} aria-hidden="true" />
-						</Button>
 					</div>
 				</header>
-				<PreparedTaskRecovery session={catalog} onResolved={applyCatalogResult} />
+				<PreparedTaskRecovery session={catalog} onResolve={resolveCatalog} />
 				{panelState.storageFailed && (
 					<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
 				)}
-				<main className="work-area" ref={area}>
+				<main className="work-area" ref={area} data-file-panel-full-width={filePanelFullWidth}>
 					{(selectedQuery.isError || workspaceQuery.isError) && (
 						<p role="alert">
 							{cl.currentFailed}
@@ -532,40 +582,49 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							</Button>
 						</p>
 					)}
-					{selected ? (
-						<ConversationPane
-							key={`${selected.workspaceId}.${selected.conversationId}`}
-							conversation={selected}
-							onOpenArtifact={
-								session ? artifactNavigation(selected, () => currentScope.current, guard, session, panel) : undefined
-							}
-							detailsOpen={detailsOpen}
-							onDetailsClose={() => {
-								setDetailsOpen(false);
-								const target = detailsReturn.current;
-								if (target?.isConnected && target.getClientRects().length) target.focus();
-								else detailsTrigger.current?.focus();
-							}}
-						/>
-					) : (
-						<WorkbenchWelcome
-							workspaceName={workspace?.name}
-							action={
-								workspace ? (
+					<div
+						className="work-conversation-frame"
+						inert={filePanelFullWidth}
+						aria-hidden={filePanelFullWidth || undefined}
+						style={{ width: retainedConversationWidth }}
+					>
+						{selected ? (
+							<ConversationPane
+								key={`${selected.workspaceId}.${selected.conversationId}`}
+								conversation={selected}
+								onOpenArtifact={
+									session ? artifactNavigation(selected, () => currentScope.current, session, panel) : undefined
+								}
+								detailsOpen={detailsOpen}
+								onDetailsClose={() => {
+									setDetailsOpen(false);
+									const target = detailsReturn.current;
+									if (target?.isConnected && target.getClientRects().length) target.focus();
+									else detailsTrigger.current?.focus();
+								}}
+							/>
+						) : (
+							<WorkbenchWelcome
+								workspaceName={workspace?.name}
+								action={
 									<PreparedTaskEntry
-										key={workspace.workspaceId}
-										workspaceId={workspace.workspaceId}
-										draft={preparedDraft(workspace.workspaceId)}
-										onDraftChange={(value) => changePreparedDraft(workspace.workspaceId, value)}
+										key={selectedWorkspace || "global"}
+										draft={preparedDraft(selectedWorkspace)}
+										onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
 										disabled={catalogBlocked}
-										onCreate={(title, model, draft) => createConversation(selectedWorkspace, title, model, draft)}
+										busy={catalogState.busy}
+										onSend={sendInitial}
+										focusRevision={composerFocusRevision}
+										onManageModels={(returnFocus) => {
+											settingsReturn.current = returnFocus;
+											setSettingsCategory("models");
+											setSettingsOpen(true);
+										}}
 									/>
-								) : (
-									<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
-								)
-							}
-						/>
-					)}
+								}
+							/>
+						)}
+					</div>
 					<FilePanel
 						controller={panel}
 						available={areaWidth}
@@ -579,13 +638,15 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 			</div>
 			<SettingsDialog
 				open={settingsOpen}
+				initialCategory={settingsCategory}
 				onOpenChange={setSettingsOpen}
 				workspace={workspace}
 				conversation={selected}
 				onRestoreFocus={() => {
 					const target = settingsReturn.current;
 					if (target?.isConnected && target.getClientRects().length) target.focus();
-					else settingsToolbarTrigger.current?.focus();
+					else if (settingsTrigger.current?.getClientRects().length) settingsTrigger.current.focus();
+					else navigationToggle.current?.focus();
 				}}
 				onOpenConversation={() => setSettingsOpen(false)}
 				credentialSettings={<ModelSettings />}
@@ -594,7 +655,33 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 				}
 				runtimeActions={
 					<ConnectionActions
-						disconnect={() => guard(disconnect)}
+						disconnect={disconnect}
+						prepareDisconnect={() => {
+							let committed = false;
+							const captured = new Map(
+								(session?.snapshot().tabs ?? []).flatMap((tab) =>
+									tab.kind === "editor" && tab.editor.protected ? [[tab.editor, tab.editor.snapshot()] as const] : [],
+								),
+							);
+							return {
+								warning: captured.size ? fileLabels(locale).leaveNote : undefined,
+								commit: () => {
+									if (committed) return true;
+									if (!connectionLease.active || currentConnection.current !== connectionLease) return false;
+									for (const tab of session?.snapshot().tabs ?? []) {
+										if (
+											tab.kind === "editor" &&
+											tab.editor.protected &&
+											captured.get(tab.editor) !== tab.editor.snapshot()
+										)
+											return false;
+									}
+									committed = true;
+									disconnect();
+									return true;
+								},
+							};
+						}}
 						onOpen={(opened, item) => {
 							cache.setQueryData(["workspace", opened.workspaceId], opened);
 							selectConversation(item, () => setSettingsOpen(false));

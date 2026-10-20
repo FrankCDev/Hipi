@@ -8,21 +8,10 @@ import { ConversationPreview } from "../src/features/workbench/conversation-prev
 
 // Inspect card content without replacing the independently tested hover/focus lifecycle.
 vi.mock("../src/features/workbench/sidebar-preview-row.tsx", () => ({
-	SidebarPreviewRow: ({
-		children,
-		preview,
-	}: {
-		children: ReactNode;
-		preview: (close: () => void, returnFocus: () => HTMLButtonElement | null) => ReactNode;
-	}) => (
+	SidebarPreviewRow: ({ children, preview }: { children: ReactNode; preview: () => ReactNode }) => (
 		<section>
 			{children}
-			<aside>
-				{preview(
-					() => {},
-					() => null,
-				)}
-			</aside>
+			<aside>{preview()}</aside>
 		</section>
 	),
 }));
@@ -44,7 +33,6 @@ function renderPreview(overrides: Partial<Conversation> = {}) {
 				workspaceName="Example project"
 				selected
 				onSelect={() => {}}
-				onDetails={() => {}}
 			/>
 		</PreferencesProvider>,
 	);
@@ -62,8 +50,9 @@ test("conversation navigation stays text-only while its preview retains the full
 
 test("preview creation metadata uses the recorded timestamp without claiming last activity", () => {
 	const html = renderPreview();
-	assert.match(html, /class="preview-created"><span>创建于<\/span><time dateTime="2026-10-19T09:30:00.000Z">/);
-	assert.match(html, /class="preview-status" data-archived="false">当前列表<\/span>/);
+	assert.match(html, /class="preview-created" dateTime="2026-10-19T09:30:00.000Z"/);
+	assert.match(html, /class="sr-only">创建于 /);
+	assert.doesNotMatch(html, /preview-status|当前列表/);
 	assert.doesNotMatch(html, /今天|刚刚|最后活跃|执行中|当前无执行/);
 });
 
@@ -75,11 +64,11 @@ test("unknown or invalid legacy creation dates are omitted rather than fabricate
 	}
 });
 
-test("archive state is truthful and technical identifiers remain behind a closed disclosure", () => {
+test("the informational preview has no duplicate actions, identifiers or decorative status", () => {
 	const html = renderPreview({ archivedAt: Date.parse("2026-10-20T00:00:00.000Z") });
-	assert.match(html, /class="preview-status" data-archived="true">已归档<\/span>/);
-	assert.match(html, /<details class="preview-identifiers"><summary>技术标识<\/summary>/);
-	assert.match(html, /<dd>project-one<\/dd>/);
-	assert.match(html, /<dd>conversation-one<\/dd>/);
-	assert.doesNotMatch(html, /<details[^>]*open/);
+	assert.doesNotMatch(
+		html,
+		/preview-status|preview-identifiers|conversation-preview-actions|<details|project-one|conversation-one/,
+	);
+	assert.equal((html.match(/<button /g) ?? []).length, 1, "Only the conversation navigation itself is actionable");
 });

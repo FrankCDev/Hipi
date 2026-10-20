@@ -12,7 +12,7 @@ import {
 	type Scope,
 	type Snapshot,
 } from "@hipi/work-runtime/contracts";
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppClientProvider } from "../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../src/app/preferences.tsx";
@@ -24,6 +24,7 @@ import "./fixture.css";
 const total = 384;
 const initialStart = total - LIMITS.historyMessages;
 const emptyHistory = new URLSearchParams(location.search).has("empty");
+const overlayFooter = new URLSearchParams(location.search).has("footer");
 const original = Array.from({ length: 480 }, (_, i) => `Original line ${i}: ${"abcdef0123456789 ".repeat(5)}`).join(
 	"\n",
 );
@@ -125,6 +126,7 @@ type Control = {
 	release: () => void;
 	stream: (step: number, final?: boolean) => void;
 	switchScope: () => void;
+	resizeFooter: (height: number) => void;
 	stats: () => { calls: CallRecord[]; maxActive: number; total: number; initialStart: number };
 };
 declare global {
@@ -134,6 +136,8 @@ declare global {
 }
 
 function Fixture() {
+	const footerRef = useRef<HTMLDivElement>(null);
+	const [footerHeight, setFooterHeight] = useState(120);
 	const [snapshot, setSnapshot] = useState(() => initial(scope));
 	const [streamStep, setStreamStep] = useState(0);
 	useLayoutEffect(() => {
@@ -171,7 +175,12 @@ function Fixture() {
 				);
 			},
 			switchScope() {
-				setSnapshot(initial({ ...scope, conversationId: "fixture-b" }));
+				setSnapshot((current) =>
+					initial({ ...scope, conversationId: current.conversationId === "fixture-a" ? "fixture-b" : "fixture-a" }),
+				);
+			},
+			resizeFooter(height) {
+				if (Number.isFinite(height) && height >= 48 && height <= 400) setFooterHeight(height);
 			},
 			stats: () => ({ calls, maxActive, total, initialStart }),
 		};
@@ -199,6 +208,11 @@ function Fixture() {
 					<button type="button" onClick={() => window.messageFixture.switchScope()}>
 						Switch conversation
 					</button>
+					{overlayFooter && (
+						<button type="button" onClick={() => window.messageFixture.resizeFooter(footerHeight === 120 ? 240 : 120)}>
+							Resize footer
+						</button>
+					)}
 				</nav>
 				<main
 					className="fixture-shell"
@@ -206,7 +220,20 @@ function Fixture() {
 					data-running={snapshot.running}
 					data-fixed={new URLSearchParams(location.search).has("fixed")}
 				>
-					<ConversationHistory scope={snapshot} snapshot={snapshot} error={false} />
+					<ConversationHistory
+						scope={snapshot}
+						snapshot={snapshot}
+						error={false}
+						footerRef={overlayFooter ? footerRef : undefined}
+					/>
+					{overlayFooter && (
+						<div className="fixture-footer" ref={footerRef} style={{ height: footerHeight }}>
+							<textarea
+								aria-label="Fixture composer"
+								placeholder="Native scrolling keys here must not change transcript intent"
+							/>
+						</div>
+					)}
 				</main>
 			</PreferencesProvider>
 		</AppClientProvider>

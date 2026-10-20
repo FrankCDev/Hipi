@@ -77,45 +77,46 @@ function render({
 	}
 }
 
-test("settings is one accessible centered modal with stable category navigation and an inline appearance form", () => {
+test("settings is an accessible page with Back, fixed categories and one inline appearance form", () => {
 	const html = render();
-	assert.match(html, /role="dialog"/);
-	assert.match(html, /data-placement="center"/);
-	assert.match(html, /class="[^"]*unified-settings-dialog/);
+	assert.doesNotMatch(html, /role="dialog"|unified-settings-dialog|data-slot="dialog-close"/);
+	assert.match(html, /class="settings-route" data-settings-page/);
+	assert.match(html, /Back to app/);
 	assert.match(html, /<nav class="settings-page-nav" aria-label="Settings categories">/);
-	for (const category of ["appearance", "models", "runtime"]) {
+	for (const category of ["general", "appearance", "models", "runtime"]) {
 		assert.match(html, new RegExp(`<button[^>]*data-category="${category}"`));
 		assert.match(html, new RegExp(`<section[^>]*data-category="${category}"`));
 	}
-	assert.match(html, /data-category="appearance" aria-current="page"/);
-	assert.match(html, /<h2 class="settings-page-heading" tabindex="-1"[^>]*>Appearance &amp; language<\/h2>/);
+	assert.match(html, /data-category="general" aria-current="page"/);
+	assert.match(html, /<h2 class="settings-page-heading" tabindex="-1"[^>]*>General<\/h2>/);
 	assert.match(html, /type="search"[^>]*aria-label="Search settings"/);
-	assert.match(html, /<section class="settings-page-content" aria-labelledby=/);
-	assert.equal((html.match(/class="settings-form"/g) ?? []).length, 1);
-	assert.match(html, /data-slot="dialog-close"[\s\S]*>Close settings<\/span>/);
+	assert.equal((html.match(/class="settings-form"/g) ?? []).length, 2);
 	assert.equal(render({ open: false }), "");
+	assert.match(render({ initialCategory: "models" }), /data-category="models" aria-current="page"/);
 });
 
-test("appearance keeps full advanced settings behind progressive groups and save/cancel remain outside those groups", () => {
+test("appearance exposes supported immediate controls without staged editing or invented capabilities", () => {
 	const html = render();
-	const firstDetails = html.indexOf('<details class="settings-advanced"');
-	assert.ok(firstDetails > html.indexOf("settings-preferences"));
-	assert.ok(firstDetails > html.indexOf("Code font"));
-	assert.equal((html.match(/<details class="settings-advanced"/g) ?? []).length, 2);
 	for (const text of [
-		"Regional appearance",
-		"Sidebar",
-		"Messages",
-		"Code editor and diff",
-		"Import, export &amp; reset",
-		"Export current JSON",
-		"Preview JSON",
-		"Preview defaults",
+		"Visual style",
+		"Advanced",
+		"UI font size",
+		"Code font size",
+		"Reduced motion",
+		"Copy theme",
+		"Import theme",
 	])
-		assert.ok(html.includes(text));
-	assert.ok(html.indexOf("settings-savebar") > html.lastIndexOf("</details>"));
-	assert.match(html, /settings-savebar[\s\S]*>Cancel<\/button>[\s\S]*>Save<\/button>/);
-	assert.doesNotMatch(html, /role="switch"|Auto.install|autostart/i);
+		assert.ok(html.includes(text), text);
+	assert.match(html, /role="radiogroup" aria-label="Theme"/);
+	assert.match(html, /<details class="settings-advanced" data-setting="advanced">/);
+	assert.ok(html.indexOf("settings-advanced-body") < html.indexOf("UI font size"));
+	assert.doesNotMatch(html, /Reset to default/);
+	assert.match(html, /type="number"[^>]*min="[^"]+"[^>]*max="[^"]+"[^>]*step="1"/);
+	assert.doesNotMatch(
+		html,
+		/settings-savebar|Unsaved|Preview JSON|Settings JSON|Regional appearance|Save<\/button>|Cancel<\/button>/,
+	);
+	assert.doesNotMatch(html, /Auto.install|autostart|Subscription|Translucent sidebar|Font smoothing/);
 });
 
 test("model section displays only returned providers/models and does not claim verified service or a global model setting", () => {
@@ -173,18 +174,21 @@ test("Chinese labels and rejected appearance recovery remain available", () => {
 	assert.match(html, /设置分类/);
 	assert.match(html, /模型与凭据/);
 	assert.match(html, /运行时与数据/);
-	assert.match(html, /分区外观/);
+	assert.match(html, /视觉样式/);
+	assert.match(html, /常规/);
 	const invalid = render({ stored: "broken" });
 	assert.match(invalid, /已保存配置无效/);
-	assert.match(invalid, /<details class="settings-advanced" data-setting="transfer" open="">/);
+	assert.match(invalid, /data-setting="advanced"/);
 	assert.match(invalid, /导出被拒绝的原始数据/);
 });
 
-test("settings bounds its own modal and scrolls only the content area with a compact-screen layout", () => {
+test("settings page owns content scrolling and uses measured desktop form dimensions", () => {
 	const css = readFileSync(new URL("../src/features/settings/settings-page.css", import.meta.url), "utf8");
-	assert.match(css, /width: min\(1060px, calc\(100vw - 48px\)\)/);
+	assert.match(css, /\.settings-route\s*\{[^}]*position: fixed;/);
 	assert.match(css, /\.settings-page-content\s*\{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
 	assert.match(css, /\.settings-section\[hidden\]\s*\{\s*display: none;/);
+	assert.match(css, /\.settings-theme-options\s*\{[^}]*width: 272px;[^}]*gap: 16px;/);
+	assert.match(css, /\.settings-size-input\s*\{[^}]*width: 64px;/);
 	assert.match(css, /@media \(max-width: 520px\)/);
-	assert.doesNotMatch(css, /#[0-9a-f]{3,8}\b|animation:/i);
+	assert.doesNotMatch(css, /unified-settings-dialog|settings-savebar|settings-unsaved-dialog/);
 });

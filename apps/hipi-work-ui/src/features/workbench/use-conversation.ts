@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { canExecuteModel } from "./model-policy.ts";
 import { reconcileReceipt } from "./receipt-reconciliation.ts";
+import { submitRequest } from "./submit-request.ts";
 import { useObservation } from "./use-observation.ts";
 
 /** Owns submission identity, draft reconciliation and request cancellation for one mounted conversation. */
@@ -86,16 +87,17 @@ export function useConversation(conversation: Conversation) {
 			setAdmissionFailed(false);
 			const controller = new AbortController();
 			request.current = controller;
+			let admitted = false;
 			try {
 				try {
-					await local.rememberForSubmission(localKey, input);
+					return await submitRequest(client, local, input, controller.signal, () => {
+						admitted = true;
+						setPending(input);
+					});
 				} catch (error) {
-					setAdmissionFailed(true);
+					if (!admitted) setAdmissionFailed(true);
 					throw error;
 				}
-				setPending(input);
-				controller.signal.throwIfAborted();
-				return await client.call("submit", input, controller.signal);
 			} finally {
 				if (request.current === controller) request.current = null;
 			}

@@ -2,8 +2,8 @@ import remend from "remend";
 
 // Provisional complexity ceilings; benchmark before treating these as product budgets.
 export const MAX_RICH_TEXT_UNITS = 32 * 1024;
-// Repeated synchronous parsing is costly: the measured 32 KiB SSR path exceeded 100 ms.
-// This provisional streaming ceiling is a mitigation, not a browser frame-time guarantee.
+// Limit the mutable tail, rather than reparsing every already-settled block.
+// This provisional ceiling is a mitigation, not a browser frame-time guarantee.
 export const MAX_STREAMING_RICH_TEXT_UNITS = 2 * 1024;
 export const ORIGINAL_PAGE_UNITS = 16 * 1024;
 

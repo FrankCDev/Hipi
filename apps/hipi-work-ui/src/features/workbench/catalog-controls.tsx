@@ -1,7 +1,7 @@
 import { type Conversation, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, Ellipsis, Info, Pencil } from "lucide-react";
-import { type RefObject, useId, useRef, useState, useSyncExternalStore } from "react";
+import { Archive, ArchiveRestore, Ellipsis, Pencil } from "lucide-react";
+import { type ReactNode, type RefObject, useId, useRef, useState, useSyncExternalStore } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
@@ -18,10 +18,17 @@ import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
 
-export function CatalogRecovery({ session, onResolved }: { session: CatalogSession; onResolved: () => void }) {
+export function CatalogRecovery({
+	session,
+	onResolve,
+}: {
+	session: CatalogSession;
+	onResolve: (operation: () => Promise<void>) => Promise<void>;
+}) {
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
+	if (state.initialSend || state.submission) return null;
 	if (!state.pending && !state.incompatible && !state.failed) return null;
 	return (
 		<section className="nav-feedback grid gap-2" aria-live="polite">
@@ -55,12 +62,12 @@ export function CatalogRecovery({ session, onResolved }: { session: CatalogSessi
 				size="sm"
 				variant="outline"
 				disabled={state.busy || state.incompatible || !state.pending}
-				onClick={() => void session.check().then(onResolved)}
+				onClick={() => void onResolve(session.check)}
 			>
 				{l.check}
 			</Button>
 			{state.notFound && (
-				<Button size="sm" variant="outline" disabled={state.busy} onClick={() => void session.retry().then(onResolved)}>
+				<Button size="sm" variant="outline" disabled={state.busy} onClick={() => void onResolve(session.retry)}>
 					{l.retry}
 				</Button>
 			)}
@@ -71,7 +78,7 @@ export function ConversationActions({
 	conversation,
 	session,
 	guard,
-	onPreview,
+	previewContent,
 	onMenuOpen,
 	onOverlayChange,
 	onReturnFocus,
@@ -80,7 +87,7 @@ export function ConversationActions({
 	conversation: Conversation;
 	session: CatalogSession;
 	guard: (action: () => void) => void;
-	onPreview?: () => void;
+	previewContent?: ReactNode;
 	onMenuOpen?: () => void;
 	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus?: () => void;
@@ -89,20 +96,50 @@ export function ConversationActions({
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
 	const cache = useQueryClient();
-	const [action, setAction] = useState<"rename" | "archive" | "restore" | null>(null);
+	const [renaming, setRenaming] = useState(false);
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const titleId = useId();
 	const ownTrigger = useRef<HTMLButtonElement>(null);
 	const trigger = triggerRef ?? ownTrigger;
-	const previewSelected = useRef(false);
 	const disabled = state.busy || !!state.pending || state.incompatible;
+	const execute = (command: CatalogCommand) => {
+		guard(() => {
+			const previous = session.getSnapshot();
+			if (previous.busy || previous.pending || previous.initialSend || previous.incompatible) return;
+			void session.execute(command).then(() => {
+				const resultState = session.getSnapshot();
+				if (
+					resultState === previous ||
+					resultState.pending ||
+					resultState.failed ||
+					resultState.resultMethod !== command.method
+				)
+					return;
+				const result = resultState.result;
+				if (
+					result &&
+					"conversationId" in result &&
+					result.workspaceId === command.params.workspaceId &&
+					"conversationId" in command.params &&
+					result.conversationId === command.params.conversationId
+				) {
+					cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
+					void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
+					if (command.method === "renameConversation") {
+						setRenaming(false);
+						onOverlayChange?.("dialog", false);
+					}
+				}
+			});
+		});
+	};
 	return (
 		<Dialog
-			open={action !== null}
+			open={renaming}
 			onOpenChange={(open) => {
 				if (!open && !state.busy) {
-					setAction(null);
+					setRenaming(false);
 					onOverlayChange?.("dialog", false);
 				}
 			}}
@@ -119,7 +156,6 @@ export function ConversationActions({
 						className="conversation-actions-trigger"
 						size="icon-sm"
 						variant="ghost"
-						disabled={disabled && !onPreview}
 						aria-label={`${l.actions}: ${conversation.title}`}
 					>
 						<Ellipsis size={16} aria-hidden="true" />
@@ -129,37 +165,21 @@ export function ConversationActions({
 					align="end"
 					className="conversation-action-menu"
 					onCloseAutoFocus={(event) => {
-						if (action || previewSelected.current) event.preventDefault();
+						if (renaming) event.preventDefault();
 						else if (onReturnFocus) {
 							event.preventDefault();
 							onReturnFocus();
 						}
-						previewSelected.current = false;
 					}}
 				>
-					<DropdownMenuLabel className="conversation-action-context">
-						<span>{l.actions}</span>
-						<span className="conversation-action-title">{conversation.title}</span>
-					</DropdownMenuLabel>
+					<DropdownMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</DropdownMenuLabel>
 					<DropdownMenuSeparator />
-					{onPreview && (
-						<DropdownMenuItem
-							onSelect={() => {
-								previewSelected.current = true;
-								onOverlayChange?.("menu", false);
-								onPreview();
-							}}
-						>
-							<Info size={15} aria-hidden="true" />
-							{l.preview}
-						</DropdownMenuItem>
-					)}
 					<DropdownMenuItem
 						disabled={disabled}
 						onSelect={() => {
 							setTitle(conversation.title);
 							onOverlayChange?.("dialog", true);
-							setAction("rename");
+							setRenaming(true);
 						}}
 					>
 						<Pencil size={15} aria-hidden="true" />
@@ -169,8 +189,16 @@ export function ConversationActions({
 					<DropdownMenuItem
 						disabled={disabled}
 						onSelect={() => {
-							onOverlayChange?.("dialog", true);
-							setAction(conversation.archivedAt === null ? "archive" : "restore");
+							execute({
+								version: PROTOCOL_VERSION,
+								method: conversation.archivedAt === null ? "archiveConversation" : "restoreConversation",
+								params: {
+									workspaceId: conversation.workspaceId,
+									conversationId: conversation.conversationId,
+									requestId: crypto.randomUUID(),
+									expectedRevision: conversation.revision,
+								},
+							});
 						}}
 					>
 						{conversation.archivedAt === null ? (
@@ -191,61 +219,34 @@ export function ConversationActions({
 					else trigger.current?.focus();
 				}}
 			>
-				<DialogTitle>{l[action ?? "rename"]}</DialogTitle>
-				<DialogDescription>
-					{l[action === "archive" ? "archiveNote" : action === "restore" ? "restoreNote" : "renameNote"]}
-				</DialogDescription>
-				<p className="break-all">
-					{conversation.workspaceId} / {conversation.conversationId}
-				</p>
-				{action === "rename" && (
-					<label htmlFor={titleId}>
-						{l.title}
-						<Input
-							id={titleId}
-							value={title}
-							disabled={disabled}
-							maxLength={128}
-							onChange={(event) => setTitle(event.target.value)}
-						/>
-					</label>
-				)}
+				<DialogTitle>{l.rename}</DialogTitle>
+				<DialogDescription>{l.renameNote}</DialogDescription>
+				<label htmlFor={titleId}>
+					{l.title}
+					<Input
+						id={titleId}
+						value={title}
+						disabled={disabled}
+						maxLength={128}
+						onChange={(event) => setTitle(event.target.value)}
+					/>
+				</label>
 				{state.failed && <p role="alert">{l.failed}</p>}
 				{state.pending && <p role="alert">{l.pending}</p>}
 				<Button
-					disabled={disabled || (action === "rename" && !title.trim())}
+					disabled={disabled || !title.trim()}
 					onClick={() => {
-						if (!action) return;
-						const params = {
-							workspaceId: conversation.workspaceId,
-							conversationId: conversation.conversationId,
-							requestId: crypto.randomUUID(),
-							expectedRevision: conversation.revision,
-						};
-						const command: CatalogCommand =
-							action === "rename"
-								? {
-										version: PROTOCOL_VERSION,
-										method: "renameConversation" as const,
-										params: { ...params, title: title.trim() },
-									}
-								: {
-										version: PROTOCOL_VERSION,
-										method: action === "archive" ? ("archiveConversation" as const) : ("restoreConversation" as const),
-										params,
-									};
-						guard(() => {
-							void session.execute(command).then(() => {
-								if (!session.getSnapshot().pending && !session.getSnapshot().failed) {
-									const result = session.getSnapshot().result;
-									if (result && "conversationId" in result) {
-										cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
-										void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
-									}
-									setAction(null);
-									onOverlayChange?.("dialog", false);
-								}
-							});
+						if (!renaming || disabled || !title.trim()) return;
+						execute({
+							version: PROTOCOL_VERSION,
+							method: "renameConversation",
+							params: {
+								workspaceId: conversation.workspaceId,
+								conversationId: conversation.conversationId,
+								requestId: crypto.randomUUID(),
+								expectedRevision: conversation.revision,
+								title: title.trim(),
+							},
 						});
 					}}
 				>

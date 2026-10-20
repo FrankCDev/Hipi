@@ -6,47 +6,277 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
 	activityEvidence,
-	appearanceChoice,
+	assertCommittedStreamIdentity,
+	assertDefaultChatScope,
+	assertInitialChatUnsubmitted,
 	assertNoAlerts,
-	assertSettingsPreviewRetained,
-	assertTaskSetupUnsubmitted,
 	captureFailure,
 	click,
+	committedStreamEvidence,
 	diagnosticTarget,
 	fixture,
+	historyEvidence,
 	hover,
+	inspectInitialChat,
 	inspectModal,
-	inspectTaskGoal,
 	modalBounds,
 	modalWheelPoint,
+	observeMountedStream,
+	observeStreamingActions,
 	pressKey,
 	receiptScope,
-	rememberCreateTrigger,
 	resolvedTheme,
 	selectReopenedConversation,
 	settleFloatingAnimations,
 	waitForOverlayClosed,
 } from "./gui-flow.mjs";
 
-test("task goal safety uses native input and observes newline/composition before restoring the exact unsent draft", async () => {
+test("persisted history uses canonical IDs even when final virtual key remains observer-local", async () => {
+	const rows = [
+		{
+			dataset: { messageId: "user_1", messageKey: "message:user_1" },
+			textContent: fixture.prompt,
+			querySelector: (selector) => selector === "article.message-user",
+		},
+		{
+			dataset: { messageId: "assistant_2", messageKey: 'stream:["workspace","conversation","partial"]' },
+			textContent: fixture.answer,
+			querySelector: (selector) => selector === "article.message-assistant",
+		},
+	];
+	const cdp = {
+		request: async (_method, params) => ({
+			result: {
+				value: runInNewContext(params.expression, {
+					document: {
+						querySelectorAll: (selector) => {
+							assert.equal(selector, "[data-message-id]");
+							return rows;
+						},
+					},
+				}),
+			},
+		}),
+	};
+	assert.deepEqual(Array.from(await historyEvidence(cdp)), ["message:user_1", "message:assistant_2"]);
+	rows[1].dataset.messageKey = "message:assistant_2";
+	assert.deepEqual(Array.from(await historyEvidence(cdp)), ["message:user_1", "message:assistant_2"]);
+	rows[1].dataset.messageId = "user_1";
+	await assert.rejects(historyEvidence(cdp), /identities must be unique/);
+});
+
+function mountedStream() {
+	const paragraph = { isConnected: true, textContent: fixture.answer };
+	const body = { isConnected: true, children: [paragraph, {}], querySelector: () => paragraph };
+	const copy = { disabled: false };
+	let busy = true;
+	const article = {
+		isConnected: true,
+		getAttribute: () => (busy ? "true" : "false"),
+		querySelector: () => body,
+		querySelectorAll: () => (busy ? [] : [copy]),
+	};
+	const row = {
+		isConnected: true,
+		dataset: {
+			messageKey: `stream:${JSON.stringify(["workspace", "conversation", "partial"])}`,
+			transcriptKind: "assistant-stream",
+		},
+		querySelector: () => article,
+	};
+	let rows = [row];
+	const document = {
+		querySelectorAll: (selector) =>
+			selector === "[data-message-key]"
+				? rows
+				: rows.filter((node) => node.dataset.transcriptKind === "assistant-stream"),
+	};
+	return {
+		document,
+		row,
+		article,
+		body,
+		paragraph,
+		copy,
+		replaceRows(value) {
+			rows = value;
+		},
+		commit() {
+			busy = false;
+			row.dataset.transcriptKind = "assistant-message";
+			row.dataset.messageId = "canonical_1";
+		},
+	};
+}
+
+test("mounted stream keeps row, article, markdown and settled paragraph through canonical commit", () => {
+	const dom = mountedStream();
+	const observation = {};
+	observeMountedStream(dom.document, observation, fixture.answer);
+	assert.equal(observation.streamNodes.row, dom.row);
+	assert.equal(committedStreamEvidence(dom.document, observation).committed, false);
+	dom.commit();
+	const evidence = committedStreamEvidence(dom.document, observation);
+	assertCommittedStreamIdentity(evidence, { workspaceId: "workspace", conversationId: "conversation" });
+	assert.equal(evidence.messageId, "canonical_1");
+	assert.throws(() =>
+		assertCommittedStreamIdentity(evidence, { workspaceId: "other", conversationId: "conversation" }),
+	);
+});
+
+test("identical text cannot hide a remounted stream node or duplicate/unfinished row", () => {
+	for (const level of [
+		"row",
+		"article",
+		"body",
+		"paragraph",
+		"disconnected",
+		"copy",
+		"duplicate",
+		"extra-stream",
+		"canonical",
+	]) {
+		const dom = mountedStream();
+		const observation = {};
+		observeMountedStream(dom.document, observation, fixture.answer);
+		dom.commit();
+		if (level === "row") dom.replaceRows([{ ...dom.row }]);
+		if (level === "article") dom.row.querySelector = () => ({ ...dom.article });
+		if (level === "body") dom.article.querySelector = () => ({ ...dom.body });
+		if (level === "paragraph") dom.body.querySelector = () => ({ ...dom.paragraph });
+		if (level === "disconnected") dom.paragraph.isConnected = false;
+		if (level === "copy") dom.copy.disabled = true;
+		if (level === "duplicate") dom.replaceRows([dom.row, dom.row]);
+		if (level === "extra-stream")
+			dom.replaceRows([dom.row, { dataset: { messageKey: "stream:other", transcriptKind: "assistant-stream" } }]);
+		if (level === "canonical") delete dom.row.dataset.messageId;
+		assert.throws(
+			() =>
+				assertCommittedStreamIdentity(committedStreamEvidence(dom.document, observation), {
+					workspaceId: "workspace",
+					conversationId: "conversation",
+				}),
+			level,
+		);
+	}
+});
+
+test("stream capture requires authoritative live identity and an actually settled paragraph", () => {
+	for (const invalid of ["key", "short-key", "paragraph", "no-tail", "committed"]) {
+		const dom = mountedStream();
+		if (invalid === "key") dom.row.dataset.messageKey = "stream:not-json";
+		if (invalid === "short-key") dom.row.dataset.messageKey = 'stream:["workspace"]';
+		if (invalid === "paragraph") dom.paragraph.textContent = "unfinished";
+		if (invalid === "no-tail") dom.body.children = [dom.paragraph];
+		if (invalid === "committed") dom.commit();
+		const observation = {};
+		observeMountedStream(dom.document, observation, fixture.answer);
+		assert.equal(observation.streamNodes, undefined, invalid);
+	}
+});
+
+test("streaming observation retains every invalid action state even after a valid sole Stop", () => {
+	const stop = { dataset: { action: "stop" }, type: "button", getAttribute: () => "Cancel execution" };
+	const send = { dataset: { action: "send" }, type: "submit", getAttribute: () => "Submit task" };
+	let actions = [stop];
+	let executionState = "running";
+	const document = {
+		querySelector: () => ({ dataset: { executionState } }),
+		querySelectorAll: () => actions,
+	};
+	const observation = { soleStopObserved: false, invalidRunningActions: 0 };
+	observeStreamingActions(document, observation);
+	assert.deepEqual(observation, { soleStopObserved: true, invalidRunningActions: 0 });
+	for (const invalid of [[stop, send], [], [send], [{ ...stop, type: "submit" }]]) {
+		actions = invalid;
+		observeStreamingActions(document, observation);
+	}
+	actions = [stop];
+	observeStreamingActions(document, observation);
+	assert.deepEqual(observation, { soleStopObserved: true, invalidRunningActions: 4 });
+	executionState = "idle";
+	actions = [send];
+	observeStreamingActions(document, observation);
+	assert.equal(observation.invalidRunningActions, 4, "Idle Send is not a running-state failure");
+});
+
+test("default chat identity and cardinality reject duplicate backing workspaces, conversations and incorrect receipt scope", async () => {
+	const valid = {
+		count: 1,
+		recent: 1,
+		workspaceId: "receipt-work",
+		selected: "true",
+		conversations: 1,
+		title: fixture.conversation,
+	};
+	const verify = (state, reopened = false) =>
+		assertDefaultChatScope(
+			{ request: async () => ({ result: { value: state } }) },
+			{ workspaceId: "receipt-work", conversationId: "one" },
+			reopened,
+		);
+	await verify(valid);
+	await verify({ ...valid, count: 2 }, true);
+	for (const [key, value] of Object.entries({
+		count: 2,
+		recent: 2,
+		workspaceId: "same-name-wrong-id",
+		selected: "false",
+		conversations: 2,
+		title: "wrong",
+	}))
+		await assert.rejects(verify({ ...valid, [key]: value }));
+	await assert.rejects(verify(valid, true));
+	await assert.rejects(verify({ ...valid, count: 3 }, true));
+});
+
+test("initial chat uses native draft input, Shift+Enter and IME without creating work before Send", async () => {
 	let selected = false;
-	const goal = {
+	let settings = false;
+	let menu = false;
+	const events = [];
+	const make = (name, y) => ({
+		name,
 		value: "",
 		getClientRects: () => [{}],
 		scrollIntoView() {},
-		getBoundingClientRect: () => ({ x: 0, y: 0, width: 100, height: 40 }),
-		contains: (node) => node === goal,
-	};
-	const dialog = {
-		querySelector: (selector) => (selector === ".task-create-confirm" ? { type: "button", disabled: false } : goal),
+		getBoundingClientRect: () => ({ x: 0, y, width: 100, height: 20 }),
+		contains(node) {
+			return node === this;
+		},
+	});
+	const goal = make("goal", 0),
+		next = make("new", 30),
+		model = make("model", 60),
+		manage = make("manage", 90),
+		back = make("back", 120);
+	const nodes = {
+		".prepared-task-input": goal,
+		".new-conversation-trigger": next,
+		".new-chat-model-trigger": model,
+		".new-chat-manage-models": manage,
+		".settings-back": back,
 	};
 	const document = {
-		querySelector: (selector) =>
-			selector === ".task-setup-dialog" ? dialog : selector === ".composer textarea" ? null : goal,
-		querySelectorAll: (selector) => (selector === ".task-setup-dialog .task-setup-input" ? [goal] : []),
-		elementFromPoint: () => goal,
+		activeElement: goal,
+		querySelector(selector) {
+			if (selector === ".new-chat-composer")
+				return {
+					querySelector: (selector) =>
+						selector.startsWith(".composer-submit") ? { type: "submit", disabled: false } : goal,
+				};
+			if (selector === ".settings-route") return settings ? {} : null;
+			if (selector === ".settings-page-nav [aria-current=page]")
+				return settings ? { dataset: { category: "models" } } : null;
+			return nodes[selector] ?? null;
+		},
+		querySelectorAll(selector) {
+			return nodes[selector] ? [nodes[selector]] : selector === '[role="dialog"]' && menu ? [{}] : [];
+		},
+		elementFromPoint(_x, y) {
+			return Object.values(nodes).find((node) => node.getBoundingClientRect().y + 10 === y);
+		},
 	};
-	const events = [];
 	const cdp = {
 		async request(method, params) {
 			if (method === "Runtime.evaluate")
@@ -61,60 +291,70 @@ test("task goal safety uses native input and observes newline/composition before
 				};
 			events.push({ method, ...params });
 			if (method === "Input.insertText") goal.value += params.text;
+			if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") {
+				const target = document.elementFromPoint(params.x, params.y);
+				document.activeElement = target;
+				if (target === next) document.activeElement = goal;
+				if (target === model) menu = true;
+				if (target === manage) {
+					menu = false;
+					settings = true;
+				}
+				if (target === back) {
+					settings = false;
+					document.activeElement = model;
+				}
+			}
 			if (method === "Input.dispatchKeyEvent" && params.type === "keyDown") {
 				if (params.key === "a") selected = true;
 				if (params.key === "Backspace" && selected) {
 					goal.value = "";
 					selected = false;
 				}
-				if (params.key === "Enter" && params.text) goal.value += "\n";
+				if (params.key === "Enter" && params.text && params.modifiers === 8) goal.value += "\n";
 			}
 		},
 	};
-	assert.deepEqual(await inspectTaskGoal(cdp), {
-		enterAddsNewlineOnly: true,
-		compositionKey229DoesNotCreate: true,
-		explicitCreateRequired: true,
+	assert.deepEqual(await inspectInitialChat(cdp), {
+		shiftEnterOnlyNewline: true,
+		cdpCompositionDoesNotSend: true,
+		navigationDoesNotCreate: true,
+		settingsRetainsDraft: true,
+		singleSendRequired: true,
 	});
-	assert.equal(goal.value, fixture.text);
-	assert.equal(
-		events.filter((event) => event.method === "Input.dispatchMouseEvent").length,
-		2,
-		"Only focus the goal; never click Create during keyboard safety acceptance",
-	);
+	assert.equal(goal.value, fixture.prompt);
 	assert.ok(events.some((event) => event.windowsVirtualKeyCode === 229));
+	assert.ok(events.some((event) => event.method === "Input.imeSetComposition"));
+	assert.equal(
+		events.filter((event) => event.method === "Input.dispatchMouseEvent" && event.type === "mouseReleased").length,
+		5,
+		"Only draft/navigation/model settings input, never Send",
+	);
 });
 
-test("dirty Settings guard rejects lost preview, category, draft and message continuity", () => {
-	const expected = { theme: "dark", draft: "retained", keys: ["message:one"] };
-	const valid = { ...expected, open: true, category: "appearance" };
-	assert.doesNotThrow(() => assertSettingsPreviewRetained(valid, expected));
-	for (const [key, value] of Object.entries({ open: false, category: "models", theme: "light", draft: "", keys: [] }))
-		assert.throws(() => assertSettingsPreviewRetained({ ...valid, [key]: value }, expected));
-});
-
-test("task goal keyboard safety rejects creation, submission, lost drafts and disabled-Create false positives", () => {
+test("initial chat rejects premature backing objects, lost drafts and disabled-Send false positives", () => {
 	const valid = {
-		open: true,
+		home: true,
 		goal: "Goal\n",
-		createType: "button",
-		createDisabled: false,
-		composer: false,
+		sendType: "submit",
+		sendDisabled: false,
+		dialogs: 0,
+		workspaces: 0,
 		conversations: 0,
 		messages: 0,
 	};
-	assert.doesNotThrow(() => assertTaskSetupUnsubmitted(valid, "Goal\n"));
+	assert.doesNotThrow(() => assertInitialChatUnsubmitted(valid, "Goal\n"));
 	for (const [key, value] of Object.entries({
-		open: false,
+		home: false,
 		goal: "Goal",
-		createType: "submit",
-		createDisabled: true,
-		composer: true,
+		sendType: "button",
+		sendDisabled: true,
+		dialogs: 1,
+		workspaces: 1,
 		conversations: 1,
 		messages: 1,
-	})) {
-		assert.throws(() => assertTaskSetupUnsubmitted({ ...valid, [key]: value }, "Goal\n"));
-	}
+	}))
+		assert.throws(() => assertInitialChatUnsubmitted({ ...valid, [key]: value }, "Goal\n"));
 });
 
 test("capture waits for finite floating entrances and two frames, without awaiting infinite busy indicators", async () => {
@@ -148,29 +388,6 @@ test("capture fails a bounded finite entrance stall instead of silently taking a
 		settleFloatingAnimations(document, 10, (callback) => callback()),
 		/did not settle/,
 	);
-});
-
-test("retained creation trigger never crosses CDP's return-by-value serialization boundary", async () => {
-	const trigger = {};
-	trigger.self = trigger;
-	const window = {};
-	let present = true;
-	const cdp = {
-		async request(method, params) {
-			assert.equal(method, "Runtime.evaluate");
-			assert.equal(params.returnByValue, true);
-			const value = runInNewContext(params.expression, {
-				window,
-				document: { querySelector: () => (present ? trigger : null) },
-			});
-			// DOM nodes cannot be serialized by value. The retained object must stay in the renderer.
-			return { result: { value: JSON.parse(JSON.stringify(value)) } };
-		},
-	};
-	await rememberCreateTrigger(cdp);
-	assert.equal(window.__hipiGuiCreateTrigger, trigger);
-	present = false;
-	await assert.rejects(rememberCreateTrigger(cdp), /requires its original primary trigger/);
 });
 
 test("focus timeout identifies only allowlisted targets, never dynamic titles or input values", async () => {
@@ -246,7 +463,7 @@ test("receipt scope comes from exact visible receipt identifiers and rejects mal
 });
 
 test("modal bounds rejects an offscreen or covered Close without sending input", async () => {
-	for (const reason of ["offscreen", "covered", "title-offscreen", "title-covered", "valid", "center", "settings"]) {
+	for (const reason of ["offscreen", "covered", "title-offscreen", "title-covered", "valid", "center"]) {
 		const rect = { x: 500, y: 10, width: 400, height: 600 };
 		const close = {
 			textContent: "Close",
@@ -259,14 +476,10 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 			contains: () => reason !== "title-covered",
 		};
 		const dialog = {
-			dataset: { placement: ["center", "settings"].includes(reason) ? "center" : "right", scrollBody: "true" },
+			dataset: { placement: reason === "center" ? "center" : "right", scrollBody: "true" },
 			getBoundingClientRect: () => rect,
 			querySelectorAll: () => [close],
 			querySelector: (selector) => {
-				if (reason === "settings") {
-					assert.ok([".settings-page-header h2", ".settings-page-content"].includes(selector));
-					return selector === ".settings-page-header h2" ? title : body;
-				}
 				return selector === '[data-slot="dialog-title"]' ? title : body;
 			},
 		};
@@ -285,9 +498,7 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 				};
 			},
 		};
-		if (reason === "settings")
-			assert.equal((await modalBounds(cdp, ".unified-settings-dialog", 1, "center")).ready, true);
-		else if (reason === "valid" || reason === "center")
+		if (reason === "valid" || reason === "center")
 			assert.equal((await modalBounds(cdp, ".dialog", 1, reason === "center" ? "center" : "right")).ready, true);
 		else await assert.rejects(modalBounds(cdp, ".dialog", 1), /modal viewport and reachable Close/);
 	}
@@ -470,61 +681,39 @@ test("failure capture is bounded and redacts unknown button text; renderer loss 
 	}
 });
 
-function renderer({ expanded = true, delay = 0, selected = false } = {}) {
+function renderer({ delay = 0, selected = false } = {}) {
 	const clicks = [];
 	let reads = 0;
-	const node = (name, y, textContent) => ({
-		name,
-		textContent,
+	const conversation = {
+		textContent: fixture.conversation,
 		disabled: false,
 		getClientRects: () => [{}],
-		getBoundingClientRect: () => ({ x: 0, y, width: 20, height: 20 }),
-		getAttribute: () => String(expanded),
+		getBoundingClientRect: () => ({ x: 0, y: 40, width: 20, height: 20 }),
 		scrollIntoView() {},
 		contains(other) {
 			return other === this;
 		},
-	});
-	const toggle = node("toggle", 0, "GUI 工作区");
-	const conversation = node("conversation", 40, fixture.conversation);
+	};
 	const document = {
-		querySelector(selector) {
-			if (selector === ".toolbar-conversation") return selected ? { textContent: fixture.conversation } : null;
-			throw new Error(`Unexpected selector: ${selector}`);
-		},
+		querySelector: () => (selected ? { textContent: fixture.conversation } : null),
 		querySelectorAll(selector) {
-			if (selector === '.workspace-branch:is([data-current="true"],[data-contains-current="true"])')
-				return ++reads > delay
-					? [{ dataset: { current: "false", containsCurrent: "true" }, querySelector: () => toggle }]
-					: [];
-			if (selector === '.workspace-branch:is([data-current="true"],[data-contains-current="true"]) .project-toggle')
-				return reads > delay ? [toggle] : [];
-			if (selector === ".conversation-list button.conversation-link") return expanded ? [conversation] : [];
+			if (selector === ".recent-conversations") return ++reads > delay ? [{}] : [];
+			if (selector === ".recent-conversations .conversation-link") return reads > delay ? [conversation] : [];
 			throw new Error(`Unexpected selector: ${selector}`);
 		},
-		elementFromPoint(_x, y) {
-			return y < 30 ? toggle : conversation;
-		},
+		elementFromPoint: () => conversation,
 	};
 	return {
 		clicks,
 		async request(method, params) {
-			if (method === "Runtime.evaluate") {
+			if (method === "Runtime.evaluate")
 				return {
 					result: {
-						value: runInNewContext(params.expression, {
-							document,
-							location: { href: "hipi-work://app/index.html" },
-						}),
+						value: runInNewContext(params.expression, { document, location: { href: "hipi-work://app/index.html" } }),
 					},
 				};
-			}
 			assert.equal(method, "Input.dispatchMouseEvent");
-			if (params.type === "mouseReleased") {
-				const target = document.elementFromPoint(params.x, params.y);
-				clicks.push(target.name);
-				if (target === toggle) expanded = !expanded;
-			}
+			if (params.type === "mouseReleased") clicks.push("conversation");
 			return {};
 		},
 	};
@@ -547,46 +736,11 @@ test("keyboard smoke emits paired native CDP events and rejects unknown keys", a
 });
 
 test("theme restoration distinguishes system preference from explicit light and dark", () => {
-	assert.equal(resolvedTheme("Follow system", false), "light");
-	assert.equal(resolvedTheme("Follow system", true), "dark");
-	assert.equal(resolvedTheme("Light", true), "light");
-	assert.equal(resolvedTheme("Dark", false), "dark");
+	assert.equal(resolvedTheme("system", false), "light");
+	assert.equal(resolvedTheme("system", true), "dark");
+	assert.equal(resolvedTheme("light", true), "light");
+	assert.equal(resolvedTheme("dark", false), "dark");
 	assert.throws(() => resolvedTheme("unknown", false), /Unknown appearance mode/);
-});
-
-test("appearance choice follows the Theme label association rather than an arbitrary combobox", async () => {
-	const control = { id: "theme-choice", textContent: " Follow system ", getAttribute: () => "combobox" };
-	let labels = [
-		{ textContent: "Language", htmlFor: "locale-choice" },
-		{ textContent: "Theme", htmlFor: "theme-choice" },
-	];
-	const document = {
-		querySelector(selector) {
-			assert.equal(selector, '.unified-settings-dialog[role="dialog"]');
-			return {
-				querySelectorAll: () => labels,
-			};
-		},
-		getElementById(id) {
-			assert.equal(id, "theme-choice");
-			return control;
-		},
-	};
-	const cdp = {
-		async request(_method, params) {
-			return { result: { value: runInNewContext(params.expression, { document, CSS: { escape: (value) => value } }) } };
-		},
-	};
-	const choice = await appearanceChoice(cdp);
-	assert.equal(choice.mode, "Follow system");
-	assert.equal(choice.selector, "#theme-choice");
-	labels = [{ textContent: "主题", htmlFor: "theme-choice" }];
-	control.textContent = "跟随系统";
-	assert.equal((await appearanceChoice(cdp)).mode, "跟随系统");
-	labels = [{ textContent: "语言", htmlFor: "theme-choice" }];
-	control.textContent = "简体中文";
-	assert.equal((await appearanceChoice(cdp, "language")).mode, "简体中文");
-	await assert.rejects(appearanceChoice(cdp, "unrecognized"));
 });
 
 test("unexpected application alerts fail even without console errors or visible geometry", async () => {
@@ -612,16 +766,10 @@ test("unexpected application alerts fail even without console errors or visible 
 	await assert.rejects(assertNoAlerts(cdp), /Unexpected application alert.*Records could not be read/);
 });
 
-test("reopen waits for delayed workspace DOM and never collapses an already expanded branch", async () => {
-	const cdp = renderer({ expanded: true, delay: 2 });
+test("reopen waits for the actual retained default Recent branch without creating another workspace", async () => {
+	const cdp = renderer({ delay: 2 });
 	await selectReopenedConversation(cdp);
 	assert.deepEqual(cdp.clicks, ["conversation"]);
-});
-
-test("reopen expands an actually collapsed branch through input before selecting the conversation", async () => {
-	const cdp = renderer({ expanded: false, delay: 1 });
-	await selectReopenedConversation(cdp);
-	assert.deepEqual(cdp.clicks, ["toggle", "conversation"]);
 });
 
 test("reopen preserves an already restored conversation selection without extra input", async () => {
@@ -657,7 +805,15 @@ test("activity evidence requires a loaded successful page, not merely absence of
 					"No activity in this scanned page. More records may be available on the next page.",
 				];
 			}
-			return { result: { value: runInNewContext(params.expression, { document: { querySelector: () => dialog } }) } };
+			return {
+				result: {
+					value: runInNewContext(params.expression, {
+						document: {
+							querySelectorAll: () => [{ querySelector: () => ({ textContent: "Conversation details" }) }, dialog],
+						},
+					}),
+				},
+			};
 		},
 	};
 	assert.deepEqual(await activityEvidence(cdp), { section: "Task-record section", empty: true });

@@ -5,6 +5,7 @@ import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog, DialogContent } from "../src/components/ui/dialog.tsx";
+import { DropdownMenuContent, DropdownMenuItem } from "../src/components/ui/dropdown-menu.tsx";
 import { Select } from "../src/components/ui/select.tsx";
 import { Textarea } from "../src/components/ui/textarea.tsx";
 import { AgentPermissionManagement } from "../src/features/agent-permissions/agent-permissions.tsx";
@@ -137,12 +138,14 @@ function element<C extends React.ElementType>(node: React.ReactNode, type: C) {
 	return only;
 }
 function button(node: React.ReactNode, className: string) {
-	const found = elements(node, Button).find((item) => item.props.className === className);
+	const found = [...elements(node, Button), ...elements(node, "button")].find(
+		(item) => item.props.className === className,
+	);
 	assert.ok(found, className);
 	return found;
 }
 function click(
-	target: React.ReactElement<React.ComponentProps<typeof Button>>,
+	target: React.ReactElement<React.ComponentProps<"button">>,
 	trigger = { isConnected: true, focus: vi.fn() },
 ) {
 	assert.ok(target.props.onClick);
@@ -196,7 +199,14 @@ test("direct Tools opens the correct live section, preserves both owners and res
 	assert.equal(initial.dialog.props.open, false);
 	assert.equal(hooks.queries.get("agent-context-roots"), false);
 	assert.equal(hooks.queries.get("tool-pack-model"), false);
-	const trigger = click(button(initial.controls, "capability-tools-trigger"));
+	const trigger = { isConnected: true, focus: vi.fn() };
+	const plus = button(initial.controls, "composer-add-trigger");
+	assert.ok(plus.props.ref && typeof plus.props.ref === "object");
+	plus.props.ref.current = trigger as unknown as HTMLButtonElement;
+	click(button(initial.controls, "capability-tools-trigger"));
+	const transfer = new Event("closeAutoFocus", { cancelable: true });
+	element(initial.controls, DropdownMenuContent).props.onCloseAutoFocus?.(transfer);
+	assert.equal(transfer.defaultPrevented, true, "The menu must not refocus behind the newly opening dialog");
 	const opened = drive();
 	assert.equal(opened.dialog.props.open, true);
 	assert.equal(opened.owner.props.detailsOpen, false);
@@ -206,11 +216,9 @@ test("direct Tools opens the correct live section, preserves both owners and res
 	assert.equal(opened.session, initial.session);
 	assert.equal(opened.packSession, initial.packSession);
 	assert.equal(hooks.queries.get("tool-pack-model"), true);
-	assert.ok(
-		elements(opened.controls, Button).some(
-			(item) =>
-				item.props["data-section" as keyof typeof item.props] === "tool-packs" && item.props["aria-current"] === "page",
-		),
+	assert.equal(
+		element(opened.controls, DialogContent).props["data-section" as keyof React.ComponentProps<typeof DialogContent>],
+		"tool-packs",
 	);
 	await vi.waitFor(() => assert.equal(opened.packSession.getSnapshot().loaded, true));
 	opened.dialog.props.onOpenChange?.(false);
@@ -252,7 +260,7 @@ test("File context and management share one draft, one consent owner and the exa
 	assert.equal(direct.focus.mock.calls.length, 1);
 	const closed = drive();
 	assert.equal(element(closed.consent, Textarea).props.value, "src\ndocs");
-	closed.dialog.props.onOpenChange?.(true);
+	click(button(closed.controls, "capabilities-trigger permission-mode-trigger"));
 	const management = drive();
 	const managementContext = elements(management.controls, Button).find(
 		(item) =>
@@ -314,7 +322,9 @@ test("direct file consent remains unavailable without a ready connection, model 
 		drive(conversation, false),
 		drive({ ...conversation, archivedAt: 2 }),
 		drive(conversation, true, null),
-	])
+	]) {
 		assert.equal(button(current.controls, "capability-context-trigger").props.disabled, true);
+		assert.equal(elements(current.controls, DropdownMenuItem)[0]?.props.disabled, true);
+	}
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });

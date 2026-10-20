@@ -17,7 +17,7 @@ export function reconcileReceipt(
 	)
 		return null;
 	const next = reconciledDraft(draft, pending, receipt);
-	if (next !== draft) local.clearDraft(`draft.${localKey}`, pending.text);
+	const cleared = next !== draft ? local.clearDraft(`draft.${localKey}`, pending.text) : true;
 	local.confirmed(receipt.requestId);
-	return next;
+	return cleared ? next : draft;
 }

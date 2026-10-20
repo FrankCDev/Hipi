@@ -3,14 +3,17 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderedFonts } from "./gui-fonts.mjs";
 import { exerciseProjectDisclosure } from "./gui-project-disclosure.mjs";
+import { createSettingsHarness } from "./gui-settings-route.mjs";
 import { exerciseToolPacks } from "./gui-tool-packs.mjs";
 import { exerciseWorkExperience, nativeEditorKey } from "./gui-work-experience.mjs";
 
 export const fixture = {
-	workspace: "GUI 工作区",
+	workspace: "Chats",
 	conversation: "GUI 会话",
 	text: "真实桌面 中文流式验证",
+	prompt: "GUI 会话\n真实桌面 中文流式验证",
 	answer: "Hipi Work deterministic test answer. No model API or external tool was called.",
+	streamTail: "This second paragraph keeps the response open while the first paragraph is already settled.",
 };
 const diagnosticLabels = [
 	"Close",
@@ -54,16 +57,6 @@ export async function evaluate(cdp, expression) {
 	const result = await cdp.request("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
 	if (result.exceptionDetails) throw new Error("Renderer evaluation failed");
 	return result.result.value;
-}
-export async function rememberCreateTrigger(cdp) {
-	assert.equal(
-		await evaluate(
-			cdp,
-			`(() => { window.__hipiGuiCreateTrigger = document.querySelector('.conversation-nav .workspace-create button[aria-label="New workspace"]'); return !!window.__hipiGuiCreateTrigger; })()`,
-		),
-		true,
-		"Workspace creation requires its original primary trigger",
-	);
 }
 export async function until(check, label, milliseconds = 30000) {
 	const deadline = Date.now() + milliseconds;
@@ -126,44 +119,154 @@ async function fill(cdp, selector, value) {
 		"Native text input must match fixture text",
 	);
 }
-export function assertTaskSetupUnsubmitted(state, goal) {
-	assert.equal(state.open, true, "Goal keyboard input closed task setup");
-	assert.equal(state.goal, goal, "Goal keyboard input changed the intended draft");
-	assert.equal(state.createType, "button", "Task creation must be an explicit button action");
-	assert.equal(state.createDisabled, false, "Keyboard safety must be tested with Create enabled");
-	assert.equal(state.composer, false, "Goal keyboard input created a conversation");
-	assert.equal(state.conversations, 0, "Goal keyboard input persisted a conversation");
-	assert.equal(state.messages, 0, "Goal keyboard input submitted a task");
+export function assertInitialChatUnsubmitted(state, goal) {
+	assert.equal(state.home, true, "Keyboard input left the initial chat composer");
+	assert.equal(state.goal, goal, "Initial chat draft changed unexpectedly");
+	assert.equal(state.sendType, "submit", "Home must expose the actual Send action");
+	assert.equal(state.sendDisabled, false, "Safety must be tested with Send enabled");
+	assert.equal(state.dialogs, 0, "Initial chat must not require a creation dialog");
+	assert.equal(state.workspaces, 0, "Editing created a backing workspace before Send");
+	assert.equal(state.conversations, 0, "Editing persisted a conversation before Send");
+	assert.equal(state.messages, 0, "Editing submitted a turn before Send");
 }
-
-export async function inspectTaskGoal(cdp) {
-	const selector = ".task-setup-dialog .task-setup-input";
-	await fill(cdp, selector, fixture.text);
+export function observeStreamingActions(document, observation) {
+	if (document.querySelector(".conversation-model-controls")?.dataset.executionState !== "running") return;
+	const actions = [...document.querySelectorAll(".conversation-panel .composer-submit")];
+	const valid =
+		actions.length === 1 &&
+		actions[0].dataset.action === "stop" &&
+		actions[0].type === "button" &&
+		actions[0].getAttribute("aria-label") === "Cancel execution";
+	if (valid) observation.soleStopObserved = true;
+	else observation.invalidRunningActions++;
+}
+/** Keep DOM references in the renderer only. Presentation IDs, not text matching, identify the stream. */
+export function observeMountedStream(document, observation, settledParagraph) {
+	if (observation.streamNodes) return;
+	const rows = [...document.querySelectorAll('[data-transcript-kind="assistant-stream"][data-message-key^="stream:"]')];
+	if (rows.length !== 1) return;
+	const row = rows[0];
+	let identity;
+	try {
+		identity = JSON.parse(row.dataset.messageKey.slice("stream:".length));
+	} catch {
+		return;
+	}
+	if (
+		!Array.isArray(identity) ||
+		identity.length !== 3 ||
+		identity.some((value) => typeof value !== "string" || !value)
+	)
+		return;
+	const article = row.querySelector("article.message-assistant");
+	const body = article?.querySelector(".markdown-body");
+	const paragraph = body?.querySelector(":scope > p");
+	if (
+		article?.getAttribute("aria-busy") !== "true" ||
+		row.dataset.messageId !== undefined ||
+		!paragraph ||
+		paragraph.textContent !== settledParagraph ||
+		body.children.length < 2
+	)
+		return;
+	observation.streamNodes = { key: row.dataset.messageKey, identity, row, article, body, paragraph, settledParagraph };
+}
+export function committedStreamEvidence(document, observation) {
+	const retained = observation.streamNodes;
+	if (!retained) return null;
+	const rows = [...document.querySelectorAll("[data-message-key]")].filter(
+		(row) => row.dataset.messageKey === retained.key,
+	);
+	if (rows.length !== 1) return null;
+	const row = rows[0];
+	const article = row.querySelector("article.message-assistant");
+	const body = article?.querySelector(".markdown-body");
+	const paragraph = body?.querySelector(":scope > p");
+	const copies = [...(article?.querySelectorAll(".message-actions .message-copy") ?? [])];
+	return {
+		committed: row.dataset.transcriptKind === "assistant-message" && !!row.dataset.messageId,
+		messageId: row.dataset.messageId,
+		identity: retained.identity,
+		sameRow: retained.row === row && retained.row.isConnected,
+		sameArticle: retained.article === article && retained.article.isConnected,
+		sameBody: retained.body === body && retained.body.isConnected,
+		sameSettledParagraph: retained.paragraph === paragraph && retained.paragraph.isConnected,
+		settledTextRetained: paragraph?.textContent === retained.settledParagraph,
+		noStreamRows: document.querySelectorAll('[data-transcript-kind="assistant-stream"]').length === 0,
+		copyEnabled: copies.length === 1 && copies[0].disabled === false,
+	};
+}
+export function assertCommittedStreamIdentity(evidence, scope) {
+	assert.ok(evidence?.committed, "Stream did not become an authoritative completed message");
+	assert.ok(typeof evidence.messageId === "string" && evidence.messageId.length > 0);
+	assert.deepEqual(evidence.identity.slice(0, 2), [scope.workspaceId, scope.conversationId]);
+	for (const field of [
+		"sameRow",
+		"sameArticle",
+		"sameBody",
+		"sameSettledParagraph",
+		"settledTextRetained",
+		"noStreamRows",
+		"copyEnabled",
+	])
+		assert.equal(evidence[field], true, `Stream completion failed mounted identity condition: ${field}`);
+}
+export async function inspectInitialChat(cdp) {
+	const selector = ".prepared-task-input";
+	await fill(cdp, selector, fixture.prompt);
 	const read = async () => {
 		await evaluate(cdp, "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
 		return evaluate(
 			cdp,
 			`(() => {
-		const dialog = document.querySelector('.task-setup-dialog');
-		const create = dialog?.querySelector('.task-create-confirm');
-		return { open: !!dialog, goal: dialog?.querySelector('.task-setup-input')?.value,
-			createType: create?.type, createDisabled: create?.disabled,
-			composer: !!document.querySelector('.composer textarea'),
+		const home = document.querySelector('.new-chat-composer');
+		const send = home?.querySelector('.composer-submit[data-action="send"]');
+		return { home: !!home, goal: home?.querySelector('.prepared-task-input')?.value,
+			sendType: send?.type, sendDisabled: send?.disabled,
+			dialogs: document.querySelectorAll('[role="dialog"]').length,
+			workspaces: document.querySelectorAll('.workspace-branch').length,
 			conversations: document.querySelectorAll('.conversation-link').length,
-			messages: document.querySelectorAll('[data-message-key^="message:"]').length };
+			messages: document.querySelectorAll('[data-message-id]').length };
 	})()`,
 		);
 	};
-	assertTaskSetupUnsubmitted(await read(), fixture.text);
-	await nativeEditorKey(cdp, "Enter");
-	assertTaskSetupUnsubmitted(await read(), `${fixture.text}\n`);
+	assertInitialChatUnsubmitted(await read(), fixture.prompt);
+	await nativeEditorKey(cdp, "Enter", { modifiers: 8 });
+	assertInitialChatUnsubmitted(await read(), `${fixture.prompt}\n`);
+	await cdp.request("Input.imeSetComposition", { text: "中文", selectionStart: 2, selectionEnd: 2 });
 	await nativeEditorKey(cdp, "Enter", { composing: true });
-	assertTaskSetupUnsubmitted(await read(), `${fixture.text}\n`);
+	await cdp.request("Input.insertText", { text: "中文" });
+	assertInitialChatUnsubmitted(await read(), `${fixture.prompt}\n中文`);
 	await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
 	await nativeEditorKey(cdp, "Backspace");
-	await cdp.request("Input.insertText", { text: fixture.text });
-	assertTaskSetupUnsubmitted(await read(), fixture.text);
-	return { enterAddsNewlineOnly: true, compositionKey229DoesNotCreate: true, explicitCreateRequired: true };
+	await cdp.request("Input.insertText", { text: fixture.prompt });
+	await click(cdp, ".new-conversation-trigger");
+	assertInitialChatUnsubmitted(await read(), fixture.prompt);
+	assert.equal(await evaluate(cdp, "document.activeElement === document.querySelector('.prepared-task-input')"), true);
+	await click(cdp, ".new-chat-model-trigger");
+	await click(cdp, ".new-chat-manage-models");
+	await until(
+		() =>
+			evaluate(cdp, "document.querySelector('.settings-page-nav [aria-current=page]')?.dataset.category === 'models'"),
+		"home model management route",
+	);
+	await click(cdp, ".settings-back");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				"!document.querySelector('.settings-route') && document.activeElement === document.querySelector('.new-chat-model-trigger')",
+			),
+		"home model route returns exact opener",
+	);
+	assertInitialChatUnsubmitted(await read(), fixture.prompt);
+	return {
+		shiftEnterOnlyNewline: true,
+		cdpCompositionDoesNotSend: true,
+		navigationDoesNotCreate: true,
+		settingsRetainsDraft: true,
+		singleSendRequired: true,
+	};
 }
 export async function pressKey(cdp, key) {
 	const code = { Escape: 27, Home: 36, Enter: 13 }[key];
@@ -186,151 +289,23 @@ export async function waitForOverlayClosed(cdp, selector, text, milliseconds = 3
 		milliseconds,
 	);
 }
-async function waitForSelectClosed(cdp, selector) {
-	await until(
-		() =>
-			evaluate(
-				cdp,
-				`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(!document.querySelector('[role="option"]') && document.activeElement === document.querySelector(${JSON.stringify(selector)})))))`,
-			),
-		"select closed and original combobox focus restored",
-	);
+export function settingsHarness(cdp) {
+	return createSettingsHarness(cdp, { evaluate, click, until, nativeEditorKey, capture, pressKey });
 }
 export async function openAppearance(cdp, trigger = ".workbench-settings-trigger") {
-	await click(cdp, trigger);
-	await until(
-		() => evaluate(cdp, `!!document.querySelector('.unified-settings-dialog[role="dialog"]')`),
-		"settings modal",
-	);
-	const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
-	await click(cdp, ".settings-page-nav button", english ? "Appearance & language" : "外观与语言");
+	await settingsHarness(cdp).open(trigger, "appearance");
 }
 export async function setAppearanceChoice(cdp, field, value) {
-	const choice = await appearanceChoice(cdp, field);
-	await click(cdp, choice.selector);
-	await click(cdp, '[role="option"]', value);
-	await waitForSelectClosed(cdp, choice.selector);
-}
-export async function saveAppearance(cdp) {
-	const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
-	await click(cdp, ".settings-savebar button", english ? "Save" : "保存");
-	await until(
-		() => evaluate(cdp, `!!document.querySelector('.settings-feedback')?.textContent.trim()`),
-		"appearance saved feedback",
-	);
-	assert.equal(
-		await evaluate(cdp, `!!document.querySelector('.unified-settings-dialog')`),
-		true,
-		"Saving appearance must leave Settings open",
-	);
-}
-
-export function assertSettingsPreviewRetained(actual, expected) {
-	assert.equal(actual.open, true, "Dirty navigation closed Settings without consent");
-	assert.equal(actual.category, "appearance", "Dirty navigation changed category without consent");
-	assert.equal(actual.theme, expected.theme, "Dirty navigation lost the appearance preview");
-	assert.equal(actual.draft, expected.draft, "Settings navigation changed the conversation draft");
-	assert.deepEqual(actual.keys, expected.keys, "Settings navigation changed execution messages");
-}
-
-export async function inspectSettingsGuard(cdp) {
-	const opener = ".sidebar-settings-trigger";
-	const original = (await appearanceChoice(cdp)).mode;
-	const resolved = await evaluate(cdp, "document.documentElement.dataset.theme");
-	const preview = resolved === "light" ? "Dark" : "Light";
-	const read = () =>
-		evaluate(
-			cdp,
-			`({open: !!document.querySelector('.unified-settings-dialog'),
-		category: document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category,
-		theme: document.documentElement.dataset.theme, draft: document.querySelector('.composer textarea').value,
-		keys: [...document.querySelectorAll('[data-message-key^="message:"]')].map(e => e.dataset.messageKey)})`,
-		);
-	await setAppearanceChoice(cdp, "theme", preview);
-	const expected = await read();
-	assert.equal(expected.theme, preview.toLowerCase());
-	const guard = async () => {
-		await until(() => evaluate(cdp, `!!document.querySelector('.settings-unsaved-dialog')`), "unsaved Settings guard");
-		assertSettingsPreviewRetained(await read(), expected);
-	};
-	const keep = async (selector) => {
-		await click(cdp, ".settings-unsaved-actions > button", "Keep editing");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!document.querySelector('.settings-unsaved-dialog') && document.activeElement === document.querySelector(${JSON.stringify(selector)})`,
-				),
-			"Keep editing restores exact initiating control",
-		);
-		assertSettingsPreviewRetained(await read(), expected);
-	};
-	const models = '.settings-page-nav button[data-category="models"]';
-	await click(cdp, models);
-	await guard();
-	await keep(models);
-	await fill(cdp, ".settings-search-input", "providers");
-	await click(cdp, '.settings-search-result[data-setting="providers"]');
-	await guard();
-	await keep('.settings-search-result[data-setting="providers"]');
-	await pressKey(cdp, "Escape");
-	await until(
-		() =>
-			evaluate(
-				cdp,
-				`document.querySelector('.settings-search-input').value === '' && document.activeElement === document.querySelector('.settings-search-input')`,
-			),
-		"search Escape clears query without closing Settings",
-	);
-	assertSettingsPreviewRetained(await read(), expected);
-	await click(cdp, models);
-	await guard();
-	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
-	await until(
-		() =>
-			evaluate(
-				cdp,
-				`!document.querySelector('.settings-unsaved-dialog') && document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'models' && document.activeElement === document.querySelector('.settings-page-heading')`,
-			),
-		"discard switches category and focuses its heading",
-	);
-	assert.equal(await evaluate(cdp, "document.documentElement.dataset.theme"), resolved);
-	await click(cdp, '.settings-page-nav button[data-category="appearance"]');
-	assert.equal((await appearanceChoice(cdp)).mode, original);
-	await setAppearanceChoice(cdp, "theme", preview);
-	const control = (await appearanceChoice(cdp)).selector;
-	await pressKey(cdp, "Escape");
-	await guard();
-	await keep(control);
-	await pressKey(cdp, "Escape");
-	await guard();
-	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
-	await waitForOverlayClosed(cdp, opener);
-	assert.equal(await evaluate(cdp, "document.documentElement.dataset.theme"), resolved);
-	await openAppearance(cdp, opener);
-	assert.equal((await appearanceChoice(cdp)).mode, original);
-	const restored = await read();
-	assert.equal(restored.draft, expected.draft);
-	assert.deepEqual(restored.keys, expected.keys);
+	await settingsHarness(cdp).setChoice(field, value);
 }
 export async function setWorkbenchPreferences(cdp, locale, mode) {
-	await openAppearance(cdp);
-	await setAppearanceChoice(cdp, "language", locale === "en" ? "English" : "简体中文");
-	const labels =
-		locale === "en"
-			? { light: "Light", dark: "Dark", system: "Follow system" }
-			: { light: "浅色", dark: "深色", system: "跟随系统" };
-	await setAppearanceChoice(cdp, "theme", labels[mode]);
-	await saveAppearance(cdp);
-	await dismissTo(cdp, ".workbench-settings-trigger");
-	await until(() => evaluate(cdp, `document.documentElement.lang === ${JSON.stringify(locale)}`), "saved locale");
+	await settingsHarness(cdp).preferences(locale, mode);
 }
 export async function selectEnglish(cdp) {
-	await openAppearance(cdp);
-	await setAppearanceChoice(cdp, "language", "English");
-	await saveAppearance(cdp);
-	await dismissTo(cdp, ".workbench-settings-trigger");
-	await until(() => evaluate(cdp, `document.documentElement.lang === 'en'`), "English selected");
+	const route = settingsHarness(cdp);
+	await route.open(".workbench-settings-trigger", "general");
+	await route.setChoice("language", "en");
+	await route.back(".workbench-settings-trigger");
 }
 export async function assertNoAlerts(cdp) {
 	const alerts = await evaluate(
@@ -340,92 +315,39 @@ export async function assertNoAlerts(cdp) {
 	assert.equal(alerts.length, 0, `Unexpected application alert: ${JSON.stringify(alerts)}`);
 }
 export function resolvedTheme(mode, systemDark) {
-	assert.ok(["Light", "Dark", "Follow system"].includes(mode), "Unknown appearance mode");
-	return mode === "Follow system" ? (systemDark ? "dark" : "light") : mode.toLowerCase();
+	assert.ok(["light", "dark", "system"].includes(mode), "Unknown appearance mode");
+	return mode === "system" ? (systemDark ? "dark" : "light") : mode;
 }
 export async function appearanceChoice(cdp, field = "theme") {
-	assert.ok(["theme", "language"].includes(field));
-	const labels = field === "theme" ? ["Theme", "主题"] : ["Language", "语言"];
-	return until(
-		() =>
-			evaluate(
-				cdp,
-				`(() => {
-		const dialog = document.querySelector('.unified-settings-dialog[role="dialog"]');
-		if (!dialog) return null;
-		const labels = [...dialog.querySelectorAll('label')].filter(e => ${JSON.stringify(labels)}.includes(e.textContent.trim()));
-		if (labels.length !== 1) return null;
-		const control = document.getElementById(labels[0].htmlFor);
-		if (!control || control.getAttribute('role') !== 'combobox') return null;
-		return { mode: control.textContent.trim(), selector: '#' + CSS.escape(control.id) };
-	})()`,
-			),
-		"appearance theme choice",
-	);
+	return settingsHarness(cdp).choice(field);
 }
 async function inspectTheme(cdp, directory, reopened) {
-	const settings = ".workbench-settings-trigger";
+	const route = settingsHarness(cdp);
 	const originalResolved = await evaluate(cdp, "document.documentElement.dataset.theme");
-	assert.ok(["light", "dark"].includes(originalResolved));
-	await openAppearance(cdp, ".sidebar-settings-trigger");
-	const original = await appearanceChoice(cdp);
-	resolvedTheme(original.mode, false);
-	await modalBounds(cdp, ".unified-settings-dialog", 30000, "center");
+	await route.open(".sidebar-settings-trigger", "appearance");
+	const original = (await route.choice()).mode;
+	const geometry = await route.geometry();
 	await capture(cdp, directory, reopened ? "settings-appearance-reopened" : "settings-appearance");
-	// A select is the nested overlay now. Escape must restore its actual combobox.
-	await click(cdp, original.selector);
-	await pressKey(cdp, "Escape");
-	await waitForSelectClosed(cdp, original.selector);
-	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
-	await click(cdp, ".settings-savebar button", "Cancel");
-	await until(
-		() => evaluate(cdp, `document.activeElement === document.querySelector('.settings-cancel')`),
-		"Cancel restores focus to its replacement form control",
-	);
-	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Cancel must restore the saved preference");
-	await until(
-		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(originalResolved)}`),
-		"cancelled preview restored",
-	);
-	await setAppearanceChoice(cdp, "theme", "Dark");
-	await saveAppearance(cdp);
-	await dismissTo(cdp, ".sidebar-settings-trigger");
-	await until(() => evaluate(cdp, `document.documentElement.dataset.theme === 'dark'`), "saved dark theme");
-	await assertNoAlerts(cdp);
+	await route.setChoice("theme", "dark");
+	await route.back(".sidebar-settings-trigger");
 	await capture(cdp, directory, reopened ? "dark-reopened" : "dark-completed");
-	await openAppearance(cdp, settings);
-	assert.equal((await appearanceChoice(cdp)).mode, "Dark", "Saved mode must survive closing and reopening settings");
-	await setAppearanceChoice(cdp, "theme", original.mode);
-	await saveAppearance(cdp);
-	const geometry = await inspectModal(cdp, ".unified-settings-dialog", "center");
-	await click(cdp, '.unified-settings-dialog button[data-slot="dialog-close"]');
-	await waitForOverlayClosed(cdp, settings);
-	await openAppearance(cdp);
-	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Original theme preference was not restored");
-	await setAppearanceChoice(cdp, "theme", originalResolved === "light" ? "Dark" : "Light");
-	await pressKey(cdp, "Escape");
-	await click(cdp, ".settings-unsaved-actions > button", "Discard changes");
-	await waitForOverlayClosed(cdp, settings);
-	await openAppearance(cdp);
-	assert.equal((await appearanceChoice(cdp)).mode, original.mode, "Closing settings must cancel unsaved preview");
-	await dismissTo(cdp, settings);
-	const expected = resolvedTheme(
-		original.mode,
-		await evaluate(cdp, `matchMedia('(prefers-color-scheme: dark)').matches`),
-	);
+	await route.open(".workbench-settings-trigger", "appearance");
+	assert.equal((await route.choice()).mode, "dark", "Immediate theme choice must survive route return");
+	await route.setChoice("theme", original);
+	await route.back(".workbench-settings-trigger");
+	const expected = resolvedTheme(original, await evaluate(cdp, "matchMedia('(prefers-color-scheme: dark)').matches"));
 	await until(
 		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(expected)}`),
 		"original resolved theme restored",
 	);
 	return {
-		originalMode: original.mode,
+		originalMode: original,
 		originalResolved,
 		restoredResolved: expected,
 		darkCaptured: true,
-		selectEscapeFocus: true,
-		sidebarEscapeFocus: true,
-		toolbarMouseCloseFocus: true,
-		cancelledPreviewRestored: true,
+		immediateThemePersisted: true,
+		sidebarBackFocus: true,
+		toolbarBackFocus: true,
 		geometry,
 	};
 }
@@ -440,8 +362,8 @@ export async function modalBounds(cdp, selector, milliseconds = 30000, placement
 		const dialog = document.querySelector(${JSON.stringify(selector)});
 		if (!dialog) return null;
 		const closes = [...dialog.querySelectorAll('button[data-slot="dialog-close"]')];
-		const body = dialog.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-content" : '[data-slot="dialog-body"]')});
-		const title = dialog.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-header h2" : '[data-slot="dialog-title"]')});
+		const body = dialog.querySelector(${JSON.stringify('[data-slot="dialog-body"]')});
+		const title = dialog.querySelector(${JSON.stringify('[data-slot="dialog-title"]')});
 		if (closes.length !== 1 || !body || !title) return null;
 		const close = closes[0];
 		const rect = e => { const r = e.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; };
@@ -487,7 +409,7 @@ export async function modalWheelPoint(cdp, selector) {
 	const point = await evaluate(
 		cdp,
 		`(() => {
-		const body=document.querySelector(${JSON.stringify(selector)})?.querySelector(${JSON.stringify(selector === ".unified-settings-dialog" ? ".settings-page-content" : '[data-slot="dialog-body"]')});
+		const body=document.querySelector(${JSON.stringify(selector)})?.querySelector(${JSON.stringify('[data-slot="dialog-body"]')});
 		if(!body)return null;
 		const r=body.getBoundingClientRect();
 		for(const y of [r.y+r.height/2,r.y+4,r.y+r.height-4])for(const x of [r.x+r.width/2,r.x+4,r.x+r.width-4]){
@@ -521,22 +443,25 @@ async function inspectControls(cdp) {
 	await assertNoAlerts(cdp);
 	await dismissTo(cdp, 'button[aria-label="Model status"]');
 	await click(cdp, ".capabilities-trigger");
-	await click(cdp, '.capabilities-navigation button[data-section="files"]');
+
 	await until(
 		() =>
-			evaluate(cdp, `document.querySelector('.capabilities-dialog')?.textContent.includes('Authorize model context')`),
+			evaluate(
+				cdp,
+				`document.querySelector('.conversation-options-dialog[data-section="files"]')?.textContent.includes('Authorize model context')`,
+			),
 		"permission details contents",
 	);
 	assert.ok(
 		await evaluate(
 			cdp,
-			`[...document.querySelectorAll('.capabilities-dialog button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
+			`[...document.querySelectorAll('.conversation-options-dialog[data-section="files"] button')].some(e => e.textContent.trim() === 'Refresh permissions')`,
 		),
 		"Permission dialog must contain Refresh permissions",
 	);
 	await assertNoAlerts(cdp);
-	const permissionGeometry = await inspectModal(cdp, ".capabilities-dialog");
-	await click(cdp, '.capabilities-dialog button[data-slot="dialog-close"]');
+	const permissionGeometry = await inspectModal(cdp, ".conversation-options-dialog[data-section=files]");
+	await click(cdp, '.conversation-options-dialog[data-section="files"] button[data-slot="dialog-close"]');
 	await waitForOverlayClosed(cdp, ".capabilities-trigger");
 	await click(cdp, ".capabilities-trigger");
 	await dismissTo(cdp, ".capabilities-trigger");
@@ -551,7 +476,7 @@ async function inspectControls(cdp) {
 			),
 		"keyboard rename menu item",
 	);
-	await pressKey(cdp, "Enter");
+	await nativeEditorKey(cdp, "Enter");
 	await until(
 		() =>
 			evaluate(
@@ -569,14 +494,13 @@ async function inspectControls(cdp) {
 	const sidebarActions = `.conversation-nav-item button[aria-label="Conversation actions: ${fixture.conversation}"]`;
 	await hover(cdp, ".conversation-link");
 	await click(cdp, sidebarActions);
-	await click(cdp, '[role="menuitem"]', "View details");
 	await until(
 		() =>
 			evaluate(
 				cdp,
-				`document.querySelector('.conversation-preview-card[role="dialog"]')?.textContent.includes(${JSON.stringify(fixture.conversation)})`,
+				`document.querySelector('[role="menu"] .preview-title')?.textContent === ${JSON.stringify(fixture.conversation)} && !!document.querySelector('[role="menu"] time.preview-created') && !document.querySelector('.conversation-preview-card')`,
 			),
-		"sidebar conversation preview",
+		"sidebar action menu retains exact title/date without a competing preview",
 	);
 	await dismissTo(cdp, sidebarActions);
 	return {
@@ -672,14 +596,14 @@ export async function captureFailure(cdp, directory) {
 	}
 	return result;
 }
-async function historyEvidence(cdp) {
+export async function historyEvidence(cdp) {
 	const rows = await until(async () => {
 		const value = await evaluate(
 			cdp,
-			`Array.from(document.querySelectorAll('[data-message-key^="message:"]')).map(row => ({key:row.dataset.messageKey,user:!!row.querySelector('article.message-user'),assistant:!!row.querySelector('article.message-assistant'),text:row.textContent}))`,
+			`Array.from(document.querySelectorAll('[data-message-id]')).map(row => ({key:'message:'+row.dataset.messageId,user:!!row.querySelector('article.message-user'),assistant:!!row.querySelector('article.message-assistant'),text:row.textContent}))`,
 		);
 		return value.length === 2 &&
-			value.some((row) => row.user && row.text.includes(fixture.text)) &&
+			value.some((row) => row.user && row.text.includes(fixture.prompt)) &&
 			value.some((row) => row.assistant && row.text.includes(fixture.answer))
 			? value
 			: undefined;
@@ -689,39 +613,55 @@ async function historyEvidence(cdp) {
 	return keys;
 }
 export async function selectReopenedConversation(cdp) {
-	const selected = await evaluate(
-		cdp,
-		`document.querySelector('.toolbar-conversation')?.textContent === ${JSON.stringify(fixture.conversation)}`,
-	);
-	if (selected) return;
-	// The workbench shell can render before its workspace query has returned.
-	// Missing is not collapsed: wait for the actual button before deciding to toggle it.
-	const state = await until(
+	if (
+		await evaluate(
+			cdp,
+			`document.querySelector('.toolbar-conversation')?.textContent === ${JSON.stringify(fixture.conversation)}`,
+		)
+	)
+		return;
+	await until(
 		() =>
 			evaluate(
 				cdp,
-				`(() => {
-		const branches = [...document.querySelectorAll('.workspace-branch:is([data-current="true"],[data-contains-current="true"])')];
-		if (branches.length !== 1 || (branches[0].dataset.current === 'true' && branches[0].dataset.containsCurrent === 'true')) return null;
-		const e = branches[0].querySelector('.project-toggle');
-		if (!e || e.disabled || !e.getClientRects().length) return null;
-		const expanded = e.getAttribute('aria-expanded');
-		return expanded === 'true' || expanded === 'false' ? { expanded } : null;
-		})()`,
+				`document.querySelectorAll('.recent-conversations').length === 1 && [...document.querySelectorAll('.recent-conversations .conversation-link')].filter(e => e.textContent.trim() === ${JSON.stringify(fixture.conversation)}).length === 1`,
 			),
-		"reopened workspace toggle",
+		"persisted default Recent conversation",
 	);
-	if (state.expanded === "false")
-		await click(cdp, '.workspace-branch:is([data-current="true"],[data-contains-current="true"]) .project-toggle');
-	await click(cdp, ".conversation-list button.conversation-link", fixture.conversation);
+	await click(cdp, ".recent-conversations .conversation-link", fixture.conversation);
+}
+export async function assertDefaultChatScope(cdp, scope, reopened) {
+	const state = await evaluate(
+		cdp,
+		`(() => {
+		const branches = [...document.querySelectorAll('.workspace-branch')];
+		const recent = branches.filter(e => e.classList.contains('recent-conversations'));
+		return { count: branches.length, recent: recent.length,
+			workspaceId: recent[0]?.dataset.workspaceId,
+			selected: recent[0]?.dataset.containsCurrent,
+			conversations: document.querySelectorAll('.conversation-link').length,
+			title: document.querySelector('.toolbar-conversation')?.textContent };
+	})()`,
+	);
+	assert.equal(
+		state.count,
+		reopened ? 2 : 1,
+		"One Send must create only its backing workspace; restart must reuse A and B",
+	);
+	assert.equal(state.recent, 1);
+	assert.equal(state.workspaceId, scope.workspaceId, "Default Recent must match the actual receipt workspace identity");
+	assert.equal(state.selected, "true");
+	assert.equal(state.conversations, 1, "One Send and restart must retain exactly one conversation");
+	assert.equal(state.title, fixture.conversation);
 }
 export async function activityEvidence(cdp) {
 	return until(async () => {
 		const state = await evaluate(
 			cdp,
 			`(() => {
-		const dialog = document.querySelector('[role="dialog"]');
-		if (dialog?.querySelector('h2')?.textContent !== 'Tool activity') return null;
+		const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(e => e.querySelector('h2')?.textContent === 'Tool activity');
+		if (dialogs.length !== 1) return null;
+		const dialog = dialogs[0];
 		const paragraphs = [...dialog.querySelectorAll('p')].map(e => e.textContent);
 		return {
 			failed: !!dialog.querySelector('[role="alert"]'),
@@ -738,14 +678,42 @@ export async function activityEvidence(cdp) {
 	}, "successful tool activity page");
 }
 async function inspectActivities(cdp, directory, reopened) {
-	await click(cdp, "button", "View activity");
+	await click(cdp, 'button[aria-label="Conversation details"]');
+	const selector = await until(
+		() =>
+			evaluate(
+				cdp,
+				`(() => {
+			const parent = document.querySelector('.workbench-detail-dialog');
+			const triggers = [...(parent?.querySelectorAll('.activity-trigger') ?? [])];
+			if (triggers.length !== 1 || !triggers[0].getAttribute('aria-controls')) return null;
+			window.__hipiGuiActivityParent = parent;
+			window.__hipiGuiActivityTrigger = triggers[0];
+			return '#' + CSS.escape(triggers[0].getAttribute('aria-controls'));
+		})()`,
+			),
+		"details owns one actual activity trigger",
+	);
+	await click(cdp, ".workbench-detail-dialog .activity-trigger");
 	await activityEvidence(cdp);
-	await click(cdp, '[role="dialog"] button', "Refresh this page");
+	await click(cdp, `${selector} button`, "Refresh this page");
 	const evidence = await activityEvidence(cdp);
 	await capture(cdp, directory, reopened ? "activities-reopened" : "activities");
-	await click(cdp, '[role="dialog"] button', "Close activity");
-	await waitForOverlayClosed(cdp, "button", "View activity");
-	return evidence;
+	await click(cdp, `${selector} button`, "Close activity");
+	await until(
+		() =>
+			evaluate(
+				cdp,
+				`!document.querySelector(${JSON.stringify(selector)}) &&
+			window.__hipiGuiActivityParent === document.querySelector('.workbench-detail-dialog') &&
+			window.__hipiGuiActivityTrigger?.isConnected && document.activeElement === window.__hipiGuiActivityTrigger`,
+			),
+		"activity child closes to its exact retained details trigger",
+	);
+	await click(cdp, ".workbench-detail-dialog button", "Close");
+	await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
+	await evaluate(cdp, "delete window.__hipiGuiActivityParent; delete window.__hipiGuiActivityTrigger");
+	return { ...evidence, nestedFocusRestored: true };
 }
 export async function exercise(cdp, directory, reopened = false, fontObservations = []) {
 	await cdp.request("Runtime.enable");
@@ -765,7 +733,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	// Set and save the actual language preference through the settings form.
 	await selectEnglish(cdp);
-	await until(() => evaluate(cdp, `!!document.querySelector('button[aria-label="New workspace"]')`), "English labels");
+	await until(() => evaluate(cdp, `!!document.querySelector('.new-conversation-trigger')`), "New chat action");
 	if (reopened) {
 		await selectReopenedConversation(cdp);
 		await until(
@@ -785,6 +753,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		);
 		await click(cdp, 'button[aria-label="Conversation details"]');
 		const scope = await receiptScope(cdp);
+		await assertDefaultChatScope(cdp, scope, true);
 		await inspectModal(cdp, ".workbench-detail-dialog");
 		await click(cdp, ".workbench-detail-dialog button", "Close");
 		await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
@@ -814,9 +783,8 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 				openAppearance,
 				setWorkbenchPreferences,
 				setAppearanceChoice,
-				saveAppearance,
+				settingsHarness,
 				inspectModal,
-				inspectSettingsGuard,
 				hover,
 			},
 			directory,
@@ -828,6 +796,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			directory,
 			fixture,
 			true,
+			scope,
 		);
 		return {
 			reopened: true,
@@ -843,74 +812,32 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		};
 	}
 	await capture(cdp, directory, "initial");
-	await rememberCreateTrigger(cdp);
-	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
-	await fill(cdp, '[role="dialog"] input', fixture.workspace);
-	await click(cdp, '[role="dialog"] .task-create-confirm');
 	await until(
 		() =>
-			evaluate(cdp, `document.querySelector('.project-name')?.textContent === ${JSON.stringify(fixture.workspace)}`),
-		"workspace persisted",
+			evaluate(
+				cdp,
+				"!!document.querySelector('.prepared-task-input') && document.querySelector('.new-chat-model-trigger')?.textContent.includes('faux')",
+			),
+		"configured model in initial chat",
 	);
-	// The same primary trigger becomes New conversation after selecting the created workspace.
-	// The compact New workspace action is a different sibling, not a valid focus-return target.
-	await waitForOverlayClosed(cdp, '.conversation-nav .workspace-create button[aria-label="New conversation"]');
-	assert.equal(
-		await evaluate(
-			cdp,
-			`(() => { const retained = window.__hipiGuiCreateTrigger === document.activeElement; delete window.__hipiGuiCreateTrigger; return retained; })()`,
-		),
-		true,
-		"Creation must retain and focus the original primary action element",
-	);
-	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
-	await fill(cdp, ".task-setup-dialog .task-title-input", fixture.conversation);
-	await click(cdp, '[role="dialog"] [role="combobox"]');
-	await until(
-		() => evaluate(cdp, `document.querySelector('[role="option"]')?.textContent.includes('faux')`),
-		"deterministic model catalog",
-	);
-	await click(cdp, '[role="option"]');
-	await waitForSelectClosed(cdp, '[role="dialog"] [role="combobox"]');
-	const taskSetup = await inspectTaskGoal(cdp);
-	await click(cdp, ".task-setup-dialog button", "Cancel");
-	await waitForOverlayClosed(cdp, '.workspace-branch button[aria-label="New conversation"]');
-	assert.equal(
-		await evaluate(cdp, "document.querySelectorAll('.conversation-link').length"),
-		0,
-		"Cancelling task setup must not create a conversation",
-	);
-	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
-	await until(
-		() => evaluate(cdp, `document.querySelector('.task-setup-input')?.value === ${JSON.stringify(fixture.text)}`),
-		"cancelled project goal restored on reopen",
-	);
-	assert.equal(await evaluate(cdp, "document.querySelector('.task-title-input').value"), fixture.conversation);
-	taskSetup.cancelReopenRetainsGoal = true;
-	await capture(cdp, directory, "task-setup-ready");
-	await click(cdp, ".task-setup-dialog .task-create-confirm");
-	await until(() => evaluate(cdp, "!!document.querySelector('.composer textarea')"), "conversation composer");
-	await waitForOverlayClosed(cdp, '.workspace-branch button[aria-label="New conversation"]');
-	assert.equal(
-		await evaluate(cdp, "document.querySelector('.composer textarea').value"),
-		fixture.text,
-		"Explicit creation must retain the exact goal as an unsent draft",
-	);
-	assert.equal(
-		await evaluate(cdp, "document.querySelectorAll('[data-message-key^=\"message:\"]').length"),
-		0,
-		"Explicit creation must not submit the initial goal",
-	);
+	const initialChat = await inspectInitialChat(cdp);
+	await capture(cdp, directory, "initial-chat-ready");
 	await evaluate(
 		cdp,
-		`(() => { window.__hipiGuiSmoke = { samples: [], running: false };
+		`(() => { window.__hipiGuiSmoke = { samples: [], running: false, soleStopObserved: false, invalidRunningActions: 0 };
 		const sample=()=>{ const e=document.querySelector('article.message-assistant[aria-busy="true"]');
 		if(e){window.__hipiGuiSmoke.running=true; const t=e.textContent; const a=window.__hipiGuiSmoke.samples;
-		if(a.at(-1)!==t && a.length<128)a.push(t);}};
-		window.__hipiGuiSmoke.observer=new MutationObserver(sample); window.__hipiGuiSmoke.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-busy']}); })()`,
+		if(a.at(-1)!==t && a.length<128)a.push(t);}
+		(${observeStreamingActions.toString()})(document,window.__hipiGuiSmoke);
+		(${observeMountedStream.toString()})(document,window.__hipiGuiSmoke,${JSON.stringify(fixture.answer)});};
+		window.__hipiGuiSmoke.observer=new MutationObserver(sample); window.__hipiGuiSmoke.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['aria-busy','data-action','data-execution-state']}); })()`,
 	);
-	await click(cdp, '.composer button[type="submit"]');
+	await click(cdp, '.new-chat-composer .composer-submit[data-action="send"]');
 	await until(() => evaluate(cdp, "window.__hipiGuiSmoke.running"), "streaming DOM");
+	await until(
+		() => evaluate(cdp, "!!window.__hipiGuiSmoke.streamNodes"),
+		"authoritative live stream with a settled first paragraph",
+	);
 	await capture(cdp, directory, "streaming");
 	await click(cdp, 'button[aria-label="Conversation details"]');
 	await until(
@@ -920,9 +847,19 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	const observed = await evaluate(
 		cdp,
-		"(() => {const s=window.__hipiGuiSmoke;s.observer.disconnect();return {running:s.running,sampleCount:s.samples.length};})()",
+		"(() => {const s=window.__hipiGuiSmoke;s.observer.disconnect();return {running:s.running,sampleCount:s.samples.length,soleStopObserved:s.soleStopObserved,invalidRunningActions:s.invalidRunningActions};})()",
 	);
 	assert.ok(observed.running && observed.sampleCount >= 2, "No incremental streaming evidence");
+	assert.equal(
+		observed.invalidRunningActions,
+		0,
+		"Running state exposed missing, duplicate or incorrect composer actions",
+	);
+	assert.equal(
+		observed.soleStopObserved,
+		true,
+		"Streaming must expose the single actual Stop action, not another Send",
+	);
 	assert.ok(
 		await evaluate(
 			cdp,
@@ -939,6 +876,21 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	const detailsGeometry = await inspectModal(cdp, ".workbench-detail-dialog");
 	const scope = await receiptScope(cdp);
+	const streamIdentity = await until(async () => {
+		const evidence = await evaluate(cdp, `(${committedStreamEvidence.toString()})(document,window.__hipiGuiSmoke)`);
+		return evidence?.committed && evidence.copyEnabled && evidence.noStreamRows ? evidence : null;
+	}, "stream completion exposes canonical identity and enabled Copy");
+	assertCommittedStreamIdentity(streamIdentity, scope);
+	assert.equal(
+		await evaluate(
+			cdp,
+			`window.__hipiGuiSmoke.streamNodes.body.textContent.includes(${JSON.stringify(fixture.streamTail)})`,
+		),
+		true,
+		"Completed retained stream must contain the entire known tail",
+	);
+	await evaluate(cdp, "delete window.__hipiGuiSmoke.streamNodes");
+	await assertDefaultChatScope(cdp, scope, false);
 	await click(cdp, '[role="dialog"] button', "Close");
 	await waitForOverlayClosed(cdp, 'button[aria-label="Conversation details"]');
 	const activities = await inspectActivities(cdp, directory, false);
@@ -967,9 +919,8 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			openAppearance,
 			setWorkbenchPreferences,
 			setAppearanceChoice,
-			saveAppearance,
+			settingsHarness,
 			inspectModal,
-			inspectSettingsGuard,
 			hover,
 		},
 		directory,
@@ -981,10 +932,12 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		directory,
 		fixture,
 		false,
+		scope,
 	);
 	return {
 		...observed,
-		taskSetup,
+		streamIdentity,
+		initialChat,
 		projectDisclosure,
 		fonts,
 		detailsGeometry,

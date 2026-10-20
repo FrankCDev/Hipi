@@ -1,0 +1,45 @@
+.file-line-navigation-trigger {
+	position: absolute;
+	top: 8px;
+	inset-inline-end: 38px;
+	z-index: 2;
+	background: var(--surface);
+}
+.file-line-navigation {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	flex: 0 0 auto;
+	gap: 4px;
+	margin: 0;
+	padding: 5px 8px;
+	border: 0;
+	border-bottom: 1px solid var(--line);
+	min-width: 0;
+	color: var(--text);
+	background: var(--surface);
+}
+.file-line-navigation input {
+	flex: 1 1 90px;
+	width: auto;
+	min-width: 60px;
+	height: 28px;
+	font-family: var(--font-mono, monospace);
+	font-size: calc(var(--font-ui-size) - 1px);
+}
+.file-line-navigation-hint {
+	flex-basis: 100%;
+	margin: 0;
+	color: var(--muted);
+	font-size: calc(var(--font-ui-size) - 2px);
+}
+.file-line-navigation-hint[role="alert"] {
+	color: var(--text);
+}
+.file-editor-surface:has(> .file-find) > .file-line-navigation-trigger {
+	inset-inline-end: 10px;
+}
+.file-editor-surface:has(> .file-line-navigation-trigger) > .file-find,
+.file-editor-surface:has(> .file-find-trigger) > .file-line-navigation {
+	padding-inline-end: 38px;
+}

@@ -12,15 +12,21 @@ import { createPreviewFixtureFiles } from "./gui-file-preview-fixtures.mjs";
 export const fileFixture = Object.freeze({
 	workspaceId: "file-gui-work",
 	workspaceTitle: "File GUI 中文",
+	otherWorkspaceId: "file-gui-other",
+	otherWorkspaceTitle: "Other file workspace 中文",
 	conversationTitle: "File acceptance 中文",
 	folder: "workbench-files",
 	textName: "notes.txt",
+	secondName: "second.txt",
 	csvName: "cells.csv",
 	imageName: "pixel.png",
 	initial: "BASELINE_ONLY\nOriginal 中文 text",
 	saved: "SAVED_ONLY\nEdited 中文 text",
 	draft: "UNSAVED_ONLY\nProtected 中文 input",
 	external: "EXTERNAL_ONLY\nConcurrent 中文 disk edit",
+	secondInitial: "SECOND_BASELINE\nIndependent 中文 buffer",
+	secondSaved: "SECOND_AUTOSAVED\nBackground 中文 save",
+	secondClosed: "SECOND_CLOSE_SAVED\nConditional 中文 close",
 	csv: "label,value\n中文,42\nfixture,read-only",
 });
 // A single original RGBA pixel (40, 120, 200, 255), with valid PNG chunk CRCs.
@@ -32,6 +38,7 @@ const digest = (value) => createHash("sha256").update(value).digest("hex");
 const previewFiles = createPreviewFixtureFiles();
 export const fileFixtureNames = Object.freeze([
 	fileFixture.textName,
+	fileFixture.secondName,
 	fileFixture.csvName,
 	fileFixture.imageName,
 	...previewFiles.map(([name]) => name),
@@ -107,6 +114,7 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 	const directory = await ownedFileDirectory(ownedProfileRoot, { create: true });
 	for (const [name, contents] of [
 		[fileFixture.textName, fileFixture.initial],
+		[fileFixture.secondName, fileFixture.secondInitial],
 		[fileFixture.csvName, fileFixture.csv],
 		[fileFixture.imageName, image],
 		...previewFiles,
@@ -117,6 +125,10 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 	const runtime = await openRuntime(store, runtimeOptions());
 	try {
 		await runtime.call("createWorkspace", { workspaceId: fileFixture.workspaceId, name: fileFixture.workspaceTitle });
+		await runtime.call("createWorkspace", {
+			workspaceId: fileFixture.otherWorkspaceId,
+			name: fileFixture.otherWorkspaceTitle,
+		});
 		const conversation = await runtime.call("createConversation", {
 			workspaceId: fileFixture.workspaceId,
 			requestId: "file-gui-create",
@@ -124,9 +136,11 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 		});
 		return {
 			workspaceId: fileFixture.workspaceId,
+			otherWorkspaceId: fileFixture.otherWorkspaceId,
 			conversationId: conversation.conversationId,
 			files: fileFixtureNames,
 			initialSha256: digest(fileFixture.initial),
+			secondInitialSha256: digest(fileFixture.secondInitial),
 			csvSha256: digest(fileFixture.csv),
 			imageSha256: digest(image),
 			previewSha256: Object.fromEntries(previewFiles.map(([name, bytes]) => [name, digest(bytes)])),
@@ -143,10 +157,21 @@ export async function verifyColdFileWorkbench({ ownedProfileRoot, assertAllOwned
 	await assertAllOwnedProcessesExited();
 	assert.equal(gui.conflictDraftPreserved, true);
 	assert.equal(gui.savedBytesVerified, true);
+	assert.equal(gui.backgroundAutosave, true);
+	assert.equal(gui.conditionalCloseSaved, true);
 	assert.deepEqual((await readdir(await ownedFileDirectory(ownedProfileRoot))).sort(), [...fileFixtureNames].sort());
 	assert.equal((await readOwnedFixture(ownedProfileRoot)).toString("utf8"), fileFixture.external);
+	assert.equal(
+		(await readOwnedFixture(ownedProfileRoot, fileFixture.secondName)).toString("utf8"),
+		fileFixture.secondClosed,
+	);
 	assert.equal((await readOwnedFixture(ownedProfileRoot, fileFixture.csvName)).toString("utf8"), fileFixture.csv);
 	assert.deepEqual(await readOwnedFixture(ownedProfileRoot, fileFixture.imageName), image);
 	for (const [name, bytes] of previewFiles) assert.deepEqual(await readOwnedFixture(ownedProfileRoot, name), bytes);
-	return { finalDiskSha256: digest(fileFixture.external), syntheticFilesIntact: true, externalEditPreserved: true };
+	return {
+		finalDiskSha256: digest(fileFixture.external),
+		secondDiskSha256: digest(fileFixture.secondClosed),
+		syntheticFilesIntact: true,
+		externalEditPreserved: true,
+	};
 }

@@ -119,15 +119,23 @@ test("packaging rejects changed, added, missing or legacy external brand/config 
 	try {
 		await mkdir(join(desktop, "branding"), { recursive: true });
 		await mkdir(join(desktop, "packaging"), { recursive: true });
+		const notices = join(root, "apps/hipi-work-ui/vendor/pierre");
+		await mkdir(notices, { recursive: true });
+		const codeMirrorNotices = join(root, "apps/hipi-work-ui/vendor/codemirror");
+		await mkdir(codeMirrorNotices, { recursive: true });
 		await writeFile(join(root, "package-lock.json"), "{}");
 		await writeFile(join(desktop, "package.json"), "{}");
 		const icon = join(desktop, "branding/icon.ico");
 		const config = join(desktop, "packaging/electron-builder.cjs");
 		await writeFile(icon, "approved icon");
 		await writeFile(config, "approved config");
+		const notice = join(notices, "README.md");
+		await writeFile(notice, "approved notice");
+		const codeMirrorNotice = join(codeMirrorNotices, "README.md");
+		await writeFile(codeMirrorNotice, "approved CodeMirror notice");
 		const snapshot = await inventory(root);
 		await assertPackagingInputs(root, snapshot);
-		for (const file of [icon, config]) {
+		for (const file of [icon, config, notice, codeMirrorNotice]) {
 			const original = await readFile(file);
 			await writeFile(file, "changed");
 			await assert.rejects(assertPackagingInputs(root, snapshot), /digest changed/);

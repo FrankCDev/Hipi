@@ -9,7 +9,7 @@ import {
 
 test("current project distinguishes direct project navigation from a contained conversation and rejects ambiguity", () => {
 	const branch = {
-		dataset: { current: "false", containsCurrent: "true" },
+		dataset: { current: "false", containsCurrent: "true", workspaceId: "A" },
 		querySelector: () => ({ textContent: "A" }),
 	};
 	let branches = [branch];

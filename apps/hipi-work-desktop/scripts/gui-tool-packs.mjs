@@ -14,23 +14,20 @@ export const packageText = JSON.stringify(
 	2,
 );
 export const packageDigest = createHash("sha256").update(packageText).digest("hex");
-const dialog = '.capabilities-dialog[role="dialog"]';
-const panel = `${dialog} .capabilities-section[data-section="tool-packs"]`;
+const dialog = '.conversation-options-dialog[role="dialog"][data-section="tool-packs"]';
+const panel = `${dialog} [data-slot="dialog-body"]`;
 
 // Runs in the renderer, reads only public DOM, and returns selectors rather than modifying nodes.
 export function readToolPacks(document, selector) {
 	const matches = [...document.querySelectorAll(selector)];
 	if (matches.length !== 1) return null;
 	const root = matches[0];
-	const shell = root.closest('.capabilities-dialog[role="dialog"]');
-	const navigation = shell?.querySelector('.capabilities-navigation button[data-section="tool-packs"]');
+	const shell = root.closest('.conversation-options-dialog[role="dialog"]');
 	if (
 		!shell ||
 		document.querySelectorAll('[role="dialog"]').length !== 1 ||
-		shell.querySelector('[data-slot="dialog-title"]')?.textContent !== "Conversation capabilities" ||
-		root.querySelector(":scope > .capabilities-section-heading > h3")?.textContent !== "Tool packs" ||
-		navigation?.getAttribute("aria-current") !== "page" ||
-		navigation.getAttribute("aria-controls") !== root.id
+		shell.querySelector('[data-slot="dialog-title"]')?.textContent !== "Tool packs" ||
+		shell.dataset.section !== "tool-packs"
 	)
 		return null;
 	const path = (node) => {
@@ -95,7 +92,7 @@ export async function closeToolPacks(cdp, { click, pressKey, until, evaluate }, 
 		() =>
 			evaluate(
 				cdp,
-				`(() => { const triggers = [...document.querySelectorAll('button.capabilities-trigger')]; return !document.querySelector('[role="dialog"]') && triggers.length === 1 && document.activeElement === triggers[0]; })()`,
+				`(() => { const triggers = [...document.querySelectorAll('button.composer-add-trigger')]; return !document.querySelector('[role="dialog"]') && triggers.length === 1 && document.activeElement === triggers[0]; })()`,
 			),
 		"capabilities closed and actual trigger focus restored",
 	);
@@ -124,8 +121,8 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		}, `${kind} persisted ${status}`);
 	const button = (card, label) => click(cdp, `${card.selector} button`, label);
 	const open = async () => {
-		await click(cdp, ".capabilities-trigger");
-		await click(cdp, `${dialog} .capabilities-navigation button[data-section="tool-packs"]`);
+		await click(cdp, ".composer-add-trigger");
+		await click(cdp, ".composer-add-menu .capability-tools-trigger");
 		await ready();
 	};
 	await open();
@@ -165,7 +162,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 		}, "explicit consent recorded");
 		await click(cdp, `${disclosure.selector} button`, "Authorize live access");
 		await waitCard("binding", "Active");
-		activeGeometry = await inspectModal(cdp, ".capabilities-dialog", "right");
+		activeGeometry = await inspectModal(cdp, dialog, "right");
 		await capture(cdp, directory, "tool-packs-active");
 		await closeToolPacks(cdp, helpers, true);
 		await open();
@@ -192,7 +189,7 @@ export async function exerciseToolPacks(cdp, helpers, directory, { reopened = fa
 	await click(cdp, `${panel} button`, "Binding history");
 	await waitCard("binding", "Revoked");
 	await assertNoAlerts(cdp);
-	const retainedGeometry = await inspectModal(cdp, ".capabilities-dialog", "right");
+	const retainedGeometry = await inspectModal(cdp, dialog, "right");
 	await capture(cdp, directory, reopened ? "tool-packs-reopened" : "tool-packs-uninstalled");
 	await closeToolPacks(cdp, helpers);
 	return {

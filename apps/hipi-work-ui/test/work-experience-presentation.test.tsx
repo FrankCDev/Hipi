@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import type { AppClient, Snapshot } from "@hipi/work-runtime/contracts";
+import type { AppClient, ConversationModel, Snapshot } from "@hipi/work-runtime/contracts";
+import { type ComponentProps, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { AppClientProvider } from "../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
+import { Button } from "../src/components/ui/button.tsx";
 import { ConversationComposer } from "../src/features/workbench/conversation-composer.tsx";
 import { ConversationStarters } from "../src/features/workbench/conversation-starters.tsx";
 import { useConversation } from "../src/features/workbench/use-conversation.ts";
@@ -92,8 +94,62 @@ test("empty or blocked drafts retain a disabled submit, including whitespace-onl
 		assert.match(send ?? "", /disabled=""/);
 	}
 });
-test("editable starters appear only in a known genuinely empty non-running conversation", () => {
-	assert.match(renderComposer(), /conversation-starters/);
+test("running replaces Send with the real execution Stop, not observation cancellation or submission", () => {
+	const cancel = vi.fn();
+	const submit = vi.fn();
+	let action: ReactNode;
+	function Probe({ state }: { state: ConversationModel["executionState"] }) {
+		const controller = useConversation(conversation);
+		action = ConversationComposer({
+			controller: {
+				...controller,
+				draft: "Later draft",
+				blocked: true,
+				submit,
+				model: {
+					...controller.model,
+					data: { model: { provider: "faux", modelId: "one" }, credentialState: "configured", executionState: state },
+				},
+				execution: { ...controller.execution, mutate: cancel },
+			},
+		});
+		return action;
+	}
+	function buttons(node: ReactNode): ReactNode[] {
+		if (Array.isArray(node)) return node.flatMap(buttons);
+		if (!isValidElement<{ children?: ReactNode }>(node)) return [];
+		return [...(node.type === Button ? [node] : []), ...buttons(node.props.children)];
+	}
+	for (const state of ["running", "cancellation_pending", "ready"] as const) {
+		const html = renderToStaticMarkup(
+			<PreferencesProvider>
+				<AppClientProvider client={client}>
+					<Probe state={state} />
+				</AppClientProvider>
+			</PreferencesProvider>,
+		);
+		const primary = buttons(action).find(
+			(node) => isValidElement<{ className?: string }>(node) && node.props.className === "composer-submit",
+		);
+		assert.ok(isValidElement<ComponentProps<typeof Button>>(primary));
+		if (state === "running") {
+			assert.equal(primary.props.type, "button");
+			assert.equal(primary.props.form, undefined);
+			assert.equal(primary.props.disabled, false);
+			assert.match(html, /data-action="stop"/);
+			assert.ok(primary.props.onClick);
+			Reflect.apply(primary.props.onClick, undefined, []);
+			assert.deepEqual(cancel.mock.calls, [["cancel"]]);
+		} else {
+			assert.equal(primary.props.type, "submit");
+			assert.equal(primary.props.disabled, true);
+			assert.match(html, /data-action="send"/);
+		}
+		assert.equal(submit.mock.calls.length, 0);
+	}
+});
+test("composer does not add suggested workflows or healthy draft-storage chatter", () => {
+	assert.doesNotMatch(renderComposer(), /conversation-starters|Draft saved|草稿已保存/);
 	assert.doesNotMatch(renderComposer("", false, null), /conversation-starters/);
 	for (const snapshot of [
 		{ ...emptySnapshot, running: true },
@@ -108,7 +164,7 @@ test("editable starters appear only in a known genuinely empty non-running conve
 
 test("optional motion is confined to floating surfaces and reduced motion disables it", async () => {
 	const css = await readFile(new URL("../src/theme.css", import.meta.url), "utf8");
-	const start = css.indexOf("@media (prefers-reduced-motion: no-preference)");
+	const start = css.indexOf("/* Floating-surface motion");
 	const end = css.indexOf("@media (prefers-reduced-motion: reduce)");
 	assert.ok(start >= 0 && end > start);
 	const motion = css.slice(start, end);
@@ -117,6 +173,8 @@ test("optional motion is confined to floating surfaces and reduced motion disabl
 	assert.doesNotMatch(motion, /\.composer|\.message|\.conversation-panel|\.work-area|width:|height:/);
 	assert.match(css.slice(end), /animation: none;/);
 	assert.match(css.slice(end), /transition: none;/);
+	assert.match(css.slice(end), /:root:not\(\[data-reduced-motion="off"\]\)/);
+	assert.match(css.slice(end), /:root\[data-reduced-motion="on"\]/);
 });
 test("starter controls never submit and do not overwrite a non-empty or blocked draft", () => {
 	for (const [hasDraft, disabled] of [

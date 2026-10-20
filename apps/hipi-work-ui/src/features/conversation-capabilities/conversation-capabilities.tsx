@@ -1,24 +1,21 @@
 import type { Conversation, ModelReference } from "@hipi/work-runtime/contracts";
-import { Blocks, ChevronRight, FolderPlus, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Blocks, ChevronDown, FolderPlus, Plus, ShieldCheck } from "lucide-react";
 import { type MouseEvent, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { Dialog, DialogBody, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
 import {
-	Dialog,
-	DialogBody,
-	DialogContent,
-	DialogDescription,
-	DialogTitle,
-	DialogTrigger,
-} from "../../components/ui/dialog.tsx";
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu.tsx";
 import { AgentPermissionManagement } from "../agent-permissions/agent-permissions.tsx";
 import { ToolPacksPanel } from "../tool-packs/index.ts";
 import { capabilityLabels } from "./labels.ts";
 import "./conversation-capabilities.css";
 
-type CapabilitySection = "files" | "tool-packs";
-
-/** A single conversation entry; the two live management owners never live inside a dismissible portal. */
+/** Acquisition and permissions are distinct controls; neither owns the underlying authorization session. */
 export function ConversationCapabilities({
 	conversation,
 	model,
@@ -30,15 +27,15 @@ export function ConversationCapabilities({
 }) {
 	const { locale } = usePreferences();
 	const l = capabilityLabels(locale);
-	const [open, setOpen] = useState(false);
-	const [section, setSection] = useState<CapabilitySection>("files");
-	const trigger = useRef<HTMLButtonElement | null>(null);
-	const sectionId = useId();
+	const [section, setSection] = useState<"files" | "tool-packs" | null>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	const plusTrigger = useRef<HTMLButtonElement>(null);
+	const returnFocus = useRef<HTMLButtonElement | null>(null);
+	const openingDialog = useRef(false);
 	const dialogId = useId();
-	const showFiles = (event: MouseEvent<HTMLButtonElement>) => {
-		if (!open) trigger.current = event.currentTarget;
+	const showPermissions = (event: MouseEvent<HTMLButtonElement>) => {
+		returnFocus.current = event.currentTarget;
 		setSection("files");
-		setOpen(true);
 	};
 	return (
 		<AgentPermissionManagement
@@ -46,131 +43,119 @@ export function ConversationCapabilities({
 			model={model}
 			connected={connected}
 			archived={conversation.archivedAt !== null}
-			detailsOpen={open && section === "files"}
-			onOpenDetails={showFiles}
+			detailsOpen={section === "files"}
+			onOpenDetails={showPermissions}
+			onContextRestoreFocus={() => plusTrigger.current?.focus()}
 		>
 			{({ content: permissions, attention, contextAction }) => (
 				<ToolPacksPanel
 					workspaceId={conversation.workspaceId}
 					conversation={conversation}
-					active={open && section === "tool-packs"}
+					active={section === "tool-packs"}
 				>
 					{(toolPacks) => (
 						<section className="permission-controls capabilities-controls" aria-label={l["capabilities.title"]}>
-							<Dialog open={open} onOpenChange={setOpen}>
-								<div className="capability-actions">
-									<Button
-										variant="ghost"
-										size="sm"
-										className="capability-context-trigger"
-										title={l["capabilities.contextHint"]}
-										{...contextAction}
-									>
-										<FolderPlus size={16} aria-hidden="true" />
-										{l["capabilities.contextAction"]}
-									</Button>
-									<Button
-										variant="ghost"
-										size="sm"
-										className="capability-tools-trigger"
-										aria-haspopup="dialog"
-										aria-expanded={open && section === "tool-packs"}
-										aria-controls={dialogId}
-										title={l["capabilities.toolsHint"]}
-										onClick={(event) => {
-											trigger.current = event.currentTarget;
-											setSection("tool-packs");
-											setOpen(true);
+							<div className="capability-actions">
+								<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+									<DropdownMenuTrigger asChild>
+										<Button
+											ref={plusTrigger}
+											variant="ghost"
+											size="icon-sm"
+											className="composer-add-trigger"
+											aria-label={l["capabilities.add"]}
+											title={l["capabilities.add"]}
+										>
+											<Plus size={18} aria-hidden="true" />
+										</Button>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent
+										className="composer-add-menu"
+										align="start"
+										side="top"
+										onCloseAutoFocus={(event) => {
+											if (openingDialog.current) event.preventDefault();
+											openingDialog.current = false;
 										}}
 									>
-										<Blocks size={16} aria-hidden="true" />
-										{l["capabilities.toolsAction"]}
-									</Button>
-									<DialogTrigger asChild>
-										<Button
-											variant="ghost"
-											size="sm"
-											className="capabilities-trigger"
-											aria-label={l["capabilities.title"]}
-											title={l["capabilities.title"]}
-											onClick={(event) => {
-												trigger.current = event.currentTarget;
-											}}
-										>
-											<SlidersHorizontal size={16} aria-hidden="true" />
-											<span>{l["capabilities.trigger"]}</span>
-										</Button>
-									</DialogTrigger>
-								</div>
+										<DropdownMenuItem asChild disabled={contextAction.disabled}>
+											<button
+												type="button"
+												className="capability-context-trigger"
+												{...contextAction}
+												onClick={(event) => {
+													openingDialog.current = true;
+													contextAction.onClick(event);
+													setMenuOpen(false);
+												}}
+											>
+												<FolderPlus size={16} aria-hidden="true" />
+												{l["capabilities.contextAction"]}
+											</button>
+										</DropdownMenuItem>
+										<DropdownMenuItem asChild>
+											<button
+												type="button"
+												className="capability-tools-trigger"
+												aria-haspopup="dialog"
+												onClick={() => {
+													openingDialog.current = true;
+													returnFocus.current = plusTrigger.current;
+													setMenuOpen(false);
+													setSection("tool-packs");
+												}}
+											>
+												<Blocks size={16} aria-hidden="true" />
+												{l["capabilities.toolsAction"]}
+											</button>
+										</DropdownMenuItem>
+									</DropdownMenuContent>
+								</DropdownMenu>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="capabilities-trigger permission-mode-trigger"
+									aria-label={l["capabilities.permissions"]}
+									title={l["capabilities.permissions"]}
+									aria-haspopup="dialog"
+									aria-expanded={section === "files"}
+									aria-controls={dialogId}
+									onClick={showPermissions}
+								>
+									<ShieldCheck size={16} aria-hidden="true" />
+									<span>{l["capabilities.permissions"]}</span>
+									<ChevronDown size={12} aria-hidden="true" />
+								</Button>
+							</div>
+							<Dialog
+								open={section !== null}
+								onOpenChange={(open) => {
+									if (!open) setSection(null);
+								}}
+							>
 								<DialogContent
 									id={dialogId}
-									placement="right"
-									className="capabilities-dialog"
+									className="conversation-options-dialog"
+									scrollBody
+									data-section={section}
 									closeLabel={l["capabilities.close"]}
+									aria-describedby={undefined}
 									onSubmit={(event) => event.stopPropagation()}
 									onCloseAutoFocus={(event) => {
-										if (trigger.current?.isConnected) {
+										if (returnFocus.current?.isConnected) {
 											event.preventDefault();
-											trigger.current.focus();
+											returnFocus.current.focus();
 										}
 									}}
 								>
-									<div className="capabilities-heading">
-										<DialogTitle>{l["capabilities.title"]}</DialogTitle>
-										<DialogDescription>{l["capabilities.description"]}</DialogDescription>
-									</div>
-									<div className="capabilities-summary">
-										<span>{l["capabilities.scope"]}</span>
-										<strong>{conversation.title}</strong>
-									</div>
-									{attention}
-									<div className="capabilities-layout">
-										<nav className="capabilities-navigation" aria-label={l["capabilities.navigation"]}>
-											<Button
-												variant="ghost"
-												data-section="files"
-												aria-current={section === "files" ? "page" : undefined}
-												aria-controls={sectionId}
-												onClick={() => setSection("files")}
-											>
-												<ShieldCheck size={18} aria-hidden="true" />
-												<span>{l["capabilities.files"]}</span>
-												<ChevronRight size={14} aria-hidden="true" />
-											</Button>
-											<Button
-												variant="ghost"
-												data-section="tool-packs"
-												aria-current={section === "tool-packs" ? "page" : undefined}
-												aria-controls={sectionId}
-												onClick={() => setSection("tool-packs")}
-											>
-												<Blocks size={18} aria-hidden="true" />
-												<span>{l["capabilities.tools"]}</span>
-												<ChevronRight size={14} aria-hidden="true" />
-											</Button>
-										</nav>
-										<DialogBody className="capabilities-content">
-											<section
-												id={sectionId}
-												className="capabilities-section"
-												data-section={section}
-												aria-labelledby={`${sectionId}-heading`}
-											>
-												<div className="capabilities-section-heading">
-													<h3 id={`${sectionId}-heading`}>
-														{l[section === "files" ? "capabilities.files" : "capabilities.tools"]}
-													</h3>
-													<p>
-														{l[section === "files" ? "capabilities.filesDescription" : "capabilities.toolsDescription"]}
-													</p>
-												</div>
-												{section === "files" ? permissions : toolPacks}
-											</section>
-										</DialogBody>
-									</div>
+									<DialogTitle>{l[section === "tool-packs" ? "capabilities.tools" : "capabilities.files"]}</DialogTitle>
+									<DialogBody>
+										{attention}
+										{section === "tool-packs" ? toolPacks : permissions}
+									</DialogBody>
 								</DialogContent>
 							</Dialog>
-							{!open && attention}
+							{section === null && attention}
 						</section>
 					)}
 				</ToolPacksPanel>

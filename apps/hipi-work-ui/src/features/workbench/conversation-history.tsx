@@ -1,20 +1,34 @@
 import type { Scope, Snapshot } from "@hipi/work-runtime/contracts";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ConversationHistoryController, type ConversationHistoryState } from "./conversation-history-controller.ts";
 import { ConversationMessages } from "./conversation-messages.tsx";
+import { readingPositionsFor } from "./conversation-reading-position.ts";
 import { readHistoryPage } from "./history-reads.ts";
 
-type Props = { scope: Scope; snapshot: Snapshot | undefined; error: boolean };
+type Props = {
+	scope: Scope;
+	snapshot: Snapshot | undefined;
+	error: boolean;
+	footerRef?: RefObject<HTMLElement | null>;
+};
 
 export function ConversationHistory(props: Props) {
-	return <ScopedHistory key={`${props.scope.workspaceId}:${props.scope.conversationId}`} {...props} />;
+	const client = useAppClient();
+	const positions = readingPositionsFor(client);
+	return (
+		<ScopedHistory
+			key={JSON.stringify([positions.ownerKey, props.scope.workspaceId, props.scope.conversationId])}
+			{...props}
+		/>
+	);
 }
 
-function ScopedHistory({ scope, snapshot, error }: Props) {
+function ScopedHistory({ scope, snapshot, error, footerRef }: Props) {
 	const client = useAppClient();
+	const positions = readingPositionsFor(client);
 	const { t } = usePreferences();
 	const [state, setState] = useState<ConversationHistoryState>({
 		snapshot,
@@ -47,6 +61,9 @@ function ScopedHistory({ scope, snapshot, error }: Props) {
 	return (
 		<ConversationMessages
 			key={displayGeneration}
+			scope={scope}
+			footerRef={footerRef}
+			readingPositions={positions}
 			snapshot={state.snapshot}
 			error={error}
 			onNearTop={onNearTop}
@@ -76,6 +93,7 @@ function ScopedHistory({ scope, snapshot, error }: Props) {
 								size="sm"
 								variant="ghost"
 								onClick={() => {
+									positions.clear(scope);
 									controller.current?.resetToLatest();
 									setDisplayGeneration((generation) => generation + 1);
 								}}

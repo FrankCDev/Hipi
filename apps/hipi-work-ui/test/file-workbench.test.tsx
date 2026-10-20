@@ -4,12 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
-import { EditorSession } from "../src/features/files/editor-session.ts";
 import { FileWorkbench, fileTarget } from "../src/features/files/file-workbench.tsx";
+import { FileWorkspaceSession } from "../src/features/files/file-workspace-session.ts";
+
+function editor(session: FileWorkspaceSession) {
+	const tab = session.snapshot().tabs.find((item) => item.id === session.snapshot().activeId);
+	assert.ok(tab && tab.kind === "editor");
+	return tab.editor;
+}
 
 const port = vi.hoisted(() => ({ files: undefined as FileClient | undefined }));
 vi.mock("../src/app/client-provider.tsx", () => ({ useFiles: () => port }));
-function render(session?: EditorSession) {
+function render(session?: FileWorkspaceSession) {
 	const cache = new QueryClient();
 	cache.setQueryData(["fileRoots", "workspace"], []);
 	const html = renderToStaticMarkup(
@@ -46,16 +52,17 @@ test("authorized connection with no roots gives real setup guidance", () => {
 test("loaded file exposes named editor and dirty buffer recovery controls", async () => {
 	const files = port.files;
 	assert.ok(files);
-	const session = new EditorSession(files);
+	const session = new FileWorkspaceSession(files);
 	await session.open({ workspaceId: "workspace", rootId: "root", path: "file.ts" }, true);
-	session.edit("mine");
+	editor(session).edit("mine");
 	const html = render(session);
 	assert.match(html, /有未保存修改/);
 	assert.match(html, /file.ts/);
-	assert.match(html, /读取磁盘/);
-	assert.match(html, /丢弃输入并重新读取/);
+	assert.match(html, /aria-label="文件操作"/);
+	assert.match(html, /role="tab"/);
 	assert.match(html, /比较修改/);
 	assert.match(html, /页面内存/);
+	session.dispose();
 });
 test("directory and open targets cross the real strict client without leaking root metadata", async () => {
 	const root = { workspaceId: "workspace", rootId: "root", writable: true, displayName: "Documents" };

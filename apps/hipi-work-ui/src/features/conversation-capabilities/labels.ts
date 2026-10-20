@@ -1,4 +1,6 @@
 const en = {
+	"capabilities.add": "Add files and tools",
+	"capabilities.permissions": "Permissions",
 	"capabilities.title": "Conversation capabilities",
 	"capabilities.trigger": "Capabilities",
 	"capabilities.contextAction": "File context",
@@ -17,6 +19,8 @@ const en = {
 };
 type Labels = { [K in keyof typeof en]: string };
 const zh: Labels = {
+	"capabilities.add": "添加文件与工具",
+	"capabilities.permissions": "权限",
 	"capabilities.title": "会话能力",
 	"capabilities.trigger": "能力",
 	"capabilities.contextAction": "文件上下文",

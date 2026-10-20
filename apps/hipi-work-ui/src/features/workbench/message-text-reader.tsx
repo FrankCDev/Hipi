@@ -3,20 +3,27 @@ import { useCallback, useEffect } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { ClipboardCopy } from "./clipboard-copy.tsx";
 import { readMessagePage } from "./history-reads.ts";
 import { MessageMarkdown } from "./message-markdown.tsx";
 import { useBoundedRead } from "./use-bounded-read.ts";
+import { UserMessageContent } from "./user-message-content.tsx";
 
 export function MessageContent({
 	message,
 	scope,
 	offset,
 	onOffsetChange,
+	streaming,
+	streamId,
 }: {
 	message: Message;
 	scope: Scope;
 	offset: number | undefined;
 	onOffsetChange: (offset: number | undefined) => void;
+	/** Undefined for committed content; false for a paused live preview. */
+	streaming?: boolean;
+	streamId?: string;
 }) {
 	const { t } = usePreferences();
 	const opened = offset !== undefined;
@@ -25,13 +32,16 @@ export function MessageContent({
 			{message.truncated ? (
 				<>
 					<p className="small-copy">
-						{t("history.preview")} ({message.text.length} / {message.textLength})
+						{t(streaming === undefined ? "history.preview" : "history.partialPreview")} ({message.text.length} /{" "}
+						{message.textLength})
 					</p>
 					<div className="message-text">{message.text}</div>
-					<Button size="sm" variant="outline" onClick={() => onOffsetChange(opened ? undefined : 0)}>
-						{t(opened ? "common.close" : "history.readFull")}
-					</Button>
-					{offset !== undefined && (
+					{streaming === undefined && (
+						<Button size="sm" variant="outline" onClick={() => onOffsetChange(opened ? undefined : 0)}>
+							{t(opened ? "common.close" : "history.readFull")}
+						</Button>
+					)}
+					{streaming === undefined && offset !== undefined && (
 						<MessageTextReader
 							scope={scope}
 							messageId={message.id}
@@ -42,9 +52,9 @@ export function MessageContent({
 					)}
 				</>
 			) : message.role === "assistant" ? (
-				<MessageMarkdown source={message.text} />
+				<MessageMarkdown source={message.text} streaming={streaming} streamId={streamId} />
 			) : (
-				<div className="message-text">{message.text}</div>
+				<UserMessageContent key={message.id} source={message.text} />
 			)}
 		</>
 	);
@@ -91,9 +101,11 @@ export function MessageTextReader({
 						{t("history.units")} {page.offset}–{page.offset + page.text.length} / {page.textLength}
 					</p>
 					<pre className="message-text">{page.text}</pre>
-					<OriginalPageCopy
+					<ClipboardCopy
 						key={`${scope.workspaceId}:${scope.conversationId}:${messageId}:${page.offset}`}
 						text={page.text}
+						label={t("history.copyPage")}
+						variant="outline"
 					/>
 				</>
 			)}
@@ -149,27 +161,5 @@ export function MessageTextReader({
 			</div>
 			{reader.loading && <output>{t("common.loading")}</output>}
 		</div>
-	);
-}
-
-/** A page-keyed read owner suppresses stale clipboard feedback after navigation or unmount. */
-function OriginalPageCopy({ text }: { text: string }) {
-	const { t } = usePreferences();
-	const write = useCallback(
-		async (_input: true, _signal: AbortSignal) => {
-			if (!navigator.clipboard) throw new Error("Clipboard unavailable");
-			await navigator.clipboard.writeText(text);
-			return true;
-		},
-		[text],
-	);
-	const copy = useBoundedRead(write);
-	return (
-		<>
-			<Button size="sm" variant="outline" disabled={copy.loading} onClick={() => copy.load(true)}>
-				{t(copy.value ? "common.copied" : "history.copyPage")}
-			</Button>
-			{copy.failed && <p role="alert">{t("common.copyFailed")}</p>}
-		</>
 	);
 }

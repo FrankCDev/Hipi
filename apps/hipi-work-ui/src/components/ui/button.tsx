@@ -4,27 +4,32 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { Slot } from "radix-ui";
 import type * as React from "react";
 import { cn } from "../../lib/cn.ts";
+import "./control-primitives.css";
+
+const quietButtonStates =
+	"not-disabled:hover:bg-accent not-disabled:active:bg-accent not-disabled:data-[state=open]:bg-accent not-disabled:aria-expanded:bg-accent not-disabled:aria-pressed:bg-accent not-disabled:data-[selected=true]:bg-accent";
 
 const buttonVariants = cva(
-	"inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:pointer-events-none disabled:bg-disabled disabled:text-disabled-foreground disabled:border-disabled-border aria-invalid:border-destructive focus-visible:aria-invalid:ring-ring [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+	"ui-button inline-flex shrink-0 items-center justify-center gap-1 rounded-md text-[length:calc(var(--font-ui-size)-1px)] font-[430] whitespace-nowrap transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring focus-visible:outline-offset-2 disabled:pointer-events-none disabled:bg-disabled disabled:text-disabled-foreground disabled:border-disabled-border aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([width]):not([height]):not([class*='size-'])]:size-4",
 	{
 		variants: {
 			variant: {
-				default: "bg-primary text-primary-foreground hover:bg-primary-hover",
-				destructive: "bg-destructive text-destructive-foreground hover:bg-destructive-hover",
-				outline:
-					"border border-border bg-background text-foreground shadow-xs hover:bg-accent hover:text-accent-foreground",
-				secondary: "bg-secondary text-secondary-foreground hover:bg-accent",
-				ghost: "text-foreground hover:bg-accent hover:text-accent-foreground",
+				default:
+					"bg-primary text-primary-foreground not-disabled:hover:bg-primary-hover not-disabled:active:bg-primary-hover not-disabled:data-[state=open]:bg-primary-hover not-disabled:aria-expanded:bg-primary-hover not-disabled:aria-pressed:bg-primary-hover not-disabled:data-[selected=true]:bg-primary-hover",
+				destructive:
+					"bg-destructive text-destructive-foreground not-disabled:hover:bg-destructive-hover not-disabled:active:bg-destructive-hover not-disabled:data-[state=open]:bg-destructive-hover not-disabled:aria-expanded:bg-destructive-hover not-disabled:aria-pressed:bg-destructive-hover not-disabled:data-[selected=true]:bg-destructive-hover",
+				outline: `border border-border bg-background text-foreground shadow-xs ${quietButtonStates}`,
+				secondary: `bg-secondary text-secondary-foreground ${quietButtonStates}`,
+				ghost: `text-foreground focus-visible:-outline-offset-1 disabled:bg-transparent disabled:text-current disabled:opacity-40 ${quietButtonStates}`,
 				link: "text-primary underline-offset-4 hover:underline",
 			},
 			size: {
 				default: "h-9 px-4 py-2 has-[>svg]:px-3",
-				xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
-				sm: "h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5",
-				lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
+				xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([width]):not([height]):not([class*='size-'])]:size-3",
+				sm: "h-8 gap-1 rounded-md px-3 has-[>svg]:px-2.5",
+				lg: "h-10 gap-1.5 rounded-md px-6 has-[>svg]:px-4",
 				icon: "size-9",
-				"icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
+				"icon-xs": "size-6 rounded-md [&_svg:not([width]):not([height]):not([class*='size-'])]:size-3",
 				"icon-sm": "size-8",
 				"icon-lg": "size-10",
 			},

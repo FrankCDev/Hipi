@@ -13,7 +13,18 @@ import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { maxPickerImageBytes, pickerOpenTarget, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { assertPdfPaint, documentPreviewState, pdfPreviewPaint } from "./gui-file-previews.mjs";
-import { fileWorkbenchState, validateFileWorkbenchEvidence } from "./gui-file-workbench.mjs";
+import {
+	assertFileWorkbenchLayout,
+	dispatchFileDrag,
+	fileCodePresentation,
+	fileDragPlan,
+	fileShadowTarget,
+	fileSplitNodes,
+	fileSplitterGeometry,
+	fileTreeListing,
+	fileWorkbenchState,
+	validateFileWorkbenchEvidence,
+} from "./gui-file-workbench.mjs";
 import {
 	changeOwnedFixture,
 	fileFixture,
@@ -22,6 +33,8 @@ import {
 	seedFileWorkbench,
 	verifyColdFileWorkbench,
 } from "./gui-file-workbench-fixture.mjs";
+import { filePanelCleanupState } from "./gui-work-experience.mjs";
+import { assertScenarioWorkspaceDatabases } from "./smoke-packaged-gui.mjs";
 
 async function profile() {
 	return realpathSync(await mkdtemp(join(realpathSync(tmpdir()), "Hipi GUI profile-")));
@@ -31,6 +44,7 @@ test("seeded file fixture passes the real native launch boundary without expandi
 	const root = await profile();
 	try {
 		await seedFileWorkbench({ ownedProfileRoot: root, assertAllOwnedProcessesExited: async () => {} });
+		await assertScenarioWorkspaceDatabases(join(root, "profile", "deterministic-store"), "file-workbench");
 		const args = [`--smoke-data-root=${root}`];
 		const paths = smokeProfile(args, "deterministic");
 		assert.equal(await ownedFileDirectory(root), join(paths.userData, fileFixture.folder));
@@ -57,6 +71,7 @@ test("synthetic fixture exercises real file CAS and all preview transports witho
 		});
 		assert.equal(processChecks, 1);
 		assert.equal(seed.grantsPreseeded, false);
+		assert.equal(seed.otherWorkspaceId, fileFixture.otherWorkspaceId);
 		assert.ok(!JSON.stringify(seed).includes(root), "Evidence must not serialize private absolute paths");
 		authority = createFileAuthority({
 			securityMode: "cooperative-local-files",
@@ -77,6 +92,11 @@ test("synthetic fixture exercises real file CAS and all preview transports witho
 		const initial = await files.readText(target);
 		assert.equal(initial.text, fileFixture.initial);
 		const saved = await files.saveText(target, fileFixture.saved, initial.revision);
+		const secondTarget = { ...target, path: fileFixture.secondName };
+		const secondInitial = await files.readText(secondTarget);
+		assert.equal(secondInitial.text, fileFixture.secondInitial);
+		const secondSaved = await files.saveText(secondTarget, fileFixture.secondSaved, secondInitial.revision);
+		await files.saveText(secondTarget, fileFixture.secondClosed, secondSaved.revision);
 		assert.equal((await readOwnedFixture(root)).toString("utf8"), fileFixture.saved);
 		await changeOwnedFixture(root);
 		await assert.rejects(files.saveText(target, fileFixture.draft, saved.revision), { code: "VERSION_CONFLICT" });
@@ -151,7 +171,12 @@ test("synthetic fixture exercises real file CAS and all preview transports witho
 		await assert.rejects(files.readText(target), { code: "UNAUTHORIZED" });
 		const cold = await verifyColdFileWorkbench({
 			ownedProfileRoot: root,
-			gui: { conflictDraftPreserved: true, savedBytesVerified: true },
+			gui: {
+				conflictDraftPreserved: true,
+				savedBytesVerified: true,
+				backgroundAutosave: true,
+				conditionalCloseSaved: true,
+			},
 			assertAllOwnedProcessesExited: async () => {
 				processChecks++;
 			},
@@ -719,6 +744,461 @@ test("file evidence refuses ambiguous presentation surfaces", () => {
 	}
 });
 
+test("file observations require the exact active tab and its uniquely labelled panel", () => {
+	const attributes = { title: "notes.txt", "aria-controls": "file-tab-content-file-1", "aria-selected": "true" };
+	const tab = { id: "file-tab-file-1", getAttribute: (key) => attributes[key], querySelector: () => null };
+	let panelLabel = tab.id;
+	const panel = {
+		id: attributes["aria-controls"],
+		getAttribute: () => panelLabel,
+		querySelectorAll: () => [],
+	};
+	const tabs = [tab];
+	const panels = [panel];
+	let status = "Matches confirmed version";
+	let dirty = false;
+	const root = {
+		textContent: "",
+		querySelectorAll: (selector) =>
+			selector === '.file-tabs [role="tab"]' ? tabs : selector === '.file-tab-panel[role="tabpanel"]' ? panels : [],
+		querySelector: (selector) =>
+			selector === ".file-document-status > span"
+				? { textContent: status, getAttribute: () => (dirty ? "true" : null) }
+				: selector === ".file-editor-status > span"
+					? { textContent: dirty ? "Changes save automatically" : "Saved" }
+					: null,
+	};
+	const document = { querySelectorAll: () => [root] };
+	assert.equal(fileWorkbenchState(document).activeId, tab.id);
+	assert.equal(fileWorkbenchState(document).path, "notes.txt");
+	assert.equal(fileWorkbenchState(document).clean, true);
+	dirty = true;
+	status = "Unsaved changes";
+	assert.equal(fileWorkbenchState(document).dirty, true);
+	assert.equal(fileWorkbenchState(document).clean, false);
+	assert.equal(fileWorkbenchState(document).autosavePending, true);
+	status = "Saving file…";
+	assert.equal(fileWorkbenchState(document).saving, true);
+	attributes["aria-selected"] = "false";
+	assert.equal(fileWorkbenchState(document), null);
+	attributes["aria-selected"] = "true";
+	panelLabel = "another-tab";
+	assert.equal(fileWorkbenchState(document), null);
+	panelLabel = tab.id;
+	panel.id = "another-panel";
+	assert.equal(fileWorkbenchState(document), null);
+	panel.id = attributes["aria-controls"];
+	tabs.push(tab);
+	assert.equal(fileWorkbenchState(document), null);
+	tabs.pop();
+	panels.push(panel);
+	assert.equal(fileWorkbenchState(document), null);
+});
+
+test("Pierre observations read exact rendered lines only from the selected named editor", () => {
+	const lines = fileFixture.initial.split("\n").map((textContent, index) => ({
+		textContent,
+		getAttribute: () => String(index + 1),
+	}));
+	let name = fileFixture.textName;
+	const inputs = [{ getAttribute: () => name }];
+	const host = {
+		shadowRoot: {
+			querySelectorAll: (selector) => (selector === "[data-content] > [data-line]" ? lines : inputs),
+		},
+	};
+	const hosts = [host];
+	const panel = {
+		querySelectorAll: (selector) => (selector.includes(".pierre-code") ? hosts : []),
+	};
+	assert.deepEqual(fileCodePresentation(panel, name), {
+		editor: fileFixture.initial,
+		left: null,
+		right: null,
+		readOnlyDiff: false,
+	});
+	name = "other.txt";
+	assert.equal(fileCodePresentation(panel, fileFixture.textName).editor, null);
+	name = fileFixture.textName;
+	lines.reverse();
+	assert.equal(fileCodePresentation(panel, name).editor, null, "Missing/virtualized lines cannot be inferred");
+	lines.reverse();
+	hosts.push(host);
+	assert.equal(fileCodePresentation(panel, name).editor, null);
+	hosts.pop();
+	inputs.push(inputs[0]);
+	assert.equal(fileCodePresentation(panel, name).editor, null);
+	assert.equal(fileCodePresentation(undefined, name).editor, null);
+});
+
+test("Pierre diff evidence requires both exact readonly split columns, never gutters or editable content", () => {
+	const column = (text) => ({
+		querySelectorAll: (selector) =>
+			selector === "[data-content] > [data-line]"
+				? text.split("\n").map((textContent, index) => ({
+						textContent,
+						getAttribute: () => String(index + 1),
+					}))
+				: [],
+	});
+	const deletions = [column(fileFixture.initial)];
+	const additions = [column(fileFixture.saved)];
+	const editables = [];
+	const host = {
+		shadowRoot: {
+			querySelectorAll: (selector) =>
+				selector === "[data-code][data-deletions]"
+					? deletions
+					: selector === "[data-code][data-additions]"
+						? additions
+						: editables,
+		},
+	};
+	const panel = { querySelectorAll: (selector) => (selector.includes(".pierre-diff") ? [host] : []) };
+	assert.deepEqual(fileCodePresentation(panel, fileFixture.textName), {
+		editor: null,
+		left: fileFixture.initial,
+		right: fileFixture.saved,
+		readOnlyDiff: true,
+	});
+	editables.push({});
+	assert.equal(fileCodePresentation(panel, fileFixture.textName).readOnlyDiff, false);
+	editables.pop();
+	additions.push(additions[0]);
+	assert.equal(fileCodePresentation(panel, fileFixture.textName).readOnlyDiff, false);
+	additions.length = 0;
+	assert.equal(fileCodePresentation(panel, fileFixture.textName).left, null);
+});
+
+function shadowFixture(kind) {
+	const attributes = {
+		"aria-label": fileFixture.textName,
+		"aria-disabled": "false",
+		contenteditable: "true",
+		title: fileFixture.textName,
+		"aria-controls": "file-tab-content-file-1",
+		"aria-labelledby": "file-tab-file-1",
+	};
+	const row = {
+		dataset: { path: fileFixture.textName, itemPath: fileFixture.textName, hipiKind: "file" },
+		getAttribute: (key) => attributes[key],
+		getBoundingClientRect: () => ({ x: 20, y: 40, width: 80, height: 28 }),
+		scrollIntoView: () => {},
+		contains: (node) => node === row,
+	};
+	const rows = [row];
+	const trees = [{ getAttribute: () => fileFixture.folder }];
+	const shadow = {
+		activeElement: row,
+		elementFromPoint: () => row,
+		querySelectorAll: (selector) => (selector === '[role="tree"]' ? trees : rows),
+	};
+	const host = { shadowRoot: shadow };
+	const hosts = [host];
+	const tabs = [{ id: "file-tab-file-1", getAttribute: (key) => attributes[key] }];
+	const panels = [
+		{
+			id: attributes["aria-controls"],
+			getAttribute: (key) => attributes[key],
+			querySelectorAll: () => hosts,
+		},
+	];
+	const root = {
+		querySelectorAll: (selector) =>
+			selector.includes('role="tab"') ? tabs : selector.includes('role="tabpanel"') ? panels : hosts,
+	};
+	const roots = [root];
+	const document = { activeElement: host, querySelectorAll: () => roots, elementFromPoint: () => host };
+	return { document, host, hosts, shadow, rows, roots, panels, attributes, row, kind };
+}
+
+test("Pierre listing requires one shadow tree with distinct enabled exact runtime/model paths", () => {
+	const fixture = shadowFixture("tree");
+	assert.deepEqual(fileTreeListing(fixture.document), { label: fileFixture.folder, paths: [fileFixture.textName] });
+	fixture.row.dataset.itemPath = "different.txt";
+	assert.equal(fileTreeListing(fixture.document), null);
+	fixture.row.dataset.itemPath = fileFixture.textName;
+	fixture.attributes["aria-disabled"] = "true";
+	assert.equal(fileTreeListing(fixture.document), null);
+	fixture.attributes["aria-disabled"] = "false";
+	fixture.row.dataset.hipiKind = "blocked";
+	assert.equal(fileTreeListing(fixture.document), null);
+	fixture.row.dataset.hipiKind = "file";
+	fixture.rows.push(fixture.row);
+	assert.equal(fileTreeListing(fixture.document), null);
+	fixture.rows.pop();
+	fixture.hosts.push(fixture.host);
+	assert.equal(fileTreeListing(fixture.document), null);
+});
+
+test("shadow pointer targets reject ambiguous, disabled, obscured or mismatched fixture surfaces", () => {
+	for (const kind of ["tree", "editor"])
+		for (const mismatch of ["host", "row", "outer-hit", "inner-hit", "path", "disabled", "size", "number"]) {
+			const fixture = shadowFixture(kind);
+			assert.deepEqual(fileShadowTarget(fixture.document, kind, fileFixture.textName), {
+				x: 60,
+				y: 54,
+				focused: true,
+			});
+			if (mismatch === "host") fixture.hosts.push(fixture.host);
+			if (mismatch === "row") fixture.rows.push(fixture.row);
+			if (mismatch === "outer-hit") fixture.document.elementFromPoint = () => ({});
+			if (mismatch === "inner-hit") fixture.shadow.elementFromPoint = () => ({});
+			if (mismatch === "path") {
+				fixture.row.dataset.itemPath = "other.txt";
+				fixture.attributes["aria-label"] = "other.txt";
+			}
+			if (mismatch === "disabled") {
+				fixture.attributes["aria-disabled"] = "true";
+				fixture.attributes.contenteditable = "false";
+			}
+			if (mismatch === "size") fixture.row.getBoundingClientRect = () => ({ x: 20, y: 40, width: 0, height: 28 });
+			if (mismatch === "number")
+				fixture.row.getBoundingClientRect = () => ({ x: Number.NaN, y: 40, width: 80, height: 28 });
+			assert.equal(fileShadowTarget(fixture.document, kind, fileFixture.textName), null, `${kind}: ${mismatch}`);
+		}
+});
+
+test("shadow editor input requires exact tab/panel correspondence and both focus boundaries", () => {
+	for (const mismatch of ["path", "panel", "label", "focus-outer", "focus-inner"]) {
+		const fixture = shadowFixture("editor");
+		if (mismatch === "path") fixture.attributes.title = "other.txt";
+		if (mismatch === "panel") fixture.panels[0].id = "other-panel";
+		if (mismatch === "label") fixture.attributes["aria-labelledby"] = "other-tab";
+		if (mismatch === "focus-outer") fixture.document.activeElement = {};
+		if (mismatch === "focus-inner") fixture.shadow.activeElement = {};
+		const target = fileShadowTarget(fixture.document, "editor", fileFixture.textName);
+		if (mismatch.startsWith("focus")) assert.equal(target.focused, false);
+		else assert.equal(target, null);
+	}
+});
+
+test("IDE geometry rejects stacked, reversed, missing or collapsed tree/editor surfaces", () => {
+	const geometry = { editorWidth: 360, treeWidth: 240, editorRight: 900, treeLeft: 901, editorTop: 110, treeTop: 110 };
+	assertFileWorkbenchLayout(geometry);
+	for (const value of [
+		null,
+		{ ...geometry, treeLeft: 500 },
+		{ ...geometry, treeTop: 500 },
+		{ ...geometry, treeWidth: 0 },
+		{ ...geometry, editorWidth: 0 },
+		{ ...geometry, editorRight: Number.NaN },
+	])
+		assert.throws(() => assertFileWorkbenchLayout(value));
+});
+
+const splitGeometry = {
+	x: 760.5,
+	y: 400,
+	width: 640,
+	min: 320,
+	max: 787,
+	areaLeft: 260,
+	areaRight: 1400,
+	areaWidth: 1140,
+	viewportWidth: 1400,
+	viewportHeight: 900,
+};
+
+test("file drag paths use measured splitter widths and bounded renderer coordinates", () => {
+	for (const requested of [80, 640, splitGeometry.areaWidth - 80]) {
+		const plan = fileDragPlan(splitGeometry, requested);
+		assert.equal(plan.moves.length, 4);
+		assert.deepEqual(plan.start, { x: 760.5, y: 400 });
+		assert.deepEqual(plan.moves.at(-1), { x: splitGeometry.x + splitGeometry.width - requested, y: 400 });
+	}
+	const full = { ...splitGeometry, x: 260.5, width: 1139, max: 1139 };
+	assert.equal(fileDragPlan(full, 640).moves.at(-1).x, 759.5);
+	const tree = { ...splitGeometry, x: 1159.5, width: 240, min: 200, max: 384 };
+	assert.equal(fileDragPlan(tree, 50).moves.at(-1).x, 1349.5);
+	for (const requested of [0, -1, 1140, Number.NaN, Infinity])
+		assert.throws(() => fileDragPlan(splitGeometry, requested));
+	for (const value of [
+		null,
+		{ ...splitGeometry, x: Number.NaN },
+		{ ...splitGeometry, width: 200 },
+		{ ...splitGeometry, max: 600 },
+		{ ...splitGeometry, areaRight: 1390 },
+		{ ...splitGeometry, viewportWidth: 1000 },
+		{ ...splitGeometry, y: 901 },
+		{ ...splitGeometry, x: 200 },
+	])
+		assert.throws(() => fileDragPlan(value, 80));
+});
+
+test("splitter measurement refuses hidden, ambiguous, obscured or wrongly labelled handles", () => {
+	const attributes = {
+		"aria-orientation": "vertical",
+		"aria-valuenow": "640",
+		"aria-valuemin": "320",
+		"aria-valuemax": "787",
+	};
+	const handle = {
+		getAttribute: (key) => attributes[key],
+		getBoundingClientRect: () => ({ x: 760, y: 100, width: 1, height: 600 }),
+		contains: (node) => node === handle,
+	};
+	const area = { getBoundingClientRect: () => ({ left: 260, right: 1400, width: 1140 }) };
+	const dock = { hidden: false, inert: false };
+	const handles = [handle];
+	const document = {
+		documentElement: { clientWidth: 1400, clientHeight: 900 },
+		elementFromPoint: () => handle,
+		querySelectorAll: (selector) =>
+			selector === ".work-area"
+				? [area]
+				: selector === ".file-panel-dock"
+					? [dock]
+					: selector.includes('[aria-label="File panel width"]')
+						? handles
+						: [],
+	};
+	assert.deepEqual(fileSplitterGeometry(document, "dock"), splitGeometry);
+	assert.equal(fileSplitterGeometry(document, "tree"), null);
+	assert.equal(fileSplitterGeometry(document, "unrelated"), null);
+	dock.hidden = true;
+	assert.equal(fileSplitterGeometry(document, "dock"), null);
+	dock.hidden = false;
+	dock.inert = true;
+	assert.equal(fileSplitterGeometry(document, "dock"), null);
+	dock.inert = false;
+	handles.push(handle);
+	assert.equal(fileSplitterGeometry(document, "dock"), null);
+	handles.pop();
+	document.elementFromPoint = () => ({});
+	assert.equal(fileSplitterGeometry(document, "dock"), null);
+	document.elementFromPoint = () => handle;
+	attributes["aria-orientation"] = "horizontal";
+	assert.equal(fileSplitterGeometry(document, "dock"), null);
+});
+
+test("file drag sends one native press, four held moves and one release without simulated DOM mode changes", async () => {
+	const plan = fileDragPlan(splitGeometry, splitGeometry.areaWidth - 80);
+	const calls = [];
+	await dispatchFileDrag(
+		{
+			request: async (method, args) => {
+				assert.equal(method, "Input.dispatchMouseEvent");
+				calls.push(args);
+			},
+		},
+		plan,
+	);
+	assert.deepEqual(
+		calls.map((call) => [call.type, call.buttons]),
+		[
+			["mouseMoved", 0],
+			["mousePressed", 1],
+			...Array.from({ length: 4 }, () => ["mouseMoved", 1]),
+			["mouseReleased", 0],
+		],
+	);
+	assert.deepEqual(
+		calls.slice(2, 6).map(({ x, y }) => ({ x, y })),
+		plan.moves,
+	);
+	assert.equal(calls.at(-1).x, plan.moves.at(-1).x);
+});
+
+test("interrupted file drag releases at its last confirmed point without retrying the move", async () => {
+	const plan = fileDragPlan(splitGeometry, 80);
+	const calls = [];
+	await assert.rejects(
+		dispatchFileDrag(
+			{
+				request: async (_method, args) => {
+					calls.push(args);
+					if (calls.length === 4) throw new Error("synthetic pointer transport failure");
+				},
+			},
+			plan,
+		),
+		/synthetic pointer transport failure/,
+	);
+	assert.equal(calls.length, 5);
+	assert.equal(calls.at(-1).type, "mouseReleased");
+	assert.equal(calls.at(-1).x, plan.moves[0].x);
+});
+
+test("split identity records exact canonical shells and permits only hidden vendor row recycling", () => {
+	const nodes = Array.from({ length: 9 }, () => ({ isConnected: true }));
+	const input = { isConnected: true };
+	const inputs = [input];
+	nodes.at(-1).shadowRoot = { querySelectorAll: () => inputs };
+	const selectors = [];
+	let duplicate = false;
+	const document = {
+		querySelectorAll: (selector) => {
+			if (!selectors.includes(selector)) selectors.push(selector);
+			const node = nodes[selectors.indexOf(selector)];
+			return duplicate ? [node, node] : [node];
+		},
+	};
+	assert.deepEqual(fileSplitNodes(document), [...nodes, input]);
+	assert.deepEqual(fileSplitNodes(document, false), nodes);
+	inputs.length = 0;
+	assert.equal(fileSplitNodes(document), null, "Visible full/split transitions require the actual retained input");
+	assert.deepEqual(fileSplitNodes(document, false), nodes, "Hidden virtual rows are not owner replacement");
+	nodes[3].isConnected = false;
+	assert.equal(fileSplitNodes(document, false), null, "Conversation composer cannot be replaced while hidden");
+	nodes[3].isConnected = true;
+	duplicate = true;
+	assert.equal(fileSplitNodes(document, false), null);
+});
+
+test("baseline cleanup skips only absent or strictly hidden/inert docks, never an obstructed visible close button", () => {
+	const attributes = { "aria-hidden": "false" };
+	let visible = true;
+	let covered = false;
+	const button = {
+		disabled: false,
+		getClientRects: () => (visible ? [{}] : []),
+		getBoundingClientRect: () => ({ x: 100, y: 20, width: visible ? 20 : 0, height: visible ? 20 : 0 }),
+		contains: (value) => value === button,
+	};
+	const dock = {
+		hidden: false,
+		inert: false,
+		getAttribute: (key) => attributes[key],
+		getClientRects: () => (visible ? [{}] : []),
+		contains: (value) => value === button,
+	};
+	const docks = [dock];
+	const buttons = [button];
+	const dialogs = [];
+	const document = {
+		querySelectorAll: (selector) =>
+			selector === ".file-panel-dock" ? docks : selector === ".file-panel-close" ? buttons : dialogs,
+		elementFromPoint: () => (covered ? {} : button),
+	};
+	assert.equal(filePanelCleanupState(document), "visible");
+	covered = true;
+	assert.equal(filePanelCleanupState(document), null, "Obstruction must not be mistaken for an already closed dock");
+	covered = false;
+	button.disabled = true;
+	assert.equal(filePanelCleanupState(document), null);
+	button.disabled = false;
+	visible = false;
+	assert.equal(filePanelCleanupState(document), null, "Zero geometry without hidden/inert semantics is not accepted");
+	dock.hidden = true;
+	dock.inert = true;
+	assert.equal(filePanelCleanupState(document), null);
+	attributes["aria-hidden"] = "true";
+	assert.equal(filePanelCleanupState(document), "hidden");
+	visible = true;
+	assert.equal(filePanelCleanupState(document), null, "A hidden dock must actually have no visible rectangle");
+	visible = false;
+	dialogs.push({});
+	assert.equal(filePanelCleanupState(document), null);
+	dialogs.pop();
+	buttons.push(button);
+	assert.equal(filePanelCleanupState(document), null);
+	buttons.length = 0;
+	assert.equal(filePanelCleanupState(document), null);
+	docks.length = 0;
+	assert.equal(filePanelCleanupState(document), "absent");
+});
+
 test("original preview fixtures are byte-deterministic, bounded, and PDF xref entries point at real objects", () => {
 	const files = createPreviewFixtureFiles();
 	assert.deepEqual(files, createPreviewFixtureFiles());
@@ -790,10 +1270,23 @@ test("completion gate requires every first-run, native-picker and cold-restart o
 	const first = Object.fromEntries(
 		[
 			"listedAndOpened",
+			"editorTreeSplit",
+			"dockDragFull",
+			"dockDragRestore",
+			"dockDragCollapseRestore",
+			"treeDragCollapseRestore",
+			"conversationShellRetained",
+			"splitterDraftPreserved",
 			"savedBytesVerified",
+			"autosaveObserved",
+			"backgroundAutosave",
+			"retainedTabIdentity",
+			"workspaceTabRetention",
+			"conditionalCloseSaved",
 			"initialBaselineSurvivesSave",
 			"conflictDraftPreserved",
 			"conflictDidNotOverwriteDisk",
+			"conflictRetryBlocked",
 			"explicitDiscardGuard",
 			"dirtyPanelPreservation",
 			"narrowModalPreservation",
@@ -805,14 +1298,20 @@ test("completion gate requires every first-run, native-picker and cold-restart o
 			"pdfPreview",
 			"pdfZoom",
 			"pdfReopenResetsZoom",
-			"dirtyPreviewGuardPreserved",
+			"dirtyPreviewRetained",
 			"unsupportedPreviewRejected",
 			"pngPreview",
-			"previewNotRestored",
+			"previewHandleRenewed",
 		].map((key) => [key, true]),
 	);
 	first.nativePicker = { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true };
-	const reopened = { reopened: true, freshlyAuthorized: true, coldSavedContent: true, rootRevoked: true };
+	const reopened = {
+		reopened: true,
+		freshlyAuthorized: true,
+		coldSavedContent: true,
+		coldTabsEmpty: true,
+		rootRevoked: true,
+	};
 	validateFileWorkbenchEvidence({ first, reopened });
 	for (const key of Object.keys(first))
 		assert.throws(() => validateFileWorkbenchEvidence({ first: { ...first, [key]: false }, reopened }));

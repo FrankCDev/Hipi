@@ -33,6 +33,55 @@ const receipt = {
 	answerEntryId: "1",
 };
 
+test("optional presentation identities are bounded, assistant-only, unique, and not command authority", () => {
+	const first = "1de12561-9171-4806-923d-bd965b721a3b";
+	const second = "10230315-a871-4a08-b7e2-f658a9e8a073";
+	const identified = { ...snapshot, messages: [{ ...message, streamId: first }], partialId: second };
+	assert.deepEqual(parseResult("snapshot", identified), identified);
+	assert.deepEqual(
+		parseFrame({ kind: "snapshot", epoch: "epoch", version: 1, snapshot: identified }).snapshot,
+		identified,
+	);
+	assert.deepEqual(
+		parseResult("getHistory", {
+			...scope,
+			messages: identified.messages,
+			nextCursor: null,
+		}).messages,
+		identified.messages,
+	);
+	for (const identity of ["", "arbitrary-public-id", `${first}x`, first.toUpperCase(), null, 42]) {
+		assert.throws(() => parseResult("snapshot", { ...snapshot, partialId: identity }), { code: "INVALID_REQUEST" });
+		assert.throws(
+			() =>
+				parseResult("getHistory", {
+					...scope,
+					messages: [{ ...message, streamId: identity }],
+					nextCursor: null,
+				}),
+			{ code: "INVALID_REQUEST" },
+		);
+	}
+	for (const messages of [
+		[{ ...message, role: "user", streamId: first }],
+		[
+			{ ...message, streamId: first },
+			{ ...message, id: "2_0", streamId: first },
+		],
+	])
+		assert.throws(() => parseResult("snapshot", { ...snapshot, messages }), { code: "INVALID_REQUEST" });
+	assert.throws(() => parseResult("snapshot", { ...identified, partialId: first }), { code: "INVALID_REQUEST" });
+	for (const params of [
+		{ ...scope, requestId: "request", text: "hello", streamId: first },
+		{ ...scope, requestId: "request", text: "hello", partialId: first },
+	])
+		assert.throws(() => parseRequest({ version: PROTOCOL_VERSION, method: "submit", params }), {
+			code: "INVALID_REQUEST",
+		});
+	// Legacy history and cold snapshots without optional presentation metadata remain valid.
+	assert.deepEqual(parseResult("snapshot", snapshot), snapshot);
+});
+
 test("history protocol rejects missing, contradictory and oversized preview metadata", () => {
 	assert.deepEqual(parseResult("snapshot", snapshot), snapshot);
 	for (const patch of [

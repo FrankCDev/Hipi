@@ -21,8 +21,7 @@ function geometry() {
 			submit: rect(948, 808, 40, 36),
 			model: rect(296, 808, 100, 36),
 			permissions: rect(410, 808, 160, 36),
-			context: rect(580, 808, 100, 36),
-			tools: rect(690, 808, 100, 36),
+			acquisition: rect(580, 808, 100, 36),
 		},
 	};
 }
@@ -38,7 +37,7 @@ test("matrix covers every requested width, language and resolved theme without d
 
 test("geometry rejects missing, covered and offscreen key controls rather than accepting screenshots alone", () => {
 	assert.doesNotThrow(() => assertWorkExperienceGeometry(geometry()));
-	for (const name of ["input", "submit", "model", "permissions", "context", "tools"]) {
+	for (const name of ["input", "submit", "model", "permissions", "acquisition"]) {
 		const hidden = geometry();
 		hidden.regions[name] = null;
 		assert.throws(() => assertWorkExperienceGeometry(hidden), /missing or collapsed/);

@@ -113,6 +113,10 @@ function layout(count = 100, initialOffset = 2025, useMeasurementPolicy = false)
 			observeRect?.(rect);
 			commit();
 		},
+		stopFollowing() {
+			instance.cancelScroll();
+			instance.setOptions({ ...instance.options, followOnAppend: false, scrollEndThreshold: -1 });
+		},
 		position(key: string) {
 			const item = instance.getVirtualItems().find((candidate) => candidate.key === key);
 			assert.ok(item, `Expected ${key} in the rendered range`);
@@ -132,6 +136,19 @@ test("stable ID expansion and above-viewport tool collapse preserve the reading 
 	assert.equal(model.element.scrollTop, 1965);
 	assert.equal(model.position("message:20"), before);
 	assert.ok(model.writes.includes(2275));
+});
+
+test("explicit intent inside 24px stops resize following without losing stable-key prepend anchoring", (t) => {
+	const model = layout(100, 9390, true);
+	t.after(model.dispose);
+	assert.equal(model.instance.isAtEnd(24), true);
+	model.stopFollowing();
+	model.resize(99, 500);
+	assert.equal(model.element.scrollTop, 9390);
+	model.replace(["older:0", "older:1", ...model.keys]);
+	assert.equal(model.element.scrollTop, 9590);
+	model.resize(101, 700);
+	assert.equal(model.element.scrollTop, 9590);
 });
 
 test("growth and shrink of an already measured row spanning the fold do not drag the reader", (t) => {

@@ -3,6 +3,7 @@
 import { Popover as PopoverPrimitive } from "radix-ui";
 import type * as React from "react";
 import { cn } from "../../lib/cn.ts";
+import "./control-primitives.css";
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
 	return <PopoverPrimitive.Root data-slot="popover" {...props} />;
@@ -25,7 +26,7 @@ function PopoverContent({
 				align={align}
 				sideOffset={sideOffset}
 				className={cn(
-					"z-50 w-72 origin-(--radix-popover-content-transform-origin) rounded-md border border-border bg-popover p-4 text-popover-foreground shadow-md outline-hidden",
+					"ui-overlay-surface z-50 w-72 origin-(--radix-popover-content-transform-origin) border border-border bg-popover p-4 text-popover-foreground shadow-md outline-hidden",
 					className,
 				)}
 				{...props}

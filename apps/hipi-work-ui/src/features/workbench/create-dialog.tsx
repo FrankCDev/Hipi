@@ -1,7 +1,5 @@
-import { LIMITS, type ModelReference } from "@hipi/work-runtime/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useId, useRef, useState } from "react";
-import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -15,75 +13,48 @@ import {
 } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { Input } from "../../components/ui/input.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
-import { Textarea } from "../../components/ui/textarea.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
-import { workbenchLabels } from "./workbench-labels.ts";
+import { ComposerKeyboard } from "./composer-keyboard.ts";
 
 export function CreateDialog({
-	kind,
 	onCreate,
 	compact = false,
 	disabled = false,
 	onOpenChange,
-	workspaceId,
-	draft,
-	onDraftChange,
 	triggerLabel,
 }: {
-	kind: "workspace" | "conversation";
-	onCreate: (name: string, model?: ModelReference, initialDraft?: string) => Promise<void>;
+	kind: "workspace";
+	onCreate: (name: string) => Promise<void>;
 	compact?: boolean;
 	disabled?: boolean;
 	onOpenChange?: (open: boolean) => void;
-	workspaceId?: string;
-	draft?: string;
-	onDraftChange?: (value: string) => void;
 	triggerLabel?: string;
 }) {
-	const { t, locale } = usePreferences();
-	const l = workbenchLabels(locale);
-	const local = useLocalState();
+	const { t } = usePreferences();
 	const nameId = useId();
-	const promptId = useId();
 	const [open, setOpen] = useState(false);
-	const [ownDraft, setOwnDraft] = useState(() => (workspaceId ? (local.read(`task-draft.${workspaceId}`) ?? "") : ""));
-	const prompt = draft ?? ownDraft;
-	const prepared = kind === "conversation" && !!workspaceId;
-	const client = useAppClient();
-	const [modelKey, setModelKey] = useState("");
-	const catalog = useQuery({
-		queryKey: ["models"],
-		queryFn: ({ signal }) => client.call("listModels", {}, signal),
-		enabled: open && kind === "conversation",
-	});
-	const selectedModel = catalog.data?.models.find((m) => JSON.stringify([m.provider, m.modelId]) === modelKey);
-	const modelReady = kind === "workspace" || (!!selectedModel && !catalog.isError);
 	const [name, setName] = useState("");
+	const keyboard = useRef(new ComposerKeyboard());
 	const creating = useRef(false);
-	const preparedName = name.trim() || (prepared ? (prompt.trim().split("\n")[0]?.slice(0, 128) ?? "") : "");
+	const preparedName = name.trim();
 	const mutation = useMutation({
-		mutationFn: (input: { name: string; model?: ModelReference; draft?: string }) =>
-			onCreate(input.name, input.model, input.draft),
+		mutationFn: onCreate,
 		onSuccess: () => {
 			setOpen(false);
 			onOpenChange?.(false);
 			setName("");
+			keyboard.current.reset();
 		},
 		onSettled: () => {
 			creating.current = false;
 		},
 	});
 	const create = () => {
-		if (disabled || !modelReady || !preparedName || mutation.isPending || mutation.isError || creating.current) return;
+		if (disabled || !preparedName || mutation.isPending || mutation.isError || creating.current) return;
 		creating.current = true;
-		mutation.mutate({
-			name: preparedName,
-			model: selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : undefined,
-			...(prepared && prompt.trim() ? { draft: prompt } : {}),
-		});
+		mutation.mutate(preparedName);
 	};
-	const title = t(kind === "workspace" ? "nav.newWorkspace" : "nav.newConversation");
+	const title = t("nav.newWorkspace");
 	const trigger = (
 		<DialogTrigger asChild>
 			<Button
@@ -103,9 +74,9 @@ export function CreateDialog({
 			open={open}
 			onOpenChange={(value) => {
 				if (!mutation.isPending) {
-					if (value && workspaceId && draft === undefined) setOwnDraft(local.read(`task-draft.${workspaceId}`) ?? "");
 					setOpen(value);
 					onOpenChange?.(value);
+					keyboard.current.reset();
 					mutation.reset();
 				}
 			}}
@@ -120,102 +91,39 @@ export function CreateDialog({
 			) : (
 				trigger
 			)}
-			<DialogContent
-				className={prepared ? "task-setup-dialog" : undefined}
-				scrollBody
-				closeLabel={t("common.close")}
-				closeDisabled={mutation.isPending}
-			>
+			<DialogContent scrollBody closeLabel={t("common.close")} closeDisabled={mutation.isPending}>
 				<DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
-				<DialogDescription className="text-sm text-muted-foreground">
-					{prepared
-						? l["workbench.prepareDescription"]
-						: t(kind === "workspace" ? "nav.workspaceDescription" : "nav.conversationDescription")}
-				</DialogDescription>
+				<DialogDescription className="text-sm text-muted-foreground">{t("nav.workspaceDescription")}</DialogDescription>
 				<DialogBody>
 					<form
 						onSubmit={(event) => {
 							event.preventDefault();
-							// Creation is an explicit button action. Enter in the goal stays a newline, including IME confirmation.
-							if (kind === "workspace") create();
+							// The keyboard handler owns Enter so IME confirmation cannot submit implicitly.
 						}}
 						className="grid gap-4"
 					>
-						{prepared && (
-							<label className="field task-goal-field" htmlFor={promptId}>
-								{l["workbench.taskGoal"]}
-								<Textarea
-									id={promptId}
-									className="task-setup-input"
-									rows={4}
-									value={prompt}
-									maxLength={LIMITS.text}
-									disabled={mutation.isPending || disabled}
-									placeholder={l["workbench.taskPlaceholder"]}
-									onChange={(event) => {
-										const value = event.target.value;
-										if (onDraftChange) onDraftChange(value);
-										else {
-											setOwnDraft(value);
-											local.write(`task-draft.${workspaceId}`, value);
-										}
-									}}
-								/>
-								<span>{l["workbench.taskNotSent"]}</span>
-							</label>
-						)}
 						<label className="field" htmlFor={nameId}>
-							{prepared && prompt.trim() ? l["workbench.taskTitleOptional"] : t("common.name")}
+							{t("common.name")}
 							<Input
 								className="task-title-input"
 								id={nameId}
-								disabled={mutation.isPending}
+								disabled={mutation.isPending || disabled}
 								autoComplete="off"
 								maxLength={128}
 								value={name}
-								placeholder={prepared && prompt.trim() ? preparedName : undefined}
 								onChange={(event) => setName(event.target.value)}
-								required={!prepared || !prompt.trim()}
+								onCompositionStart={() => keyboard.current.compositionStart()}
+								onCompositionEnd={(event) => keyboard.current.compositionEnd(event.timeStamp)}
+								onBlur={() => keyboard.current.reset()}
+								onKeyUp={() => keyboard.current.keyUp()}
+								onKeyDown={(event) => {
+									const action = keyboard.current.keyDown(event.nativeEvent);
+									if (action !== "native") event.preventDefault();
+									if (action === "submit") create();
+								}}
+								required
 							/>
 						</label>
-						{kind === "conversation" && (
-							<div className="grid gap-2">
-								<Select
-									value={modelKey}
-									onValueChange={setModelKey}
-									disabled={catalog.isPending || catalog.isError || mutation.isPending}
-								>
-									<SelectTrigger aria-label={t("model.select")} className="w-full">
-										<SelectValue placeholder={t("model.select")} />
-									</SelectTrigger>
-									<SelectContent>
-										{catalog.data?.models.map((m) => (
-											<SelectItem
-												key={JSON.stringify([m.provider, m.modelId])}
-												value={JSON.stringify([m.provider, m.modelId])}
-											>
-												{m.name} · {m.provider}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-								<p className="text-sm text-muted-foreground">{t("model.fixed")}</p>
-								{selectedModel && (
-									<p className="text-sm">
-										{t(
-											`model.${catalog.data?.providers.find((p) => p.provider === selectedModel.provider)?.credentialState ?? "unavailable"}`,
-										)}
-									</p>
-								)}
-								{catalog.isPending && <output>{t("common.loading")}</output>}
-								{(catalog.isError || catalog.data?.models.length === 0) && (
-									<p role="alert">{t(catalog.isError ? "model.failed" : "model.empty")}</p>
-								)}
-								<Button type="button" variant="ghost" onClick={() => void catalog.refetch()}>
-									{t("model.refresh")}
-								</Button>
-							</div>
-						)}
 						{mutation.isError && (
 							<p role="alert" className="error-text">
 								{t("nav.creationUnknown")}
@@ -223,15 +131,15 @@ export function CreateDialog({
 						)}
 						<div className="flex justify-end gap-2">
 							<DialogClose asChild>
-								<Button variant="ghost" disabled={mutation.isPending}>
+								<Button type="button" variant="ghost" disabled={mutation.isPending}>
 									{t("common.cancel")}
 								</Button>
 							</DialogClose>
 							<Button
-								type={kind === "workspace" ? "submit" : "button"}
+								type="button"
 								className="task-create-confirm"
-								disabled={disabled || !modelReady || !preparedName || mutation.isPending || mutation.isError}
-								onClick={kind === "conversation" ? create : undefined}
+								disabled={disabled || !preparedName || mutation.isPending || mutation.isError}
+								onClick={create}
 							>
 								{t(mutation.isPending ? "common.loading" : "common.create")}
 							</Button>

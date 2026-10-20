@@ -5,19 +5,33 @@ import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import { workbenchLabels } from "./workbench-labels.ts";
 
-/** The same catalog owner remains authoritative, including after the setup dialog is dismissed. */
-export function PreparedTaskRecovery({ session, onResolved }: { session: CatalogSession; onResolved: () => void }) {
+/** Interrupted first Send stays with its existing owner until the durable submit handoff finishes. */
+export function PreparedTaskRecovery({
+	session,
+	onResolve,
+}: {
+	session: CatalogSession;
+	onResolve: (operation: () => Promise<void>) => Promise<void>;
+}) {
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const { locale } = usePreferences();
 	const l = workbenchLabels(locale);
 	const c = catalogLabels(locale);
-	if (!state.preparedTask || !state.pending) return null;
+	const initial = state.initialSend;
+	const legacy = state.preparedTask;
+	if (state.busy || state.submission || (!initial && (!legacy || !state.pending))) return null;
 	return (
 		<section className="prepared-task-recovery notice" aria-live="polite" aria-label={l["workbench.handoffTitle"]}>
-			<p>{state.handoffConflict ? l["workbench.handoffConflict"] : c.pending}</p>
+			<p>
+				{initial
+					? l["workbench.initialSendUnconfirmed"]
+					: state.handoffConflict
+						? l["workbench.handoffConflict"]
+						: c.pending}
+			</p>
 			<details>
 				<summary>{l["workbench.handoffOriginal"]}</summary>
-				<pre>{state.preparedTask.text}</pre>
+				<pre>{initial?.text ?? legacy?.text}</pre>
 			</details>
 			{state.failed && <p role="alert">{c.failed}</p>}
 			{state.notFound && <p>{c.notFound}</p>}
@@ -26,7 +40,7 @@ export function PreparedTaskRecovery({ session, onResolved }: { session: Catalog
 					variant="outline"
 					size="sm"
 					disabled={state.busy || state.incompatible}
-					onClick={() => void session.check().then(onResolved)}
+					onClick={() => void onResolve(session.check)}
 				>
 					{c.check}
 				</Button>
@@ -35,7 +49,7 @@ export function PreparedTaskRecovery({ session, onResolved }: { session: Catalog
 						variant="outline"
 						size="sm"
 						disabled={state.busy || state.incompatible}
-						onClick={() => void session.retry().then(onResolved)}
+						onClick={() => void onResolve(session.retry)}
 					>
 						{c.retry}
 					</Button>
@@ -45,7 +59,7 @@ export function PreparedTaskRecovery({ session, onResolved }: { session: Catalog
 						variant="outline"
 						size="sm"
 						disabled={state.busy || state.incompatible}
-						onClick={() => void session.discardPreparedTask().then(onResolved)}
+						onClick={() => void onResolve(session.discardPreparedTask)}
 					>
 						{l["workbench.handoffKeep"]}
 					</Button>

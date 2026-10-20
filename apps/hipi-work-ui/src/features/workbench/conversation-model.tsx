@@ -55,7 +55,7 @@ export function ConversationModelControls({ controller }: { controller: Conversa
 					</div>
 				</PopoverContent>
 			</Popover>
-			{info && info.executionState !== "ready" && (
+			{info && info.executionState !== "ready" && info.executionState !== "running" && (
 				<output className="model-state">{t(`model.${info.executionState}`)}</output>
 			)}
 			{info && info.credentialState !== "configured" && (
@@ -89,7 +89,7 @@ export function ConversationModelControls({ controller }: { controller: Conversa
 					</DialogContent>
 				</Dialog>
 			)}
-			{(info?.executionState === "running" || info?.executionState === "paused") && (
+			{info?.executionState === "paused" && (
 				<Button
 					variant="outline"
 					size="sm"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { inspectNativeAppearance } from "./gui-native-appearance.mjs";
 
 export const layoutCases = [1440, 1280, 1024, 640].flatMap((width) =>
 	["en", "zh-CN"].flatMap((locale) => ["light", "dark"].map((theme) => ({ width, height: 900, locale, theme }))),
@@ -14,8 +15,7 @@ export function workExperienceGeometry(document, viewport) {
 		submit: '.composer button[type="submit"]',
 		model: ".model-status-trigger",
 		permissions: ".capabilities-trigger",
-		context: ".capability-context-trigger",
-		tools: ".capability-tools-trigger",
+		acquisition: ".composer-add-trigger",
 	};
 	const regions = Object.fromEntries(
 		Object.entries(selectors).map(([name, selector]) => {
@@ -51,7 +51,7 @@ export function assertWorkExperienceGeometry(state) {
 				rect.y + rect.height <= state.height + 1,
 			`${name} escapes the visible viewport`,
 		);
-		if (["input", "submit", "model", "permissions", "context", "tools"].includes(name)) {
+		if (["input", "submit", "model", "permissions", "acquisition"].includes(name)) {
 			assert.equal(rect.disabled, false, `${name} must be actionable during draft layout acceptance`);
 			assert.equal(rect.hit, true, `${name} is covered`);
 		}
@@ -90,6 +90,33 @@ export async function nativeEditorKey(
 		});
 }
 
+/** A retained hidden dock is already closed; an obstructed visible close action is not. */
+export function filePanelCleanupState(document) {
+	const docks = document.querySelectorAll(".file-panel-dock");
+	const buttons = document.querySelectorAll(".file-panel-close");
+	if (document.querySelectorAll(".file-panel-dialog").length) return null;
+	if (docks.length === 0 && buttons.length === 0) return "absent";
+	if (docks.length !== 1 || buttons.length !== 1 || !docks[0].contains(buttons[0])) return null;
+	const dock = docks[0];
+	const button = buttons[0];
+	if (dock.hidden || dock.inert || dock.getAttribute("aria-hidden") === "true")
+		return dock.hidden &&
+			dock.inert &&
+			dock.getAttribute("aria-hidden") === "true" &&
+			dock.getClientRects().length === 0 &&
+			button.getClientRects().length === 0
+			? "hidden"
+			: null;
+	const rectangle = button.getBoundingClientRect();
+	return dock.getClientRects().length > 0 &&
+		rectangle.width > 0 &&
+		rectangle.height > 0 &&
+		!button.disabled &&
+		button.contains(document.elementFromPoint(rectangle.x + rectangle.width / 2, rectangle.y + rectangle.height / 2))
+		? "visible"
+		: null;
+}
+
 export async function exerciseWorkExperience(cdp, helpers, directory, { reopened = false, expectedScope } = {}) {
 	const {
 		evaluate,
@@ -103,19 +130,15 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		openAppearance,
 		setWorkbenchPreferences,
 		setAppearanceChoice,
-		saveAppearance,
-		inspectModal,
-		inspectSettingsGuard,
+		settingsHarness,
 		hover,
 	} = helpers;
 	const settings = ".workbench-settings-trigger";
+	const route = settingsHarness(cdp);
 	const files = 'header button[aria-label="Show files"]';
 	const readDraft = () => evaluate(cdp, "document.querySelector('.composer textarea').value");
 	const readKeys = () =>
-		evaluate(
-			cdp,
-			`Array.from(document.querySelectorAll('[data-message-key^="message:"]')).map(e=>e.dataset.messageKey)`,
-		);
+		evaluate(cdp, `Array.from(document.querySelectorAll('[data-message-id]')).map(e=>'message:'+e.dataset.messageId)`);
 	const originalKeys = await readKeys();
 	assert.equal(await readDraft(), "", "Layout acceptance requires the completed baseline's empty composer");
 	assert.equal(await evaluate(cdp, `document.querySelector('.composer button[type="submit"]').disabled`), true);
@@ -123,8 +146,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 	assert.equal(await evaluate(cdp, "document.querySelector('.work-shell').dataset.navigationCollapsed"), "false");
 	await openAppearance(cdp);
 	const originalMode = (await appearanceChoice(cdp)).mode;
-	await pressKey(cdp, "Escape");
-	await waitForOverlayClosed(cdp, settings);
+	await route.back(settings);
 	const samples = [];
 	let failure;
 	let result;
@@ -167,13 +189,16 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		await click(cdp, ".composer textarea");
 		await cdp.request("Input.insertText", { text: retainedDraft });
 		phase = "settings";
-		await click(cdp, ".sidebar-settings-trigger");
-		await until(
-			() => evaluate(cdp, `document.activeElement === document.querySelector('.settings-page-header h2')`),
-			"settings heading receives initial focus",
-		);
+		await route.open(".sidebar-settings-trigger", "appearance");
 		assert.equal((await appearanceChoice(cdp)).mode, originalMode);
-		await inspectSettingsGuard(cdp);
+		const settingsEvidence = await route.inspect(directory, `work-experience-${reopened ? "reopened-" : ""}settings`);
+		const nativeAppearance = await inspectNativeAppearance(
+			cdp,
+			helpers,
+			route,
+			directory,
+			`work-experience-${reopened ? "reopened-" : ""}native-appearance`,
+		);
 		await click(cdp, '.settings-page-nav button[data-category="models"]');
 		await until(
 			() =>
@@ -184,23 +209,22 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"actual model catalog in selected category",
 		);
 		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-models`);
-		await click(cdp, '.settings-page-nav button[data-category="models"]');
-		await nativeEditorKey(cdp, "Tab");
+		// Category activation moves focus to its heading. Start keyboard traversal from the actual search input instead.
+		await click(cdp, ".settings-search-input");
+		for (let index = 0; index < 4; index++) await nativeEditorKey(cdp, "Tab");
 		assert.equal(await evaluate(cdp, `document.activeElement?.dataset.category`), "runtime");
-		// Native button activation requires Enter's character event, not only a JS keydown.
 		await nativeEditorKey(cdp, "Enter");
 		await until(
 			() =>
 				evaluate(
 					cdp,
-					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'runtime' && document.querySelector('.settings-section:not([hidden])')?.textContent.includes('GUI 会话')`,
+					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'runtime' && document.querySelector('.settings-section:not([hidden])')?.textContent.includes('GUI 会话') && document.activeElement === document.querySelector('.settings-page-heading')`,
 				),
-			"keyboard runtime category with current conversation",
+			"keyboard runtime category and heading focus with current conversation",
 		);
-		await inspectModal(cdp, ".unified-settings-dialog", "center");
+		await route.geometry();
 		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-runtime`);
-		await click(cdp, ".settings-section:not([hidden]) button", "Return to conversation");
-		await waitForOverlayClosed(cdp, ".sidebar-settings-trigger");
+		await route.back(".sidebar-settings-trigger");
 		assert.equal(await readDraft(), retainedDraft, "Settings must retain the task draft");
 		assert.equal(
 			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
@@ -209,7 +233,8 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 		assert.deepEqual(await readKeys(), originalKeys);
 		assert.ok(expectedScope?.workspaceId && expectedScope?.conversationId, "Direct capabilities require receipt scope");
-		await click(cdp, ".capability-context-trigger");
+		await click(cdp, ".composer-add-trigger");
+		await click(cdp, ".composer-add-menu .capability-context-trigger");
 		await until(
 			() =>
 				evaluate(
@@ -231,20 +256,20 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"No-root Context must not authorize access",
 		);
 		await pressKey(cdp, "Escape");
-		await waitForOverlayClosed(cdp, ".capability-context-trigger");
-		await click(cdp, ".capability-tools-trigger");
+		await waitForOverlayClosed(cdp, ".composer-add-trigger");
+		await click(cdp, ".composer-add-trigger");
+		await click(cdp, ".composer-add-menu .capability-tools-trigger");
 		await until(
 			() =>
 				evaluate(
 					cdp,
-					`document.querySelector('.capabilities-section')?.dataset.section === 'tool-packs'
-			&& document.querySelector('.capabilities-navigation [aria-current="page"]')?.dataset.section === 'tool-packs'
-			&& document.querySelector('.capabilities-summary strong')?.textContent === document.querySelector('.toolbar-conversation')?.textContent`,
+					`document.querySelector('.conversation-options-dialog')?.dataset.section === 'tool-packs'
+			&& document.querySelector('.conversation-options-dialog [data-slot="dialog-title"]')?.textContent === 'Tool packs' `,
 				),
 			"direct Tools opens the existing conversation tool-pack section",
 		);
 		await pressKey(cdp, "Escape");
-		await waitForOverlayClosed(cdp, ".capability-tools-trigger");
+		await waitForOverlayClosed(cdp, ".composer-add-trigger");
 		assert.equal(
 			await readDraft(),
 			retainedDraft,
@@ -268,14 +293,13 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 				(item.width === 640 && item.locale === "zh-CN" && item.theme === "dark")
 			) {
 				await openAppearance(cdp);
-				await inspectModal(cdp, ".unified-settings-dialog", "center");
+				await route.geometry();
 				await capture(
 					cdp,
 					directory,
 					`work-experience-${reopened ? "reopened-" : ""}settings-${item.width}-${item.locale}-${item.theme}`,
 				);
-				await pressKey(cdp, "Escape");
-				await waitForOverlayClosed(cdp, settings);
+				await route.back(settings);
 			}
 			const geometry = await evaluate(
 				cdp,
@@ -462,12 +486,11 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			() =>
 				evaluate(
 					cdp,
-					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.unified-settings-dialog') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
+					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.settings-route') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
 				),
 			"nested credentials restores exact trigger",
 		);
-		await pressKey(cdp, "Escape");
-		await waitForOverlayClosed(cdp, settings);
+		await route.back(settings);
 		assert.equal(await readDraft(), draft, "Nested credentials must retain the task draft");
 		assert.deepEqual(await readKeys(), originalKeys);
 		assert.equal(
@@ -480,7 +503,8 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			samples,
 			sidebarCollapse: true,
 			settingsCategories: true,
-			settingsDirtyNavigationGuard: true,
+			settingsImmediatePreferences: settingsEvidence,
+			nativeAppearance,
 			directCapabilitiesScopedAndFocusRestored: true,
 			settingsKeyboardNavigation: true,
 			nestedCredentialsEscapeFocus: true,
@@ -497,6 +521,8 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 				"physical IME",
 				"native OS window resizing (CSS viewport emulation used)",
 				"individual pending approval (no legitimate fixture in baseline)",
+				"inline activity with tool records (baseline executes no tools)",
+				"native font-number spinner (blur and Enter commits exercised)",
 				"execution cancellation (baseline completed task preserved)",
 				"error-state layout (covered separately by file-workbench fixture)",
 				"visual review of generated screenshots",
@@ -518,15 +544,23 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 				index < 3 && (await evaluate(cdp, `!!document.querySelector('[role="dialog"],[role="menu"]')`));
 				index++
 			) {
-				if (await evaluate(cdp, `!!document.querySelector('.settings-unsaved-dialog')`)) {
-					const english = await evaluate(cdp, `document.documentElement.lang === 'en'`);
-					await click(cdp, ".settings-unsaved-actions > button", english ? "Discard changes" : "放弃修改");
-				} else await pressKey(cdp, "Escape");
+				await pressKey(cdp, "Escape");
 			}
+			if (await evaluate(cdp, `!!document.querySelector('.settings-route')`)) await route.back();
 			await resize(1440);
 			if (await evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationCollapsed==='true'`))
 				await click(cdp, ".navigation-toggle");
-			if (await evaluate(cdp, "!!document.querySelector('.file-panel-close')")) await click(cdp, ".file-panel-close");
+			const filesState = await until(
+				() => evaluate(cdp, `(${filePanelCleanupState.toString()})(document)`),
+				"file cleanup is absent, strictly hidden/inert, or visibly actionable",
+			);
+			if (filesState === "visible") {
+				await click(cdp, ".file-panel-close");
+				await until(
+					async () => (await evaluate(cdp, `(${filePanelCleanupState.toString()})(document)`)) === "hidden",
+					"file cleanup hides the retained dock without clicking its hidden close button",
+				);
+			}
 			await preferences("en", "light");
 			await click(cdp, ".composer textarea");
 			await nativeEditorKey(cdp, "a", { modifiers: process.platform === "darwin" ? 4 : 2 });
@@ -534,9 +568,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			assert.equal(await readDraft(), "", "Acceptance draft must be removed before restart");
 			await openAppearance(cdp);
 			await setAppearanceChoice(cdp, "theme", originalMode);
-			await saveAppearance(cdp);
-			await pressKey(cdp, "Escape");
-			await waitForOverlayClosed(cdp, settings);
+			await route.back(settings);
 			await cdp.request("Emulation.clearDeviceMetricsOverride");
 			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation; delete window.__hipiGuiCredentialTrigger");
 			assert.deepEqual(await readKeys(), originalKeys);

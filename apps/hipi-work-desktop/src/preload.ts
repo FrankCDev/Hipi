@@ -1,8 +1,22 @@
+import {
+	AppearanceError,
+	parseAppearanceReply,
+	parseAppearanceRequest,
+	parseAppearanceStatus,
+	parseFontReply,
+} from "@hipi/work-runtime/appearance";
 import { AppError, parseRequest } from "@hipi/work-runtime/contracts";
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { parseFileRequest } from "@hipi/work-runtime/files/protocol";
 import { parsePreviewRequest } from "@hipi/work-runtime/previews/protocol";
 import { contextBridge, ipcRenderer } from "electron";
+import {
+	APPEARANCE_CHANNEL,
+	APPEARANCE_UPDATED,
+	decodeFontRequest,
+	FONT_CANCEL_CHANNEL,
+	FONT_CHANNEL,
+} from "./appearance-protocol.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL, rootRequest } from "./file-protocol.ts";
 import { InvocationGate } from "./invocation-gate.ts";
@@ -14,6 +28,66 @@ const gate = new InvocationGate();
 const credentialGate = new InvocationGate();
 const fileGate = new InvocationGate();
 const previewCalls = new Set<string>();
+let appearancePending = 0;
+let fontPending: string | undefined;
+const appearanceListeners = new Set<(status: unknown) => void>();
+ipcRenderer.on(APPEARANCE_UPDATED, (_event, raw: unknown) => {
+	try {
+		const status = parseAppearanceStatus(raw);
+		for (const listener of appearanceListeners) {
+			try {
+				listener(status);
+			} catch {
+				// A failed consumer cannot prevent other listeners from updating.
+			}
+		}
+	} catch {
+		// Ignore malformed unsolicited updates.
+	}
+});
+contextBridge.exposeInMainWorld(
+	"hipiWorkAppearance",
+	Object.freeze({
+		async request(raw: unknown): Promise<unknown> {
+			const request = parseAppearanceRequest(raw);
+			if (appearancePending >= 4) return { ok: false, error: "BUSY" };
+			appearancePending++;
+			try {
+				const response: unknown = await ipcRenderer.invoke(APPEARANCE_CHANNEL, JSON.stringify(request));
+				parseAppearanceReply(response);
+				return response;
+			} catch (error) {
+				return { ok: false, error: error instanceof AppearanceError ? error.code : "FAILED" };
+			} finally {
+				appearancePending--;
+			}
+		},
+		fontsSupported: ["darwin", "win32", "linux"].includes(process.platform),
+		async listFonts(rawId: unknown): Promise<unknown> {
+			const id = decodeFontRequest(JSON.stringify({ version: 1, id: rawId }));
+			if (fontPending) return { ok: false, error: "BUSY" };
+			fontPending = id;
+			try {
+				const response: unknown = await ipcRenderer.invoke(FONT_CHANNEL, JSON.stringify({ version: 1, id }));
+				parseFontReply(response);
+				return response;
+			} catch (error) {
+				return { ok: false, error: error instanceof AppearanceError ? error.code : "FAILED" };
+			} finally {
+				if (fontPending === id) fontPending = undefined;
+			}
+		},
+		cancelFonts(rawId: unknown): void {
+			const id = decodeFontRequest(JSON.stringify({ version: 1, id: rawId }));
+			if (fontPending === id) ipcRenderer.send(FONT_CANCEL_CHANNEL, JSON.stringify({ version: 1, id }));
+		},
+		subscribe(listener: (status: unknown) => void): () => void {
+			if (typeof listener !== "function" || appearanceListeners.size >= 4) throw new TypeError("Invalid listener");
+			appearanceListeners.add(listener);
+			return () => appearanceListeners.delete(listener);
+		},
+	}),
+);
 contextBridge.exposeInMainWorld(
 	"hipiWorkPreviews",
 	Object.freeze({

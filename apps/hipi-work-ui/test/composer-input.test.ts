@@ -60,12 +60,13 @@ test("holding a send key never repeatedly submits or inserts accidental newlines
 	assert.equal(keyboard.keyDown({ ...enter, shiftKey: true, repeat: true }), "native");
 });
 
-test("textarea starts at three rows, grows to eight, and shrinks after clearing or restoring a short draft", () => {
-	assert.deepEqual(composerTextareaSize(24, 24, 0, 0), { height: 72, overflowY: "hidden" });
+test("Work textarea starts at two rows, grows to eight, and shrinks after clearing or restoring a short draft", () => {
+	assert.deepEqual(composerTextareaSize(24, 24, 0, 0), { height: 48, overflowY: "hidden" });
 	assert.deepEqual(composerTextareaSize(120, 24, 0, 0), { height: 120, overflowY: "hidden" });
 	assert.deepEqual(composerTextareaSize(192, 24, 0, 0), { height: 192, overflowY: "hidden" });
 	assert.deepEqual(composerTextareaSize(360, 24, 0, 0), { height: 192, overflowY: "auto" });
-	assert.deepEqual(composerTextareaSize(24, 24, 0, 0), { height: 72, overflowY: "hidden" });
-	assert.deepEqual(composerTextareaSize(40, 20, 16, 2), { height: 78, overflowY: "hidden" });
+	assert.deepEqual(composerTextareaSize(24, 24, 0, 0), { height: 48, overflowY: "hidden" });
+	assert.deepEqual(composerTextareaSize(40, 20, 16, 2), { height: 58, overflowY: "hidden" });
+	assert.deepEqual(composerTextareaSize(20, 20, 4, 0), { height: 44, overflowY: "hidden" });
 	assert.deepEqual(composerTextareaSize(300, 20, 16, 2), { height: 178, overflowY: "auto" });
 });

@@ -1,9 +1,10 @@
+import type { AppearanceStatus } from "@hipi/work-runtime/appearance";
 import type { ModelCatalog } from "@hipi/work-runtime/contracts";
 import type { ThemeConfig } from "../../app/theme/index.ts";
 import { settingsLabels } from "./labels.ts";
 import { settingsPageLabels } from "./settings-page-labels.ts";
 
-export type SettingsCategory = "appearance" | "models" | "runtime";
+export type SettingsCategory = "general" | "appearance" | "models" | "runtime";
 export type SettingsSearchEntry = {
 	id: string;
 	category: SettingsCategory;
@@ -14,13 +15,43 @@ export type SettingsSearchEntry = {
 	terms?: string;
 };
 
-/** Index only settings the current UI actually exposes; never credentials or user work content. */
-export function settingsSearchEntries(config: ThemeConfig, catalog?: ModelCatalog): SettingsSearchEntry[] {
+/** Index only supported settings and returned model identities, never secrets or work content. */
+export function settingsSearchEntries(
+	config: ThemeConfig,
+	catalog?: ModelCatalog,
+	appearance?: AppearanceStatus,
+): SettingsSearchEntry[] {
 	const t = settingsLabels(config.locale);
 	const l = settingsPageLabels(config.locale);
 	const entries: SettingsSearchEntry[] = [
-		...(["theme", "language", "uiFont", "codeFont", "regions", "transfer"] as const).map((id) => {
-			const label = id === "theme" ? "mode" : id === "language" ? "locale" : id;
+		...(
+			[
+				"theme",
+				"language",
+				"uiFont",
+				"codeFont",
+				"contentFont",
+				"uiFontSize",
+				"codeFontSize",
+				"reducedMotion",
+				"separateModes",
+				"transfer",
+				"copyTheme",
+				"installedFonts",
+				"codeTheme",
+				"pointerCursor",
+			] as const
+		).map((id) => {
+			const key =
+				id === "theme"
+					? "theme"
+					: id === "language"
+						? "locale"
+						: id === "transfer"
+							? "importTheme"
+							: id === "copyTheme"
+								? "copy"
+								: id;
 			const value =
 				id === "theme"
 					? t(`settings.${config.mode}`)
@@ -28,28 +59,27 @@ export function settingsSearchEntries(config: ThemeConfig, catalog?: ModelCatalo
 						? config.locale === "en"
 							? "English"
 							: "简体中文"
-						: id === "uiFont" || id === "codeFont"
+						: id === "uiFont" || id === "codeFont" || id === "contentFont"
 							? t(`settings.font.${config[id]}`)
 							: undefined;
 			return {
 				id,
-				category: "appearance" as const,
-				label: t(`settings.${label}`),
-				destination: l["settingsPage.appearance"],
-				description: t(`settings.${label}Description`),
+				category: id === "language" ? ("general" as const) : ("appearance" as const),
+				label: t(`settings.${key}`),
+				destination: l[id === "language" ? "settingsPage.general" : "settingsPage.appearance"],
+				description: "",
 				value,
-				terms:
-					id === "transfer"
-						? [t("settings.reset"), t("settings.import"), t("settings.export"), "JSON"].join(" ")
-						: id === "regions"
-							? [
-									t("settings.foreground"),
-									t("settings.background"),
-									...(["sidebar", "messages", "editor"] as const).map((region) => t(`settings.region.${region}`)),
-								].join(" ")
-							: undefined,
 			};
 		}),
+		...(["light", "dark"] as const).flatMap((mode) =>
+			(["accent", "background", "foreground"] as const).map((field) => ({
+				id: `${mode}-${field}`,
+				category: "appearance" as const,
+				label: `${t(`settings.${mode}`)} ${t(`settings.${field}`)}`,
+				destination: l["settingsPage.appearance"],
+				description: t("settings.visual"),
+			})),
+		),
 		...(["providers", "credentials", "catalog"] as const).map((id) => ({
 			id,
 			category: "models" as const,
@@ -66,6 +96,18 @@ export function settingsSearchEntries(config: ThemeConfig, catalog?: ModelCatalo
 			description: id === "currentScope" ? l["settingsPage.scopeNote"] : l[`settingsPage.${id}Note`],
 		})),
 	];
+	for (const id of [
+		...(appearance && appearance.backdrop !== "unsupported" ? ["translucentSidebar" as const] : []),
+		...(appearance?.fontSmoothing ? ["fontSmoothing" as const] : []),
+	]) {
+		entries.push({
+			id,
+			category: "appearance",
+			label: t(`settings.${id}`),
+			destination: l["settingsPage.appearance"],
+			description: "",
+		});
+	}
 	for (const provider of catalog?.providers ?? []) {
 		entries.push({
 			id: `provider:${provider.provider}`,
