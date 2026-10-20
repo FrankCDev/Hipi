@@ -513,6 +513,7 @@ export class PiWorkspace implements WorkspacePort {
 		const agent = await this.#harness.snapshot(AgentDoc, conversation.id, context);
 		if (!agent?.model) throw new AppError("MODEL_UNAVAILABLE");
 		const model = { provider: agent.model.provider, modelId: agent.model.modelId };
+		const available = this.#options.models.getModel(model.provider, model.modelId) !== undefined;
 		const state = await this.snapshot(scope);
 		const cancellation = await this.#harness.snapshot(CancellationDoc, conversation.id, context);
 		const inspection = this.#paused && cancellation?.requested ? await this.#harness.inspect(context) : undefined;
@@ -521,9 +522,11 @@ export class PiWorkspace implements WorkspacePort {
 			inspection?.submissions.some((record) => record.conversationId === conversation.id);
 		return {
 			model,
-			credentialState: this.#options.credentials
-				? await this.#options.credentials.status(model.provider).catch(() => "unavailable" as const)
-				: "configured",
+			credentialState: !available
+				? "unavailable"
+				: this.#options.credentials
+					? await this.#options.credentials.status(model.provider).catch(() => "unavailable" as const)
+					: "configured",
 			executionState: this.#paused
 				? cancellationPending
 					? "cancellation_pending"

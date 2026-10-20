@@ -15,6 +15,7 @@ import { ThemeStore, themeStorageKey } from "../src/app/theme/store.ts";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog } from "../src/components/ui/dialog.tsx";
 import { Input } from "../src/components/ui/input.tsx";
+import { Select, SelectContent, SelectItem } from "../src/components/ui/select.tsx";
 import { Textarea } from "../src/components/ui/textarea.tsx";
 import { SettingsForm } from "../src/features/settings/appearance-settings.tsx";
 import { SettingsDialog } from "../src/features/settings/settings-dialog.tsx";
@@ -479,6 +480,7 @@ test("browser installed font selection stays explicit and persists exact family/
 	const bold = { ...regular, fullName: "Example Mono Bold", postscriptName: "ExampleMono-Bold", style: "Bold" };
 	let calls = 0;
 	appearance = {
+		status: { ...nativeStatus, platform: "web" },
 		client: {
 			localFontsSupported: true,
 			status: async () => {
@@ -506,6 +508,10 @@ test("browser installed font selection stays explicit and persists exact family/
 	};
 	let tree = driveForm();
 	assert.equal(calls, 0);
+	assert.equal(
+		find(tree, (node) => node.props.settingId === "installedFonts").props.description,
+		"Read font names and styles on this device. Browsers may ask permission. Nothing is uploaded.",
+	);
 	const unopened = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
 	(unopened.props.onOpenChange as (open: boolean) => void)(true);
 	tree = driveForm();
@@ -583,6 +589,10 @@ test("native picker opens the bounded query, survives StrictMode replay and remo
 		nodes(initial).some((node) => node.props.children === "Choose installed fonts"),
 		false,
 	);
+	assert.equal(
+		nodes(initial).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
 	openFont();
 	// Replay actual form effects with state retained, matching StrictMode setup→cleanup→setup.
 	for (const cell of hooks.cells) {
@@ -596,7 +606,16 @@ test("native picker opens the bounded query, survives StrictMode replay and remo
 	await settleFonts();
 	assert.equal(list.mock.calls.length, 1);
 	assert.equal(signal?.aborted, false);
-	assert.ok(find(driveForm(), (node) => node.props["data-font-catalog-state"] === "pending"));
+	const pending = driveForm();
+	assert.ok(find(pending, (node) => node.props["data-font-catalog-state"] === "pending"));
+	assert.equal(
+		find(pending, (node) => node.props.label === "Font" && Array.isArray(node.props.options)).props.loading,
+		"Reading fonts…",
+	);
+	assert.equal(
+		nodes(pending).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
 	finish(catalog);
 	await settleFonts();
 	let tree = driveForm();
@@ -605,6 +624,13 @@ test("native picker opens the bounded query, survives StrictMode replay and remo
 		1,
 	);
 	const font = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	assert.equal(
+		nodes(tree).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
+	assert.equal(font.props.notice, false);
+	assert.equal(font.props.action, undefined);
+	assert.ok(find(tree, (node) => node.props["data-setting"] === "installedFonts"));
 	(font.props.onChange as (value: string) => void)("installed:Native Sans");
 	assert.deepEqual(store.current.localFontFaces.ui, face);
 	cleanup();
@@ -644,7 +670,27 @@ test("native picker keeps failure explicit across remount, retries once and igno
 	openFont();
 	await settleFonts();
 	assert.equal(calls, 1);
-	click(driveForm(), (node) => node.type === Button && node.props.children === "Retry font list");
+	const failed = driveForm();
+	assert.equal(
+		nodes(failed).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
+	const font = find(failed, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	assert.equal(typeof font.type, "function");
+	const picker = (font.type as (props: Record<string, unknown>) => React.ReactNode)(font.props);
+	const content = find(picker, (node) => node.type === SelectContent);
+	assert.equal(
+		find(content, (node) => node.props.role === "alert").props.children,
+		"Font access was not allowed. You can enter a family name instead.",
+	);
+	const retry = find(content, (node) => node.type === SelectItem && node.props.children === "Retry font list");
+	const beforeRetry = store.current;
+	const updatesBeforeRetry = theme.update.mock.calls.length;
+	(find(picker, (node) => node.type === Select).props.onValueChange as (value: string) => void)(
+		String(retry.props.value),
+	);
+	assert.deepEqual(store.current, beforeRetry);
+	assert.equal(theme.update.mock.calls.length, updatesBeforeRetry);
 	await settleFonts();
 	assert.equal(calls, 2);
 	const freshList = vi.fn(async () => ({ families: [], truncated: false }));
@@ -674,6 +720,87 @@ test("native picker keeps failure explicit across remount, retries once and igno
 	openFont();
 	await settleFonts();
 	assert.equal(freshList.mock.calls.length, 2);
+});
+
+test.each([
+	["en", "Some installed fonts could not be listed. You can enter a family name instead."],
+	["zh-CN", "部分已安装字体未能列出，你仍可输入字体名称。"],
+] as const)(
+	"native partial catalogs stay truthful inside the %s font picker without an extra settings row",
+	async (locale, message) => {
+		store.update({ ...store.current, locale });
+		const face = {
+			family: "Available Sans",
+			fullName: "Available Sans Regular",
+			postscriptName: "AvailableSans",
+			style: "Regular",
+		};
+		const list = vi.fn(async () => ({
+			families: [{ family: face.family, faces: [face], monospace: false }],
+			truncated: true,
+		}));
+		appearance = { client: fontClient(list), status: { ...nativeStatus, platform: "macos" } };
+		const label = locale === "en" ? "Font" : "字体";
+		let tree = driveForm();
+		const font = find(tree, (node) => node.props.label === label && Array.isArray(node.props.options));
+		(font.props.onOpenChange as (open: boolean) => void)(true);
+		driveForm();
+		await settleFonts();
+		tree = driveForm();
+		assert.equal(list.mock.calls.length, 1);
+		assert.equal(
+			nodes(tree).some((node) => node.props.settingId === "installedFonts" || node.props.children === message),
+			false,
+		);
+		const loaded = find(tree, (node) => node.props.label === label && Array.isArray(node.props.options));
+		assert.equal(typeof loaded.type, "function");
+		const picker = (loaded.type as (props: Record<string, unknown>) => React.ReactNode)(loaded.props);
+		assert.ok(
+			find(
+				find(picker, (node) => node.type === SelectContent),
+				(node) => node.props.children === message,
+			),
+		);
+		assert.equal(loaded.props.action, undefined);
+		(loaded.props.onChange as (value: string) => void)("installed:Available Sans");
+		assert.deepEqual(store.current.localFontFaces.ui, face);
+		assert.equal(
+			find(tree, (node) => node.props["data-font-catalog-state"] === "ready").props["data-font-catalog-truncated"],
+			true,
+		);
+	},
+);
+
+test("an unresolved native platform does not flash browser permission UI or bypass font loading ownership", async () => {
+	const list = vi.fn(async () => ({ families: [], truncated: false }));
+	const client = fontClient(list);
+	appearance = { client };
+	const initial = driveForm();
+	assert.equal(
+		nodes(initial).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
+	openFont();
+	await settleFonts();
+	assert.equal(list.mock.calls.length, 0);
+	appearance = { client, status: { ...nativeStatus, platform: "windows" } };
+	driveForm();
+	driveForm();
+	await settleFonts();
+	const tree = driveForm();
+	assert.equal(list.mock.calls.length, 1);
+	const font = find(tree, (node) => node.props.label === "Font" && Array.isArray(node.props.options));
+	assert.ok(
+		find(
+			font.props.notice as React.ReactNode,
+			(node) =>
+				node.props.children === "No supported installed fonts were returned. You can enter a family name instead.",
+		),
+	);
+	assert.equal(
+		nodes(tree).some((node) => node.props.settingId === "installedFonts"),
+		false,
+	);
 });
 
 test("native-only settings reflect actual host support and honor reduced-transparency status", () => {

@@ -17,6 +17,7 @@ import { Input } from "../../components/ui/input.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
+import type { PreviewActions } from "./sidebar-preview-row.tsx";
 
 export function CatalogRecovery({
 	session,
@@ -79,6 +80,7 @@ export function ConversationActions({
 	session,
 	guard,
 	previewContent,
+	menuPosition,
 	onMenuOpen,
 	onOverlayChange,
 	onReturnFocus,
@@ -88,6 +90,7 @@ export function ConversationActions({
 	session: CatalogSession;
 	guard: (action: () => void) => void;
 	previewContent?: ReactNode;
+	menuPosition?: Parameters<PreviewActions>[0]["menuPosition"];
 	onMenuOpen?: () => void;
 	onOverlayChange?: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus?: () => void;
@@ -162,7 +165,11 @@ export function ConversationActions({
 					</Button>
 				</DropdownMenuTrigger>
 				<DropdownMenuContent
-					align="end"
+					side={menuPosition ? "right" : "bottom"}
+					align={menuPosition ? "start" : "end"}
+					sideOffset={menuPosition?.sideOffset}
+					alignOffset={menuPosition?.alignOffset}
+					collisionPadding={12}
 					className="conversation-action-menu"
 					onCloseAutoFocus={(event) => {
 						if (renaming) event.preventDefault();

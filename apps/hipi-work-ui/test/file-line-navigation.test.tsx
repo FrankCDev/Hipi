@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { TextDocument } from "@pierre/diffs/edit";
 import type * as React from "react";
 import { isValidElement } from "react";
-import { beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { defaultConfig } from "../src/app/theme/config.ts";
 import { Input } from "../src/components/ui/input.tsx";
 import { DEFAULT_EDITOR_KEYBINDINGS } from "../src/features/files/editor-keybindings.ts";
@@ -12,6 +12,14 @@ import {
 	useFileLineNavigation,
 } from "../src/features/files/file-line-navigation.tsx";
 import { PierreCodeEditor } from "../src/features/files/pierre-editor.tsx";
+
+// Pin the browser platform rather than inheriting Node's host-dependent navigator.
+const shortcutPlatforms = [
+	{ platform: "MacIntel", ctrl: false, meta: true },
+	{ platform: "Win32", ctrl: true, meta: false },
+	{ platform: "Linux x86_64", ctrl: true, meta: false },
+];
+afterEach(() => vi.unstubAllGlobals());
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({
@@ -101,12 +109,12 @@ function element(
 	}
 	throw new Error("Element missing");
 }
-function key(key: string, composing = false, code = 0, ctrl = false, alt = false) {
+function key(key: string, composing = false, code = 0, ctrl = false, alt = false, meta = false) {
 	return {
 		key,
 		shiftKey: false,
 		ctrlKey: ctrl,
-		metaKey: false,
+		metaKey: meta,
 		altKey: alt,
 		nativeEvent: { key, code: key, isComposing: composing, keyCode: code },
 		preventDefault: vi.fn(),
@@ -315,134 +323,143 @@ test("configurable navigation shortcuts do not claim Find again, composing keys,
 	assert.ok(element(panel, (item) => item.type === Input && item.props["aria-label"] === "行与列"));
 });
 
-test("Pierre production capture uses public state and centered reveal APIs, never text writes or saves", () => {
-	const onChange = vi.fn();
-	const onSave = vi.fn();
-	const props = { text: "first\nsecond", name: "file.txt", label: "Editor", readOnly: false, onChange, onSave };
-	const snapshot = {
-		selections: [{ start: { line: 0, character: 1 }, end: { line: 0, character: 3 }, direction: -1 }],
-		view: { scrollTop: 80, scrollLeft: 12 },
-	};
-	const editor = {
-		getViewState: vi.fn(() => snapshot),
-		setViewState: vi.fn(),
-		setSelections: vi.fn(),
-		focus: vi.fn(),
-	};
-	const controller = { getEditor: () => editor, getSelectedLines: () => null, scrollTo: vi.fn() };
-	const render = () => {
-		const surface = PierreCodeEditor(props);
-		return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
-	};
-	let tree = drive(render);
-	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
-	(code.props.ref as React.RefObject<unknown>).current = controller;
-	(code.props.containerRef as React.RefObject<unknown>).current = { scrollTop: 80, scrollLeft: 0 };
-	const capture = callback(
-		element(tree, (item) => item.type === "section" && item.props["data-readonly"] === false),
-		"onKeyDownCapture",
-	);
-	capture(key("g", true, 0, true, true));
-	capture(key("g", false, 229, true, true));
-	assert.equal(editor.getViewState.mock.calls.length, 0);
-	capture(key("g", false, 0, true, true));
-	tree = drive(render);
-	callback(
-		element(tree, (item) => item.type === Input),
-		"onChange",
-	)({
-		currentTarget: { value: "2:4" },
-		nativeEvent: {},
-	});
-	tree = drive(render);
-	assert.deepEqual(editor.setSelections.mock.lastCall, [
-		[{ start: { line: 1, character: 3 }, end: { line: 1, character: 3 }, direction: "none" }],
-	]);
-	assert.deepEqual(controller.scrollTo.mock.lastCall, [
-		{ type: "line", id: "document", lineNumber: 2, align: "center", behavior: "instant" },
-	]);
-	assert.equal(editor.focus.mock.calls.length, 0);
-	callback(
-		element(tree, (item) => item.type === "fieldset"),
-		"onKeyDown",
-	)(key("Escape"));
-	assert.deepEqual(editor.setViewState.mock.lastCall, [snapshot]);
-	assert.deepEqual(editor.focus.mock.lastCall, [{ preventScroll: true }]);
-	assert.equal(onChange.mock.calls.length, 0);
-	assert.equal(onSave.mock.calls.length, 0);
-	// Pierre versions rewind on undo. The real change callback must still invalidate the preview.
-	tree = drive(render);
-	capture(key("g", false, 0, true, true));
-	tree = drive(render);
-	callback(
-		element(tree, (item) => item.type === Input),
-		"onChange",
-	)({
-		currentTarget: { value: "2" },
-		nativeEvent: {},
-	});
-	const document = (code.props.editorOptions as { initialState: { document: TextDocument } }).initialState.document;
-	const version = document.version;
-	document.applyResolvedEdits([{ start: 0, end: 0, text: "new\n" }]);
-	callback(code, "onItemEditChange")({ file: { contents: document.getText() } });
-	document.undo();
-	callback(code, "onItemEditChange")({ file: { contents: document.getText() } });
-	assert.equal(document.version, version);
-	tree = drive(render);
-	callback(
-		element(tree, (item) => item.type === "fieldset"),
-		"onKeyDown",
-	)(key("Escape"));
-	assert.equal(editor.setViewState.mock.calls.length, 1);
-	assert.equal(editor.focus.mock.calls.length, 1);
-	assert.equal(onSave.mock.calls.length, 0);
-});
+test.each(shortcutPlatforms)(
+	"Pierre production capture uses public state and centered reveal APIs, never text writes or saves on $platform",
+	({ platform, ctrl, meta }) => {
+		vi.stubGlobal("navigator", { platform });
+		const onChange = vi.fn();
+		const onSave = vi.fn();
+		const props = { text: "first\nsecond", name: "file.txt", label: "Editor", readOnly: false, onChange, onSave };
+		const snapshot = {
+			selections: [{ start: { line: 0, character: 1 }, end: { line: 0, character: 3 }, direction: -1 }],
+			view: { scrollTop: 80, scrollLeft: 12 },
+		};
+		const editor = {
+			getViewState: vi.fn(() => snapshot),
+			setViewState: vi.fn(),
+			setSelections: vi.fn(),
+			focus: vi.fn(),
+		};
+		const controller = { getEditor: () => editor, getSelectedLines: () => null, scrollTo: vi.fn() };
+		const render = () => {
+			const surface = PierreCodeEditor(props);
+			return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+		};
+		let tree = drive(render);
+		const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+		(code.props.ref as React.RefObject<unknown>).current = controller;
+		(code.props.containerRef as React.RefObject<unknown>).current = { scrollTop: 80, scrollLeft: 0 };
+		const capture = callback(
+			element(tree, (item) => item.type === "section" && item.props["data-readonly"] === false),
+			"onKeyDownCapture",
+		);
+		capture(key("g", false, 0, !ctrl, true, !meta));
+		capture(key("g", true, 0, ctrl, true, meta));
+		capture(key("g", false, 229, ctrl, true, meta));
+		assert.equal(editor.getViewState.mock.calls.length, 0);
+		capture(key("g", false, 0, ctrl, true, meta));
+		tree = drive(render);
+		callback(
+			element(tree, (item) => item.type === Input),
+			"onChange",
+		)({
+			currentTarget: { value: "2:4" },
+			nativeEvent: {},
+		});
+		tree = drive(render);
+		assert.deepEqual(editor.setSelections.mock.lastCall, [
+			[{ start: { line: 1, character: 3 }, end: { line: 1, character: 3 }, direction: "none" }],
+		]);
+		assert.deepEqual(controller.scrollTo.mock.lastCall, [
+			{ type: "line", id: "document", lineNumber: 2, align: "center", behavior: "instant" },
+		]);
+		assert.equal(editor.focus.mock.calls.length, 0);
+		callback(
+			element(tree, (item) => item.type === "fieldset"),
+			"onKeyDown",
+		)(key("Escape"));
+		assert.deepEqual(editor.setViewState.mock.lastCall, [snapshot]);
+		assert.deepEqual(editor.focus.mock.lastCall, [{ preventScroll: true }]);
+		assert.equal(onChange.mock.calls.length, 0);
+		assert.equal(onSave.mock.calls.length, 0);
+		// Pierre versions rewind on undo. The real change callback must still invalidate the preview.
+		tree = drive(render);
+		capture(key("g", false, 0, ctrl, true, meta));
+		tree = drive(render);
+		callback(
+			element(tree, (item) => item.type === Input),
+			"onChange",
+		)({
+			currentTarget: { value: "2" },
+			nativeEvent: {},
+		});
+		const document = (code.props.editorOptions as { initialState: { document: TextDocument } }).initialState.document;
+		const version = document.version;
+		document.applyResolvedEdits([{ start: 0, end: 0, text: "new\n" }]);
+		callback(code, "onItemEditChange")({ file: { contents: document.getText() } });
+		document.undo();
+		callback(code, "onItemEditChange")({ file: { contents: document.getText() } });
+		assert.equal(document.version, version);
+		tree = drive(render);
+		callback(
+			element(tree, (item) => item.type === "fieldset"),
+			"onKeyDown",
+		)(key("Escape"));
+		assert.equal(editor.setViewState.mock.calls.length, 1);
+		assert.equal(editor.focus.mock.calls.length, 1);
+		assert.equal(onSave.mock.calls.length, 0);
+	},
+);
 
-test("read-only Pierre reveals a whole line through public selection and restores the original viewport without editing", () => {
-	const onChange = vi.fn();
-	const onSave = vi.fn();
-	const props = { text: "first\nsecond", name: "file.txt", label: "Editor", readOnly: true, onChange, onSave };
-	const original = { id: "document", range: { start: 1, end: 1 } };
-	const controller = {
-		getEditor: () => undefined,
-		getSelectedLines: () => original,
-		setSelectedLines: vi.fn(),
-		scrollTo: vi.fn(),
-	};
-	const render = () => {
-		const surface = PierreCodeEditor(props);
-		return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
-	};
-	let tree = drive(render);
-	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
-	(code.props.ref as React.RefObject<unknown>).current = controller;
-	const scroll = { scrollTop: 60, scrollLeft: 10 };
-	(code.props.containerRef as React.RefObject<unknown>).current = scroll;
-	const section = element(tree, (item) => item.type === "section" && item.props["data-readonly"] === true);
-	const focus = vi.fn();
-	(section.props.ref as React.RefObject<unknown>).current = { focus };
-	assert.equal(section.props.tabIndex, 0);
-	callback(section, "onKeyDownCapture")(key("g", false, 0, true, true));
-	tree = drive(render);
-	callback(
-		element(tree, (item) => item.type === Input),
-		"onChange",
-	)({
-		currentTarget: { value: "9" },
-		nativeEvent: {},
-	});
-	assert.deepEqual(controller.setSelectedLines.mock.lastCall, [{ id: "document", range: { start: 2, end: 2 } }]);
-	scroll.scrollTop = 90;
-	scroll.scrollLeft = 20;
-	tree = drive(render);
-	callback(
-		element(tree, (item) => item.type === "fieldset"),
-		"onKeyDown",
-	)(key("Escape"));
-	assert.deepEqual(controller.setSelectedLines.mock.lastCall, [original]);
-	assert.deepEqual(controller.scrollTo.mock.lastCall, [{ type: "position", position: 60, behavior: "instant" }]);
-	assert.deepEqual(scroll, { scrollTop: 60, scrollLeft: 10 });
-	assert.deepEqual(focus.mock.lastCall, [{ preventScroll: true }]);
-	assert.equal(onChange.mock.calls.length, 0);
-	assert.equal(onSave.mock.calls.length, 0);
-});
+test.each(shortcutPlatforms)(
+	"read-only Pierre reveals a whole line through public selection and restores the original viewport without editing on $platform",
+	({ platform, ctrl, meta }) => {
+		vi.stubGlobal("navigator", { platform });
+		const onChange = vi.fn();
+		const onSave = vi.fn();
+		const props = { text: "first\nsecond", name: "file.txt", label: "Editor", readOnly: true, onChange, onSave };
+		const original = { id: "document", range: { start: 1, end: 1 } };
+		const controller = {
+			getEditor: () => undefined,
+			getSelectedLines: () => original,
+			setSelectedLines: vi.fn(),
+			scrollTo: vi.fn(),
+		};
+		const render = () => {
+			const surface = PierreCodeEditor(props);
+			return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+		};
+		let tree = drive(render);
+		const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+		(code.props.ref as React.RefObject<unknown>).current = controller;
+		const scroll = { scrollTop: 60, scrollLeft: 10 };
+		(code.props.containerRef as React.RefObject<unknown>).current = scroll;
+		const section = element(tree, (item) => item.type === "section" && item.props["data-readonly"] === true);
+		const focus = vi.fn();
+		(section.props.ref as React.RefObject<unknown>).current = { focus };
+		assert.equal(section.props.tabIndex, 0);
+		callback(section, "onKeyDownCapture")(key("g", false, 0, ctrl, true, meta));
+		tree = drive(render);
+		callback(
+			element(tree, (item) => item.type === Input),
+			"onChange",
+		)({
+			currentTarget: { value: "9" },
+			nativeEvent: {},
+		});
+		assert.deepEqual(controller.setSelectedLines.mock.lastCall, [{ id: "document", range: { start: 2, end: 2 } }]);
+		scroll.scrollTop = 90;
+		scroll.scrollLeft = 20;
+		tree = drive(render);
+		callback(
+			element(tree, (item) => item.type === "fieldset"),
+			"onKeyDown",
+		)(key("Escape"));
+		assert.deepEqual(controller.setSelectedLines.mock.lastCall, [original]);
+		assert.deepEqual(controller.scrollTo.mock.lastCall, [{ type: "position", position: 60, behavior: "instant" }]);
+		assert.deepEqual(scroll, { scrollTop: 60, scrollLeft: 10 });
+		assert.deepEqual(focus.mock.lastCall, [{ preventScroll: true }]);
+		assert.equal(onChange.mock.calls.length, 0);
+		assert.equal(onSave.mock.calls.length, 0);
+	},
+);

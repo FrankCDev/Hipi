@@ -1,5 +1,5 @@
 import { AppError, type Conversation, type Workspace } from "@hipi/work-runtime/contracts";
-import { Ellipsis, SquarePen } from "lucide-react";
+import { Archive, Ellipsis, MessageCircle, SquarePen } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -286,7 +286,11 @@ function ProjectConversationMenu({
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent
-				align="end"
+				side={controls ? "right" : "bottom"}
+				align={controls ? "start" : "end"}
+				sideOffset={controls?.menuPosition.sideOffset}
+				alignOffset={controls?.menuPosition.alignOffset}
+				collisionPadding={12}
 				className="project-action-menu"
 				onCloseAutoFocus={(event) => {
 					if (!controls) return;
@@ -303,8 +307,14 @@ function ProjectConversationMenu({
 						if (value === "active" || value === "archived") onFilterChange(value);
 					}}
 				>
-					<DropdownMenuRadioItem value="active">{cl.active}</DropdownMenuRadioItem>
-					<DropdownMenuRadioItem value="archived">{cl.archived}</DropdownMenuRadioItem>
+					<DropdownMenuRadioItem value="active">
+						<MessageCircle size={16} aria-hidden="true" />
+						{cl.active}
+					</DropdownMenuRadioItem>
+					<DropdownMenuRadioItem value="archived">
+						<Archive size={16} aria-hidden="true" />
+						{cl.archived}
+					</DropdownMenuRadioItem>
 				</DropdownMenuRadioGroup>
 			</DropdownMenuContent>
 		</DropdownMenu>

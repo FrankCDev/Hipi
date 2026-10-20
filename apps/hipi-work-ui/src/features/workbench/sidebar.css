@@ -1,4 +1,49 @@
 /* Original sidebar construction; layout tokens follow the desktop reference. */
+.sidebar .sidebar-brand-row {
+	gap: 4px;
+}
+
+.sidebar .brand-home {
+	flex: 1;
+	min-width: 0;
+}
+
+.sidebar .brand-home > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar .sidebar-search-trigger {
+	flex-shrink: 0;
+	color: var(--muted);
+}
+
+.sidebar .nav-section-heading {
+	font-size: calc(var(--font-ui-size) - 1px);
+	font-weight: 430;
+	letter-spacing: 0;
+}
+
+.sidebar .sidebar-search-panel[hidden] {
+	display: none;
+}
+
+.sidebar .sidebar-search-panel .nav-search {
+	margin-top: 4px;
+}
+
+.sidebar .nav-search input::-webkit-search-cancel-button {
+	appearance: none;
+}
+
+.sidebar .sidebar-search-panel .search-scope {
+	margin: 6px 8px 0;
+	padding: 0;
+	font-size: calc(var(--font-ui-size) - 3px);
+	line-height: 1.5;
+}
+
 nav .workspace-tree {
 	gap: 4px;
 	font-size: calc(var(--font-ui-size) - 1px);
@@ -141,7 +186,7 @@ nav .workspace-tree {
 }
 
 [data-slot="popover-content"].conversation-preview-card {
-	width: min(360px, calc(100vw - 24px));
+	width: min(320px, calc(100vw - 24px));
 	border: 0.5px solid var(--line);
 	border-radius: 12px;
 	padding: 10px;
@@ -219,6 +264,32 @@ nav .workspace-tree {
 		opacity: 0;
 	}
 
+	.workspace-tree .sidebar-row-actions {
+		width: 0;
+		overflow: hidden;
+	}
+
+	.workspace-tree .conversation-actions-trigger {
+		flex-basis: 0;
+		width: 0;
+		overflow: hidden;
+	}
+
+	.workspace-tree .sidebar-preview-row:hover .sidebar-row-actions,
+	.workspace-tree .sidebar-preview-row:focus-within .sidebar-row-actions,
+	.workspace-tree .sidebar-row-actions:has([data-state="open"]) {
+		width: auto;
+		overflow: visible;
+	}
+
+	.workspace-tree .sidebar-preview-row:hover .conversation-actions-trigger,
+	.workspace-tree .sidebar-preview-row:focus-within .conversation-actions-trigger,
+	.workspace-tree .conversation-actions-trigger[data-state="open"] {
+		flex-basis: 28px;
+		width: 28px;
+		overflow: visible;
+	}
+
 	.workspace-tree .sidebar-preview-row:hover .sidebar-row-actions,
 	.workspace-tree .sidebar-preview-row:focus-within .sidebar-row-actions,
 	.workspace-tree .sidebar-row-actions:has([data-state="open"]),
@@ -250,5 +321,16 @@ nav .workspace-tree {
 	.workspace-tree .recent-actions-trigger,
 	.workspace-tree .conversation-actions-trigger {
 		opacity: 1;
+	}
+
+	.workspace-tree .sidebar-row-actions {
+		width: auto;
+		overflow: visible;
+	}
+
+	.workspace-tree .conversation-actions-trigger {
+		flex-basis: 28px;
+		width: 28px;
+		overflow: visible;
 	}
 }

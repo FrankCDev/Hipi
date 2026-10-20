@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { nativeEditorKey } from "./gui-work-experience.mjs";
 
+export const projectCreationTrigger = '.nav-section-heading button[aria-label="New project"]';
+
 export function projectViewportReady(document, width) {
 	const shell = document.querySelector(".work-shell");
 	const sidebar = document.querySelector(".sidebar");
@@ -52,7 +54,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 	);
 	const { evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts } = helpers;
 	const second = "GUI disclosure empty project";
-	const creator = '.nav-section-heading button[aria-label="New workspace"]';
+	const creator = projectCreationTrigger;
 	const locate = (name) =>
 		until(
 			() => evaluate(cdp, `(${projectSelector.toString()})(document, ${JSON.stringify(name)})`),

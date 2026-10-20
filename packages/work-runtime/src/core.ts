@@ -71,6 +71,11 @@ export interface WorkspacePort {
 	close(): Promise<void>;
 }
 export type RuntimePorts = {
+	listCustomProviders(): Promise<Result<"listCustomProviders">>;
+	saveCustomProvider(input: Params<"saveCustomProvider">): Promise<Result<"saveCustomProvider">>;
+	removeCustomProvider(input: Params<"removeCustomProvider">): Promise<Result<"removeCustomProvider">>;
+	listBuiltInProviders(): Promise<Result<"listBuiltInProviders">>;
+	getBuiltInProviderModels(input: Params<"getBuiltInProviderModels">): Promise<Result<"getBuiltInProviderModels">>;
 	previewToolPack(input: Params<"previewToolPack">): Promise<Result<"previewToolPack">>;
 	listToolPacks(input: Params<"listToolPacks">): Promise<Result<"listToolPacks">>;
 	getToolPackSource(input: Params<"getToolPackSource">): Promise<Result<"getToolPackSource">>;
@@ -191,6 +196,11 @@ export class WorkRuntime implements AppClient {
 		if (this.#closed) throw new AppError("CLOSED");
 		if (request.method === "handshake") return { protocolVersion: PROTOCOL_VERSION, storeId: this.#ports.storeId };
 		if (request.expectedStoreId !== this.#ports.storeId) throw new AppError("STORE_MISMATCH");
+		if (request.method === "listCustomProviders") return this.#ports.listCustomProviders();
+		if (request.method === "saveCustomProvider") return this.#ports.saveCustomProvider(request.params);
+		if (request.method === "removeCustomProvider") return this.#ports.removeCustomProvider(request.params);
+		if (request.method === "listBuiltInProviders") return this.#ports.listBuiltInProviders();
+		if (request.method === "getBuiltInProviderModels") return this.#ports.getBuiltInProviderModels(request.params);
 		if (request.method === "previewToolPack") return this.#ports.previewToolPack(request.params);
 		if (request.method === "listToolPacks") return this.#ports.listToolPacks(request.params);
 		if (request.method === "getToolPackSource") return this.#ports.getToolPackSource(request.params);

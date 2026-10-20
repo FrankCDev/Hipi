@@ -6,6 +6,12 @@ import type { Models } from "@earendil-works/pi-ai";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { AppError } from "./contracts.ts";
 import { WorkRuntime } from "./core.ts";
+import {
+	assertConfigurableModels,
+	builtInProviderCatalog,
+	builtInProviderModels,
+	configureCustomProviders,
+} from "./model-provider.ts";
 import { PiWorkspace, type PiWorkspaceOptions, WorkspaceShutdownFailed } from "./pi-workspace.ts";
 import { checkDatabasePath, StoreCatalog } from "./store-catalog.ts";
 
@@ -42,8 +48,32 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		throw error;
 	}
 	let unsafe = false;
+	try {
+		configureCustomProviders(options.models, catalog.listCustomProviders().providers);
+	} catch (error) {
+		catalog.close();
+		throw error;
+	}
 	return new WorkRuntime({
 		storeId: catalog.storeId,
+		listCustomProviders: async () => catalog.listCustomProviders(),
+		listBuiltInProviders: async () => builtInProviderCatalog(),
+		getBuiltInProviderModels: async ({ vendorId }) => builtInProviderModels(vendorId),
+		saveCustomProvider: async (input) => {
+			assertConfigurableModels(options.models);
+			const otherModels = options.models.getModels().filter((model) => model.provider !== input.provider);
+			if (otherModels.length + input.models.length > 512) throw new AppError("CAPACITY_EXCEEDED");
+			const result = catalog.saveCustomProvider(input);
+			// Re-read current committed state: an old replay result must never resurrect a removed recipient.
+			configureCustomProviders(options.models, catalog.listCustomProviders().providers);
+			return result;
+		},
+		removeCustomProvider: async (input) => {
+			assertConfigurableModels(options.models);
+			const result = catalog.removeCustomProvider(input);
+			configureCustomProviders(options.models, catalog.listCustomProviders().providers);
+			return result;
+		},
 		previewToolPack: (input) => catalog.previewToolPack(input),
 		listToolPacks: (input) => catalog.listToolPacks(input),
 		getToolPackSource: (input) => catalog.getToolPackSource(input),
@@ -74,6 +104,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		listConversations: (input) => catalog.listConversations(input),
 		close: async () => {
 			if (unsafe) throw new AppError("WORKSPACE_BUSY");
+			configureCustomProviders(options.models, []);
 			catalog.close();
 		},
 		openWorkspace: async (workspaceId, name, openOptions) => {

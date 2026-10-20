@@ -1,28 +1,16 @@
-import { cp, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import maintenance from "../packaging/linux-maintenance.cjs";
-import {
-	assertCodeMirrorDependencies,
-	codeMirrorInventorySha256,
-	codeMirrorPackageForOwner,
-	codeMirrorPackages,
-	readCodeMirrorLicenseFiles,
-} from "./codemirror-licenses.mjs";
+import { resolveBundleOwner } from "./bundle-owner.mjs";
 import { assertFontAsset, fontAssets } from "./font-assets.mjs";
-import {
-	assertPierreDependencies,
-	pierreInventorySha256,
-	pierrePackageForOwner,
-	pierrePackages,
-	readPierreLicenseFiles,
-} from "./pierre-licenses.mjs";
 import {
 	allowedPayload,
 	assertBrandIcon,
 	assertPublicText,
 	filesUnder,
 	inventory,
+	readmeLicenseText,
 	requiredFiles,
 	requireFiles,
 	sha256,
@@ -56,12 +44,6 @@ if (JSON.stringify(sourceSnapshot.bundles) !== JSON.stringify(await inventory(jo
 	throw new Error("Build output differs from the recorded source snapshot; run build-release.mjs again");
 }
 await requireFiles(desktop, requiredFiles);
-await assertPierreDependencies(root, lock);
-await assertCodeMirrorDependencies(root, lock);
-await readPierreLicenseFiles(join(root, "apps/hipi-work-ui/vendor/pierre"));
-await readPierreLicenseFiles(join(desktop, "dist/third-party/pierre"));
-await readCodeMirrorLicenseFiles(join(root, "apps/hipi-work-ui/vendor/codemirror"));
-await readCodeMirrorLicenseFiles(join(desktop, "dist/third-party/codemirror"));
 const payload = (await filesUnder(join(desktop, "dist"))).map((file) => `dist/${file}`);
 for (const file of payload) {
 	// Build diagnostics are intentionally never shipped. Everything else must be reviewed.
@@ -78,8 +60,6 @@ for (const file of payload.filter(allowedPayload)) {
 	await mkdir(dirname(join(stage, file)), { recursive: true });
 	await cp(join(desktop, file), join(stage, file));
 }
-await readPierreLicenseFiles(join(stage, "dist/third-party/pierre"));
-await readCodeMirrorLicenseFiles(join(stage, "dist/third-party/codemirror"));
 await cp(join(root, "LICENSE"), join(stage, "LICENSE"));
 await writeFile(
 	join(stage, "package.json"),
@@ -105,81 +85,53 @@ await writeFile(
 // Build metafiles never enter the shipped application.
 const inputs = JSON.parse(await readFile(join(desktop, "dist/bundle-inputs.meta.json"), "utf8")).inputs;
 if (!Array.isArray(inputs) || inputs.length === 0) throw new Error("Missing bundle input provenance");
-const queue = [];
-for (const input of inputs) {
-	if (typeof input !== "string" || input.startsWith("/") || input.split("/").includes(".."))
-		throw new Error("Invalid bundle input path");
-	let cursor = dirname(resolve(root, input));
-	let found = false;
-	while (cursor.startsWith(root)) {
-		try {
-			await requireFiles(cursor, ["package.json"]);
-			queue.push(cursor);
-			found = true;
-			break;
-		} catch (error) {
-			if (error.code !== "ENOENT") throw error;
-		}
-		const parent = dirname(cursor);
-		if (parent === cursor) break;
-		cursor = parent;
-	}
-	if (!found) throw new Error(`Bundle input has no package owner: ${input}`);
-}
 const seen = new Set();
 const dependencies = [];
-while (queue.length) {
-	const location = await realpath(queue.shift());
+for (const input of inputs) {
+	const { location, info, locked } = await resolveBundleOwner(root, input, lock);
 	if (seen.has(location)) continue;
 	seen.add(location);
-	const info = JSON.parse(await readFile(join(location, "package.json"), "utf8"));
-	const key = relative(root, location).replaceAll("\\", "/");
-	const locked = lock.packages[key];
-	const pierre = pierrePackageForOwner(key, info, locked);
-	const codeMirror = codeMirrorPackageForOwner(key, info, locked);
-	const reviewedOwner = pierre ?? codeMirror;
-	const reviewedDirectory = pierre ? "pierre" : "codemirror";
 	const id = `${info.name.replaceAll("/", "__")}@${info.version}`;
-	const publicFiles = reviewedOwner
-		? []
-		: (await readdir(location)).filter((file) => /^(?:licen[sc]e|copying|notice)(?:[._-].*)?$/i.test(file));
-	const licenseFiles = reviewedOwner
-		? reviewedOwner.notices.map((notice) => `dist/third-party/${reviewedDirectory}/${notice.file}`)
-		: [];
+	const packageFiles = await readdir(location);
+	const publicFiles = packageFiles.filter((file) => /^(?:licen[sc]e|copying|notice)(?:[._-].*)?$/i.test(file));
+	const licenseFiles = [];
 	const workspaceOwned = !location.replaceAll("\\", "/").includes("/node_modules/");
 	if (workspaceOwned && publicFiles.length === 0) licenseFiles.push("LICENSE");
-	let licenseSource = reviewedOwner
-		? `dist/third-party/${reviewedDirectory}/inventory.json#${reviewedOwner.path}`
-		: workspaceOwned && publicFiles.length === 0
-			? "repository-root-license"
-			: "package-distribution";
-	if (info.name === "isarray" && info.version === "1.0.0" && publicFiles.length === 0) {
-		const readme = await readFile(join(location, "README.md"), "utf8");
-		const start = readme.indexOf("## License\n");
-		const notice = readme.slice(start + "## License\n".length);
-		if (
-			start < 0 ||
-			!notice.includes("Copyright (c) 2013 Julian Gruber") ||
-			!notice.includes("THE SOFTWARE IS PROVIDED")
-		)
-			throw new Error("isarray license text changed; review required");
-		const target = `licenses/${id}/LICENSE-from-README`;
-		await mkdir(dirname(join(stage, target)), { recursive: true });
-		await writeFile(join(stage, target), notice);
-		licenseFiles.push(target);
-		licenseSource = "pinned-package-README-License-section";
+	let licenseSource = workspaceOwned && publicFiles.length === 0 ? "repository-root-license" : "package-distribution";
+	const readme = packageFiles.find((file) => /^readme(?:[._-].*)?$/i.test(file));
+	if (licenseFiles.length === 0 && publicFiles.length === 0 && info.license === "MIT" && readme) {
+		await requireFiles(location, [readme]);
+		const notice = readmeLicenseText(await readFile(join(location, readme), "utf8"));
+		if (notice) {
+			const target = `licenses/${id}/LICENSE-from-README`;
+			await mkdir(dirname(join(stage, target)), { recursive: true });
+			await writeFile(join(stage, target), notice);
+			licenseFiles.push(target);
+			licenseSource = "package-README-license-section";
+		}
 	}
-	if (info.name === "react-remove-scroll-bar" && info.version === "2.3.8" && publicFiles.length === 0) {
-		if (info.license !== "MIT") throw new Error("react-remove-scroll-bar license declaration changed");
-		const notice = await readFile(join(desktop, "packaging/licenses/react-remove-scroll-bar-2.3.8.LICENSE"));
-		if (sha256(notice) !== "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84")
-			throw new Error("Supplemental upstream license digest mismatch");
+	// These published packages omit their upstream license text.
+	const supplement = {
+		"react-remove-scroll-bar@2.3.8": {
+			sha256: "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84",
+			source:
+				"https://github.com/theKashey/react-remove-scroll-bar/blob/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE",
+		},
+		"standardwebhooks@1.1.1": {
+			sha256: "5ec8c7b26b64d881a6706617bed25c049f97f2f35de034c756de8546fd6dbe27",
+			source:
+				"https://github.com/standard-webhooks/standard-webhooks/blob/b4d2c14fc5b4ccff3ff271e3b087dff812254c59/libraries/LICENSE",
+		},
+	}[`${info.name}@${info.version}`];
+	if (supplement && publicFiles.length === 0 && licenseFiles.length === 0) {
+		if (info.license !== "MIT") throw new Error(`${info.name} license declaration changed`);
+		const notice = await readFile(join(desktop, `packaging/licenses/${info.name}-${info.version}.LICENSE`));
+		if (sha256(notice) !== supplement.sha256) throw new Error("Supplemental upstream license digest mismatch");
 		const target = `licenses/${id}/LICENSE-upstream-supplement`;
 		await mkdir(dirname(join(stage, target)), { recursive: true });
 		await writeFile(join(stage, target), notice);
 		licenseFiles.push(target);
-		licenseSource =
-			"https://github.com/theKashey/react-remove-scroll-bar/blob/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE";
+		licenseSource = supplement.source;
 	}
 	for (const file of publicFiles) {
 		const target = `licenses/${id}/${file}`;
@@ -223,18 +175,6 @@ const provenance = {
 	vite: manifest.devDependencies.vite,
 	lockSha256: sha256(await readFile(join(root, "package-lock.json"))),
 	modelCatalogPin: JSON.parse(await readFile(join(desktop, "packaging/model-catalog.json"), "utf8")),
-	pierreLicenseInventory: {
-		file: "dist/third-party/pierre/inventory.json",
-		sha256: pierreInventorySha256,
-		scope: "reviewed-installed-closure; bundled owners listed separately in dependency-licenses.json",
-		installedPackageCount: pierrePackages.length,
-	},
-	codeMirrorLicenseInventory: {
-		file: "dist/third-party/codemirror/inventory.json",
-		sha256: codeMirrorInventorySha256,
-		scope: "reviewed-installed-closure; bundled owners listed separately in dependency-licenses.json",
-		installedPackageCount: codeMirrorPackages.length,
-	},
 	...(linuxMaintenance ? { linuxMaintenanceRuntime: linuxMaintenance } : {}),
 	sourceSnapshotSha256: sourceSnapshot.sourceSnapshotSha256,
 	sourceSnapshot: sourceSnapshot.sourceSnapshot,

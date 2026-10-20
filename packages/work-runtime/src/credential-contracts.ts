@@ -2,19 +2,23 @@ import { AppError, type CredentialState, type ErrorCode, parseError } from "./co
 
 /** Separate management capability; never part of AppClient or persisted request receipts. */
 export const CREDENTIAL_BODY_BYTES = 16 * 1024;
+export const MAX_CREDENTIAL_PROVIDERS = 32;
+export type CredentialProvider = "openai" | `custom_${string}`;
 export type CredentialRequest =
-	| { version: 1; operation: "status" | "remove"; provider: "openai" }
-	| { version: 1; operation: "set"; provider: "openai"; secret: string };
+	| { version: 1; operation: "status" | "remove"; provider: CredentialProvider }
+	| { version: 1; operation: "set"; provider: CredentialProvider; secret: string };
 export type CredentialResponse = { ok: true; state: CredentialState } | { ok: false; error: ErrorCode };
 export interface CredentialManagement {
 	execute(request: CredentialRequest): Promise<CredentialResponse>;
 }
-export function credentialProvider(value: unknown): "openai" {
-	if (value !== "openai") throw new AppError("INVALID_REQUEST");
-	return value;
+export function credentialProvider(value: unknown): CredentialProvider {
+	if (value === "openai") return value;
+	if (typeof value !== "string" || !/^custom_[a-z0-9][a-z0-9_-]{0,63}$/.test(value))
+		throw new AppError("INVALID_REQUEST");
+	return value as CredentialProvider;
 }
 export function credentialSecret(value: unknown): string {
-	// Official API keys are printable ASCII. This stricter bound also excludes CR/LF/NUL.
+	// Keys must be bounded printable ASCII without whitespace, CR/LF, or NUL.
 	if (typeof value !== "string" || !/^[\x21-\x7e]{1,4096}$/.test(value)) throw new AppError("INVALID_REQUEST");
 	return value;
 }

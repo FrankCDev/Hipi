@@ -1,7 +1,9 @@
 export {
+	type CredentialProvider,
 	credentialProvider,
 	credentialSecret,
 	credentialState,
+	MAX_CREDENTIAL_PROVIDERS,
 	parseCredentialRequest as credentialRequest,
 } from "@hipi/work-runtime/credentials";
 

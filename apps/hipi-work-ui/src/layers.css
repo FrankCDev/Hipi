@@ -1,0 +1,3 @@
+/* Establish precedence before either the component graph or Tailwind is loaded.
+   Both CSS entry points import this because Vite may emit dependency CSS first. */
+@layer theme, base, components, utilities;

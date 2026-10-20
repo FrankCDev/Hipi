@@ -1,9 +1,0 @@
-- Checking registry.
-✔ Checking registry.
-- Updating files.
-✔ Created 1 file:
-  - src/components/ui/input-group.tsx
-ℹ Skipped 3 files: (files might be identical, use --overwrite to overwrite)
-  - src/components/ui/button.tsx
-  - src/components/ui/input.tsx
-  - src/components/ui/textarea.tsx

@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import { TextDocument } from "@pierre/diffs/edit";
 import type * as React from "react";
 import { isValidElement } from "react";
-import { beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { defaultConfig } from "../src/app/theme/config.ts";
 import { Input } from "../src/components/ui/input.tsx";
 import { DEFAULT_EDITOR_KEYBINDINGS } from "../src/features/files/editor-keybindings.ts";
 import { useFileSearch } from "../src/features/files/file-search.tsx";
 import { PierreCodeEditor } from "../src/features/files/pierre-editor.tsx";
+
+// Pin the browser platform rather than inheriting Node's host-dependent navigator.
+const shortcutPlatforms = [
+	{ platform: "MacIntel", ctrl: false, meta: true },
+	{ platform: "Win32", ctrl: true, meta: false },
+	{ platform: "Linux x86_64", ctrl: true, meta: false },
+];
+afterEach(() => vi.unstubAllGlobals());
 
 type Cell = { value: unknown; deps?: React.DependencyList };
 const hooks = vi.hoisted(() => ({ cells: [] as Cell[], cursor: 0, pending: [] as (() => void)[], changed: false }));
@@ -86,12 +94,12 @@ function element(
 function ReactChildren(value: unknown): React.ReactNode[] {
 	return (Array.isArray(value) ? value.flat(Infinity) : [value]) as React.ReactNode[];
 }
-function key(key: string, composing = false, code = 0, ctrl = false) {
+function key(key: string, composing = false, code = 0, ctrl = false, meta = false) {
 	return {
 		key,
 		shiftKey: false,
 		ctrlKey: ctrl,
-		metaKey: false,
+		metaKey: meta,
 		altKey: false,
 		nativeEvent: {
 			key,
@@ -100,7 +108,7 @@ function key(key: string, composing = false, code = 0, ctrl = false) {
 			keyCode: code,
 			shiftKey: false,
 			ctrlKey: ctrl,
-			metaKey: false,
+			metaKey: meta,
 			altKey: false,
 		},
 		preventDefault: vi.fn(),
@@ -149,46 +157,52 @@ test("shared search uses public matching options, selects the first result, wrap
 	assert.deepEqual(memory, { search: { query: "[", caseSensitive: true, wholeWord: true, regex: true } });
 });
 
-test("Pierre production capture never saves or opens Find during IME and passes the real filename to the accessible editor", () => {
-	const save = vi.fn();
-	const props = {
-		text: "untouched",
-		name: "notes.txt",
-		label: "File text editor",
-		readOnly: false,
-		onChange: vi.fn(),
-		onSave: save,
-	};
-	const render = () => {
-		const surface = PierreCodeEditor(props);
-		assert.equal(typeof surface.type, "function");
-		return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
-	};
-	let tree = drive(render);
-	const section = () => element(tree, (item) => item.type === "section" && item.props["data-readonly"] === false);
-	const capture = section().props.onKeyDownCapture as (event: unknown) => void;
-	for (const event of [
-		key("s", true, 0, true),
-		key("s", false, 229, true),
-		key("f", true, 0, true),
-		key("f", false, 229, true),
-	])
-		capture(event);
-	tree = drive(render);
-	assert.equal(save.mock.calls.length, 0);
-	assert.throws(() => element(tree, (item) => item.type === "search"));
-	capture(key("s", false, 0, true));
-	assert.equal(save.mock.calls.length, 1);
-	capture(key("f", false, 0, true));
-	tree = drive(render);
-	assert.ok(element(tree, (item) => item.type === "search"));
-	const code = element(tree, (item) => Array.isArray(item.props.initialItems));
-	assert.deepEqual(
-		(code.props.initialItems as { file: { name: string } }[]).map((item) => item.file.name),
-		["notes.txt"],
-	);
-	assert.equal(section().props["aria-label"], "File text editor");
-});
+test.each(shortcutPlatforms)(
+	"Pierre production capture never saves or opens Find during IME and passes the real filename to the accessible editor on $platform",
+	({ platform, ctrl, meta }) => {
+		vi.stubGlobal("navigator", { platform });
+		const save = vi.fn();
+		const props = {
+			text: "untouched",
+			name: "notes.txt",
+			label: "File text editor",
+			readOnly: false,
+			onChange: vi.fn(),
+			onSave: save,
+		};
+		const render = () => {
+			const surface = PierreCodeEditor(props);
+			assert.equal(typeof surface.type, "function");
+			return (surface.type as (props: typeof surface.props) => React.ReactNode)(surface.props);
+		};
+		let tree = drive(render);
+		const section = () => element(tree, (item) => item.type === "section" && item.props["data-readonly"] === false);
+		const capture = section().props.onKeyDownCapture as (event: unknown) => void;
+		for (const event of [
+			key("s", false, 0, !ctrl, !meta),
+			key("f", false, 0, !ctrl, !meta),
+			key("s", true, 0, ctrl, meta),
+			key("s", false, 229, ctrl, meta),
+			key("f", true, 0, ctrl, meta),
+			key("f", false, 229, ctrl, meta),
+		])
+			capture(event);
+		tree = drive(render);
+		assert.equal(save.mock.calls.length, 0);
+		assert.throws(() => element(tree, (item) => item.type === "search"));
+		capture(key("s", false, 0, ctrl, meta));
+		assert.equal(save.mock.calls.length, 1);
+		capture(key("f", false, 0, ctrl, meta));
+		tree = drive(render);
+		assert.ok(element(tree, (item) => item.type === "search"));
+		const code = element(tree, (item) => Array.isArray(item.props.initialItems));
+		assert.deepEqual(
+			(code.props.initialItems as { file: { name: string } }[]).map((item) => item.file.name),
+			["notes.txt"],
+		);
+		assert.equal(section().props["aria-label"], "File text editor");
+	},
+);
 
 test("replacement callbacks preserve IME and read-only boundaries and reject a stale document projection", () => {
 	const document = new TextDocument("file", "one one");
@@ -241,69 +255,77 @@ test("replacement callbacks preserve IME and read-only boundaries and reject a s
 	]);
 });
 
-test("replace-all allocation is bounded before a transaction and reports the existing localized editor limit", () => {
-	const text = "a".repeat(1000);
-	const document = new TextDocument("file", text);
-	const replace = vi.fn();
-	const render = () =>
-		useFileSearch({
-			document,
-			text,
-			bindings: DEFAULT_EDITOR_KEYBINDINGS,
-			select: vi.fn(),
-			focus: vi.fn(),
-			replace,
-		});
-	let view = drive(render);
-	view.onKeyDown({ ...key("f", false, 0, true), altKey: true } as unknown as React.KeyboardEvent);
-	view = drive(render);
-	const input = (label: string) =>
-		element(view.panel, (item) => item.type === Input && item.props["aria-label"] === label);
-	(input("Find in file").props.onChange as (event: unknown) => void)({ currentTarget: { value: "a" } });
-	(input("Replace").props.onChange as (event: unknown) => void)({ currentTarget: { value: "b".repeat(1024) } });
-	view = drive(render);
-	(element(view.panel, (item) => item.props["aria-label"] === "Replace all").props.onClick as () => void)();
-	view = drive(render);
-	assert.equal(replace.mock.calls.length, 0);
-	assert.ok(element(view.panel, (item) => item.props.role === "alert"));
-});
-
-test("typing replacement text retains the selected second match and recoverable stale transactions never escape", () => {
-	const document = new TextDocument("file", "one one");
-	const replace = vi.fn();
-	const render = () =>
-		useFileSearch({
-			document,
-			text: document.getText(),
-			bindings: DEFAULT_EDITOR_KEYBINDINGS,
-			select: vi.fn(),
-			focus: vi.fn(),
-			replace,
-		});
-	let view = drive(render);
-	view.onKeyDown({ ...key("f", false, 0, true), altKey: true } as unknown as React.KeyboardEvent);
-	view = drive(render);
-	const input = (label: string) =>
-		element(view.panel, (item) => item.type === Input && item.props["aria-label"] === label);
-	(input("Find in file").props.onChange as (event: unknown) => void)({ currentTarget: { value: "one" } });
-	view = drive(render);
-	for (let index = 0; index < 2; index++) {
-		(input("Find in file").props.onKeyDown as (event: unknown) => void)(key("Enter"));
+test.each(shortcutPlatforms)(
+	"replace-all allocation is bounded before a transaction and reports the existing localized editor limit on $platform",
+	({ platform, ctrl, meta }) => {
+		vi.stubGlobal("navigator", { platform });
+		const text = "a".repeat(1000);
+		const document = new TextDocument("file", text);
+		const replace = vi.fn();
+		const render = () =>
+			useFileSearch({
+				document,
+				text,
+				bindings: DEFAULT_EDITOR_KEYBINDINGS,
+				select: vi.fn(),
+				focus: vi.fn(),
+				replace,
+			});
+		let view = drive(render);
+		view.onKeyDown({ ...key("f", false, 0, ctrl, meta), altKey: true } as unknown as React.KeyboardEvent);
 		view = drive(render);
-	}
-	assert.equal(element(view.panel, (item) => item.type === "output").props.children, "2 / 2");
-	(input("Replace").props.onChange as (event: unknown) => void)({ currentTarget: { value: "two" } });
-	view = drive(render);
-	assert.equal(element(view.panel, (item) => item.type === "output").props.children, "2 / 2");
-	(input("Replace").props.onKeyDown as (event: unknown) => void)(key("Enter"));
-	assert.deepEqual(replace.mock.lastCall?.[0], [{ from: 4, to: 7, text: "two" }]);
-	replace.mockImplementation(() => {
-		throw new Error("Search document changed");
-	});
-	assert.doesNotThrow(() => (input("Replace").props.onKeyDown as (event: unknown) => void)(key("Enter")));
-	view = drive(render);
-	assert.equal(
-		element(view.panel, (item) => item.props.role === "alert").props.children,
-		"The document changed. Search again before replacing.",
-	);
-});
+		const input = (label: string) =>
+			element(view.panel, (item) => item.type === Input && item.props["aria-label"] === label);
+		(input("Find in file").props.onChange as (event: unknown) => void)({ currentTarget: { value: "a" } });
+		(input("Replace").props.onChange as (event: unknown) => void)({ currentTarget: { value: "b".repeat(1024) } });
+		view = drive(render);
+		(element(view.panel, (item) => item.props["aria-label"] === "Replace all").props.onClick as () => void)();
+		view = drive(render);
+		assert.equal(replace.mock.calls.length, 0);
+		assert.ok(element(view.panel, (item) => item.props.role === "alert"));
+	},
+);
+
+test.each(shortcutPlatforms)(
+	"typing replacement text retains the selected second match and recoverable stale transactions never escape on $platform",
+	({ platform, ctrl, meta }) => {
+		vi.stubGlobal("navigator", { platform });
+		const document = new TextDocument("file", "one one");
+		const replace = vi.fn();
+		const render = () =>
+			useFileSearch({
+				document,
+				text: document.getText(),
+				bindings: DEFAULT_EDITOR_KEYBINDINGS,
+				select: vi.fn(),
+				focus: vi.fn(),
+				replace,
+			});
+		let view = drive(render);
+		view.onKeyDown({ ...key("f", false, 0, ctrl, meta), altKey: true } as unknown as React.KeyboardEvent);
+		view = drive(render);
+		const input = (label: string) =>
+			element(view.panel, (item) => item.type === Input && item.props["aria-label"] === label);
+		(input("Find in file").props.onChange as (event: unknown) => void)({ currentTarget: { value: "one" } });
+		view = drive(render);
+		for (let index = 0; index < 2; index++) {
+			(input("Find in file").props.onKeyDown as (event: unknown) => void)(key("Enter"));
+			view = drive(render);
+		}
+		assert.equal(element(view.panel, (item) => item.type === "output").props.children, "2 / 2");
+		(input("Replace").props.onChange as (event: unknown) => void)({ currentTarget: { value: "two" } });
+		view = drive(render);
+		assert.equal(element(view.panel, (item) => item.type === "output").props.children, "2 / 2");
+		(input("Replace").props.onKeyDown as (event: unknown) => void)(key("Enter"));
+		assert.deepEqual(replace.mock.lastCall?.[0], [{ from: 4, to: 7, text: "two" }]);
+		replace.mockImplementation(() => {
+			throw new Error("Search document changed");
+		});
+		assert.doesNotThrow(() => (input("Replace").props.onKeyDown as (event: unknown) => void)(key("Enter")));
+		view = drive(render);
+		assert.equal(
+			element(view.panel, (item) => item.props.role === "alert").props.children,
+			"The document changed. Search again before replacing.",
+		);
+	},
+);

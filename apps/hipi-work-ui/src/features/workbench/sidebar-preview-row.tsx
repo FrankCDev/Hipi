@@ -4,6 +4,7 @@ import { ConversationPreviewInteraction, type PreviewMode } from "./conversation
 
 export type PreviewActions = (controls: {
 	previewContent: ReactNode;
+	menuPosition: { sideOffset: number; alignOffset: number };
 	onMenuOpen: () => void;
 	onOverlayChange: (owner: "menu" | "dialog", open: boolean) => void;
 	onReturnFocus: () => void;
@@ -31,6 +32,7 @@ export function SidebarPreviewRow({
 	renderActions?: PreviewActions;
 }) {
 	const [mode, setMode] = useState<PreviewMode>("closed");
+	const [menuPosition, setMenuPosition] = useState({ sideOffset: 4, alignOffset: 0 });
 	const [interaction] = useState(() => new ConversationPreviewInteraction(setMode));
 	const trigger = useRef<HTMLButtonElement>(null);
 	const row = useRef<HTMLDivElement>(null);
@@ -100,8 +102,19 @@ export function SidebarPreviewRow({
 					{children}
 					{renderActions?.({
 						previewContent,
+						menuPosition,
 						triggerRef: trigger,
-						onMenuOpen: () => interaction.close("navigate"),
+						onMenuOpen: () => {
+							if (row.current && trigger.current) {
+								const anchor = row.current.getBoundingClientRect();
+								const button = trigger.current.getBoundingClientRect();
+								setMenuPosition({
+									sideOffset: anchor.right - button.right + 4,
+									alignOffset: anchor.top - button.top,
+								});
+							}
+							interaction.close("navigate");
+						},
 						onOverlayChange: (owner, open) => interaction.setOverlayOpen(owner, open),
 						onReturnFocus: returnFocus,
 					})}
@@ -112,7 +125,7 @@ export function SidebarPreviewRow({
 				className="conversation-preview-card"
 				side="right"
 				align="start"
-				sideOffset={10}
+				sideOffset={4}
 				collisionPadding={12}
 				aria-labelledby={titleId}
 				tabIndex={-1}

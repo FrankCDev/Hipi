@@ -1,0 +1,126 @@
+.custom-provider-settings,
+.custom-provider-form,
+.custom-provider-fields,
+.custom-provider-models {
+	display: grid;
+	min-width: 0;
+	gap: 16px;
+}
+.custom-provider-fields {
+	border: 0;
+	padding: 0;
+	margin: 0;
+}
+.custom-provider-settings {
+	gap: 0;
+}
+.custom-provider-dialog[data-slot="dialog-content"] {
+	width: min(640px, calc(100vw - 32px));
+	max-width: 640px;
+	border-radius: 20px;
+}
+.custom-provider-form .field {
+	display: grid;
+	gap: 7px;
+	min-width: 0;
+}
+.custom-provider-form input,
+.custom-provider-form .custom-provider-select {
+	width: 100%;
+	min-width: 0;
+}
+.custom-provider-hint,
+.custom-provider-feedback,
+.custom-provider-warning {
+	font-size: 13px;
+	line-height: 1.5;
+	font-weight: 400;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+.custom-provider-warning {
+	padding: 12px;
+	border: 0.5px solid var(--line);
+	border-radius: 8px;
+	color: var(--warning);
+	background: var(--canvas);
+}
+.custom-provider-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.custom-provider-row {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	min-width: 0;
+	padding-block: 16px;
+	border-bottom: 0.5px solid var(--line);
+}
+.custom-provider-model-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+	align-items: end;
+	gap: 8px;
+}
+.custom-provider-models h3 {
+	font-size: inherit;
+	font-weight: 500;
+}
+.custom-provider-models > button {
+	width: fit-content;
+}
+.custom-provider-suggestions {
+	min-width: 0;
+	padding: 12px;
+	border: 0.5px solid var(--line);
+	border-radius: 12px;
+}
+.custom-provider-suggestions > summary {
+	font-weight: 500;
+}
+.custom-provider-suggestions > p,
+.custom-provider-suggestions > input {
+	margin-block: 8px;
+}
+.custom-provider-suggestion-list {
+	max-height: 190px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.custom-provider-suggestion-list > button {
+	justify-content: space-between;
+	width: 100%;
+	height: auto;
+	min-height: 40px;
+	text-align: left;
+	white-space: normal;
+}
+.custom-provider-suggestion-list > button > span:first-child {
+	display: grid;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.custom-provider-suggestion-list strong {
+	font-weight: 500;
+}
+.custom-provider-suggestion-list > button > span > span {
+	font-size: 12px;
+	color: var(--muted);
+}
+@media (max-width: 520px) {
+	.custom-provider-row {
+		flex-wrap: wrap;
+	}
+	.custom-provider-model-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.custom-provider-model-row > label {
+		grid-column: 1;
+	}
+	.custom-provider-model-row > button {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+	}
+}

@@ -373,6 +373,11 @@ test("other/current disclosure preserves the selected task, clean file, drafts a
 
 test("other/current disclosure preserves the exact nonempty search entered through Workbench's input callback", () => {
 	const initial = drive();
+	const trigger = elements(initial.content, Button).find(
+		(button) => button.props.className === "sidebar-search-trigger",
+	);
+	assert.ok(trigger);
+	press(trigger);
 	const input = element(initial.content, InputGroupInput);
 	const search = "  Current task / 草稿  ";
 	assert.ok(input.props.onChange);
@@ -387,6 +392,69 @@ test("other/current disclosure preserves the exact nonempty search entered throu
 		assert.equal(element(current.content, InputGroupInput).props.value, search);
 		assert.equal(current.session.snapshot(), snapshot);
 	}
+});
+
+test("header search opens and focuses the bounded filter, clears in place, and Escape returns focus without navigation", () => {
+	const initial = drive();
+	const navigation = elements(initial.content, Button).find((button) => button.props.className === "navigation-toggle");
+	assert.ok(navigation);
+	press(navigation);
+	const trigger = elements(initial.content, Button).find(
+		(button) => button.props.className === "sidebar-search-trigger",
+	);
+	assert.ok(trigger);
+	assert.equal(trigger.props["aria-expanded"], false);
+	const input = element(initial.content, InputGroupInput);
+	const focused = vi.fn();
+	const returned = vi.fn();
+	assert.ok(input.props.ref && typeof input.props.ref === "object");
+	assert.ok(trigger.props.ref && typeof trigger.props.ref === "object");
+	Object.assign(input.props.ref, { current: { focus: focused } });
+	Object.assign(trigger.props.ref, { current: { focus: returned } });
+	press(trigger);
+	const opened = drive();
+	assert.equal(focused.mock.calls.length, 1);
+	assert.equal(
+		elements(opened.content, "div").find((item) => item.props.className === "sidebar-search-panel")?.props.hidden,
+		false,
+	);
+	assert.equal(input.props.type, "search");
+	assert.ok(input.props.onChange);
+	Reflect.apply(input.props.onChange, undefined, [{ target: { value: "Work / 草稿" } }]);
+	const clear = elements(drive().content, Button).find((button) => button.props.className === "sidebar-search-clear");
+	assert.ok(clear);
+	assert.equal(clear.props["aria-label"], "nav.clearSearch");
+	press(clear);
+	assert.equal(drive().tree.search, "");
+	assert.equal(focused.mock.calls.length, 2);
+	Reflect.apply(input.props.onChange, undefined, [{ target: { value: "Keep until Escape" } }]);
+	const keydown = element(drive().content, InputGroupInput).props.onKeyDown;
+	assert.ok(keydown);
+	const preventDefault = vi.fn();
+	const stopPropagation = vi.fn();
+	Reflect.apply(keydown, undefined, [
+		{ key: "Escape", nativeEvent: { isComposing: true }, preventDefault, stopPropagation },
+	]);
+	assert.equal(drive().tree.search, "Keep until Escape");
+	assert.equal(preventDefault.mock.calls.length, 0);
+	Reflect.apply(keydown, undefined, [
+		{ key: "Escape", nativeEvent: { isComposing: false }, preventDefault, stopPropagation },
+	]);
+	const closed = drive();
+	assert.equal(closed.tree.search, "");
+	assert.equal(returned.mock.calls.length, 1);
+	assert.equal(preventDefault.mock.calls.length, 1);
+	assert.equal(stopPropagation.mock.calls.length, 1);
+	assert.equal(
+		elements(closed.content, "div").find((item) => item.props.className === "sidebar-search-panel")?.props.hidden,
+		true,
+	);
+	assert.equal(
+		closed.content.props["data-navigation-open"],
+		true,
+		"Escape dismisses only search, not mobile navigation",
+	);
+	assertPreserved(closed, initial);
 });
 
 test.each(["dirty", "saving", "unknown"] as const)(

@@ -49,6 +49,13 @@
 - If `packages/coding-agent/install-lock/` needs regen, run `node scripts/generate-coding-agent-install-lock.mjs` (verify with `--check` or `npm run check`). New deps with lifecycle scripts require review and an explicit allowlist entry in that script; never add one silently.
 - Pre-commit blocks lockfile commits unless `PI_ALLOW_LOCKFILE_CHANGE=1`. Don't bypass unless the user wants the lockfile change committed.
 
+## Third-Party Notices
+
+- Use npm packages normally. Do not copy each dependency's implementation or license tree into `vendor`, or maintain duplicate per-package inventories, CLI logs, staging lockfiles and audit snapshots by default. `package.json` and the lockfile remain the dependency source of truth.
+- Keep license handling proportionate. Do not introduce elaborate license frameworks, redundant hash checks or repeated audits for ordinary dependency use, or let them displace product implementation and validation.
+- When packaging, collect necessary notices for the dependencies actually shipped through the existing build process, rather than checking a second installed-dependency license tree into source control.
+- Preserve required attribution for directly distributed source components, fonts and assets, and address concrete license restrictions when encountered. This is not permission to remove required distribution notices.
+
 ## Git
 
 Multiple pi sessions may be running in this cwd at the same time, each modifying different files. Git operations that touch unstaged, staged, or untracked files outside your own changes will stomp on other sessions' work. Follow these rules:

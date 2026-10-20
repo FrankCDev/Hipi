@@ -16,6 +16,7 @@ import {
 	assertSourceSnapshot,
 	filesUnder,
 	inventory,
+	readmeLicenseText,
 	requiredFiles,
 	requireFiles,
 	sourceSnapshot,
@@ -35,6 +36,8 @@ test("allowlist includes parser and PDF notices, excludes all unreviewed payload
 		"dist/renderer/assets/../../secret.js",
 		"dist/branding/private.png",
 		"dist/branding/icon.svg",
+		"dist/third-party/pierre/inventory.json",
+		"dist/third-party/codemirror/inventory.json",
 	]) {
 		assert.equal(allowedPayload(file), false, file);
 	}
@@ -67,6 +70,24 @@ test("private paths and map references fail closed", () => {
 	assert.throws(() => assertPublicText("//# sourceMappingURL=x.map", "/private/build"));
 	assert.throws(() => assertPublicText("/private/build/src/main.ts", "/private/build"));
 	assert.doesNotThrow(() => assertPublicText("console.log('public');", "/private/build"));
+});
+
+test("complete MIT notices embedded in package READMEs are retained without source copies", async () => {
+	for (const [name, author] of [
+		["isarray", "Julian Gruber"],
+		["lru_map", "Rasmus Andersson"],
+	]) {
+		const readme = await readFile(new URL(`../../../node_modules/${name}/README.md`, import.meta.url), "utf8");
+		const notice = readmeLicenseText(readme);
+		assert.ok(notice.includes(author));
+		assert.ok(notice.includes("The above copyright notice and this permission notice"));
+		assert.ok(notice.includes("THE SOFTWARE IS PROVIDED"));
+		assert.ok(readme.includes(notice.trim()));
+		assert.ok(!notice.includes("## Usage"));
+	}
+	assert.equal(readmeLicenseText("# License\nMIT\n"), undefined);
+	assert.equal(readmeLicenseText("See the license on the project website."), undefined);
+	assert.equal(readmeLicenseText("# MIT license\nCopyright Example\nPermission is hereby granted\n"), undefined);
 });
 
 test("maintenance builds as an offline Node-only standalone CLI and runs relocated help", async () => {
@@ -119,23 +140,15 @@ test("packaging rejects changed, added, missing or legacy external brand/config 
 	try {
 		await mkdir(join(desktop, "branding"), { recursive: true });
 		await mkdir(join(desktop, "packaging"), { recursive: true });
-		const notices = join(root, "apps/hipi-work-ui/vendor/pierre");
-		await mkdir(notices, { recursive: true });
-		const codeMirrorNotices = join(root, "apps/hipi-work-ui/vendor/codemirror");
-		await mkdir(codeMirrorNotices, { recursive: true });
 		await writeFile(join(root, "package-lock.json"), "{}");
 		await writeFile(join(desktop, "package.json"), "{}");
 		const icon = join(desktop, "branding/icon.ico");
 		const config = join(desktop, "packaging/electron-builder.cjs");
 		await writeFile(icon, "approved icon");
 		await writeFile(config, "approved config");
-		const notice = join(notices, "README.md");
-		await writeFile(notice, "approved notice");
-		const codeMirrorNotice = join(codeMirrorNotices, "README.md");
-		await writeFile(codeMirrorNotice, "approved CodeMirror notice");
 		const snapshot = await inventory(root);
 		await assertPackagingInputs(root, snapshot);
-		for (const file of [icon, config, notice, codeMirrorNotice]) {
+		for (const file of [icon, config]) {
 			const original = await readFile(file);
 			await writeFile(file, "changed");
 			await assert.rejects(assertPackagingInputs(root, snapshot), /digest changed/);

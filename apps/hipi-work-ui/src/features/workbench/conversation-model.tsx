@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
+import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
@@ -9,9 +11,18 @@ import { workbenchLabels } from "./workbench-labels.ts";
 
 export function ConversationModelControls({ controller }: { controller: ConversationController }) {
 	const { t, locale } = usePreferences();
+	const client = useAppClient();
 	const [open, setOpen] = useState(false);
 	const { model, execution } = controller;
 	const info = model.data;
+	const catalog = useQuery({
+		queryKey: ["models"],
+		queryFn: ({ signal }) => client.call("listModels", {}, signal),
+	});
+	const modelName = catalog.data?.models.find(
+		(item) => item.provider === info?.model.provider && item.modelId === info.model.modelId,
+	)?.name;
+	const providerName = catalog.data?.providers.find((item) => item.provider === info?.model.provider)?.name;
 	return (
 		<div className="conversation-model-controls" data-execution-state={info?.executionState}>
 			<Popover>
@@ -23,7 +34,8 @@ export function ConversationModelControls({ controller }: { controller: Conversa
 						aria-label={workbenchLabels(locale)["workbench.modelStatus"]}
 					>
 						<span>
-							{info?.model.modelId ??
+							{modelName ??
+								info?.model.modelId ??
 								(model.isPending ? t("common.loading") : workbenchLabels(locale)["workbench.modelStatus"])}
 						</span>
 						<ChevronDown size={14} aria-hidden="true" />
@@ -38,7 +50,8 @@ export function ConversationModelControls({ controller }: { controller: Conversa
 						{info && (
 							<>
 								<span className="break-all">
-									{info.model.provider} · {info.model.modelId}
+									{providerName ? `${providerName} · ` : ""}
+									{info.model.modelId}
 								</span>
 								<output>
 									{t(`model.${info.credentialState}`)} · {t(`model.${info.executionState}`)}

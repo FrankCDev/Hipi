@@ -148,9 +148,35 @@ function rowAndActions() {
 	Object.assign(owner.triggerRef, { current: { focus: returned } });
 	const session = new CatalogSession({ call: vi.fn(), observe: vi.fn() }, new LocalState());
 	const renderActions = () =>
-		drive("actions", () => ConversationActions({ conversation, session, guard: (action) => action(), ...owner }));
+		drive("actions", () => ConversationActions({ conversation, session, guard: (action) => action(), ...controls }));
 	return { renderRow, renderActions, focus, returned };
 }
+
+test("sidebar action menus align to the full row's right edge and top, not the trailing button", () => {
+	const ui = rowAndActions();
+	const row = element(ui.renderRow(), "div");
+	assert.ok(row.props.ref && typeof row.props.ref === "object");
+	Object.assign(row.props.ref, {
+		current: { getBoundingClientRect: () => ({ right: 275, top: 80 }) },
+	});
+	const trigger = elements(ui.renderActions(), Button).find(
+		(button) => button.props.className === "conversation-actions-trigger",
+	);
+	assert.ok(trigger);
+	assert.ok(trigger.props.ref && typeof trigger.props.ref === "object");
+	Object.assign(trigger.props.ref, {
+		current: { getBoundingClientRect: () => ({ right: 263, top: 84 }), focus: vi.fn() },
+	});
+	element(ui.renderActions(), DropdownMenu).props.onOpenChange?.(true);
+	ui.renderRow();
+	const content = element(ui.renderActions(), DropdownMenuContent);
+	assert.equal(content.props.side, "right");
+	assert.equal(content.props.align, "start");
+	assert.equal(content.props.sideOffset, 16);
+	assert.equal(content.props.alignOffset, -4);
+	assert.equal(content.props.collisionPadding, 12);
+	assert.equal(content.props.avoidCollisions, undefined, "Radix collision handling keeps its enabled default");
+});
 
 test("production menu-to-dialog callbacks exclude previews until dialog closes and suppress return-focus reopen", () => {
 	const ui = rowAndActions();

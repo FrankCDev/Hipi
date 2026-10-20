@@ -118,6 +118,8 @@ function Choice({
 	onChange,
 	onOpenChange,
 	loading,
+	notice,
+	action,
 }: {
 	label: string;
 	value: string;
@@ -125,9 +127,18 @@ function Choice({
 	onChange: (value: string) => void;
 	onOpenChange?: (open: boolean) => void;
 	loading?: string;
+	notice?: ReactNode;
+	action?: { value: string; label: string; onSelect: () => void };
 }) {
 	return (
-		<Select value={value} onValueChange={onChange} onOpenChange={onOpenChange}>
+		<Select
+			value={value}
+			onValueChange={(next) => {
+				if (action && next === action.value) action.onSelect();
+				else onChange(next);
+			}}
+			onOpenChange={onOpenChange}
+		>
 			<SelectTrigger aria-label={label} aria-busy={!!loading} className="settings-choice" size="sm">
 				<SelectValue />
 			</SelectTrigger>
@@ -138,11 +149,13 @@ function Choice({
 						{loading}
 					</output>
 				)}
+				{notice && <div className="max-w-72 whitespace-normal px-2">{notice}</div>}
 				{options.map((item) => (
 					<SelectItem key={item.value} value={item.value}>
 						{item.label}
 					</SelectItem>
 				))}
+				{action && <SelectItem value={action.value}>{action.label}</SelectItem>}
 			</SelectContent>
 		</Select>
 	);
@@ -256,6 +269,7 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 	}>();
 	const fontClient = native.client;
 	const fontPlatform = native.status?.platform;
+	const browserFontAccess = fontPlatform === "web" || !fontClient;
 	const query = nativeFontCatalog(native.client, native.status?.platform);
 	const fontOwner = query ?? native.client;
 	const [fontState, setFontState] = useState<{ owner?: AppearanceClient | FontCatalogQuery; state: FontCatalogState }>({
@@ -380,6 +394,28 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 	const openFontPicker = (open: boolean) => {
 		if (open && fontClient) setOpenedFontPicker({ client: fontClient, platform: fontPlatform });
 	};
+	const fontNotice = !browserFontAccess &&
+		(fontError ||
+			catalog?.truncated ||
+			catalog?.families.length === 0 ||
+			fontClient?.localFontsSupported === false) && (
+			<>
+				{fontError && (
+					<p role="alert" className="settings-hint">
+						{t(`settings.native.${fontError}`)}
+					</p>
+				)}
+				{catalog?.truncated && <p className="settings-hint">{t("settings.fontsLimited")}</p>}
+				{catalog && catalog.families.length === 0 && <p className="settings-hint">{t("settings.fontsEmpty")}</p>}
+				{fontClient && !fontClient.localFontsSupported && (
+					<p className="settings-hint">{t("settings.fontsUnsupported")}</p>
+				)}
+			</>
+		);
+	const fontRetry =
+		query && fontError
+			? { value: "retry-font-catalog", label: t("settings.fontsRetry"), onSelect: () => query.retry() }
+			: undefined;
 	const fontControl = (field: "uiFont" | "contentFont" | "codeFont") => {
 		const area = field === "uiFont" ? "ui" : field === "contentFont" ? "content" : "code";
 		const face = config.localFontFaces[area];
@@ -395,13 +431,18 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 			...(face && !selectedFamily ? [{ value: `installed:${face.family}`, label: face.family }] : []),
 		];
 		return (
-			<div className="settings-font-control">
+			<div
+				className="settings-font-control"
+				data-setting={!browserFontAccess && field === "uiFont" ? "installedFonts" : undefined}
+			>
 				<Choice
 					label={t(`settings.${field}`)}
 					value={face ? `installed:${face.family}` : custom ? "custom" : config[field]}
 					options={choices}
 					onOpenChange={openFontPicker}
 					loading={loadingFonts ? t("settings.fontsLoading") : undefined}
+					notice={fontNotice}
+					action={fontRetry}
 					onChange={(value) => {
 						const localFontFaces = { ...config.localFontFaces };
 						delete localFontFaces[area];
@@ -440,6 +481,8 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 						}))}
 						onOpenChange={openFontPicker}
 						loading={loadingFonts ? t("settings.fontsLoading") : undefined}
+						notice={fontNotice}
+						action={fontRetry}
 						onChange={(value) => {
 							const selected = selectedFamily?.faces.find((item) => item.postscriptName === value);
 							if (selected) update({ ...config, localFontFaces: { ...config.localFontFaces, [area]: selected } });
@@ -571,7 +614,7 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 				<SettingRow settingId="uiFont" label={t("settings.uiFont")}>
 					{fontControl("uiFont")}
 				</SettingRow>
-				{(!query || currentFontState.status !== "idle") && (
+				{browserFontAccess && (
 					<SettingRow
 						settingId="installedFonts"
 						label={t("settings.installedFonts")}
@@ -583,10 +626,6 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 								size="sm"
 								disabled={loadingFonts}
 								onClick={() => {
-									if (query) {
-										query.retry();
-										return;
-									}
 									if (!native.client || fontRequest.current) return;
 									const client = native.client;
 									const controller = new AbortController();
@@ -643,9 +682,11 @@ export function SettingsForm({ selectedSetting }: { selectedSetting?: string } =
 								: ""}
 					</output>
 				)}
-				{catalog?.truncated && <p className="settings-hint">{t("settings.fontsLimited")}</p>}
-				{catalog && catalog.families.length === 0 && <p className="settings-hint">{t("settings.fontsEmpty")}</p>}
-				{fontError && (
+				{browserFontAccess && catalog?.truncated && <p className="settings-hint">{t("settings.fontsLimited")}</p>}
+				{browserFontAccess && catalog && catalog.families.length === 0 && (
+					<p className="settings-hint">{t("settings.fontsEmpty")}</p>
+				)}
+				{browserFontAccess && fontError && (
 					<p role="alert" className="error-text">
 						{t(`settings.native.${fontError}`)}
 					</p>

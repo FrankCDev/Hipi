@@ -1,6 +1,6 @@
 import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings, SquarePen } from "lucide-react";
+import { Settings, SquarePen, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -9,7 +9,6 @@ import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../../components/ui/input-group.tsx";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { fileLabels } from "../files/file-labels.ts";
 import { FileWorkspaceSession } from "../files/file-workspace-session.ts";
 import { SettingsDialog } from "../settings/index.ts";
@@ -54,6 +53,12 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		else action();
 	};
 	const searchInputId = useId();
+	const searchInput = useRef<HTMLInputElement>(null);
+	const searchTrigger = useRef<HTMLButtonElement>(null);
+	const [searchOpen, setSearchOpen] = useState(false);
+	useEffect(() => {
+		if (searchOpen) searchInput.current?.focus();
+	}, [searchOpen]);
 	const local = useLocalState();
 	const cache = useQueryClient();
 	const catalog = useMemo(() => new CatalogSession(client, local), [client, local]);
@@ -147,6 +152,11 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		};
 	}, [navigationOpen]);
 	const [search, setSearch] = useState("");
+	const closeSearch = () => {
+		setSearch("");
+		setSearchOpen(false);
+		searchTrigger.current?.focus();
+	};
 	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
 	const preparedKey = (workspaceId: string) => (workspaceId ? `task-draft.${workspaceId}` : "chat-draft.global");
 	const preparedDraft = (workspaceId: string) =>
@@ -337,6 +347,22 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 						</span>
 					</button>
 					<Button
+						ref={searchTrigger}
+						className="sidebar-search-trigger"
+						variant="ghost"
+						size="icon-sm"
+						aria-label={t("nav.search")}
+						title={t("nav.search")}
+						aria-expanded={searchOpen}
+						aria-controls={`${searchInputId}-panel`}
+						onClick={() => {
+							if (searchOpen) closeSearch();
+							else setSearchOpen(true);
+						}}
+					>
+						<Icon name="search" size={17} />
+					</Button>
+					<Button
 						ref={sidebarCollapse}
 						className="sidebar-collapse"
 						variant="ghost"
@@ -377,44 +403,52 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							{t("nav.newConversation")}
 						</Button>
 					</div>
-					<label className="sr-only" htmlFor={searchInputId}>
-						{t("nav.search")}
-					</label>
-					<InputGroup className="nav-search">
-						<InputGroupInput
-							className="text-[13px]"
-							id={searchInputId}
-							placeholder={t("nav.search")}
-							aria-describedby={`${searchInputId}-scope`}
-							value={search}
-							onChange={(event) => setSearch(event.target.value)}
-						/>
-						<InputGroupAddon>
-							<Icon name="search" />
-						</InputGroupAddon>
-						<InputGroupAddon align="inline-end">
-							<TooltipProvider>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											aria-label={cl.searchScopeLabel}
-											aria-describedby={`${searchInputId}-scope`}
-										>
-											<Icon name="info" size={14} />
-										</Button>
-									</TooltipTrigger>
-									<TooltipContent side="right" className="max-w-64">
-										{cl.searchScope}
-									</TooltipContent>
-								</Tooltip>
-							</TooltipProvider>
-						</InputGroupAddon>
-					</InputGroup>
-					<p className="sr-only" id={`${searchInputId}-scope`}>
-						{cl.searchScope}
-					</p>
+					<div className="sidebar-search-panel" id={`${searchInputId}-panel`} hidden={!searchOpen}>
+						<label className="sr-only" htmlFor={searchInputId}>
+							{t("nav.search")}
+						</label>
+						<InputGroup className="nav-search">
+							<InputGroupInput
+								ref={searchInput}
+								id={searchInputId}
+								type="search"
+								placeholder={t("nav.search")}
+								aria-describedby={`${searchInputId}-scope`}
+								value={search}
+								onChange={(event) => setSearch(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+										event.preventDefault();
+										event.stopPropagation();
+										closeSearch();
+									}
+								}}
+							/>
+							<InputGroupAddon>
+								<Icon name="search" size={16} />
+							</InputGroupAddon>
+							<InputGroupAddon align="inline-end">
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									className="sidebar-search-clear"
+									aria-label={t(search ? "nav.clearSearch" : "nav.closeSearch")}
+									onClick={() => {
+										if (!search) closeSearch();
+										else {
+											setSearch("");
+											searchInput.current?.focus();
+										}
+									}}
+								>
+									<X size={14} aria-hidden="true" />
+								</Button>
+							</InputGroupAddon>
+						</InputGroup>
+						<p className="search-scope" id={`${searchInputId}-scope`}>
+							{cl.searchScope}
+						</p>
+					</div>
 					<div className="nav-section-heading">
 						<span>{t("nav.workspaces")}</span>
 						<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />

@@ -170,7 +170,7 @@ export async function backupStore({
 			createdAt,
 			sourceStoreId: catalog.sourceStoreId,
 			sourceRoot: root,
-			catalogSchema: 3,
+			catalogSchema: catalog.catalogSchema,
 			piSchema: 2,
 			producer: "hipi-work/0.0.1",
 			files: [],

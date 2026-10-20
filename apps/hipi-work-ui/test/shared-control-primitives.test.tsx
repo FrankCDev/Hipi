@@ -221,14 +221,18 @@ test("text fields preserve native composition/change/invalid contracts with the 
 test("shared control CSS emits scoped focus, state, sizing, theme and reduced-motion rules", async () => {
 	const theme = await readFile(new URL("../src/theme.css", import.meta.url), "utf8");
 	const controls = await readFile(new URL("../src/components/ui/control-primitives.css", import.meta.url), "utf8");
-	const compiler = await compile(`${theme}\n${controls}`, {
+	const compiler = await compile(theme, {
 		base: fileURLToPath(new URL("../src", import.meta.url)),
+		onDependency: () => {},
+	});
+	const controlsCompiler = await compile(controls, {
+		base: fileURLToPath(new URL("../src/components/ui", import.meta.url)),
 		onDependency: () => {},
 	});
 	const candidates = (["default", "ghost", "destructive"] as const).flatMap((variant) =>
 		buttonVariants({ variant }).split(" "),
 	);
-	const css = compiler.build(candidates);
+	const css = `${compiler.build(candidates)}\n${controlsCompiler.build([])}`;
 	assert.match(css, /:focus-visible\s*\{[^{}]*outline-width: 2px/);
 	assert.match(css, /:focus-visible\s*\{\s*outline-offset: calc\(1px \* -1\)/);
 	assert.ok(/\[aria-pressed="?true"?\]\s*\{\s*background-color: var\(--brand-hover\)/.test(css));

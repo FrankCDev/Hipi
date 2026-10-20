@@ -5,10 +5,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { build } from "esbuild";
 import { build as buildRenderer } from "vite";
-import { assertCodeMirrorDependencies, prepareCodeMirrorLicenses } from "./codemirror-licenses.mjs";
 import { prepareFontAssets } from "./font-assets.mjs";
 import { assertMaintenanceBundle } from "./maintenance-bundle.mjs";
-import { assertPierreDependencies, preparePierreLicenses } from "./pierre-licenses.mjs";
 import { assertBrandIcon, brandIconSha256 } from "./release-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,11 +47,6 @@ await writeFile(resolve(root, "dist/branding/icon.png"), brandIcon);
 await cp(resolve(ui, "vendor/pdfjs"), resolve(root, "dist/third-party/pdfjs"), { recursive: true });
 await cp(resolve(ui, "THIRD_PARTY_NOTICES.md"), resolve(root, "dist/third-party/UI-NOTICES.md"));
 await prepareFontAssets(ui, root);
-const dependencyLock = JSON.parse(await readFile(resolve(root, "../../package-lock.json"), "utf8"));
-await assertPierreDependencies(resolve(root, "../.."), dependencyLock);
-await assertCodeMirrorDependencies(resolve(root, "../.."), dependencyLock);
-await preparePierreLicenses(ui, root);
-await prepareCodeMirrorLicenses(ui, root);
 await bundle({
 	...options,
 	entryPoints: ["src/main.ts"],

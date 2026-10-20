@@ -391,6 +391,9 @@ test("capture fails a bounded finite entrance stall instead of silently taking a
 });
 
 test("focus timeout identifies only allowlisted targets, never dynamic titles or input values", async () => {
+	assert.equal(diagnosticTarget('button[aria-label="New project"]'), "New project");
+	assert.equal(diagnosticTarget(".new-conversation-trigger", "New chat"), "New chat");
+	assert.equal(diagnosticTarget('button[aria-label="New workspace"]'), "unrecognized target");
 	assert.equal(diagnosticTarget('button[aria-label="Model status"]'), "Model status");
 	assert.equal(
 		diagnosticTarget('header button[aria-label="Conversation actions: private title"]'),

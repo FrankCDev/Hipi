@@ -30,6 +30,7 @@
 			"import": "./dist/providers/*.js"
 		},
 		"./api/*": {
+			"source": "./src/api/*.ts",
 			"types": "./dist/api/*.d.ts",
 			"import": "./dist/api/*.js"
 		},

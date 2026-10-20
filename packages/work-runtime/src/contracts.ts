@@ -5,6 +5,12 @@ import {
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
+import {
+	isProviderConfigurationMethod,
+	type ProviderConfigurationMethods,
+	parseProviderConfigurationParams,
+	parseProviderConfigurationResult,
+} from "./provider-configuration.ts";
 
 export {
 	ACTIVITY_LIMITS,
@@ -12,6 +18,12 @@ export {
 	type ToolActivityPage,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
+export {
+	CUSTOM_PROVIDER_LIMITS,
+	type CustomProviderConfiguration,
+	type CustomProviderProtocol,
+	type ProviderModelOption,
+} from "./provider-configuration.ts";
 
 import {
 	isToolPackMethod,
@@ -31,7 +43,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -209,63 +221,64 @@ export type ObservationStatus =
 	| { state: "closed"; reason: "disposed" | "disconnected" | "expired" | "error"; code?: ErrorCode };
 export type Subscription = { dispose(): Promise<void> };
 export type Handshake = { protocolVersion: typeof PROTOCOL_VERSION; storeId: string };
-export type Methods = ToolPackMethods & {
-	getToolActivities: { params: Scope & { cursor?: string }; result: ToolActivityPage };
-	getToolActivityText: { params: Scope & { activityId: string; cursor?: string }; result: ToolActivityTextPage };
-	handshake: { params: Record<string, never>; result: Handshake };
-	listWorkspaces: { params: { cursor?: string }; result: Page<Workspace> };
-	listConversations: {
-		params: { workspaceId: string; filter?: ConversationFilter; cursor?: string };
-		result: Page<Conversation>;
-	};
-	createWorkspace: { params: { workspaceId: string; name: string }; result: Workspace };
-	getWorkspace: { params: { workspaceId: string }; result: Workspace };
-	openWorkspace: { params: { workspaceId: string }; result: Workspace };
-	createConversation: {
-		params: { workspaceId: string; requestId: string; title: string; model?: ModelReference };
-		result: Conversation;
-	};
-	getConversation: { params: Scope; result: Conversation };
-	renameConversation: { params: ConversationMutation & { title: string }; result: Conversation };
-	archiveConversation: { params: ConversationMutation; result: Conversation };
-	restoreConversation: { params: ConversationMutation; result: Conversation };
-	getConversationCommandResult: {
-		params: { workspaceId: string; requestId: string };
-		result: ConversationCommandResult | null;
-	};
-	listModels: { params: Record<string, never>; result: ModelCatalog };
-	getConversationModel: { params: Scope; result: ConversationModel };
-	continueWorkspace: { params: { workspaceId: string }; result: { workspaceId: string; state: "authorized" } };
-	cancelExecution: { params: Scope; result: ConversationModel };
-	authorizeAgentContext: { params: AgentContextRequest; result: AgentContext };
-	authorizeRetainedContext: { params: RetainedContextRequest; result: AgentContext };
-	revokeAgentContext: {
-		params: Scope & { requestId: string; grantId: string; expectedRevision: number };
-		result: AgentContext;
-	};
-	listAgentContexts: { params: Scope & { cursor?: string }; result: AgentContextPage };
-	listActiveAgentContexts: { params: Scope; result: AgentContext[] };
-	getAgentCommandResult: { params: Scope & { requestId: string }; result: AgentCommandResult | null };
-	listPendingToolApprovals: { params: Scope & { cursor?: string }; result: ToolApprovalPage };
-	listToolApprovals: { params: Scope & { cursor?: string }; result: ToolApprovalPage };
-	decideToolApproval: {
-		params: Scope & {
-			requestId: string;
-			approvalId: string;
-			expectedRevision: number;
-			decision: "approve" | "reject";
-			argumentsDigest: string;
-			contentDigest: string;
+export type Methods = ToolPackMethods &
+	ProviderConfigurationMethods & {
+		getToolActivities: { params: Scope & { cursor?: string }; result: ToolActivityPage };
+		getToolActivityText: { params: Scope & { activityId: string; cursor?: string }; result: ToolActivityTextPage };
+		handshake: { params: Record<string, never>; result: Handshake };
+		listWorkspaces: { params: { cursor?: string }; result: Page<Workspace> };
+		listConversations: {
+			params: { workspaceId: string; filter?: ConversationFilter; cursor?: string };
+			result: Page<Conversation>;
 		};
-		result: ToolApproval;
+		createWorkspace: { params: { workspaceId: string; name: string }; result: Workspace };
+		getWorkspace: { params: { workspaceId: string }; result: Workspace };
+		openWorkspace: { params: { workspaceId: string }; result: Workspace };
+		createConversation: {
+			params: { workspaceId: string; requestId: string; title: string; model?: ModelReference };
+			result: Conversation;
+		};
+		getConversation: { params: Scope; result: Conversation };
+		renameConversation: { params: ConversationMutation & { title: string }; result: Conversation };
+		archiveConversation: { params: ConversationMutation; result: Conversation };
+		restoreConversation: { params: ConversationMutation; result: Conversation };
+		getConversationCommandResult: {
+			params: { workspaceId: string; requestId: string };
+			result: ConversationCommandResult | null;
+		};
+		listModels: { params: Record<string, never>; result: ModelCatalog };
+		getConversationModel: { params: Scope; result: ConversationModel };
+		continueWorkspace: { params: { workspaceId: string }; result: { workspaceId: string; state: "authorized" } };
+		cancelExecution: { params: Scope; result: ConversationModel };
+		authorizeAgentContext: { params: AgentContextRequest; result: AgentContext };
+		authorizeRetainedContext: { params: RetainedContextRequest; result: AgentContext };
+		revokeAgentContext: {
+			params: Scope & { requestId: string; grantId: string; expectedRevision: number };
+			result: AgentContext;
+		};
+		listAgentContexts: { params: Scope & { cursor?: string }; result: AgentContextPage };
+		listActiveAgentContexts: { params: Scope; result: AgentContext[] };
+		getAgentCommandResult: { params: Scope & { requestId: string }; result: AgentCommandResult | null };
+		listPendingToolApprovals: { params: Scope & { cursor?: string }; result: ToolApprovalPage };
+		listToolApprovals: { params: Scope & { cursor?: string }; result: ToolApprovalPage };
+		decideToolApproval: {
+			params: Scope & {
+				requestId: string;
+				approvalId: string;
+				expectedRevision: number;
+				decision: "approve" | "reject";
+				argumentsDigest: string;
+				contentDigest: string;
+			};
+			result: ToolApproval;
+		};
+		getFileOperation: { params: Scope & { operationId: string; reconcile?: boolean }; result: FileOperation | null };
+		submit: { params: Submit; result: Receipt };
+		getReceipt: { params: { workspaceId: string; requestId: string }; result: ReceiptView | null };
+		snapshot: { params: Scope; result: Snapshot };
+		getHistory: { params: Scope & { cursor?: string }; result: HistoryPage };
+		getMessageText: { params: Scope & { messageId: string; offset: number }; result: MessageTextChunk };
 	};
-	getFileOperation: { params: Scope & { operationId: string; reconcile?: boolean }; result: FileOperation | null };
-	submit: { params: Submit; result: Receipt };
-	getReceipt: { params: { workspaceId: string; requestId: string }; result: ReceiptView | null };
-	snapshot: { params: Scope; result: Snapshot };
-	getHistory: { params: Scope & { cursor?: string }; result: HistoryPage };
-	getMessageText: { params: Scope & { messageId: string; offset: number }; result: MessageTextChunk };
-};
 export type Method = keyof Methods;
 export type Params<M extends Method> = Methods[M]["params"];
 export type Result<M extends Method> = Methods[M]["result"];
@@ -359,6 +372,18 @@ export function parseRequest(value: unknown): Request {
 	)
 		throw new AppError("INVALID_REQUEST");
 	const p = object(r.params);
+	if (isProviderConfigurationMethod(r.method)) {
+		try {
+			return {
+				version: PROTOCOL_VERSION,
+				...(r.expectedStoreId === undefined ? {} : { expectedStoreId: id(r.expectedStoreId) }),
+				method: r.method,
+				params: parseProviderConfigurationParams(r.method, p),
+			} as Request;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (isToolPackMethod(r.method)) {
 		try {
 			return {
@@ -1091,6 +1116,13 @@ function parsePage<T>(value: unknown, max: number, parse: (value: unknown) => T,
 }
 export function parseResult<M extends Method>(method: M, value: unknown): Result<M> {
 	if (!fitsPayloadBudget(value)) throw new AppError("INVALID_REQUEST");
+	if (isProviderConfigurationMethod(method)) {
+		try {
+			return parseProviderConfigurationResult(method, value) as Result<M>;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (isToolPackMethod(method)) {
 		try {
 			return parseToolPackResult(method, value) as Result<M>;

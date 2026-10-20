@@ -23,6 +23,7 @@ import { useThemeSettings } from "../../app/theme/index.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { GeneralSettings, SettingsForm } from "./appearance-settings.tsx";
+import { CustomProviderSettings } from "./custom-provider-settings.tsx";
 import { settingsPageLabels } from "./settings-page-labels.ts";
 import { type SettingsCategory, searchSettings, settingsSearchEntries } from "./settings-search.ts";
 import "./settings-page.css";
@@ -261,7 +262,11 @@ export function SettingsPage({ open, onOpenChange, onRestoreFocus, initialCatego
 								<SettingsForm selectedSetting={destination?.target} />
 							</section>
 							<section hidden={category !== "models"} className="settings-section" data-category="models">
-								<ModelContent catalog={catalog} credentialSettings={actions.credentialSettings} />
+								<ModelContent
+									enabled={category === "models"}
+									catalog={catalog}
+									credentialSettings={actions.credentialSettings}
+								/>
 							</section>
 							<section hidden={category !== "runtime"} className="settings-section" data-category="runtime">
 								<RuntimeContent {...actions} />
@@ -277,9 +282,11 @@ export function SettingsPage({ open, onOpenChange, onRestoreFocus, initialCatego
 export const SettingsDialog = SettingsPage;
 
 function ModelContent({
+	enabled,
 	catalog,
 	credentialSettings,
 }: {
+	enabled: boolean;
 	catalog: UseQueryResult<ModelCatalog>;
 	credentialSettings: ReactNode;
 }) {
@@ -288,6 +295,7 @@ function ModelContent({
 	const l = settingsPageLabels(locale);
 	return (
 		<>
+			<CustomProviderSettings enabled={enabled} catalog={catalog.isError ? undefined : catalog.data} />
 			<div className="settings-section-heading" data-setting="providers">
 				<h3>{l["settingsPage.providers"]}</h3>
 				<Button variant="ghost" size="sm" disabled={catalog.isFetching} onClick={() => void catalog.refetch()}>
@@ -309,7 +317,6 @@ function ModelContent({
 						</span>
 						<div className="settings-row-copy">
 							<strong>{provider.name}</strong>
-							<span>{provider.provider}</span>
 						</div>
 						<output
 							className="settings-provider-status"
@@ -367,7 +374,9 @@ function ModelContent({
 							<strong>{model.name}</strong>
 							<span>{model.modelId}</span>
 						</div>
-						<span className="settings-model-provider">{model.provider}</span>
+						<span className="settings-model-provider">
+							{catalog.data?.providers.find((provider) => provider.provider === model.provider)?.name ?? model.provider}
+						</span>
 					</div>
 				))}
 				{catalog.data?.models.length === 0 && <p className="settings-empty">{l["settingsPage.catalogEmpty"]}</p>}

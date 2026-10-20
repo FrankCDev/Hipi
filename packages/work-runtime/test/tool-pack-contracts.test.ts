@@ -56,10 +56,14 @@ function request(method: string, params: unknown) {
 	return parseRequest({ version: PROTOCOL_VERSION, expectedStoreId: "store", method, params });
 }
 
-test("protocol 5 refuses old requests and old server handshake", () => {
-	assert.equal(PROTOCOL_VERSION, 5);
-	assert.throws(() => parseRequest({ version: 4, method: "handshake", params: {} }), { code: "INVALID_REQUEST" });
-	assert.throws(() => parseResult("handshake", { protocolVersion: 4, storeId: "store" }), { code: "INVALID_REQUEST" });
+test("protocol 6 refuses old and future requests and server handshakes", () => {
+	assert.equal(PROTOCOL_VERSION, 6);
+	for (const version of [4, 5, 7]) {
+		assert.throws(() => parseRequest({ version, method: "handshake", params: {} }), { code: "INVALID_REQUEST" });
+		assert.throws(() => parseResult("handshake", { protocolVersion: version, storeId: "store" }), {
+			code: "INVALID_REQUEST",
+		});
+	}
 });
 test("package commands validate exact immutable identity, disclosure, raw UTF-8 and unknown fields", () => {
 	assert.deepEqual(request("installToolPack", install).params, install);

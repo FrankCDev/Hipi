@@ -4,7 +4,12 @@ import { type FileHandle, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { AppError, type CredentialState } from "@hipi/work-runtime/contracts";
 
-import { credentialProvider, credentialSecret } from "./credential-protocol.ts";
+import {
+	type CredentialProvider,
+	credentialProvider,
+	credentialSecret,
+	MAX_CREDENTIAL_PROVIDERS,
+} from "./credential-protocol.ts";
 
 export interface SafeStoragePort {
 	isEncryptionAvailable(): boolean | Promise<boolean>;
@@ -69,12 +74,12 @@ export class CredentialStore {
 		this.#tail = result.catch(() => undefined);
 		return result;
 	}
-	async #read(): Promise<string | undefined> {
+	async #read(): Promise<Map<CredentialProvider, string>> {
 		let file: FileHandle;
 		try {
 			file = await open(this.#path, constants.O_RDONLY | constants.O_NOFOLLOW);
 		} catch (error) {
-			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
+			if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return new Map();
 			throw new AppError("INTERNAL");
 		}
 		try {
@@ -89,19 +94,37 @@ export class CredentialStore {
 				typeof value !== "object" ||
 				Array.isArray(value) ||
 				!("version" in value) ||
-				value.version !== 1 ||
-				Object.keys(value).some((key) => !["version", "openai"].includes(key))
+				(value.version !== 1 && value.version !== 2)
 			)
 				throw new AppError("INTERNAL");
-			return "openai" in value ? credentialSecret(value.openai) : undefined;
+			const providers = new Map<CredentialProvider, string>();
+			if (value.version === 1) {
+				if (Object.keys(value).some((key) => !["version", "openai"].includes(key))) throw new AppError("INTERNAL");
+				if ("openai" in value) providers.set("openai", credentialSecret(value.openai));
+			} else {
+				if (
+					Object.keys(value).some((key) => !["version", "providers"].includes(key)) ||
+					!("providers" in value) ||
+					!value.providers ||
+					typeof value.providers !== "object" ||
+					Array.isArray(value.providers)
+				)
+					throw new AppError("INTERNAL");
+				const entries = Object.entries(value.providers);
+				if (entries.length > MAX_CREDENTIAL_PROVIDERS) throw new AppError("INTERNAL");
+				for (const [provider, secret] of entries) providers.set(credentialProvider(provider), credentialSecret(secret));
+			}
+			return providers;
 		} catch {
 			throw new AppError("INTERNAL");
 		} finally {
-			await file.close();
+			await file.close().catch(() => {
+				throw new AppError("INTERNAL");
+			});
 		}
 	}
 	status(provider: string): Promise<CredentialState> {
-		credentialProvider(provider);
+		const identity = credentialProvider(provider);
 		this.#observe("status-enter");
 		return this.#serial(async () => {
 			try {
@@ -111,7 +134,7 @@ export class CredentialStore {
 				if (!available) return "unavailable";
 				this.#observe("file-read-enter");
 				try {
-					return (await this.#read()) === undefined ? "missing" : "configured";
+					return (await this.#read()).has(identity) ? "configured" : "missing";
 				} catch {
 					return "locked";
 				} finally {
@@ -123,29 +146,37 @@ export class CredentialStore {
 		});
 	}
 	get(provider: string): Promise<string | undefined> {
-		credentialProvider(provider);
+		const identity = credentialProvider(provider);
 		return this.#serial(async () => {
 			if (!(await this.#available())) throw new AppError("INTERNAL");
-			return this.#read();
+			return (await this.#read()).get(identity);
 		});
 	}
 	set(provider: string, secret: string): Promise<void> {
-		credentialProvider(provider);
+		const identity = credentialProvider(provider);
 		credentialSecret(secret);
-		return this.#write(secret);
+		return this.#write(identity, secret);
 	}
 	remove(provider: string): Promise<void> {
-		credentialProvider(provider);
-		return this.#write(undefined);
+		return this.#write(credentialProvider(provider), undefined);
 	}
-	#write(secret: string | undefined): Promise<void> {
+	#write(provider: CredentialProvider, secret: string | undefined): Promise<void> {
 		return this.#serial(async () => {
 			if (!(await this.#available())) throw new AppError("INTERNAL");
 			// A damaged or locked existing file must never be replaced, including by deletion.
-			await this.#read();
+			const providers = await this.#read();
+			if (secret === undefined) providers.delete(provider);
+			else {
+				if (!providers.has(provider) && providers.size >= MAX_CREDENTIAL_PROVIDERS)
+					throw new AppError("CAPACITY_EXCEEDED");
+				providers.set(provider, secret);
+			}
+			// Reads retain v1 intact. An explicit set/remove upgrades the complete encrypted map.
+			const plaintext = JSON.stringify({ version: 2, providers: Object.fromEntries(providers) });
+			if (Buffer.byteLength(plaintext) > MAX_BYTES) throw new AppError("CAPACITY_EXCEEDED");
 			const temporary = `${this.#path}.${randomUUID()}.tmp`;
 			try {
-				const encrypted = await this.#storage.encryptString(JSON.stringify({ version: 1, openai: secret }));
+				const encrypted = await this.#storage.encryptString(plaintext);
 				if (!encrypted.length || encrypted.length > MAX_BYTES) throw new AppError("INTERNAL");
 				await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
 				const file = await open(temporary, "wx", 0o600);
@@ -156,6 +187,16 @@ export class CredentialStore {
 					await file.close();
 				}
 				await this.#replace(temporary, this.#path);
+				// POSIX also needs the directory entry flushed after rename. Windows does not
+				// support opening directories this way; native durability remains platform-qualified.
+				if (this.#platform !== "win32") {
+					const directory = await open(dirname(this.#path), constants.O_RDONLY | constants.O_DIRECTORY);
+					try {
+						await directory.sync();
+					} finally {
+						await directory.close();
+					}
+				}
 			} catch {
 				throw new AppError("INTERNAL");
 			} finally {

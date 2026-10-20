@@ -87,7 +87,7 @@ test("current conversation and its containing project have distinct surfaces wit
 	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
 	assert.match(html, />收起项目<\/span>/);
 	assert.match(html, />打开项目<\/span>/);
-	assert.match(html, /aria-label="新建会话: My project 0"/);
+	assert.match(html, /aria-label="新聊天: My project 0"/);
 	assert.match(html, /aria-label="会话操作: My conversation"/);
 	assert.match(html, /aria-haspopup="menu"/);
 	assert.equal(
@@ -225,10 +225,11 @@ test("selected conversation remains mounted when it is outside the displayed dir
 	const empty = render();
 	assert.match(empty, /data-selected-conversation="selected-conversation"/);
 	assert.doesNotMatch(empty, /第一页|加载更多/);
-	assert.match(empty, /aria-label="新建工作区"/);
+	assert.match(empty, /aria-label="新建项目"/);
 	assert.match(empty, /aria-label="工作台设置"/);
-	assert.match(empty, /<p class="sr-only"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
-	assert.match(empty, /aria-label="搜索范围"/);
+	assert.match(empty, /<p class="search-scope"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
+	assert.match(empty, /class="sidebar-search-panel"[^>]*hidden=""/);
+	assert.match(empty, /aria-label="搜索聊天"[^>]*aria-expanded="false"/);
 	assert.equal(local.read("draft.selected-workspace.selected-conversation"), "keep this draft");
 	cache.clear();
 });

@@ -2,6 +2,7 @@ import type { AppearanceStatus } from "@hipi/work-runtime/appearance";
 import type { ModelCatalog } from "@hipi/work-runtime/contracts";
 import type { ThemeConfig } from "../../app/theme/index.ts";
 import { settingsLabels } from "./labels.ts";
+import { providerLabels } from "./provider-labels.ts";
 import { settingsPageLabels } from "./settings-page-labels.ts";
 
 export type SettingsCategory = "general" | "appearance" | "models" | "runtime";
@@ -23,7 +24,16 @@ export function settingsSearchEntries(
 ): SettingsSearchEntry[] {
 	const t = settingsLabels(config.locale);
 	const l = settingsPageLabels(config.locale);
+	const provider = providerLabels(config.locale);
 	const entries: SettingsSearchEntry[] = [
+		{
+			id: "custom-providers",
+			category: "models",
+			label: provider["provider.title"],
+			destination: l["settingsPage.models"],
+			description: provider["provider.empty"],
+			terms: "OpenAI Anthropic DeepSeek OpenRouter API base URL",
+		},
 		...(
 			[
 				"theme",

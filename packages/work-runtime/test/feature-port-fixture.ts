@@ -5,6 +5,11 @@ async function denied(): Promise<never> {
 }
 /** Existing fixtures explicitly deny features outside their scenario. */
 export const deniedFeatureReads = {
+	listCustomProviders: denied,
+	saveCustomProvider: denied,
+	removeCustomProvider: denied,
+	listBuiltInProviders: denied,
+	getBuiltInProviderModels: denied,
 	previewToolPack: denied,
 	listToolPacks: denied,
 	getToolPackSource: denied,

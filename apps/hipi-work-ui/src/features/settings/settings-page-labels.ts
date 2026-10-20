@@ -32,7 +32,7 @@ const en = {
 	"settingsPage.memoryStorage": "Runtime memory only",
 	"settingsPage.noCredentials": "Credential management unavailable",
 	"settingsPage.credentialsNote":
-		"Credential editing currently supports the official OpenAI API only. Saved keys are never displayed or included in appearance exports.",
+		"Manage custom-provider keys in their configuration above. This action manages the built-in OpenAI key. Saved keys are never displayed or included in appearance exports.",
 	"settingsPage.connection": "Runtime connection",
 	"settingsPage.connectionNote":
 		"Disconnecting stops this interface from observing work. It does not stop execution or undo external actions.",
@@ -103,7 +103,7 @@ const zh: Labels = {
 	"settingsPage.memoryStorage": "仅运行时内存",
 	"settingsPage.noCredentials": "当前连接不提供凭据管理",
 	"settingsPage.credentialsNote":
-		"凭据编辑当前仅支持 OpenAI 官方 API。已保存的密钥不会显示，也不会包含在外观导出文件中。",
+		"自定义 Provider 的密钥在上方对应配置中管理，此处操作内置 OpenAI 的密钥。已保存的密钥不会显示，也不会包含在外观导出文件中。",
 	"settingsPage.connection": "运行时连接",
 	"settingsPage.connectionNote": "断开只会停止此界面对工作的观察，不会停止运行时执行，也不会回滚外部操作。",
 	"settingsPage.connectionCheck": "连接检查",

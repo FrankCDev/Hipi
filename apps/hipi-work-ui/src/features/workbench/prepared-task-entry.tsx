@@ -47,10 +47,10 @@ export function PreparedTaskEntry({
 	});
 	const configured = (provider: string) =>
 		catalog.data?.providers.some((item) => item.provider === provider && item.credentialState === "configured");
-	const selected =
-		catalog.data?.models.find((model) => JSON.stringify([model.provider, model.modelId]) === modelKey) ??
-		catalog.data?.models.find((model) => configured(model.provider)) ??
-		catalog.data?.models[0];
+	// A removed selection must not silently redirect the user's next message to another service.
+	const selected = modelKey
+		? catalog.data?.models.find((model) => JSON.stringify([model.provider, model.modelId]) === modelKey)
+		: (catalog.data?.models.find((model) => configured(model.provider)) ?? catalog.data?.models[0]);
 	const ready = selected && configured(selected.provider) && !catalog.isError;
 	useLayoutEffect(() => {
 		if (input.current?.value === draft) resizeComposerTextarea(input.current);
@@ -135,7 +135,10 @@ export function PreparedTaskEntry({
 										>
 											<span>
 												<strong>{model.name}</strong>
-												<span>{model.provider}</span>
+												<span>
+													{catalog.data?.providers.find((item) => item.provider === model.provider)?.name ??
+														model.provider}
+												</span>
 											</span>
 											{active && <Check size={16} aria-hidden="true" />}
 										</Button>

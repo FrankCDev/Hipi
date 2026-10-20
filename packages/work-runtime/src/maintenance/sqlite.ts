@@ -5,6 +5,7 @@ import {
 	openNodeSqliteStorageReadOnly,
 	type ReadonlySqliteStorage,
 } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { CUSTOM_PROVIDER_LIMITS, parseResult } from "../contracts.ts";
 import { checkDatabasePath } from "../store-owner.ts";
 import { MAINTENANCE_LIMITS, MaintenanceError } from "./contracts.ts";
 import { assertRegularFile, validateWorkspaceId } from "./paths.ts";
@@ -24,6 +25,7 @@ async function closeStorage(storage: ReadonlySqliteStorage): Promise<void> {
 }
 let expectedPiSchema: string | undefined;
 let expectedCatalogSchema: string | undefined;
+let expectedConfiguredCatalogSchema: string | undefined;
 function assertSchemaBudget(db: DatabaseSync): void {
 	const count = db.prepare("SELECT count(*) AS total FROM sqlite_schema").get()?.total;
 	if (
@@ -100,7 +102,7 @@ export function assertSqliteIntegrity(path: string, standalone = false): void {
 		closeDatabase(db);
 	}
 }
-function assertCatalogSchema(db: DatabaseSync): void {
+function assertCatalogSchema(db: DatabaseSync): 3 | 5 {
 	if (expectedCatalogSchema === undefined) {
 		const reference = new DatabaseSync(":memory:");
 		try {
@@ -108,17 +110,30 @@ function assertCatalogSchema(db: DatabaseSync): void {
 				"CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, store_id TEXT NOT NULL, root TEXT NOT NULL); CREATE TABLE workspaces (workspace_id TEXT PRIMARY KEY, name TEXT NOT NULL, ready INTEGER NOT NULL CHECK(ready IN (0,1))); CREATE TABLE conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL)",
 			);
 			expectedCatalogSchema = schemaSignature(reference);
+			reference.exec(
+				"CREATE TABLE custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL)",
+			);
+			expectedConfiguredCatalogSchema = schemaSignature(reference);
 		} finally {
 			reference.close();
 		}
 	}
-	if (schemaSignature(db) !== expectedCatalogSchema) throw new MaintenanceError("UNSUPPORTED_SCHEMA");
+	const signature = schemaSignature(db);
+	if (signature === expectedCatalogSchema) return 3;
+	if (signature === expectedConfiguredCatalogSchema) return 5;
+	throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 }
 export function inspectCatalog(path: string, expectedRoot?: string) {
 	const db = openReadOnly(path);
 	try {
-		assertCatalogSchema(db);
-		const allowed = new Set(["identity", "workspaces", "conversations", "directory_checkpoints"]);
+		const version = assertCatalogSchema(db);
+		const allowed = new Set([
+			"identity",
+			"workspaces",
+			"conversations",
+			"directory_checkpoints",
+			...(version === 5 ? ["custom_providers", "provider_commands"] : []),
+		]);
 		for (const row of db.prepare("SELECT type,name,sql FROM sqlite_schema").iterate()) {
 			if (row.type === "table" && typeof row.name === "string" && allowed.delete(row.name)) continue;
 			if (
@@ -157,7 +172,7 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			throw new MaintenanceError("IDENTITY_MISMATCH");
 		const identities = db.prepare("SELECT singleton,version,store_id,root FROM identity LIMIT 2").all();
 		const identity = identities[0];
-		if (identities.length !== 1 || identity.singleton !== 1 || identity.version !== 3)
+		if (identities.length !== 1 || identity.singleton !== 1 || identity.version !== version)
 			throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 		if (
 			typeof identity.store_id !== "string" ||
@@ -167,6 +182,50 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			(expectedRoot !== undefined && identity.root !== expectedRoot)
 		)
 			throw new MaintenanceError("IDENTITY_MISMATCH");
+		if (version === 5) {
+			const providerCount = db
+				.prepare("SELECT count(*) AS total FROM (SELECT 1 FROM custom_providers LIMIT ?)")
+				.get(CUSTOM_PROVIDER_LIMITS.providers + 1)?.total;
+			if (
+				typeof providerCount !== "number" ||
+				providerCount > CUSTOM_PROVIDER_LIMITS.providers ||
+				db
+					.prepare(
+						"SELECT 1 FROM custom_providers WHERE length(CAST(provider AS BLOB))>71 OR length(CAST(value AS BLOB))>? LIMIT 1",
+					)
+					.get(CUSTOM_PROVIDER_LIMITS.configurationBytes) ||
+				db
+					.prepare(
+						"SELECT 1 FROM provider_commands WHERE length(CAST(request_id AS BLOB))>128 OR length(CAST(digest AS BLOB))!=64 OR length(CAST(result AS BLOB))>? LIMIT 1",
+					)
+					.get(CUSTOM_PROVIDER_LIMITS.configurationBytes)
+			)
+				throw new MaintenanceError("CAPACITY_EXCEEDED");
+			try {
+				const providers = db.prepare("SELECT provider,value FROM custom_providers").all();
+				for (const row of providers) {
+					if (typeof row.value !== "string") throw new Error("Invalid configuration");
+					const provider = parseResult("saveCustomProvider", JSON.parse(row.value));
+					if (provider.provider !== row.provider) throw new Error("Identity mismatch");
+				}
+				for (const row of db.prepare("SELECT request_id,digest,result FROM provider_commands").iterate()) {
+					if (
+						typeof row.request_id !== "string" ||
+						!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(row.request_id) ||
+						typeof row.digest !== "string" ||
+						!/^[a-f0-9]{64}$/.test(row.digest) ||
+						typeof row.result !== "string"
+					)
+						throw new Error("Invalid command");
+					const result: unknown = JSON.parse(row.result);
+					if (result && typeof result === "object" && "removed" in result)
+						parseResult("removeCustomProvider", result);
+					else parseResult("saveCustomProvider", result);
+				}
+			} catch {
+				throw new MaintenanceError("IDENTITY_MISMATCH");
+			}
+		}
 		const workspaces: { workspaceId: string; name: string; ready: 0 | 1 }[] = [];
 		const seen = new Set<string>();
 		for (const row of db.prepare("SELECT workspace_id,name,ready FROM workspaces").iterate()) {
@@ -184,7 +243,7 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			workspaces.push({ workspaceId: row.workspace_id, name: row.name, ready: row.ready });
 			if (workspaces.length > MAINTENANCE_LIMITS.workspaces) throw new MaintenanceError("CAPACITY_EXCEEDED");
 		}
-		return { sourceStoreId: identity.store_id, sourceRoot: identity.root, workspaces };
+		return { sourceStoreId: identity.store_id, sourceRoot: identity.root, catalogSchema: version, workspaces };
 	} finally {
 		closeDatabase(db);
 	}

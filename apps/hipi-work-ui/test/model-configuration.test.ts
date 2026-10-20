@@ -62,6 +62,21 @@ test("credential input validation rejects control characters and excessive input
 	assert.equal(calls, 0);
 });
 
+test("custom provider credentials share strict request/response parsing with the host", async () => {
+	const provider = "custom_test-profile";
+	const client = createCredentialClient({
+		request: async () => ({ ok: true, state: "configured" }),
+	});
+	assert.equal(await client.request({ operation: "set", provider, secret: "FAKE_CUSTOM_KEY" }), "configured");
+	for (const state of [["configured"], { toString: () => "configured" }, null, 0]) {
+		const malformed = createCredentialClient({ request: async () => ({ ok: true, state }) });
+		await assert.rejects(malformed.request({ operation: "status", provider }), /INVALID_REQUEST/);
+	}
+	for (const invalid of ["anthropic", "custom_", "custom_../other", "__proto__"]) {
+		await assert.rejects(client.request({ operation: "status", provider: invalid }), /INVALID_REQUEST/);
+	}
+});
+
 test("credential timeout is bounded and never automatically retried", async () => {
 	vi.useFakeTimers();
 	try {

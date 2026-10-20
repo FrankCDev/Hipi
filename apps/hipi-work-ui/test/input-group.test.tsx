@@ -110,7 +110,7 @@ afterEach(() => {
 	hooks.active = false;
 });
 
-test("workbench search groups the icon and input inside one border with a real translated label", () => {
+test("header search keeps a hidden, labeled input group with truthful scope until it is opened", () => {
 	const cache = new QueryClient();
 	cache.setQueryData(["workspaces"], []);
 	const html = renderToStaticMarkup(
@@ -121,21 +121,25 @@ test("workbench search groups the icon and input inside one border with a real t
 		</QueryClientProvider>,
 	);
 	cache.clear();
-	const label = html.match(/<label class="sr-only" for="([^"]+)">搜索会话<\/label>/);
+	const label = html.match(/<label class="sr-only" for="([^"]+)">搜索聊天<\/label>/);
 	assert.ok(label);
+	assert.ok(html.includes(`class="sidebar-search-panel" id="${label[1]}-panel" hidden=""`));
+	assert.match(html, /aria-label="搜索聊天"[^>]*aria-expanded="false"/);
 	const group = html.match(/<div data-slot="input-group"[\s\S]*?<\/div><\/div>/)?.[0];
 	assert.ok(group);
 	assert.ok(group.includes(`id="${label[1]}"`));
 	assert.ok(group.includes(`aria-describedby="${label[1]}-scope"`));
-	assert.match(group, /<input data-slot="input-group-control"/);
+	assert.match(group, /<input\b[^>]*data-slot="input-group-control"/);
 	assert.match(group, /data-slot="input-group-addon"[^>]*data-align="inline-start"[\s\S]*<svg aria-hidden="true"/);
 	const input = group.match(/<input\b[^>]*>/)?.[0];
 	assert.ok(input);
 	assert.match(input, /focus-visible:ring-0/);
 	assert.doesNotMatch(input, /focus-visible:ring-\[3px\](?: |")/);
-	const scopeButton = group.match(/<button\b[^>]*aria-label="搜索范围"[^>]*>/)?.[0];
-	assert.ok(scopeButton);
-	assert.match(scopeButton, /focus-visible:outline-2/);
+	const closeButton = group.match(/<button\b[^>]*aria-label="关闭搜索"[^>]*>/)?.[0];
+	assert.ok(closeButton);
+	assert.match(closeButton, /focus-visible:outline-2/);
+	assert.match(html, /class="search-scope"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
+	assert.doesNotMatch(html, /aria-label="搜索范围"/);
 });
 
 test("compact project creation retains one named button with the official size and dialog trigger", () => {
@@ -152,7 +156,7 @@ test("compact project creation retains one named button with the official size a
 	assert.match(html, /data-size="icon-sm"/);
 	assert.match(html, /data-variant="ghost"/);
 	assert.match(html, /aria-haspopup="dialog"/);
-	assert.match(html, /aria-label="新建工作区"/);
+	assert.match(html, /aria-label="新建项目"/);
 });
 
 type Node = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;

@@ -14,10 +14,15 @@ import { decode, encode } from "../src/protocol.ts";
 
 function catalog() {
 	const rejectFeatureRead = async () => {
-		throw new Error("Files must not read tool packs or activities");
+		throw new Error("Files must not read tool packs, activities, or provider settings");
 	};
 	return new WorkRuntime({
 		storeId: "store",
+		listCustomProviders: rejectFeatureRead,
+		saveCustomProvider: rejectFeatureRead,
+		removeCustomProvider: rejectFeatureRead,
+		listBuiltInProviders: rejectFeatureRead,
+		getBuiltInProviderModels: rejectFeatureRead,
 		previewToolPack: rejectFeatureRead,
 		listToolPacks: rejectFeatureRead,
 		getToolPackSource: rejectFeatureRead,

@@ -4,7 +4,7 @@ import type * as React from "react";
 import { isValidElement } from "react";
 import { beforeEach, test, vi } from "vitest";
 import { Button } from "../src/components/ui/button.tsx";
-import { DropdownMenuRadioGroup } from "../src/components/ui/dropdown-menu.tsx";
+import { DropdownMenuContent, DropdownMenuRadioGroup } from "../src/components/ui/dropdown-menu.tsx";
 import { CatalogSession } from "../src/features/workbench/catalog-session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 import { SidebarPreviewRow } from "../src/features/workbench/sidebar-preview-row.tsx";
@@ -113,6 +113,7 @@ test("disclosure, project navigation and direct draft entry are three independen
 	assert.deepEqual(ui.open.mock.calls, [["project"]]);
 	const actions = row.props.renderActions?.({
 		previewContent: null,
+		menuPosition: { sideOffset: 40, alignOffset: -4 },
 		triggerRef: { current: null },
 		onMenuOpen: vi.fn(),
 		onOverlayChange: vi.fn(),
@@ -133,6 +134,7 @@ test("archive visibility is changed by the project menu and opens only that coll
 	const row = only(ui.render(), SidebarPreviewRow);
 	const actions = row.props.renderActions?.({
 		previewContent: null,
+		menuPosition: { sideOffset: 40, alignOffset: -4 },
 		triggerRef: { current: null },
 		onMenuOpen: vi.fn(),
 		onOverlayChange: vi.fn(),
@@ -141,6 +143,12 @@ test("archive visibility is changed by the project menu and opens only that coll
 	const children = only(actions, "div").props.children;
 	assert.ok(Array.isArray(children));
 	const menu = invoke(children[0]);
+	const content = only(menu, DropdownMenuContent);
+	assert.equal(content.props.side, "right");
+	assert.equal(content.props.align, "start");
+	assert.equal(content.props.sideOffset, 40);
+	assert.equal(content.props.alignOffset, -4);
+	assert.equal(content.props.collisionPadding, 12);
 	only(menu, DropdownMenuRadioGroup).props.onValueChange?.("archived");
 	ui.render();
 	assert.deepEqual(fixture.options?.queryKey, ["conversations", "project", "archived"]);

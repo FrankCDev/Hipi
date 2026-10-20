@@ -1,11 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
+import { click, waitForOverlayClosed } from "./gui-flow.mjs";
 import {
 	assertDisclosureContinuity,
 	currentProject,
+	projectCreationTrigger,
 	projectSelector,
 	projectViewportReady,
 } from "./gui-project-disclosure.mjs";
+
+test("named project creation targets New project and restores that exact trigger after its dialog", async () => {
+	const trigger = {
+		disabled: false,
+		getClientRects: () => [{}],
+		scrollIntoView() {},
+		getBoundingClientRect: () => ({ x: 10, y: 10, width: 30, height: 30 }),
+		contains: (node) => node === trigger,
+	};
+	const document = {
+		activeElement: trigger,
+		querySelector: () => null,
+		querySelectorAll: (selector) => {
+			assert.equal(selector, '.nav-section-heading button[aria-label="New project"]');
+			return [trigger];
+		},
+		elementFromPoint: () => trigger,
+	};
+	const events = [];
+	const cdp = {
+		async request(method, params) {
+			if (method === "Runtime.evaluate")
+				return {
+					result: {
+						value: await runInNewContext(params.expression, {
+							document,
+							location: { href: "hipi-work://app/index.html" },
+							requestAnimationFrame: (callback) => callback(),
+						}),
+					},
+				};
+			events.push(params.type);
+		},
+	};
+	await click(cdp, projectCreationTrigger);
+	assert.deepEqual(events, ["mousePressed", "mouseReleased"]);
+	await waitForOverlayClosed(cdp, projectCreationTrigger);
+	document.activeElement = {};
+	await assert.rejects(waitForOverlayClosed(cdp, projectCreationTrigger, undefined, 1), /focus restored: New project/);
+});
 
 test("current project distinguishes direct project navigation from a contained conversation and rejects ambiguity", () => {
 	const branch = {

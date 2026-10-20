@@ -15,7 +15,7 @@ const groups = [
 	],
 	[
 		"apps/hipi-work-ui/test",
-		"history-reads conversation-dynamic-layout conversation-virtualizer file-client bounded-read composer-input desktop-client conversation-history-controller message-projection local-state receipt-reconciliation preview-client conversation-preview-interaction connection local-persistence conversation-measurement-policy file-editor-session artifact-editor reopen-request preview-session editor-input-limit execution-outcome conversation-scroll-intent conversation-reading-position conversation-transcript clipboard-feedback markdown-segments streaming-text-buffer response-announcement syntax-highlight file-search-replacement",
+		"history-reads conversation-dynamic-layout conversation-virtualizer file-client bounded-read composer-input desktop-client conversation-history-controller message-projection local-state receipt-reconciliation preview-client conversation-preview-interaction connection local-persistence conversation-measurement-policy file-editor-session artifact-editor reopen-request preview-session editor-input-limit execution-outcome conversation-scroll-intent conversation-reading-position conversation-transcript clipboard-feedback markdown-segments streaming-text-buffer response-announcement syntax-highlight file-search-replacement css-cascade",
 	],
 ];
 const nodeTests = groups.flatMap(([directory, names]) =>
@@ -40,8 +40,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-fonts.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-appearance.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-windows-dialogs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/font-assets.test.mjs");
-nodeTests.push("apps/hipi-work-desktop/scripts/pierre-licenses.test.mjs");
-nodeTests.push("apps/hipi-work-desktop/scripts/codemirror-licenses.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/bundle-owner.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
@@ -51,6 +50,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
+nodeTests.push("packages/work-runtime/test/custom-providers.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
 nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
@@ -88,6 +88,7 @@ const uiTests = [
 	"appearance-settings",
 	"settings-dialog",
 	"settings-workflow",
+	"custom-provider-settings",
 	"conversation-capabilities",
 	"conversation-capabilities-interaction",
 	"conversation-preview-card",

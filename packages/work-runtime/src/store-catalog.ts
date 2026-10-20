@@ -9,6 +9,7 @@ import { readToolActivities, readToolActivityText } from "./activities/storage.t
 import { readAgentCommandResult } from "./agent-tools/authorization-store.ts";
 import {
 	AppError,
+	CUSTOM_PROVIDER_LIMITS,
 	LIMITS,
 	type Params,
 	PROTOCOL_VERSION,
@@ -17,7 +18,7 @@ import {
 	type Result,
 	type Workspace,
 } from "./contracts.ts";
-import { commandKey, DIRECTORY_LIMITS } from "./conversation-directory.ts";
+import { commandKey, DIRECTORY_LIMITS, directoryDigest } from "./conversation-directory.ts";
 import { previewToolPack } from "./extensions/lifecycle.ts";
 import {
 	readActiveToolPackBindings,
@@ -107,7 +108,7 @@ export class StoreCatalog {
 					throw new AppError("STORE_MISMATCH");
 				if (database.prepare("SELECT 1 FROM sqlite_schema WHERE name='identity' AND type='table'").get()) {
 					const row = database.prepare("SELECT version FROM identity WHERE singleton=1").get();
-					if (row && row.version !== 1 && row.version !== 2 && row.version !== 3)
+					if (row && row.version !== 1 && row.version !== 2 && row.version !== 3 && row.version !== 5)
 						throw new AppError("STORE_MISMATCH");
 				}
 				try {
@@ -141,19 +142,19 @@ export class StoreCatalog {
 			}
 			if (
 				!identity ||
-				(identity.version !== 1 && identity.version !== 2 && identity.version !== 3) ||
+				(identity.version !== 1 && identity.version !== 2 && identity.version !== 3 && identity.version !== 5) ||
 				identity.root !== root
 			)
 				throw new AppError("STORE_MISMATCH");
-			// Version 3 is a one-way safety fence: older runtimes do not enforce package
-			// history disclosure. Commit it under the root owner lock before opening PI
-			// data or returning any runtime that could install or disclose a package.
+			// Version 5 fences older runtimes that cannot enforce configured recipient identities.
+			// Version 4 remains reserved for non-executing recovery archives.
+			// Schema and version move together under the existing exclusive root owner.
 			database.exec("BEGIN IMMEDIATE");
 			try {
 				database.exec(
-					"CREATE TABLE IF NOT EXISTS conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX IF NOT EXISTS conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE IF NOT EXISTS directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL); UPDATE identity SET version=3 WHERE singleton=1 AND version IN (1,2)",
+					"CREATE TABLE IF NOT EXISTS conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX IF NOT EXISTS conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE IF NOT EXISTS directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL); UPDATE identity SET version=5 WHERE singleton=1 AND version IN (1,2,3)",
 				);
-				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 3)
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 5)
 					throw new AppError("STORE_MISMATCH");
 				database.exec("COMMIT");
 			} catch (error) {
@@ -165,6 +166,7 @@ export class StoreCatalog {
 				storeId: identity.store_id,
 			});
 			const catalog = new StoreCatalog(root, owner, database, storeId);
+			catalog.listCustomProviders();
 			await catalog.#recover();
 			return catalog;
 		} catch (error) {
@@ -176,6 +178,86 @@ export class StoreCatalog {
 				throw closeError;
 			}
 			owner.close();
+			throw error;
+		}
+	}
+	listCustomProviders(): Result<"listCustomProviders"> {
+		if (
+			this.#database
+				.prepare(
+					"SELECT 1 FROM custom_providers WHERE length(CAST(provider AS BLOB))>71 OR length(CAST(value AS BLOB))>? LIMIT 1",
+				)
+				.get(CUSTOM_PROVIDER_LIMITS.configurationBytes)
+		)
+			throw new AppError("CAPACITY_EXCEEDED");
+		const rows = this.#database
+			.prepare("SELECT provider,value FROM custom_providers ORDER BY provider LIMIT ?")
+			.all(CUSTOM_PROVIDER_LIMITS.providers + 1);
+		return parseResult("listCustomProviders", {
+			providers: rows.map((row) => {
+				if (typeof row.value !== "string") throw new AppError("STORE_MISMATCH");
+				const config = parseResult("saveCustomProvider", JSON.parse(row.value));
+				if (config.provider !== row.provider) throw new AppError("STORE_MISMATCH");
+				return config;
+			}),
+		});
+	}
+	/** Synchronous transaction: config, identity replacement and permanent replay result commit together. */
+	saveCustomProvider(input: Params<"saveCustomProvider">): Result<"saveCustomProvider"> {
+		return this.#providerCommand("saveCustomProvider", input, () => {
+			const providers = this.listCustomProviders().providers;
+			const prior = input.provider ? providers.find((entry) => entry.provider === input.provider) : undefined;
+			if (input.provider && !prior) throw new AppError("NOT_FOUND");
+			if (!prior && providers.length >= CUSTOM_PROVIDER_LIMITS.providers) throw new AppError("CAPACITY_EXCEEDED");
+			const provider =
+				prior && prior.baseUrl === input.baseUrl && prior.protocol === input.protocol
+					? prior.provider
+					: `custom_${randomUUID()}`;
+			const value = parseResult("saveCustomProvider", {
+				provider,
+				vendorId: input.vendorId,
+				name: input.name,
+				protocol: input.protocol,
+				baseUrl: input.baseUrl,
+				models: input.models,
+			});
+			if (prior && prior.provider !== provider)
+				this.#database.prepare("DELETE FROM custom_providers WHERE provider=?").run(prior.provider);
+			this.#database
+				.prepare("INSERT OR REPLACE INTO custom_providers VALUES (?,?)")
+				.run(provider, JSON.stringify(value));
+			return value;
+		});
+	}
+	removeCustomProvider(input: Params<"removeCustomProvider">): Result<"removeCustomProvider"> {
+		return this.#providerCommand("removeCustomProvider", input, () => {
+			this.#database.prepare("DELETE FROM custom_providers WHERE provider=?").run(input.provider);
+			return { provider: input.provider, removed: true };
+		});
+	}
+	#providerCommand<M extends "saveCustomProvider" | "removeCustomProvider">(
+		method: M,
+		input: Params<M>,
+		operation: () => Result<M>,
+	): Result<M> {
+		const digest = directoryDigest(method, input);
+		const prior = this.#database
+			.prepare("SELECT digest,result FROM provider_commands WHERE request_id=?")
+			.get(input.requestId);
+		if (prior) {
+			if (prior.digest !== digest || typeof prior.result !== "string") throw new AppError("IDEMPOTENCY_CONFLICT");
+			return parseResult(method, JSON.parse(prior.result));
+		}
+		this.#database.exec("BEGIN IMMEDIATE");
+		try {
+			const result = operation();
+			this.#database
+				.prepare("INSERT INTO provider_commands VALUES (?,?,?)")
+				.run(input.requestId, digest, JSON.stringify(result));
+			this.#database.exec("COMMIT");
+			return result;
+		} catch (error) {
+			this.#database.exec("ROLLBACK");
 			throw error;
 		}
 	}

@@ -138,12 +138,30 @@ test("async store reads legacy ciphertext without rewriting and preserves corrup
 		assert.equal(await store.status("openai"), "configured");
 		assert.equal(await store.get("openai"), "synthetic-old");
 		assert.deepEqual(await readFile(path), legacy, "rotation advice must not cause write-on-read");
+		const custom = "custom_async-migration";
+		await store.set(custom, "synthetic-custom");
+		assert.deepEqual(JSON.parse(native.decryptString(await readFile(path))), {
+			version: 2,
+			providers: { openai: "synthetic-old", [custom]: "synthetic-custom" },
+		});
 		await store.set("openai", "synthetic-new");
-		assert.equal(JSON.parse(native.decryptString(await readFile(path))).openai, "synthetic-new");
+		const migrated = await readFile(path);
+		assert.deepEqual(JSON.parse(native.decryptString(migrated)), {
+			version: 2,
+			providers: { openai: "synthetic-new", [custom]: "synthetic-custom" },
+		});
+		assert.equal(migrated.includes(Buffer.from("synthetic-")), false);
+		const reopened = new CredentialStore(path, createCredentialCrypto(native, "darwin"), "darwin");
+		assert.equal(await reopened.get("openai"), "synthetic-new");
+		assert.equal(await reopened.get(custom), "synthetic-custom");
+		assert.deepEqual(await readFile(path), migrated, "reopening v2 must not rewrite ciphertext");
 		await writeFile(path, "damaged");
 		assert.equal(await store.status("openai"), "locked");
 		await assert.rejects(store.set("openai", "synthetic-replacement"));
 		await assert.rejects(store.remove("openai"));
+		assert.equal(await reopened.status(custom), "locked");
+		await assert.rejects(reopened.set(custom, "synthetic-replacement"));
+		await assert.rejects(reopened.remove(custom));
 		assert.equal(await readFile(path, "utf8"), "damaged");
 		native.encryptStringAsync = async () => {
 			throw new Error("key unavailable");

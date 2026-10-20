@@ -14,7 +14,7 @@
 
 直接固定 `shiki 4.5.0`（MIT），与 Pierre 已解析版本共用。普通文件适配器显式选择 JavaScript 引擎、禁用可选 worker pool，只登记静态导入的 CSS、HTML、JavaScript、JSON、Python、shell、TypeScript、YAML 语法；未支持扩展名退回纯文本。主题由原始应用语义令牌适配生成。没有 CDN、远端语法/主题地址或放宽 CSP。依赖本身仍含未选用的加载器；最终 Vite 本地产物图与打包后离线加载需要发布门禁验证，不以此源码检查代替。
 
-三包的安装依赖闭包共 55 个已安装条目，包括共享和仅类型依赖，不等于最终浏览器打包数量。已检查全部条目的许可证与 `preinstall` / `install` / `postinstall`：许可证为 Apache-2.0、MIT、ISC 或 BSD-3-Clause，没有上述安装脚本。精确版本、integrity 与原始 LICENSE/NOTICE 的 SHA-256 在 [依赖清单](../../apps/hipi-work-ui/vendor/pierre/inventory.json)；原始通知及来源在 [保留目录](../../apps/hipi-work-ui/vendor/pierre/README.md)。`lru_map` 的完整 MIT 通知来自其 npm README，Pierre 主题的 Primer 通知亦保留。执行的安装/卸载均带 `--ignore-scripts`。
+依赖以 `package.json` 与根锁文件为准，安装/卸载使用 `--ignore-scripts`。不另存 npm 依赖的许可证副本或安装闭包清单；现有桌面 staging 流程按实际保留的打包输入收集对应包的原始 LICENSE / NOTICE，包括 README 中的完整许可文本。
 
 编辑器适配层不拥有第二个保存状态机。128 KiB 事务界限在公共 `TextDocument` 扩展点、进入撤销历史之前检查；标签仅持有内存视图/历史状态。CAS、保存结果未知、冲突恢复与权限仍由现有文件会话拥有。恢复核对/采用版本不会触发自动保存，必须再次编辑或明确保存后才恢复。以上说明不是安全公告扫描、完整浏览器行为或三平台验收结论。
 

@@ -367,9 +367,9 @@ test("pack cursors fence membership and reject another store while active bindin
 });
 
 for (const previousVersion of [1, 2]) {
-	test(`catalog ${previousVersion} upgrades to durable version 3 before runtime admission and retains identity/data`, async () => {
+	test(`catalog ${previousVersion} upgrades to durable version 5 before runtime admission and retains identity/data`, async () => {
 		// Catalog identity stores the canonical root, including macOS /private/var temporary paths.
-		const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-catalog-v3-")));
+		const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-catalog-v5-")));
 		let runtime = await openTestRuntime(directory);
 		try {
 			await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
@@ -384,6 +384,7 @@ for (const previousVersion of [1, 2]) {
 			const workspaceBefore = await readFile(workspacePath);
 			const database = new DatabaseSync(join(directory, "catalog.sqlite"));
 			try {
+				database.exec("DROP TABLE custom_providers; DROP TABLE provider_commands");
 				database.prepare("UPDATE identity SET version=?").run(previousVersion);
 			} finally {
 				database.close();
@@ -399,7 +400,9 @@ for (const previousVersion of [1, 2]) {
 			const upgraded = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
 			try {
 				const row = upgraded.prepare("SELECT version,store_id,root FROM identity WHERE singleton=1").get();
-				assert.deepEqual({ ...row }, { version: 3, store_id: identity.storeId, root: directory });
+				assert.deepEqual({ ...row }, { version: 5, store_id: identity.storeId, root: directory });
+				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM custom_providers").get()?.count, 0);
+				assert.equal(upgraded.prepare("SELECT count(*) AS count FROM provider_commands").get()?.count, 0);
 				assert.equal(
 					upgraded.prepare("SELECT name FROM workspaces WHERE workspace_id='work'").get()?.name,
 					"Preserved",
@@ -418,21 +421,24 @@ for (const previousVersion of [1, 2]) {
 			runtime = await openTestRuntime(directory);
 			assert.deepEqual(await runtime.call("handshake", {}), identity);
 			await runtime.close();
-			const future = new DatabaseSync(join(directory, "catalog.sqlite"));
-			try {
-				future.exec("UPDATE identity SET version=999");
-			} finally {
-				future.close();
+			// Version 4 is reserved for non-executing recovery archives; future schemas also stay untouched.
+			for (const rejectedVersion of [4, 6, 999]) {
+				const incompatible = new DatabaseSync(join(directory, "catalog.sqlite"));
+				try {
+					incompatible.prepare("UPDATE identity SET version=?").run(rejectedVersion);
+				} finally {
+					incompatible.close();
+				}
+				await assert.rejects(openTestRuntime(directory), { code: "STORE_MISMATCH" });
+				const refused = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
+				try {
+					assert.equal(refused.prepare("SELECT version FROM identity").get()?.version, rejectedVersion);
+					assert.equal(refused.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
+				} finally {
+					refused.close();
+				}
+				assert.deepEqual(await readFile(workspacePath), workspaceBefore);
 			}
-			await assert.rejects(openTestRuntime(directory), { code: "STORE_MISMATCH" });
-			const refused = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
-			try {
-				assert.equal(refused.prepare("SELECT version FROM identity").get()?.version, 999);
-				assert.equal(refused.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
-			} finally {
-				refused.close();
-			}
-			assert.deepEqual(await readFile(workspacePath), workspaceBefore);
 		} finally {
 			await runtime.close();
 			await rm(directory, { recursive: true, force: true });
@@ -441,7 +447,7 @@ for (const previousVersion of [1, 2]) {
 }
 
 test("catalog safety-fence write failure rejects runtime, preserves version 2 and releases the owner lock", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-v3-failure-"));
+	const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-v5-failure-"));
 	let runtime = await openTestRuntime(directory);
 	try {
 		await runtime.call("createWorkspace", { workspaceId: "work", name: "Preserved" });
@@ -452,7 +458,7 @@ test("catalog safety-fence write failure rejects runtime, preserves version 2 an
 		const database = new DatabaseSync(join(directory, "catalog.sqlite"));
 		try {
 			database.exec(
-				"UPDATE identity SET version=2; CREATE TRIGGER reject_safety_fence BEFORE UPDATE OF version ON identity WHEN NEW.version=3 BEGIN SELECT RAISE(ABORT,'injected fence write failure'); END",
+				"DROP TABLE custom_providers; DROP TABLE provider_commands; UPDATE identity SET version=2; CREATE TRIGGER reject_safety_fence BEFORE UPDATE OF version ON identity WHEN NEW.version=5 BEGIN SELECT RAISE(ABORT,'injected fence write failure'); END",
 			);
 		} finally {
 			database.close();
@@ -463,6 +469,14 @@ test("catalog safety-fence write failure rejects runtime, preserves version 2 an
 		try {
 			assert.equal(failed.prepare("SELECT version FROM identity").get()?.version, 2);
 			assert.equal(failed.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
+			assert.equal(
+				failed
+					.prepare(
+						"SELECT count(*) AS count FROM sqlite_schema WHERE name IN ('custom_providers','provider_commands')",
+					)
+					.get()?.count,
+				0,
+			);
 			failed.exec("DROP TRIGGER reject_safety_fence");
 		} finally {
 			failed.close();
@@ -472,7 +486,9 @@ test("catalog safety-fence write failure rejects runtime, preserves version 2 an
 		await runtime.close();
 		const successful = new DatabaseSync(join(directory, "catalog.sqlite"), { readOnly: true });
 		try {
-			assert.equal(successful.prepare("SELECT version FROM identity").get()?.version, 3);
+			assert.equal(successful.prepare("SELECT version FROM identity").get()?.version, 5);
+			assert.equal(successful.prepare("SELECT count(*) AS count FROM custom_providers").get()?.count, 0);
+			assert.equal(successful.prepare("SELECT count(*) AS count FROM provider_commands").get()?.count, 0);
 		} finally {
 			successful.close();
 		}

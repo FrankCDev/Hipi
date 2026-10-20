@@ -39,9 +39,12 @@ function request(method: string, params: unknown) {
 	return parseRequest({ version: PROTOCOL_VERSION, expectedStoreId: "fixture-store", method, params });
 }
 
-test("protocol 5 requires stable create identity and revision-bound directory mutations", () => {
-	assert.equal(PROTOCOL_VERSION, 5);
-	assert.throws(() => parseRequest({ version: 3, method: "listWorkspaces", params: {} }), { code: "INVALID_REQUEST" });
+test("protocol 6 requires stable create identity and revision-bound directory mutations", () => {
+	assert.equal(PROTOCOL_VERSION, 6);
+	for (const version of [3, 5, 7])
+		assert.throws(() => parseRequest({ version, method: "listWorkspaces", params: {} }), {
+			code: "INVALID_REQUEST",
+		});
 	const create = { workspaceId: "test", requestId: "create-1", title: "One" };
 	assert.deepEqual(request("createConversation", create).params, create);
 	for (const patch of [

@@ -20,8 +20,7 @@ const en = {
 	"settings.fontsRetry": "Retry font list",
 	"settings.fontsLoading": "Reading fonts…",
 	"settings.fontsUnsupported": "This device cannot list local fonts. Enter a family name instead.",
-	"settings.fontsLimited":
-		"Some font metadata was unavailable or exceeded the 512-family / 2,048-style limit. You can still enter a family name.",
+	"settings.fontsLimited": "Some installed fonts could not be listed. You can enter a family name instead.",
 	"settings.fontsEmpty": "No supported installed fonts were returned. You can enter a family name instead.",
 	"settings.uiFontStyle": "Font style",
 	"settings.contentFontStyle": "Content font style",
@@ -114,7 +113,7 @@ const zh: Record<Key, string> = {
 	"settings.fontsRetry": "重试字体列表",
 	"settings.fontsLoading": "正在读取字体…",
 	"settings.fontsUnsupported": "此设备无法列出本机字体，你仍可输入字体名称。",
-	"settings.fontsLimited": "部分字体信息不可用或超过 512 个字体家族、2,048 种样式的上限，你仍可输入字体名称。",
+	"settings.fontsLimited": "部分已安装字体未能列出，你仍可输入字体名称。",
 	"settings.fontsEmpty": "未返回可用的已安装字体，你仍可输入字体名称。",
 	"settings.uiFontStyle": "字体样式",
 	"settings.contentFontStyle": "内容字体样式",

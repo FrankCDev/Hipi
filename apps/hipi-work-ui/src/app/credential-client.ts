@@ -1,8 +1,15 @@
-import { AppError, type CredentialState, parseError } from "@hipi/work-runtime/contracts";
+import { AppError, type CredentialState } from "@hipi/work-runtime/contracts";
+import {
+	parseCredentialRequest,
+	parseCredentialResponse,
+	type CredentialRequest as VersionedCredentialRequest,
+} from "@hipi/work-runtime/credentials";
 
 export type CredentialRequest =
-	| { operation: "status" | "remove"; provider: "openai" }
-	| { operation: "set"; provider: "openai"; secret: string };
+	| (Omit<Extract<VersionedCredentialRequest, { operation: "status" | "remove" }>, "version" | "provider"> & {
+			provider: string;
+	  })
+	| (Omit<Extract<VersionedCredentialRequest, { operation: "set" }>, "version" | "provider"> & { provider: string });
 export interface CredentialBridge {
 	request(input: unknown): Promise<unknown>;
 }
@@ -23,22 +30,13 @@ export function createCredentialClient(
 	return {
 		storage,
 		async request(input) {
-			if (
-				input.provider !== "openai" ||
-				!["status", "set", "remove"].includes(input.operation) ||
-				Object.keys(input).some(
-					(key) => !["operation", "provider", ...(input.operation === "set" ? ["secret"] : [])].includes(key),
-				)
-			)
-				throw new AppError("INVALID_REQUEST");
-			if (input.operation === "set" && !/^[\x21-\x7e]{1,4096}$/.test(input.secret))
-				throw new AppError("INVALID_REQUEST");
+			const request = parseCredentialRequest({ version: 1, ...input });
 			let response: unknown;
 			try {
 				response = await new Promise<unknown>((resolve, reject) => {
 					const timer = setTimeout(() => reject(new AppError("CLOSED")), 10000);
 					Promise.resolve()
-						.then(() => bridge.request({ version: 1, ...input }))
+						.then(() => bridge.request(request))
 						.then(
 							(value) => {
 								clearTimeout(timer);
@@ -53,17 +51,9 @@ export function createCredentialClient(
 			} catch {
 				throw new AppError("CLOSED");
 			}
-			if (!response || typeof response !== "object" || Array.isArray(response)) throw new AppError("INVALID_REQUEST");
-			const value = response as Record<string, unknown>;
-			if (value.ok === false && Object.keys(value).every((key) => key === "ok" || key === "error"))
-				throw new AppError(parseError(value.error));
-			if (
-				value.ok !== true ||
-				Object.keys(value).some((key) => key !== "ok" && key !== "state") ||
-				!["configured", "missing", "locked", "unavailable"].includes(String(value.state))
-			)
-				throw new AppError("INVALID_REQUEST");
-			return value.state as CredentialState;
+			const value = parseCredentialResponse(response);
+			if (!value.ok) throw new AppError(value.error);
+			return value.state;
 		},
 	};
 }

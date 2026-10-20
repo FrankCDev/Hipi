@@ -46,7 +46,7 @@ export function parseBackupManifest(bytes: Uint8Array): BackupManifest {
 		"reservations",
 		"excludedFiles",
 	]);
-	if (m.formatVersion !== 1 || m.catalogSchema !== 3 || m.piSchema !== 2)
+	if (m.formatVersion !== 1 || (m.catalogSchema !== 3 && m.catalogSchema !== 5) || m.piSchema !== 2)
 		throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 	const producer = text(m.producer, 128);
 	const version =
@@ -121,7 +121,7 @@ export function parseBackupManifest(bytes: Uint8Array): BackupManifest {
 		createdAt,
 		sourceStoreId,
 		sourceRoot,
-		catalogSchema: 3,
+		catalogSchema: m.catalogSchema,
 		piSchema: 2,
 		producer,
 		files,
@@ -168,7 +168,8 @@ export async function verifyBackup({ directory }: { directory: string }) {
 			throw new MaintenanceError("IDENTITY_MISMATCH");
 		assertSqliteIntegrity(join(root, "catalog.sqlite"), true);
 		const catalog = inspectCatalog(join(root, "catalog.sqlite"), manifest.sourceRoot);
-		if (catalog.sourceStoreId !== manifest.sourceStoreId) throw new MaintenanceError("IDENTITY_MISMATCH");
+		if (catalog.sourceStoreId !== manifest.sourceStoreId || catalog.catalogSchema !== manifest.catalogSchema)
+			throw new MaintenanceError("IDENTITY_MISMATCH");
 		for (const workspace of manifest.workspaces) {
 			assertSqliteIntegrity(join(root, `workspaces/${workspace.workspaceId}.sqlite`), true);
 			const identity = await inspectWorkspace(

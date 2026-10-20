@@ -1,3 +1,4 @@
+@import "./layers.css";
 @import "tailwindcss";
 @source not "../vendor";
 /* Offline, complete upstream font. Limit fallback matching to CJK/punctuation so Latin stays user-selected. */

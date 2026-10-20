@@ -9,6 +9,7 @@ import {
 	type Models,
 } from "@earendil-works/pi-ai";
 import { type PackageDescriptor, packageDescriptors } from "../extensions/lifecycle-descriptors.ts";
+import { customModelRequestUrl, registeredCustomProvider } from "../model-provider.ts";
 
 /** Host-only port. Implementations share their conversation lock with revocation. */
 export interface ModelDispatchAuthorization {
@@ -74,13 +75,24 @@ export function createWorkspaceModels(
 		let ended = false;
 		let denied = false;
 		const requestModel = structuredClone(model);
+		// Built-ins stay pinned to the workspace's original provider. Runtime-owned custom
+		// recipients may be added later, but each dispatch pins their exact committed instance.
+		const customProvider = registeredCustomProvider(models, requestModel.provider);
 		// The evidence and the provider request share this owned snapshot, including system tool deltas.
 		const requestContext = structuredClone(context);
 		const descriptors = packageDescriptors(requestContext);
 		const assertProvider = () => {
+			const expectedProvider = customProvider ?? providers.get(requestModel.provider);
+			const currentModel = models.getModel(requestModel.provider, requestModel.id);
 			if (
-				!providers.has(requestModel.provider) ||
-				models.getProvider(requestModel.provider) !== providers.get(requestModel.provider)
+				!expectedProvider ||
+				models.getProvider(requestModel.provider) !== expectedProvider ||
+				!currentModel ||
+				(customProvider &&
+					(registeredCustomProvider(models, requestModel.provider) !== customProvider ||
+						currentModel.baseUrl !== requestModel.baseUrl ||
+						currentModel.api !== requestModel.api ||
+						requestModel.headers))
 			) {
 				throw new Error("model_context_blocked");
 			}
@@ -118,17 +130,17 @@ export function createWorkspaceModels(
 						controller.signal.throwIfAborted();
 						const url = new URL(input instanceof Request ? input.url : input.toString());
 						const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-						if (
-							url.origin !== "https://api.openai.com" ||
-							url.username ||
-							url.password ||
-							url.search ||
-							url.hash ||
-							!["/v1/responses", "/v1/chat/completions"].includes(url.pathname) ||
-							method.toUpperCase() !== "POST" ||
-							requestModel.provider !== "openai" ||
-							!["openai-responses", "openai-completions"].includes(requestModel.api)
-						) {
+						const permitted = customProvider
+							? url.href === customModelRequestUrl(requestModel)
+							: url.origin === "https://api.openai.com" &&
+								!url.username &&
+								!url.password &&
+								!url.search &&
+								!url.hash &&
+								["/v1/responses", "/v1/chat/completions"].includes(url.pathname) &&
+								requestModel.provider === "openai" &&
+								["openai-responses", "openai-completions"].includes(requestModel.api);
+						if (!permitted || method.toUpperCase() !== "POST") {
 							throw new Error("model_context_blocked");
 						}
 						const signals = [controller.signal];
