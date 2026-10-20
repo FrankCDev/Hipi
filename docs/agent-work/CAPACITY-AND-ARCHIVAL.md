@@ -53,7 +53,9 @@ active grant IDs、pending approval IDs、未核对 operation IDs 与历史分�
 
 ## 3. 目录投影与崩溃顺序
 
-[StoreCatalog](../../packages/work-runtime/src/store-catalog.ts)保留单 owner 锁，root schema 当前为 8。schema 2 引入 conversations 索引和 directory_checkpoints；schema 3 增加旧程序拒绝打开的安全屏障；schema 7 增加权威置顶状态及不可变命令回执，schema 8 增加独立可重建搜索投影，仍使用原 catalog.sqlite。置顶不是可丢弃的目录/搜索缓存，搜索重建不能修复或清空损坏的置顶事实。
+[StoreCatalog](../../packages/work-runtime/src/store-catalog.ts)保留单 owner 锁，当前版本及兼容范围见[存储版本兼容性](STORE-MAINTENANCE.md#存储版本兼容性)。schema 2 引入 conversations 索引和 directory_checkpoints；schema 3 增加旧程序拒绝打开的安全屏障；schema 7 增加权威置顶成员及不可变命令回执，schema 8 增加独立可重建搜索投影，schema 9 增加独立排序代际和排序回执，均使用原 catalog.sqlite。置顶不是可丢弃的目录/搜索缓存，搜索重建不能修复或清空损坏的置顶事实。
+
+置顶排序在同一 catalog 事务内核对首次回执、完整意图、成员与锚点、排序代际，再调整顺序并保存首次结果，不通过取消置顶再置顶实现。纯排序保留成员修订、归档屏障和未加载页面中的其他置顶项；无变化命令保存回执但不推进代际。当前顺序通过列表读取，旧命令查询和重试只返回不可变首次结果，不重放旧顺序。[排序回归](../../packages/work-runtime/test/pinned-reorder.test.ts)覆盖分页边界、并发排序使首页失效、归档竞争、回执失败回滚及备份/重启。
 
 1. PI 同事务写会话元数据、DirectoryCommand 首次结果、DirectoryChange 和 head。提交失败时均不可见。
 2. 目录列表读取 workspace header，通过公共 Storage 点查未消费日志和当前 metadata，每批最多 64 条。
@@ -72,15 +74,15 @@ active grant IDs、pending approval IDs、未核对 operation IDs 与历史分�
 
 ### 工具包授权的单向版本屏障（schema 3）
 
-以下 schema 3 说明保留其首次引入时的安全动机。当前 runtime 接受正常 root identity.version 1、2、3、5、6、7、8，并在原 root 单 owner 锁内事务升级到 8；schema 4 始终只供非执行恢复档案，普通 runtime 拒绝。升级写入、版本核对或 commit 失败均拒绝打开，不退回旧路径。原 storeId、root 与工作区数据保持不变。
+以下 schema 3 说明保留其首次引入时的安全动机。正常 root identity.version 的准入范围及当前目标版本见[存储版本兼容性](STORE-MAINTENANCE.md#存储版本兼容性)，升级在原 root 单 owner 锁内事务执行；schema 4 始终只供非执行恢复档案，普通 runtime 拒绝。升级写入、版本核对或 commit 失败均拒绝打开，不退回旧路径。原 storeId、root 与工作区数据保持不变。
 
 这不是可选的 PI 标记。已交付 protocol 4 源码只接受 catalog schema 1/2，不知道工具包历史披露授权；若仍允许它打开新增工具包历史的数据，旧模型出站路径可能绕过新的授权检查。catalog schema 3 使该旧版本在返回 runtime 前以 STORE_MISMATCH 拒绝。
 
 这是单向数据格式升级，即使只打开目录也会建立屏障。回滚必须停止全部相关进程，恢复升级前离线取得的完整一致备份，包括 root catalog/identity、owner 文件及全部工作区 SQLite 数据和备份时存在的配套文件；必须作为同一备份集合恢复到原 root 路径。不得只替换旧二进制、手动调低 version，或混用不同时点的 catalog 与 workspace 数据。未持有可验证的升级前完整备份时，不应承诺可安全回滚。
 
-[feature-readonly.test.ts](../../packages/work-runtime/test/feature-readonly.test.ts) 的真实 SQLite 回归现验证支持的旧 schema 升级到 8 后保身份及工作区数据库完整字节、未来版本拒绝，以及注入升级写失败时不开 runtime 且释放 owner 锁。[搜索备份回归](../../packages/work-runtime/test/search-backup.test.ts)另验证已有 schema 7 置顶状态和不可变回执在升级到 8 后保留。旧版拒绝测试复现已交付 v4 的版本准入条件；没有运行其旧二进制，不等价于跨版本端到端恢复验证。
+[feature-readonly.test.ts](../../packages/work-runtime/test/feature-readonly.test.ts) 的真实 SQLite 回归现验证支持的旧 schema 升级到当前版本后保身份及工作区数据库完整字节、未来版本拒绝，以及注入升级写失败时不开 runtime 且释放 owner 锁。[搜索备份回归](../../packages/work-runtime/test/search-backup.test.ts)另验证已有 schema 7、8 的置顶状态和不可变回执在升级后保留，并核对已有搜索投影未被清空。旧版拒绝测试复现已交付 v4 的版本准入条件；没有运行其旧二进制，不等价于跨版本端到端恢复验证。
 
-当前[离线维护入口](STORE-MAINTENANCE.md)支持 schema 3、5、6、7、8 源库备份及核验，但 restore 只创建新 schema 4 只读档案，不实现上述可执行回滚。完整平台故障资格与跨版本二进制回滚验收仍未完成；临时数据回归不能替代这些门禁。
+当前[离线维护入口](STORE-MAINTENANCE.md#存储版本兼容性)仅对明确支持的源库版本备份及核验，restore 只创建新 schema 4 只读档案，不实现上述可执行回滚。完整平台故障资格与跨版本二进制回滚验收仍未完成；临时数据回归不能替代这些门禁。
 
 ## 4. Rename / archive / restore
 

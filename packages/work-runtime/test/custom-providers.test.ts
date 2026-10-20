@@ -714,7 +714,7 @@ test("catalog schema 3 migration, schema 6 backup and non-executing restore pres
 		const profile = await runtime.call("saveCustomProvider", { ...settings(), requestId: "save" });
 		credentials.keys.set(profile.provider, "synthetic-key-not-for-backup");
 		await runtime.close();
-		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 8);
+		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 9);
 		// Retain an actual schema6 backup fixture, not a version label over schema7 tables.
 		const configured = new DatabaseSync(join(source, "catalog.sqlite"));
 		try {
@@ -752,7 +752,7 @@ test("catalog schema 3 migration, schema 6 backup and non-executing restore pres
 			{ code: "STORE_MISMATCH" },
 		);
 		const future = new DatabaseSync(join(source, "catalog.sqlite"));
-		future.exec("UPDATE identity SET version=9");
+		future.exec("UPDATE identity SET version=10");
 		future.close();
 		assert.throws(() => inspectCatalog(join(source, "catalog.sqlite")), { code: "UNSUPPORTED_SCHEMA" });
 		await assert.rejects(

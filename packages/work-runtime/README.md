@@ -52,7 +52,7 @@ npm run dev --workspace=@hipi/work-ui -- --port 5173 --strictPort
 
 ## 连接身份与目录
 
-- `handshake({})` 返回 `{protocolVersion: 3, storeId}`，经过与所有请求相同的 HTTP token/Origin/Host 验证或继承 IPC 通道。它不创建工作区、不打开 Harness、不开始执行。协议 1/2 客户端应与服务端一起升级；持久目录与回执 schema 不因这一传输变更而修改。
+- `handshake({})` 返回 `{protocolVersion: PROTOCOL_VERSION, storeId}`，当前版本以[共享契约](src/contracts.ts)为准，经过与所有请求相同的 HTTP token/Origin/Host 验证或继承 IPC 通道。它不创建工作区、不打开 Harness、不开始执行。请求和握手结果都要求精确版本匹配；不兼容客户端须与服务端一起更新，不能先进入业务调用再等待结果解析失败。置顶分页与命令回执新增顺序语义时升级应用协议；传输版本、工具包格式和[存储版本](../../docs/agent-work/STORE-MAINTENANCE.md#存储版本兼容性)分别管理，不是同一编号。
 - HTTP/IPC client 锁定首次验证的 storeId，每个后续调用和观察都发送 expectedStoreId，服务端在用例执行前核对。同 URL 换后端返回 `STORE_MISMATCH`；原 client 不能自动换身份。新连接需要新 client 与重新握手。
 - 根 `catalog.sqlite` schema v1 保存随机 storeId 与规范数据根路径；URL、端口、token 和进程不是持久身份。复制/移动到不同规范路径会拒绝启动，不自动改 ID。当前未提供迁移或恢复身份重建工具；不得手动删 catalog 来绕过该保护。相同绝对路径的跨主机克隆、备份回退检测尚未实现，不能作为受支持的同时运行方式。
 - 根 owner 锁覆盖 catalog 与 workspace 生命周期。创建顺序是 pending 登记 → PI 初始化 → ready 登记；中断保留原目录和 pending，显式同 ID/同名可继续。重启扫描最多 64 个根目录条目，发现第一阶段工作区或已提交但未 ready 的 PI 元数据，修复登记。已登记库丢失时拒绝重新创建空库。

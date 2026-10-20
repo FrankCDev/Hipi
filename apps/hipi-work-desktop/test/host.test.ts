@@ -25,32 +25,35 @@ test("source guard rejects same URL foreign windows and child frames", () => {
 });
 test("protocol rejects arbitrary methods and unknown fields", () => {
 	assert.equal(CHANNEL, `hipi-work:v${PROTOCOL_VERSION}`);
+	assert.equal(CHANNEL, "hipi-work:v8");
 	assert.throws(
 		() => command(encode({ generation, id: "1", kind: "call", request: { ...handshake, method: "readFile" } })),
 		AppError,
 	);
 	assert.throws(() => command(encode({ generation, id: "1", kind: "cancel", path: "/tmp" })), AppError);
-	assert.throws(
-		() => command(encode({ generation, id: "1", kind: "call", request: { ...handshake, version: 1 } })),
-		AppError,
-	);
+	for (const version of [1, 7, 9])
+		assert.throws(() => command(encode({ generation, id: "1", kind: "call", request: { ...handshake, version } })), {
+			code: "INVALID_REQUEST",
+		});
 });
 test("obsolete handshake reply closes the host instead of accepting an incompatible runtime", async () => {
-	const sent: string[] = [];
-	let failures = 0;
-	const host = new HostConnection(
-		generation,
-		(raw) => sent.push(raw),
-		() => {
-			failures++;
-		},
-	);
-	const pending = host.call(handshake);
-	const id = decode(sent[0]).id;
-	host.receive(encode({ generation, id, kind: "result", result: { protocolVersion: 1, storeId: "store" } }));
-	assert.deepEqual(await pending.result, { ok: false, error: "CLOSED" });
-	assert.equal(host.activeCount, 0);
-	assert.equal(failures, 1);
+	for (const protocolVersion of [1, 7, 9]) {
+		const sent: string[] = [];
+		let failures = 0;
+		const host = new HostConnection(
+			generation,
+			(raw) => sent.push(raw),
+			() => {
+				failures++;
+			},
+		);
+		const pending = host.call(handshake);
+		const id = decode(sent[0]).id;
+		host.receive(encode({ generation, id, kind: "result", result: { protocolVersion, storeId: "store" } }));
+		assert.deepEqual(await pending.result, { ok: false, error: "CLOSED" });
+		assert.equal(host.activeCount, 0);
+		assert.equal(failures, 1);
+	}
 });
 test("host loss resolves in-flight command as unknown and never replays", async () => {
 	const sent: string[] = [];

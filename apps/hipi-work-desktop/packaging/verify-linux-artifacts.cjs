@@ -43,9 +43,13 @@ function assertAppImageCriticalFiles(listing, readEntry, expected) {
 	}
 }
 
-function verifyLinuxTar(archive, expected) {
+function verifyLinuxTar(archive, expected, productionVersion) {
 	const prefix = path.basename(archive, ".tar.gz");
-	assert.match(prefix, /^Hipi-Work-[0-9A-Za-z.+-]+-linux-x64-unsigned$/);
+	if (productionVersion === undefined) assert.match(prefix, /^Hipi-Work-[0-9A-Za-z.+-]+-linux-x64-unsigned$/);
+	else {
+		assert.match(productionVersion, /^[1-9]\d*\.\d+\.\d+$/);
+		assert.equal(prefix, `Hipi-Work-${productionVersion}-linux-x64`);
+	}
 	const seen = new Set();
 	const verified = new Set();
 	// The builder's locked tar reader parses streams without extracting or

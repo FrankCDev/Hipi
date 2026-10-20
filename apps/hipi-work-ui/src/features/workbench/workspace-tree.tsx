@@ -23,6 +23,7 @@ import { ConversationPreview } from "./conversation-preview.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import { projectFolderLabels } from "./project-folder-labels.ts";
 import { ProjectPreviewCard } from "./project-preview-card.tsx";
+import type { SidebarOrderAction } from "./sidebar-drag-provider.tsx";
 import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 import { SidebarTitle } from "./sidebar-title.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
@@ -42,6 +43,8 @@ type TreeProps = {
 	onSelect: (conversation: Conversation) => void;
 	onNewConversation: (workspaceId: string) => void;
 	onManageProjectFolder?: (workspace: Workspace, restoreFocus?: () => void) => void;
+	section?: "projects" | "recent";
+	projectOrder?: (workspace: Workspace) => SidebarOrderAction;
 };
 
 /** Each expanded branch shows a bounded catalog window, never execution streams. */
@@ -57,11 +60,13 @@ export function WorkspaceTree(props: TreeProps) {
 		<nav aria-label={t("nav.workspaces")}>
 			<ul className="workspace-tree">
 				{props.workspaces
-					.filter((workspace) => workspace.workspaceId !== props.defaultWorkspaceId)
+					.filter((workspace) => props.section !== "recent" && workspace.workspaceId !== props.defaultWorkspaceId)
 					.map((workspace) => (
 						<WorkspaceBranch key={workspace.workspaceId} {...props} workspace={workspace} />
 					))}
-				{recent && <WorkspaceBranch key={recent.workspaceId} {...props} workspace={recent} />}
+				{recent && props.section !== "projects" && (
+					<WorkspaceBranch key={recent.workspaceId} {...props} workspace={recent} />
+				)}
 			</ul>
 		</nav>
 	);
@@ -75,6 +80,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const disclosureId = useId();
 	const openId = useId();
 	const recent = workspace.workspaceId === props.defaultWorkspaceId;
+	const orderAction = recent ? undefined : props.projectOrder?.(workspace);
 	const expanded = recent || props.isExpanded(workspace.workspaceId);
 	const region = useRef<HTMLElement>(null);
 	const focusedRow = useRef<HTMLElement | null>(null);
@@ -119,6 +125,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 					selected={current}
 					containsCurrent={containsCurrent}
 					titleId={headingId}
+					orderAction={orderAction}
 					menuPreview={<ProjectPreviewCard workspace={workspace} mode="menu" />}
 					preview={(preview) => (
 						<ProjectPreviewCard
@@ -162,7 +169,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						</div>
 					)}
 				>
-					{({ hovered }) => (
+					{({ hovered, describedBy }) => (
 						<>
 							<button
 								type="button"
@@ -183,6 +190,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 							<button
 								type="button"
 								className="project-open"
+								aria-describedby={describedBy}
 								aria-current={current ? "page" : undefined}
 								aria-labelledby={`${openId} ${headingId}`}
 								title={cl.openProject}

@@ -67,6 +67,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		getConversationPresentation: (input) => catalog.getConversationPresentation(input),
 		listPinnedConversations: (input) => catalog.listPinnedConversations(input),
 		setConversationPinned: (input) => catalog.setConversationPinned(input),
+		reorderPinnedConversation: (input) => catalog.reorderPinnedConversation(input),
 		getPresentationCommandResult: (input) => catalog.getPresentationCommandResult(input),
 		listCustomProviders: async () => catalog.listCustomProviders(),
 		listBuiltInProviders: async () => builtInProviderCatalog(),

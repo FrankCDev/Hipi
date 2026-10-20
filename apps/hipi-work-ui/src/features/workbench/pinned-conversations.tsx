@@ -1,5 +1,5 @@
-import type { Conversation, PinnedConversation } from "@hipi/work-runtime/contracts";
-import { useId, useLayoutEffect, useRef } from "react";
+import type { Conversation, PinnedConversation, PinnedConversationPage } from "@hipi/work-runtime/contracts";
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -8,7 +8,10 @@ import { CatalogPagination } from "./catalog-pagination.tsx";
 import type { CatalogSession } from "./catalog-session.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
 import { pinLabels } from "./pin-labels.ts";
+import { pinnedOrderActions, pinnedScopeKey } from "./pinned-order-actions.ts";
 import type { PresentationSession } from "./presentation-session.ts";
+import { type SidebarOrderAction, SidebarOrderSection } from "./sidebar-drag-provider.tsx";
+import { sidebarOrderLabels } from "./sidebar-order-labels.ts";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 
 export function PinnedConversations({
@@ -17,23 +20,43 @@ export function PinnedConversations({
 	selectedWorkspace,
 	selectedConversation,
 	onSelect,
+	sectionAction,
+	onVisibleChange,
 }: {
 	catalog: CatalogSession;
 	presentation: PresentationSession;
 	selectedWorkspace: string;
 	selectedConversation: string;
 	onSelect: (conversation: Conversation) => void;
+	sectionAction?: SidebarOrderAction;
+	onVisibleChange?: (visible: boolean) => void;
 }) {
 	const client = useAppClient();
 	const { locale } = usePreferences();
 	const l = pinLabels(locale);
 	const headingId = useId();
+	const [announcement, setAnnouncement] = useState("");
 	const region = useRef<HTMLElement>(null);
 	const focused = useRef<{ element: HTMLElement; workspaceId: string; conversationId: string } | null>(null);
-	const pages = useCatalogPages({
+	const state = useSyncExternalStore(presentation.subscribe, presentation.getSnapshot, presentation.getSnapshot);
+	const pages = useCatalogPages<PinnedConversation, PinnedConversationPage>({
 		queryKey: ["pinned-conversations"],
 		queryPage: (cursor, signal) => client.call("listPinnedConversations", cursor ? { cursor } : {}, signal),
 		itemKey: (item: PinnedConversation) => `${item.conversation.workspaceId}.${item.conversation.conversationId}`,
+	});
+	const blocked = state.busy || !!state.pending || state.incompatible || pages.isFetching || pages.isError;
+	const actions = pinnedOrderActions(pages.pages, pages.items, blocked, (input) => {
+		setAnnouncement("");
+		void presentation.reorder(input).then(() => {
+			const current = presentation.getSnapshot().orderResult;
+			if (!current) return;
+			const index = current.items.findIndex(
+				({ conversation }) => pinnedScopeKey(conversation) === pinnedScopeKey(input.moved),
+			);
+			setAnnouncement(
+				index >= 0 ? `${sidebarOrderLabels(locale).movedTo} ${index + 1}` : sidebarOrderLabels(locale).moved,
+			);
+		});
 	});
 	useLayoutEffect(() => {
 		const previous = focused.current;
@@ -50,8 +73,10 @@ export function PinnedConversations({
 			preventScroll: true,
 		});
 	});
-	if (!pages.items.length && !pages.isError && !pages.isPending) return null;
-	return (
+	const visible = pages.items.length > 0 || pages.isError || pages.isPending;
+	useEffect(() => onVisibleChange?.(visible), [visible, onVisibleChange]);
+	if (!visible) return null;
+	const content = (
 		<section
 			ref={region}
 			className="pinned-conversations"
@@ -90,6 +115,7 @@ export function PinnedConversations({
 						<ConversationPreview
 							conversation={conversation}
 							resolveWorkspace
+							orderAction={actions.get(pinnedScopeKey(conversation))}
 							selected={
 								selectedWorkspace === conversation.workspaceId && selectedConversation === conversation.conversationId
 							}
@@ -108,6 +134,10 @@ export function PinnedConversations({
 				))}
 			</ul>
 			<CatalogPagination pages={pages} listRef={region} />
+			<output className="sr-only" aria-live="polite">
+				{announcement}
+			</output>
 		</section>
 	);
+	return sectionAction ? <SidebarOrderSection action={sectionAction}>{content}</SidebarOrderSection> : content;
 }

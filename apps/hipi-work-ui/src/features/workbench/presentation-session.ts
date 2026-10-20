@@ -3,27 +3,33 @@ import {
 	AppError,
 	type ConversationPresentation,
 	type Params,
+	type PinnedConversationPage,
 	PROTOCOL_VERSION,
 	parseRequest,
 	type Request,
+	type Result,
 } from "@hipi/work-runtime/contracts";
 import type { LocalState } from "./local-state.ts";
 
 type PinCommand = Extract<Request, { method: "setConversationPinned" }>;
+type OrderCommand = Extract<Request, { method: "reorderPinnedConversation" }>;
+type PresentationCommand = PinCommand | OrderCommand;
 type PinInput = Params<"setConversationPinned">;
 type State = {
-	pending: PinCommand | null;
+	pending: PresentationCommand | null;
 	busy: boolean;
 	failed: boolean;
 	incompatible: boolean;
 	notFound: boolean;
 	rejected: boolean;
 	result: ConversationPresentation | null;
+	orderResult: PinnedConversationPage | null;
+	order: boolean;
 };
 const key = "command.presentation";
-const encode = (request: PinCommand | null) => JSON.stringify({ version: 2, request });
+const encode = (request: PresentationCommand | null) => JSON.stringify({ version: 2, request });
 
-function read(raw: string | null): { pending: PinCommand | null; incompatible: boolean } {
+function read(raw: string | null): { pending: PresentationCommand | null; incompatible: boolean } {
 	if (!raw) return { pending: null, incompatible: false };
 	try {
 		const saved: unknown = JSON.parse(raw);
@@ -31,7 +37,10 @@ function read(raw: string | null): { pending: PinCommand | null; incompatible: b
 			throw new Error("INVALID_RECOVERY");
 		if (saved.request === null) return { pending: null, incompatible: false };
 		const request = parseRequest(saved.request);
-		if (request.method === "setConversationPinned" && request.expectedStoreId === undefined)
+		if (
+			(request.method === "setConversationPinned" || request.method === "reorderPinnedConversation") &&
+			request.expectedStoreId === undefined
+		)
 			return { pending: request, incompatible: false };
 	} catch {
 		// Preserve an unrecognized record. Never invent its original identity or intent.
@@ -50,13 +59,16 @@ export class PresentationSession {
 	constructor(client: AppClient, local: LocalState) {
 		this.#client = client;
 		this.#local = local;
+		const saved = read(local.read(key));
 		this.#state = {
-			...read(local.read(key)),
+			...saved,
 			busy: false,
 			failed: false,
 			notFound: false,
 			rejected: false,
 			result: null,
+			orderResult: null,
+			order: saved.pending?.method === "reorderPinnedConversation",
 		};
 	}
 	getSnapshot = () => this.#state;
@@ -71,18 +83,23 @@ export class PresentationSession {
 		this.#disposed = true;
 		this.#request?.abort();
 		this.#request = undefined;
+		this.#state = { ...this.#state, busy: false };
 		this.#listeners.clear();
 	}
 	#publish(patch: Partial<State>) {
 		if (this.#disposed) return;
-		this.#state = { ...this.#state, ...patch };
+		this.#state = {
+			...this.#state,
+			...patch,
+			...(patch.pending ? { order: patch.pending.method === "reorderPinnedConversation" } : {}),
+		};
 		for (const listener of this.#listeners) listener();
 	}
 	async #run(work: (signal: AbortSignal) => Promise<void>) {
 		if (this.#disposed || this.#request || this.#state.incompatible) return;
 		const controller = new AbortController();
 		this.#request = controller;
-		this.#publish({ busy: true, failed: false, notFound: false, rejected: false, result: null });
+		this.#publish({ busy: true, failed: false, notFound: false, rejected: false, result: null, orderResult: null });
 		const timeout = setTimeout(() => controller.abort(), 15000);
 		let abort: (() => void) | undefined;
 		try {
@@ -94,7 +111,9 @@ export class PresentationSession {
 				}),
 			]);
 		} catch {
-			if (this.#request === controller) this.#publish({ ...read(this.#local.read(key)), failed: true });
+			// #current/#admit already published authoritative locked storage. Another tab's
+			// command may not exist in this LocalState's startup cache.
+			if (this.#request === controller) this.#publish({ failed: true });
 		} finally {
 			clearTimeout(timeout);
 			if (abort) controller.signal.removeEventListener("abort", abort);
@@ -113,7 +132,7 @@ export class PresentationSession {
 			return saved.pending;
 		});
 	}
-	async #release(command: PinCommand, signal: AbortSignal) {
+	async #release(command: PresentationCommand, signal: AbortSignal) {
 		await this.#local.withAdmission(key, () => {
 			signal.throwIfAborted();
 			const saved = read(this.#local.storedValue(key)?.value ?? null);
@@ -150,7 +169,21 @@ export class PresentationSession {
 		await this.#release(command, signal);
 		this.#publish({ result: current });
 	}
-	async #lookup(command: PinCommand, signal: AbortSignal): Promise<boolean> {
+	async #finishOrder(command: OrderCommand, result: Result<"reorderPinnedConversation">, signal: AbortSignal) {
+		signal.throwIfAborted();
+		if (
+			result.orderGeneration !== command.params.expectedOrderGeneration &&
+			result.orderGeneration !== command.params.expectedOrderGeneration + 1
+		)
+			throw new Error("RESULT_MISMATCH");
+		// A receipt proves this operation, not today's list placement. Never apply historical order.
+		const current = await this.#client.call("listPinnedConversations", {}, signal);
+		signal.throwIfAborted();
+		if (current.orderGeneration < result.orderGeneration) throw new Error("RESULT_MISMATCH");
+		await this.#release(command, signal);
+		this.#publish({ orderResult: current });
+	}
+	async #lookup(command: PresentationCommand, signal: AbortSignal): Promise<boolean> {
 		const receipt = await this.#client.call(
 			"getPresentationCommandResult",
 			{ requestId: command.params.requestId },
@@ -161,15 +194,23 @@ export class PresentationSession {
 			this.#publish({ notFound: true });
 			return false;
 		}
-		if (receipt.method !== command.method || encode({ ...command, params: receipt.params }) !== encode(command))
+		if (receipt.method !== command.method || JSON.stringify(receipt.params) !== JSON.stringify(command.params))
 			throw new Error("REQUEST_MISMATCH");
-		await this.#finish(command, receipt.result, signal);
+		if (command.method === "setConversationPinned" && receipt.method === "setConversationPinned")
+			await this.#finish(command, receipt.result, signal);
+		else if (command.method === "reorderPinnedConversation" && receipt.method === "reorderPinnedConversation")
+			await this.#finishOrder(command, receipt.result, signal);
 		return true;
 	}
-	async #dispatch(command: PinCommand, signal: AbortSignal) {
+	async #dispatch(command: PresentationCommand, signal: AbortSignal) {
 		try {
-			const result = await this.#client.call(command.method, command.params, signal);
-			await this.#finish(command, result, signal);
+			if (command.method === "setConversationPinned") {
+				const result = await this.#client.call(command.method, command.params, signal);
+				await this.#finish(command, result, signal);
+			} else {
+				const result = await this.#client.call(command.method, command.params, signal);
+				await this.#finishOrder(command, result, signal);
+			}
 		} catch (error) {
 			signal.throwIfAborted();
 			if (await this.#lookup(command, signal)) return;
@@ -191,6 +232,17 @@ export class PresentationSession {
 			params: { ...input },
 		});
 		if (command.method !== "setConversationPinned") return;
+		await this.#admit(command);
+	};
+	reorder = async (input: Params<"reorderPinnedConversation">) => {
+		const command = parseRequest({
+			version: PROTOCOL_VERSION,
+			method: "reorderPinnedConversation",
+			params: { ...input, moved: { ...input.moved }, before: input.before ? { ...input.before } : null },
+		});
+		if (command.method === "reorderPinnedConversation") await this.#admit(command);
+	};
+	async #admit(command: PresentationCommand) {
 		await this.#run(async (signal) => {
 			await this.#local.withAdmission(key, () => {
 				signal.throwIfAborted();
@@ -203,7 +255,7 @@ export class PresentationSession {
 			signal.throwIfAborted();
 			await this.#dispatch(command, signal);
 		});
-	};
+	}
 	check = () =>
 		this.#run(async (signal) => {
 			const command = await this.#current(signal);

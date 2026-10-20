@@ -6,6 +6,7 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
+import type { SidebarOrderAction } from "./sidebar-drag-provider.tsx";
 import { conversationAge } from "./sidebar-preview-metadata.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 import { SidebarTitle } from "./sidebar-title.tsx";
@@ -33,6 +34,7 @@ export function ConversationPreview({
 	onSelect,
 	renderActions,
 	resolveWorkspace = false,
+	orderAction,
 }: {
 	conversation: Conversation;
 	workspaceName?: string;
@@ -40,6 +42,7 @@ export function ConversationPreview({
 	onSelect: () => void;
 	renderActions?: PreviewActions;
 	resolveWorkspace?: boolean;
+	orderAction?: SidebarOrderAction;
 }) {
 	const { locale } = usePreferences();
 	const titleId = useId();
@@ -52,6 +55,7 @@ export function ConversationPreview({
 			selected={selected}
 			titleId={titleId}
 			renderActions={renderActions}
+			orderAction={orderAction}
 			preview={() => (
 				<>
 					<PopoverHeader className="preview-heading">
@@ -77,13 +81,14 @@ export function ConversationPreview({
 				</>
 			)}
 		>
-			{({ hovered }) => (
+			{({ hovered, describedBy }) => (
 				<button
 					type="button"
 					className="conversation-link"
 					data-workspace-id={conversation.workspaceId}
 					data-conversation-id={conversation.conversationId}
 					aria-current={selected ? "page" : undefined}
+					aria-describedby={describedBy}
 					onClick={onSelect}
 				>
 					<SidebarTitle className="conversation-title" id={titleId} text={conversation.title} hovered={hovered} />

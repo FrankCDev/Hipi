@@ -88,6 +88,7 @@ export type RuntimePorts = {
 	): Promise<Result<"getConversationPresentation">>;
 	listPinnedConversations(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">>;
 	setConversationPinned(input: Params<"setConversationPinned">): Promise<Result<"setConversationPinned">>;
+	reorderPinnedConversation(input: Params<"reorderPinnedConversation">): Promise<Result<"reorderPinnedConversation">>;
 	getPresentationCommandResult(
 		input: Params<"getPresentationCommandResult">,
 	): Promise<Result<"getPresentationCommandResult">>;
@@ -220,6 +221,7 @@ export class WorkRuntime implements AppClient {
 			return this.#ports.getConversationPresentation(request.params);
 		if (request.method === "listPinnedConversations") return this.#ports.listPinnedConversations(request.params);
 		if (request.method === "setConversationPinned") return this.#ports.setConversationPinned(request.params);
+		if (request.method === "reorderPinnedConversation") return this.#ports.reorderPinnedConversation(request.params);
 		if (request.method === "getPresentationCommandResult")
 			return this.#ports.getPresentationCommandResult(request.params);
 		if (request.method === "refreshConversationSearch")

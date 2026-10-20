@@ -55,7 +55,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -105,17 +105,27 @@ export type ConversationCommandResult = {
 /** Catalog-owned presentation, independent of conversation/execution revisions. */
 export type ConversationPresentation = Scope & { revision: number; pinned: boolean };
 export type PinnedConversation = { conversation: Conversation; presentation: ConversationPresentation };
+export type PinnedConversationPage = Page<PinnedConversation> & {
+	orderGeneration: number;
+	/** First canonical pin beyond this page, including pins not loaded by the client. */
+	nextPinnedScope: Scope | null;
+};
 export type SetConversationPinned = Scope & {
 	requestId: string;
 	expectedPresentationRevision: number;
 	pinned: boolean;
 };
-/** An immutable first result, not the conversation's current presentation. */
-export type PresentationCommandResult = {
-	method: "setConversationPinned";
-	params: SetConversationPinned;
-	result: ConversationPresentation;
+export type ReorderPinnedConversation = {
+	requestId: string;
+	moved: Scope;
+	/** null explicitly means the end of the complete pinned list. */
+	before: Scope | null;
+	expectedOrderGeneration: number;
 };
+/** An immutable first result, not the conversation's current presentation. */
+export type PresentationCommandResult =
+	| { method: "setConversationPinned"; params: SetConversationPinned; result: ConversationPresentation }
+	| { method: "reorderPinnedConversation"; params: ReorderPinnedConversation; result: { orderGeneration: number } };
 export const AGENT_LIMITS = {
 	contexts: 64,
 	activeContexts: 32,
@@ -269,8 +279,9 @@ export type Methods = ToolPackMethods &
 		};
 		getConversation: { params: Scope; result: Conversation };
 		getConversationPresentation: { params: Scope; result: ConversationPresentation };
-		listPinnedConversations: { params: { cursor?: string }; result: Page<PinnedConversation> };
+		listPinnedConversations: { params: { cursor?: string }; result: PinnedConversationPage };
 		setConversationPinned: { params: SetConversationPinned; result: ConversationPresentation };
+		reorderPinnedConversation: { params: ReorderPinnedConversation; result: { orderGeneration: number } };
 		getPresentationCommandResult: {
 			params: { requestId: string };
 			result: PresentationCommandResult | null;
@@ -567,6 +578,23 @@ export function parseRequest(value: unknown): Request {
 				},
 			};
 			break;
+		case "reorderPinnedConversation": {
+			const moved = parseObservationScope(p.moved);
+			const before = p.before === null ? null : parseObservationScope(p.before);
+			if (before?.workspaceId === moved.workspaceId && before.conversationId === moved.conversationId)
+				throw new AppError("INVALID_REQUEST");
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: {
+					requestId: id(p.requestId),
+					moved,
+					before,
+					expectedOrderGeneration: integer(p.expectedOrderGeneration),
+				},
+			};
+			break;
+		}
 		case "submit":
 			request = {
 				version: PROTOCOL_VERSION,
@@ -1380,28 +1408,42 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		result = { items: Array.from(p.items, parseToolApproval), nextCursor: cursor(p.nextCursor) };
 	} else if (method === "getConversationPresentation" || method === "setConversationPinned") {
 		result = parseConversationPresentation(value);
+	} else if (method === "reorderPinnedConversation") {
+		const p = object(value);
+		fields(p, ["orderGeneration"]);
+		result = { orderGeneration: integer(p.orderGeneration) };
 	} else if (method === "getPresentationCommandResult") {
 		if (value === null) result = null;
 		else {
 			const p = object(value);
 			fields(p, ["method", "params", "result"]);
-			if (p.method !== "setConversationPinned") throw new AppError("INVALID_REQUEST");
 			const request = parseRequest({ version: PROTOCOL_VERSION, method: p.method, params: p.params });
-			if (request.method !== "setConversationPinned") throw new AppError("INVALID_REQUEST");
-			const presentation = parseConversationPresentation(p.result);
-			if (
-				presentation.workspaceId !== request.params.workspaceId ||
-				presentation.conversationId !== request.params.conversationId ||
-				presentation.pinned !== request.params.pinned ||
-				presentation.revision < request.params.expectedPresentationRevision ||
-				presentation.revision > request.params.expectedPresentationRevision + 1
-			)
-				throw new AppError("INVALID_REQUEST");
-			result = { method: p.method, params: request.params, result: presentation };
+			if (request.method === "setConversationPinned") {
+				const presentation = parseConversationPresentation(p.result);
+				if (
+					presentation.workspaceId !== request.params.workspaceId ||
+					presentation.conversationId !== request.params.conversationId ||
+					presentation.pinned !== request.params.pinned ||
+					presentation.revision < request.params.expectedPresentationRevision ||
+					presentation.revision > request.params.expectedPresentationRevision + 1
+				)
+					throw new AppError("INVALID_REQUEST");
+				result = { method: request.method, params: request.params, result: presentation };
+			} else if (request.method === "reorderPinnedConversation") {
+				const order = parseResult(request.method, p.result);
+				if (
+					order.orderGeneration < request.params.expectedOrderGeneration ||
+					order.orderGeneration > request.params.expectedOrderGeneration + 1
+				)
+					throw new AppError("INVALID_REQUEST");
+				result = { method: request.method, params: request.params, result: order };
+			} else throw new AppError("INVALID_REQUEST");
 		}
 	} else if (method === "listPinnedConversations") {
-		result = parsePage(
-			value,
+		const p = object(value);
+		fields(p, ["items", "nextCursor", "orderGeneration", "nextPinnedScope"]);
+		const page = parsePage(
+			{ items: p.items, nextCursor: p.nextCursor },
 			LIMITS.directoryPage,
 			(raw) => {
 				const p = object(raw);
@@ -1419,6 +1461,17 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 			},
 			(item) => JSON.stringify([item.conversation.workspaceId, item.conversation.conversationId]),
 		);
+		const nextPinnedScope = p.nextPinnedScope === null ? null : parseObservationScope(p.nextPinnedScope);
+		if (
+			(page.nextCursor === null) !== (nextPinnedScope === null) ||
+			page.items.some(
+				(item) =>
+					item.conversation.workspaceId === nextPinnedScope?.workspaceId &&
+					item.conversation.conversationId === nextPinnedScope.conversationId,
+			)
+		)
+			throw new AppError("INVALID_REQUEST");
+		result = { ...page, orderGeneration: integer(p.orderGeneration), nextPinnedScope };
 	} else if (method === "getConversationCommandResult") {
 		if (value === null) result = null;
 		else {

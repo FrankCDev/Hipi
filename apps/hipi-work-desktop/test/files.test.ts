@@ -24,6 +24,7 @@ function catalog() {
 		getConversationPresentation: rejectFeatureRead,
 		listPinnedConversations: rejectFeatureRead,
 		setConversationPinned: rejectFeatureRead,
+		reorderPinnedConversation: rejectFeatureRead,
 		getPresentationCommandResult: rejectFeatureRead,
 		listCustomProviders: rejectFeatureRead,
 		saveCustomProvider: rejectFeatureRead,

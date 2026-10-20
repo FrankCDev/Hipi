@@ -10,6 +10,7 @@ import {
 	type PresentationCommandResult,
 	parseResult,
 	parseScope,
+	type ReorderPinnedConversation,
 	type Result,
 	type Scope,
 } from "./contracts.ts";
@@ -17,6 +18,8 @@ import {
 /** Only StoreCatalog constructs this schema, under its original root owner lease. */
 export const PRESENTATION_SCHEMA =
 	"CREATE TABLE IF NOT EXISTS conversation_presentations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, revision INTEGER NOT NULL, pin_ordinal INTEGER, pin_conversation_revision INTEGER, archived_revision INTEGER NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE UNIQUE INDEX IF NOT EXISTS presentation_pin_order ON conversation_presentations(pin_ordinal) WHERE pin_ordinal IS NOT NULL; CREATE TABLE IF NOT EXISTS presentation_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), generation INTEGER NOT NULL, next_ordinal INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS presentation_commands (request_id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL)";
+export const PRESENTATION_ORDER_SCHEMA =
+	"ALTER TABLE presentation_state ADD COLUMN order_generation INTEGER NOT NULL DEFAULT 0; UPDATE presentation_state SET order_generation=generation";
 export type PresentationFailpoint = "after_read" | "after_commit" | "before_archive_cleanup";
 type RecordValue = ConversationPresentation & {
 	pinOrdinal: number | null;
@@ -24,9 +27,12 @@ type RecordValue = ConversationPresentation & {
 	archivedRevision: number;
 };
 /** Keep maintenance verification independent of PI's document definitions and execution entry point. */
-function presentationDigest(input: Params<"setConversationPinned">): string {
+function presentationDigest(
+	method: PresentationCommandResult["method"],
+	input: PresentationCommandResult["params"],
+): string {
 	return createHash("sha256")
-		.update(JSON.stringify(["setConversationPinned", input]))
+		.update(JSON.stringify([method, input]))
 		.digest("hex");
 }
 function integer(value: unknown): number {
@@ -57,7 +63,7 @@ function record(value: Record<string, unknown>): RecordValue {
 }
 
 /** Bounded row materialization and semantic checks shared by runtime opening and backup verification. */
-export function validatePresentationStore(database: DatabaseSync): void {
+export function validatePresentationStore(database: DatabaseSync, ordered = false): void {
 	if (
 		database
 			.prepare(
@@ -76,7 +82,8 @@ export function validatePresentationStore(database: DatabaseSync): void {
 	if (states.length !== 1 || state.singleton !== 1) throw new AppError("STORE_MISMATCH");
 	const generation = integer(state.generation);
 	const nextOrdinal = integer(state.next_ordinal);
-	if (nextOrdinal > generation) throw new AppError("STORE_MISMATCH");
+	const orderGeneration = ordered ? integer(state.order_generation) : generation;
+	if (nextOrdinal > generation || orderGeneration < generation) throw new AppError("STORE_MISMATCH");
 	for (const row of database.prepare("SELECT * FROM conversation_presentations").iterate()) {
 		const value = record(row);
 		if (
@@ -89,12 +96,26 @@ export function validatePresentationStore(database: DatabaseSync): void {
 	for (const row of database.prepare("SELECT * FROM presentation_commands").iterate()) {
 		if (typeof row.result !== "string") throw new AppError("STORE_MISMATCH");
 		const value = parseResult("getPresentationCommandResult", JSON.parse(row.result));
-		if (!value || value.params.requestId !== row.request_id || presentationDigest(value.params) !== row.digest)
+		if (
+			!value ||
+			value.params.requestId !== row.request_id ||
+			presentationDigest(value.method, value.params) !== row.digest
+		)
 			throw new AppError("STORE_MISMATCH");
-		const current = database
-			.prepare("SELECT * FROM conversation_presentations WHERE workspace_id=? AND public_id=?")
-			.get(value.result.workspaceId, value.result.conversationId);
-		if (!current || record(current).revision < value.result.revision) throw new AppError("STORE_MISMATCH");
+		if (value.method === "setConversationPinned") {
+			const current = database
+				.prepare("SELECT * FROM conversation_presentations WHERE workspace_id=? AND public_id=?")
+				.get(value.result.workspaceId, value.result.conversationId);
+			if (!current || record(current).revision < value.result.revision) throw new AppError("STORE_MISMATCH");
+		} else {
+			if (!ordered || value.result.orderGeneration > orderGeneration) throw new AppError("STORE_MISMATCH");
+			for (const scope of [value.params.moved, ...(value.params.before ? [value.params.before] : [])]) {
+				const current = database
+					.prepare("SELECT * FROM conversation_presentations WHERE workspace_id=? AND public_id=?")
+					.get(scope.workspaceId, scope.conversationId);
+				if (!current || record(current).revision < 1) throw new AppError("STORE_MISMATCH");
+			}
+		}
 	}
 }
 
@@ -130,12 +151,16 @@ export class ConversationPresentations {
 					archivedRevision: 0,
 				};
 	}
-	#state(): { generation: number; nextOrdinal: number } {
+	#state(): { generation: number; nextOrdinal: number; orderGeneration: number } {
 		const state = this.#database
-			.prepare("SELECT generation,next_ordinal FROM presentation_state WHERE singleton=1")
+			.prepare("SELECT generation,next_ordinal,order_generation FROM presentation_state WHERE singleton=1")
 			.get();
 		if (!state) throw new AppError("STORE_MISMATCH");
-		return { generation: integer(state.generation), nextOrdinal: integer(state.next_ordinal) };
+		return {
+			generation: integer(state.generation),
+			nextOrdinal: integer(state.next_ordinal),
+			orderGeneration: integer(state.order_generation),
+		};
 	}
 	#put(value: RecordValue): void {
 		this.#database
@@ -163,9 +188,10 @@ export class ConversationPresentations {
 				prior.pinOrdinal = null;
 				prior.pinConversationRevision = null;
 				prior.revision = increment(prior.revision);
+				const state = this.#state();
 				this.#database
-					.prepare("UPDATE presentation_state SET generation=? WHERE singleton=1")
-					.run(increment(this.#state().generation));
+					.prepare("UPDATE presentation_state SET generation=?,order_generation=? WHERE singleton=1")
+					.run(increment(state.generation), increment(state.orderGeneration));
 			}
 			this.#put(prior);
 			this.#database.exec("COMMIT");
@@ -200,10 +226,14 @@ export class ConversationPresentations {
 		return result;
 	}
 	async set(input: Params<"setConversationPinned">): Promise<ConversationPresentation> {
-		const digest = presentationDigest(input);
+		const digest = presentationDigest("setConversationPinned", input);
 		const replay = () => {
 			const prior = this.command(input.requestId);
-			if (prior && presentationDigest(prior.params) !== digest) throw new AppError("IDEMPOTENCY_CONFLICT");
+			if (
+				prior &&
+				(prior.method !== "setConversationPinned" || presentationDigest(prior.method, prior.params) !== digest)
+			)
+				throw new AppError("IDEMPOTENCY_CONFLICT");
 			return prior?.result;
 		};
 		const prior = replay();
@@ -227,12 +257,101 @@ export class ConversationPresentations {
 					value.pinOrdinal = input.pinned ? increment(state.nextOrdinal) : null;
 					value.pinConversationRevision = input.pinned ? conversation.revision : null;
 					this.#database
-						.prepare("UPDATE presentation_state SET generation=?,next_ordinal=? WHERE singleton=1")
-						.run(increment(state.generation), value.pinOrdinal ?? state.nextOrdinal);
+						.prepare(
+							"UPDATE presentation_state SET generation=?,next_ordinal=?,order_generation=? WHERE singleton=1",
+						)
+						.run(
+							increment(state.generation),
+							value.pinOrdinal ?? state.nextOrdinal,
+							increment(state.orderGeneration),
+						);
 				}
 				this.#put(value);
 				result = this.#public(value);
 				const receipt: PresentationCommandResult = { method: "setConversationPinned", params: input, result };
+				this.#database
+					.prepare("INSERT INTO presentation_commands VALUES (?,?,?)")
+					.run(input.requestId, digest, JSON.stringify(receipt));
+			}
+			this.#database.exec("COMMIT");
+		} catch (error) {
+			this.#database.exec("ROLLBACK");
+			throw error;
+		}
+		await this.#failpoint?.("after_commit");
+		return result;
+	}
+	async reorder(input: ReorderPinnedConversation): Promise<Result<"reorderPinnedConversation">> {
+		const digest = presentationDigest("reorderPinnedConversation", input);
+		const replay = () => {
+			const prior = this.command(input.requestId);
+			if (
+				prior &&
+				(prior.method !== "reorderPinnedConversation" || presentationDigest(prior.method, prior.params) !== digest)
+			)
+				throw new AppError("IDEMPOTENCY_CONFLICT");
+			return prior?.result;
+		};
+		const prior = replay();
+		if (prior) return prior;
+		const conversations: Conversation[] = [];
+		for (const scope of [input.moved, ...(input.before ? [input.before] : [])]) {
+			const conversation = await this.#getConversation(scope);
+			this.recordArchive(conversation);
+			conversations.push(conversation);
+		}
+		await this.#failpoint?.("after_read");
+		this.#database.exec("BEGIN IMMEDIATE");
+		let result: Result<"reorderPinnedConversation">;
+		try {
+			const repeated = replay();
+			if (repeated) result = repeated;
+			else {
+				const values = conversations.map((conversation) => {
+					const value = this.#read(conversation);
+					if (conversation.archivedAt !== null || conversation.revision <= value.archivedRevision)
+						throw new AppError("CONVERSATION_ARCHIVED");
+					if (value.pinOrdinal === null) throw new AppError("IDEMPOTENCY_CONFLICT");
+					return value;
+				});
+				const state = this.#state();
+				if (state.orderGeneration !== input.expectedOrderGeneration) throw new AppError("IDEMPOTENCY_CONFLICT");
+				const moved = values[0].pinOrdinal;
+				const anchor = values[1]?.pinOrdinal ?? null;
+				if (moved === null) throw new AppError("IDEMPOTENCY_CONFLICT");
+				const destination =
+					anchor !== null && anchor < moved
+						? anchor
+						: integer(
+								this.#database
+									.prepare(
+										`SELECT max(pin_ordinal) AS ordinal FROM conversation_presentations ${anchor === null ? "" : "WHERE pin_ordinal<?"}`,
+									)
+									.get(...(anchor === null ? [] : [anchor]))?.ordinal,
+							);
+				let orderGeneration = state.orderGeneration;
+				if (destination !== moved) {
+					const low = Math.min(moved, destination);
+					const high = Math.max(moved, destination);
+					// Rotate the existing ordinal slots, including gaps and all unloaded pins. Negative staging
+					// avoids transient unique-index collisions; no membership revision or archive fence changes.
+					this.#database
+						.prepare(
+							`WITH positions AS MATERIALIZED (SELECT workspace_id,public_id,CASE WHEN pin_ordinal=? THEN ? ELSE ${destination < moved ? "lead" : "lag"}(pin_ordinal) OVER (ORDER BY pin_ordinal) END AS target FROM conversation_presentations WHERE pin_ordinal BETWEEN ? AND ?) UPDATE conversation_presentations SET pin_ordinal=-(SELECT target FROM positions WHERE positions.workspace_id=conversation_presentations.workspace_id AND positions.public_id=conversation_presentations.public_id) WHERE pin_ordinal BETWEEN ? AND ?`,
+						)
+						.run(moved, destination, low, high, low, high);
+					this.#database
+						.prepare(
+							"UPDATE conversation_presentations SET pin_ordinal=-pin_ordinal WHERE pin_ordinal BETWEEN ? AND ?",
+						)
+						.run(-high, -low);
+					orderGeneration = increment(orderGeneration);
+					this.#database
+						.prepare("UPDATE presentation_state SET order_generation=? WHERE singleton=1")
+						.run(orderGeneration);
+				}
+				result = { orderGeneration };
+				const receipt: PresentationCommandResult = { method: "reorderPinnedConversation", params: input, result };
 				this.#database
 					.prepare("INSERT INTO presentation_commands VALUES (?,?,?)")
 					.run(input.requestId, digest, JSON.stringify(receipt));
@@ -267,40 +386,53 @@ export class ConversationPresentations {
 			} catch {
 				throw new AppError("INVALID_REQUEST");
 			}
-			if (value.generation !== state.generation) throw new AppError("CURSOR_STALE");
+			if (value.generation !== state.orderGeneration) throw new AppError("CURSOR_STALE");
 		}
-		const rows = this.#database
-			.prepare("SELECT * FROM conversation_presentations WHERE pin_ordinal>? ORDER BY pin_ordinal LIMIT ?")
-			.all(after, LIMITS.directoryPage + 1);
-		const candidates = rows.slice(0, LIMITS.directoryPage).map(record);
+		let orderGeneration = state.orderGeneration;
+		let scanAfter = after;
+		let pageAfter = after;
 		const items: PinnedConversation[] = [];
-		for (const candidate of candidates) {
-			const conversation = await this.#getConversation(candidate);
-			this.recordArchive(conversation);
-			if (conversation.archivedAt === null) items.push({ conversation, presentation: this.#public(candidate) });
-		}
-		const current = this.#state();
-		// A concurrent pin must not let an old page claim the new generation. Archive cleanup on this
-		// first page is safe to filter; its scan position still advances over every examined ordinal.
-		if (current.generation !== state.generation) {
-			if (input.cursor !== undefined) throw new AppError("CURSOR_STALE");
-			for (const item of items) {
-				const latest = this.#read(item.presentation);
-				if (latest.revision !== item.presentation.revision) throw new AppError("CURSOR_STALE");
+		let nextPinnedScope: Scope | null = null;
+		while (nextPinnedScope === null) {
+			const rows = this.#database
+				.prepare("SELECT * FROM conversation_presentations WHERE pin_ordinal>? ORDER BY pin_ordinal LIMIT ?")
+				.all(scanAfter, LIMITS.directoryPage + 1);
+			if (rows.length === 0) break;
+			for (const row of rows) {
+				const candidate = record(row);
+				if (candidate.pinOrdinal === null) throw new AppError("STORE_MISMATCH");
+				const conversation = await this.#getConversation(candidate);
+				// Check before our own synchronous cleanup, not only membership revisions after the scan.
+				// A pure reorder changes neither membership revisions nor nextOrdinal.
+				if (this.#state().orderGeneration !== orderGeneration) throw new AppError("CURSOR_STALE");
+				this.recordArchive(conversation);
+				const current = this.#state();
+				if (input.cursor !== undefined && current.orderGeneration !== orderGeneration)
+					throw new AppError("CURSOR_STALE");
+				orderGeneration = current.orderGeneration;
+				scanAfter = candidate.pinOrdinal;
+				if (conversation.archivedAt !== null) continue;
+				if (items.length === LIMITS.directoryPage) {
+					nextPinnedScope = { workspaceId: candidate.workspaceId, conversationId: candidate.conversationId };
+					break;
+				}
+				items.push({ conversation, presentation: this.#public(candidate) });
+				pageAfter = candidate.pinOrdinal;
 			}
-			if (current.nextOrdinal !== state.nextOrdinal) throw new AppError("CURSOR_STALE");
 		}
 		return {
 			items,
+			orderGeneration,
+			nextPinnedScope,
 			nextCursor:
-				rows.length > LIMITS.directoryPage
+				nextPinnedScope !== null
 					? Buffer.from(
 							JSON.stringify({
 								version: 1,
 								kind: "pinned",
 								storeId: this.#storeId,
-								generation: current.generation,
-								after: candidates[candidates.length - 1].pinOrdinal,
+								generation: orderGeneration,
+								after: pageAfter,
 							}),
 						).toString("base64url")
 					: null,

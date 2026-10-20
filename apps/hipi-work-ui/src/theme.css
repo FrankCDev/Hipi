@@ -541,15 +541,6 @@
 .welcome[data-project-ready="true"] > p:not(.welcome-eyebrow) {
 	display: none;
 }
-.welcome-action > button {
-	background: var(--brand);
-	color: var(--on-brand);
-	border-radius: 9px;
-	padding-inline: 16px;
-}
-.welcome-action > button:hover {
-	background: var(--brand-hover);
-}
 .welcome-principles {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));

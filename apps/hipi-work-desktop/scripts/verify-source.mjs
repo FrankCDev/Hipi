@@ -22,6 +22,9 @@ const nodeTests = groups.flatMap(([directory, names]) =>
 	names.split(" ").map((name) => `${directory}/${name}.test.ts`),
 );
 nodeTests.push("apps/hipi-work-desktop/scripts/release-policy.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/production-policy.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/release-artifacts.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/verify-native-release.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/verify-pack.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-download.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
@@ -32,6 +35,7 @@ nodeTests.push("apps/hipi-work-ui/test/conversation-failure.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/observation-session.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/initial-context-runtime.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/sidebar-preview-metadata.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/project-folder-cascade.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/anchored-history-controller.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/conversation-search-integration.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
@@ -68,6 +72,7 @@ nodeTests.push("packages/work-runtime/test/project-folder-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folders.test.ts");
 nodeTests.push("packages/work-runtime/test/conversation-presentation.test.ts");
 nodeTests.push("packages/work-runtime/test/presentation-backup.test.ts");
+nodeTests.push("packages/work-runtime/test/pinned-reorder.test.ts");
 nodeTests.push("packages/work-runtime/test/conversation-search.test.ts");
 nodeTests.push("packages/work-runtime/test/search-projection.test.ts");
 nodeTests.push("packages/work-runtime/test/search-backup.test.ts");
@@ -125,6 +130,8 @@ const uiTests = [
 	"project-preview-card",
 	"sidebar-title",
 	"sidebar-title-lifecycle",
+	"sidebar-drag-provider",
+	"sidebar-dnd-integration",
 	"tool-packs-panel-lifecycle",
 	"archived-conversation",
 	"conversation-model-refresh",
@@ -156,6 +163,10 @@ uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/presentation-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/sidebar-title-motion.test.ts");
 uiTests.push("apps/hipi-work-ui/test/conversation-search-controller.test.ts");
+uiTests.push("apps/hipi-work-ui/test/sidebar-layout-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/sidebar-drag-controller.test.ts");
+uiTests.push("apps/hipi-work-ui/test/sidebar-pointer-sensor.test.ts");
+uiTests.push("apps/hipi-work-ui/test/pinned-order-actions.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-context-send.test.ts");
@@ -186,13 +197,23 @@ run("packages/work-runtime/scripts/check-browser.mjs", [], resolve(root, "packag
 // A stuck test must produce a failure instead of silently consuming the whole CI job.
 // Explicit per-test deadlines can be stricter; no scenario is skipped on timeout.
 // TAP emits each failure's details immediately, even if a later test leaves handles open.
-run("--conditions=source", [
-	"--test",
-	"--test-reporter=tap",
-	"--test-timeout=120000",
-	"--test-concurrency=2",
-	...nodeTests,
-]);
+// Native Windows observation keeps its original deadlines, but does not compete
+// with another source-test process during cold PowerShell/Electron startup.
+// Portable observer/security cases remain in the ordinary batch on other hosts.
+const windowsNativeTest = "apps/hipi-work-desktop/scripts/gui-windows-dialogs.test.mjs";
+const nodeTestGroups =
+	process.platform === "win32"
+		? [nodeTests.filter((file) => file !== windowsNativeTest), [windowsNativeTest]]
+		: [nodeTests];
+for (const tests of nodeTestGroups) {
+	run("--conditions=source", [
+		"--test",
+		"--test-reporter=tap",
+		"--test-timeout=120000",
+		`--test-concurrency=${tests.length === 1 ? 1 : 2}`,
+		...tests,
+	]);
+}
 run("node_modules/vitest/vitest.mjs", ["run", "--maxWorkers=2", "--config", "vitest.base.ts", ...uiTests]);
 // Durable's own config supplies source exports and current-only retention setup.
 // Do not replace it with the renderer-oriented root config.

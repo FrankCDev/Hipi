@@ -173,7 +173,14 @@ test.each(["en", "zh-CN"])("pinned rows retain the same canonical selection and 
 	locale = language;
 	const cache = new QueryClient();
 	cache.setQueryData(["pinned-conversations", "pages"], {
-		pages: [{ items: [{ conversation, presentation: { ...original, revision: 1, pinned: true } }], nextCursor: null }],
+		pages: [
+			{
+				items: [{ conversation, presentation: { ...original, revision: 1, pinned: true } }],
+				nextCursor: null,
+				orderGeneration: 1,
+				nextPinnedScope: null,
+			},
+		],
 		pageParams: [undefined],
 	});
 	const local = new LocalState();

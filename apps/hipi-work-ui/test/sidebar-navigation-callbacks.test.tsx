@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type * as DndCore from "@dnd-kit/core";
 import { type AppClient, type Conversation, type Method, parseResult } from "@hipi/work-runtime/contracts";
 import type * as React from "react";
 import { isValidElement } from "react";
@@ -17,6 +18,7 @@ import { ConversationActions } from "../src/features/workbench/catalog-controls.
 import { CatalogPagination } from "../src/features/workbench/catalog-pagination.tsx";
 import { CatalogSession } from "../src/features/workbench/catalog-session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
+import { PresentationSession } from "../src/features/workbench/presentation-session.ts";
 import { type PreviewActions, SidebarPreviewRow } from "../src/features/workbench/sidebar-preview-row.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
@@ -25,6 +27,7 @@ const hooks = vi.hoisted(() => ({
 	scope: "",
 	cursor: 0,
 	commits: [] as (() => void)[],
+	dragContext: { state: { source: false } },
 }));
 // Bounded production-callback adapter. It checks owner handoff and explicit
 // focus callbacks, not browser focus order, portal mounting, or React DOM.
@@ -38,6 +41,8 @@ vi.mock("react", async () => {
 	}
 	return {
 		...actual,
+		useContext: () => hooks.dragContext,
+		useLayoutEffect: () => {},
 		useState: <T,>(initial: T | (() => T)) => {
 			const { cells, index, previous } = cell();
 			const current = previous ?? { value: typeof initial === "function" ? (initial as () => T)() : initial };
@@ -67,6 +72,21 @@ vi.mock("react", async () => {
 				});
 			}
 		},
+	};
+});
+// Only adapt hooks used by the sortable boundary. These navigation tests do not
+// simulate dnd-kit sensors, collision measurement, or the library components.
+vi.mock("@dnd-kit/core", async () => {
+	const actual = await vi.importActual<typeof DndCore>("@dnd-kit/core");
+	return {
+		...actual,
+		useDraggable: () => ({
+			attributes: {},
+			listeners: undefined,
+			setNodeRef: vi.fn(),
+			setActivatorNodeRef: vi.fn(),
+		}),
+		useDroppable: () => ({ setNodeRef: vi.fn() }),
 	};
 });
 vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en", t: (key: string) => key }) }));
@@ -102,6 +122,7 @@ function element<C extends React.ElementType>(node: React.ReactNode, type: C) {
 beforeEach(() => {
 	hooks.cells.clear();
 	hooks.commits = [];
+	hooks.dragContext = { state: { source: false } };
 	vi.clearAllMocks();
 	vi.useFakeTimers();
 });
@@ -470,6 +491,7 @@ test("touch menu exposes the same read-only preview with no duplicate View detai
 
 test("keyboard Tab enters an interactive card and returns through its exact source and next row control", () => {
 	vi.stubGlobal("HTMLElement", Object);
+	vi.stubGlobal("Element", Object);
 	const ui = rowAndActions();
 	const row = element(ui.renderRow(), "div");
 	const card = element(ui.renderRow(), PopoverContent);
@@ -525,6 +547,33 @@ test("keyboard Tab enters an interactive card and returns through its exact sour
 	Reflect.apply(element(view, PopoverContent).props.onKeyDown, undefined, [{ ...tab, target: control }]);
 	assert.equal(next.focus.mock.calls.length, 1);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+});
+
+test("active dragging closes an open preview and action hover cannot reopen it or restart the title", () => {
+	class Target {
+		closest() {
+			return this;
+		}
+		contains() {
+			return true;
+		}
+	}
+	vi.stubGlobal("Node", Target);
+	vi.stubGlobal("Element", Target);
+	const ui = rowAndActions();
+	const target = new Target();
+	const pointer = { pointerType: "mouse", target, currentTarget: target };
+	Reflect.apply(element(ui.renderRow(), "div").props.onPointerEnter, undefined, [pointer]);
+	vi.advanceTimersByTime(400);
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	hooks.dragContext.state.source = true;
+	ui.renderRow();
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+	Reflect.apply(element(ui.renderRow(), "div").props.onPointerMove, undefined, [pointer]);
+	Reflect.apply(element(ui.renderRow(), "div").props.onPointerEnter, undefined, [pointer]);
+	vi.advanceTimersByTime(500);
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+	hooks.dragContext.state.source = false;
 });
 
 test("reverse pointer travel uses the row corridor and stopping in the gap retains a bounded close deadline", () => {
@@ -715,6 +764,52 @@ test("a cancelled dirty-file guard does not send or persist the archive", () => 
 	assert.equal(local.read("command.catalog"), null);
 	assert.equal(session.getSnapshot().busy, false);
 	session.dispose();
+});
+
+test("an unresolved order blocks archive mutations but leaves rename and navigation ownership independent", async () => {
+	const local = new LocalState();
+	const calls: Method[] = [];
+	const client: AppClient = {
+		call: async (method) => {
+			calls.push(method);
+			if (method === "getPresentationCommandResult") return parseResult(method, null);
+			throw new Error("Unknown order");
+		},
+		observe: vi.fn(),
+	};
+	const presentation = new PresentationSession(client, local);
+	const session = new CatalogSession(client, local);
+	const render = () =>
+		drive("archive-order", () =>
+			ConversationActions({ conversation, session, presentation, inlineActions: true, guard: (action) => action() }),
+		);
+	const staleArchive = elements(render(), DropdownMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Archive conversation"),
+	);
+	await presentation.reorder({
+		requestId: "unknown-order",
+		moved: { workspaceId: conversation.workspaceId, conversationId: conversation.conversationId },
+		before: null,
+		expectedOrderGeneration: 0,
+	});
+	const view = render();
+	const archive = elements(view, DropdownMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Archive conversation"),
+	);
+	const rename = elements(view, DropdownMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Rename conversation"),
+	);
+	assert.equal(archive?.props.disabled, true);
+	assert.equal(rename?.props.disabled, false);
+	assert.equal(
+		elements(view, Button).find((item) => item.props["aria-label"] === "Archive conversation")?.props.disabled,
+		true,
+	);
+	staleArchive?.props.onSelect?.(new Event("select"));
+	assert.deepEqual(calls, ["reorderPinnedConversation", "getPresentationCommandResult"]);
+	assert.equal(local.write("workspace", "elsewhere"), true);
+	session.dispose();
+	presentation.dispose();
 });
 
 test("direct Archive follows the same immutable guard and unknown-request owner as the menu", async () => {

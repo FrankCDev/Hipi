@@ -231,6 +231,7 @@ test("disposed or timed-out operations retain recovery and ignore late success",
 		await Promise.resolve();
 		assert.ok(f.session.getSnapshot().pending);
 		assert.equal(f.session.getSnapshot().result, null);
+		assert.equal(f.session.getSnapshot().busy, false);
 		assert.equal(f.calls[0]?.signal?.aborted, true);
 		f.session.dispose();
 	}
@@ -259,4 +260,176 @@ test("two owners share the durable admission slot and a queued action snapshots 
 	assert.equal(second.getSnapshot().pending?.params.requestId, input.requestId);
 	f.session.dispose();
 	second.dispose();
+});
+
+const orderInput: Params<"reorderPinnedConversation"> = {
+	requestId: "order-request",
+	moved: { workspaceId: "workspace", conversationId: "conversation" },
+	before: { workspaceId: "other", conversationId: "anchor" },
+	expectedOrderGeneration: 7,
+};
+const orderPage = { items: [], nextCursor: null, orderGeneration: 12, nextPinnedScope: null };
+
+test.each([false, true])("order recovery reconciles current list after historical receipt (lost=%s)", async (lost) => {
+	const f = fixture();
+	f.local.write("workspace", "unchanged");
+	f.local.write("draft.workspace.conversation", "Unsent");
+	f.handle(async (method) => {
+		if (method === "reorderPinnedConversation") {
+			if (lost) throw new Error("Lost response");
+			return { orderGeneration: 8 };
+		}
+		if (method === "getPresentationCommandResult")
+			return { method: "reorderPinnedConversation", params: orderInput, result: { orderGeneration: 8 } };
+		assert.equal(method, "listPinnedConversations");
+		return orderPage;
+	});
+	await f.session.reorder(orderInput);
+	assert.deepEqual(
+		f.calls.map(({ method }) => method),
+		lost
+			? ["reorderPinnedConversation", "getPresentationCommandResult", "listPinnedConversations"]
+			: ["reorderPinnedConversation", "listPinnedConversations"],
+	);
+	assert.deepEqual(f.session.getSnapshot().orderResult, orderPage);
+	assert.equal(f.session.getSnapshot().result, null);
+	assert.equal(f.session.getSnapshot().pending, null);
+	assert.equal(f.local.read("workspace"), "unchanged");
+	assert.equal(f.local.read("draft.workspace.conversation"), "Unsent");
+	f.session.dispose();
+});
+
+test("unknown order restores immutable scopes and generation, and retry never rebases", async () => {
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, work: () => unknown) => work() } });
+	const storage = new MemoryStorage();
+	const f = fixture(new LocalState("store", storage));
+	const mutable = structuredClone(orderInput);
+	await f.session.reorder(mutable);
+	mutable.moved.workspaceId = "changed";
+	mutable.before = null;
+	mutable.expectedOrderGeneration = 99;
+	f.session.dispose();
+	const restored = new PresentationSession(f.client, new LocalState("store", storage));
+	assert.equal(restored.getSnapshot().order, true);
+	assert.equal(f.calls.length, 2, "restoration does not dispatch");
+	await restored.check();
+	await restored.retry();
+	assert.deepEqual(
+		f.calls.filter(({ method }) => method === "reorderPinnedConversation").map(({ params }) => params),
+		[orderInput, orderInput],
+	);
+	assert.equal(restored.getSnapshot().pending?.method, "reorderPinnedConversation");
+	assert.equal(restored.getSnapshot().notFound, true);
+	restored.dispose();
+});
+
+test("a known order receipt with failed current-list read retains ownership until a later read succeeds", async () => {
+	const f = fixture();
+	let available = false;
+	f.handle(async (method) => {
+		if (method === "reorderPinnedConversation") return { orderGeneration: 8 };
+		if (method === "getPresentationCommandResult")
+			return { method: "reorderPinnedConversation", params: orderInput, result: { orderGeneration: 8 } };
+		if (!available) throw new Error("Read unavailable");
+		return orderPage;
+	});
+	await f.session.reorder(orderInput);
+	assert.ok(f.session.getSnapshot().pending);
+	assert.equal(f.session.getSnapshot().orderResult, null);
+	available = true;
+	await f.session.check();
+	assert.equal(f.session.getSnapshot().pending, null);
+	assert.deepEqual(f.session.getSnapshot().orderResult, orderPage);
+	assert.equal(f.calls.filter(({ method }) => method === "reorderPinnedConversation").length, 1);
+	f.session.dispose();
+});
+
+test.each(["anchor", "generation", "method"] as const)(
+	"mismatched order %s cannot release the saved request",
+	async (mismatch) => {
+		const f = fixture();
+		f.handle(async (method) => {
+			if (method === "reorderPinnedConversation") throw new Error("Unknown");
+			if (method === "getPresentationCommandResult")
+				return mismatch === "method"
+					? { method: "setConversationPinned", params: { ...input, requestId: orderInput.requestId }, result }
+					: {
+							method: "reorderPinnedConversation",
+							params: mismatch === "anchor" ? { ...orderInput, before: null } : orderInput,
+							result: { orderGeneration: mismatch === "generation" ? 99 : 8 },
+						};
+			return orderPage;
+		});
+		await f.session.reorder(orderInput);
+		assert.ok(f.session.getSnapshot().pending);
+		assert.equal(f.session.getSnapshot().failed, true);
+		assert.equal(f.session.getSnapshot().orderResult, null);
+		f.session.dispose();
+	},
+);
+
+test.each(["IDEMPOTENCY_CONFLICT", "CONVERSATION_ARCHIVED", "INVALID_REQUEST"] as const)(
+	"definitive order %s releases only after absent receipt and never silently retries",
+	async (code) => {
+		const f = fixture();
+		f.handle(async (method) => {
+			if (method === "reorderPinnedConversation") throw new AppError(code, "Rejected");
+			assert.equal(method, "getPresentationCommandResult");
+			return null;
+		});
+		await f.session.reorder(orderInput);
+		assert.equal(f.session.getSnapshot().pending, null);
+		assert.equal(f.session.getSnapshot().rejected, true);
+		await f.session.retry();
+		assert.equal(f.calls.filter(({ method }) => method === "reorderPinnedConversation").length, 1);
+		f.session.dispose();
+	},
+);
+
+test.each(["pin", "order"] as const)(
+	"an unresolved %s blocks the other presentation mutation, not unrelated local work",
+	async (first) => {
+		const f = fixture();
+		if (first === "pin") {
+			await f.session.execute(input);
+			await f.session.reorder(orderInput);
+		} else {
+			await f.session.reorder(orderInput);
+			await f.session.execute(input);
+		}
+		assert.deepEqual(
+			f.calls.map(({ method }) => method),
+			[first === "pin" ? "setConversationPinned" : "reorderPinnedConversation", "getPresentationCommandResult"],
+		);
+		assert.equal(f.local.write("draft.other.chat", "Still editable"), true);
+		assert.equal(f.local.write("workspace", "other"), true);
+		f.session.dispose();
+	},
+);
+
+test("no-op order receipt keeps its generation but still refreshes current placement", async () => {
+	const f = fixture();
+	f.handle(async (method) => (method === "reorderPinnedConversation" ? { orderGeneration: 7 } : orderPage));
+	await f.session.reorder(orderInput);
+	assert.equal(f.session.getSnapshot().pending, null);
+	assert.deepEqual(f.session.getSnapshot().orderResult, orderPage);
+	f.session.dispose();
+});
+
+test("a second window retains authoritative unknown recovery when its startup cache is stale and lookup fails", async () => {
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, work: () => unknown) => work() } });
+	const storage = new MemoryStorage();
+	const first = fixture(new LocalState("store", storage));
+	const second = fixture(new LocalState("store", storage));
+	await first.session.reorder(orderInput);
+	assert.equal(second.local.read("command.presentation"), null);
+	second.handle(async () => {
+		throw new Error("Receipt service unavailable");
+	});
+	await second.session.check();
+	assert.equal(second.session.getSnapshot().pending?.params.requestId, orderInput.requestId);
+	assert.equal(second.session.getSnapshot().failed, true);
+	assert.equal(second.session.getSnapshot().busy, false);
+	first.session.dispose();
+	second.session.dispose();
 });

@@ -7,7 +7,11 @@ import {
 	type ReadonlySqliteStorage,
 } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { AppError, CUSTOM_PROVIDER_LIMITS, parseResult } from "../contracts.ts";
-import { PRESENTATION_SCHEMA, validatePresentationStore } from "../conversation-presentation.ts";
+import {
+	PRESENTATION_ORDER_SCHEMA,
+	PRESENTATION_SCHEMA,
+	validatePresentationStore,
+} from "../conversation-presentation.ts";
 import { SEARCH_SCHEMA, validateSearchStore } from "../search/schema.ts";
 import { checkDatabasePath } from "../store-owner.ts";
 import { MAINTENANCE_LIMITS, MaintenanceError } from "./contracts.ts";
@@ -32,6 +36,7 @@ let expectedConfiguredCatalogSchema: string | undefined;
 let expectedProjectCatalogSchema: string | undefined;
 let expectedPresentationCatalogSchema: string | undefined;
 let expectedSearchCatalogSchema: string | undefined;
+let expectedOrderedCatalogSchema: string | undefined;
 function assertSchemaBudget(db: DatabaseSync): void {
 	const count = db.prepare("SELECT count(*) AS total FROM sqlite_schema").get()?.total;
 	if (
@@ -108,7 +113,7 @@ export function assertSqliteIntegrity(path: string, standalone = false): void {
 		closeDatabase(db);
 	}
 }
-function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 {
+function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 | 9 {
 	if (expectedCatalogSchema === undefined) {
 		const reference = new DatabaseSync(":memory:");
 		try {
@@ -128,6 +133,8 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 {
 			expectedPresentationCatalogSchema = schemaSignature(reference);
 			reference.exec(SEARCH_SCHEMA);
 			expectedSearchCatalogSchema = schemaSignature(reference);
+			reference.exec(PRESENTATION_ORDER_SCHEMA);
+			expectedOrderedCatalogSchema = schemaSignature(reference);
 		} finally {
 			reference.close();
 		}
@@ -138,6 +145,7 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 | 7 | 8 {
 	if (signature === expectedProjectCatalogSchema) return 6;
 	if (signature === expectedPresentationCatalogSchema) return 7;
 	if (signature === expectedSearchCatalogSchema) return 8;
+	if (signature === expectedOrderedCatalogSchema) return 9;
 	throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 }
 function assertProjectFolders(db: DatabaseSync): void {
@@ -208,7 +216,7 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			...(version >= 5 ? ["custom_providers", "provider_commands"] : []),
 			...(version >= 6 ? ["project_folders"] : []),
 			...(version >= 7 ? ["conversation_presentations", "presentation_state", "presentation_commands"] : []),
-			...(version === 8 ? ["search_state", "search_sources", "search_chunks"] : []),
+			...(version >= 8 ? ["search_state", "search_sources", "search_chunks"] : []),
 		]);
 		for (const row of db.prepare("SELECT type,name,sql FROM sqlite_schema").iterate()) {
 			if (row.type === "table" && typeof row.name === "string" && allowed.delete(row.name)) continue;
@@ -217,7 +225,7 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 				typeof row.name === "string" &&
 				(row.name === "conversation_page" ||
 					(version >= 7 && row.name === "presentation_pin_order") ||
-					(version === 8 && row.name === "search_chunk_scope") ||
+					(version >= 8 && row.name === "search_chunk_scope") ||
 					row.name.startsWith("sqlite_autoindex_"))
 			)
 				continue;
@@ -264,8 +272,8 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 		if (version >= 6) assertProjectFolders(db);
 		if (version >= 7) {
 			try {
-				validatePresentationStore(db);
-				if (version === 8) validateSearchStore(db);
+				validatePresentationStore(db, version >= 9);
+				if (version >= 8) validateSearchStore(db);
 			} catch (error) {
 				throw new MaintenanceError(
 					error instanceof AppError && error.code === "CAPACITY_EXCEEDED"

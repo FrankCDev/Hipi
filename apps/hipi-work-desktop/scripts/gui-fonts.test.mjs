@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFontLayout, renderedFonts } from "./gui-fonts.mjs";
+import { readFontLayout, renderedFonts, visibleFontTarget } from "./gui-fonts.mjs";
 
 const fixture = {
 	workspace: "Chats",
@@ -33,7 +33,12 @@ function renderer(fonts, visible = true) {
 			if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
 			if (method === "DOM.querySelector")
 				return {
-					nodeId: params.selector === ".conversation-link" ? 2 : params.selector === ".toolbar-conversation" ? 4 : 3,
+					nodeId:
+						params.selector === ".workspace-branch .conversation-link .sidebar-title-content"
+							? 2
+							: params.selector === ".toolbar-conversation"
+								? 4
+								: 3,
 				};
 			if (method === "CSS.getPlatformFontsForNode") return { fonts };
 			assert.ok(["DOM.enable", "CSS.enable"].includes(method), "No rendering or input overrides allowed");
@@ -54,6 +59,47 @@ test("Chinese fixture evidence records actual node fonts and strips unrelated pr
 		cdp.calls.filter((call) => call.method === "CSS.getPlatformFontsForNode").map((call) => call.params),
 		[{ nodeId: 2 }, { nodeId: 3 }, { nodeId: 4 }],
 	);
+});
+
+test("sidebar font evidence uses the actual nested text leaf and rejects missing, duplicate or unrelated canonical rows", () => {
+	const selector = ".workspace-branch .conversation-link .sidebar-title-content";
+	const rect = { width: 80, height: 20, top: 20, bottom: 40, left: 20, right: 100 };
+	const leaf = { textContent: fixture.conversation, getBoundingClientRect: () => rect };
+	const row = { ...leaf, contains: (node) => node === leaf };
+	let leaves = [leaf],
+		rows = [row];
+	const document = { querySelectorAll: (query) => (query === selector ? leaves : rows) };
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), true);
+	leaves = [];
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+	leaves = [leaf, leaf];
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+	leaves = [leaf];
+	rows = [row, row];
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+	rows = [{ ...row, contains: () => false }];
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+	rows = [row];
+	rect.height = 0;
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+	rect.height = 20;
+	leaf.textContent = "wrong";
+	assert.equal(visibleFontTarget(document, selector, fixture.conversation, 1400, 872), false);
+});
+
+test("empty wrapper fonts cannot replace actual nested sidebar glyph evidence", async () => {
+	const cdp = renderer([bundled]);
+	const request = cdp.request.bind(cdp);
+	cdp.request = async (method, params) => {
+		if (method === "DOM.querySelector") assert.notEqual(params.selector, ".conversation-link");
+		return request(method, params);
+	};
+	await renderedFonts(cdp, fixture, "linux");
+	assert.equal(
+		cdp.calls.find((call) => call.method === "DOM.querySelector").params.selector,
+		".workspace-branch .conversation-link .sidebar-title-content",
+	);
+	await assert.rejects(renderedFonts(renderer([]), fixture, "linux"), /Missing rendered font/);
 });
 
 test("a failed target retains observed font and fixed layout diagnostics before throwing", async () => {

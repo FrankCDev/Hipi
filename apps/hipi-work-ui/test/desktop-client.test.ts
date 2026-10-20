@@ -70,6 +70,35 @@ test("desktop calls pin identity and never automatically replay commands on host
 	assert.equal(f.requests[1]?.expectedStoreId, "store");
 });
 
+test("incompatible handshake results reject before desktop commands or subscriptions", async () => {
+	for (const protocolVersion of [7, 9]) {
+		const requests: unknown[] = [];
+		let subscriptions = 0;
+		const client = createDesktopClient({
+			async request(input) {
+				requests.push(input);
+				return { ok: true, result: { protocolVersion, storeId: "wrong-protocol" } };
+			},
+			subscribe() {
+				subscriptions++;
+				return () => {};
+			},
+		});
+		await assert.rejects(client.call("createWorkspace", { workspaceId: "blocked", name: "Blocked" }), {
+			code: "INVALID_REQUEST",
+		});
+		await assert.rejects(
+			client.observe(scope, () => {}),
+			{ code: "INVALID_REQUEST" },
+		);
+		assert.deepEqual(requests, [
+			{ version: PROTOCOL_VERSION, method: "handshake", params: {} },
+			{ version: PROTOCOL_VERSION, method: "handshake", params: {} },
+		]);
+		assert.equal(subscriptions, 0);
+	}
+});
+
 test("cancelled requests stop waiting, suppress late results, and never send cancellation of execution", async () => {
 	const f = fixture();
 	await f.client.call("handshake", {});

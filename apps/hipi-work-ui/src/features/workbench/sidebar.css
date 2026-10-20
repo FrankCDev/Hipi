@@ -69,7 +69,16 @@ nav .workspace-tree {
 	min-height: 36px;
 	padding-inline: 8px;
 	gap: 8px;
-	border-radius: 9999px;
+	border-radius: 10px;
+}
+
+/* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: Unsupported engines retain the ordinary rounded rectangle. */
+@supports (corner-shape: superellipse(1.5)) {
+	.workspace-tree .sidebar-preview-row {
+		border-radius: 12.5px;
+		/* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: Guarded by the feature query. */
+		corner-shape: superellipse(1.5);
+	}
 }
 
 .workspace-tree .project-row {
@@ -393,6 +402,95 @@ nav .workspace-tree {
 
 :root[data-reduced-motion="on"] .workspace-tree button {
 	transition: none;
+}
+
+.sidebar-order-section {
+	position: relative;
+}
+
+.sidebar-order-section > .sidebar-section-handle {
+	position: absolute;
+	inset-inline-start: 0;
+	top: 2px;
+	width: 18px;
+	height: 28px;
+	min-height: 28px;
+	padding: 0;
+	z-index: 1;
+	color: var(--muted);
+	cursor: grab;
+	touch-action: none;
+}
+
+.sidebar-order-section > .nav-section-heading,
+.sidebar-order-section .pinned-conversations > .nav-section-heading,
+.sidebar-order-section .recent-conversations-heading {
+	padding-inline-start: 20px;
+}
+
+.sidebar-order-section .recent-conversations {
+	margin-top: 0;
+}
+
+.sidebar-order-section + .sidebar-order-section {
+	margin-top: 12px;
+}
+
+.sidebar-order-section .pinned-conversations {
+	margin-bottom: 0;
+}
+
+[data-sidebar-sortable="true"] :is(.project-open, .conversation-link) {
+	cursor: grab;
+	touch-action: none;
+}
+
+.sidebar-order-surface [data-drag-source="true"] {
+	opacity: 0.2;
+}
+
+.sidebar-order-surface [data-drag-edge] {
+	position: relative;
+}
+
+.sidebar-order-surface [data-drag-edge]::after {
+	content: "";
+	position: absolute;
+	inset-inline: 7px;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--accent);
+	pointer-events: none;
+	z-index: 2;
+}
+
+.sidebar-order-surface [data-drag-edge="before"]::after {
+	top: -2px;
+}
+
+.sidebar-order-surface [data-drag-edge="after"]::after {
+	bottom: -2px;
+}
+
+.sidebar-order-surface[data-sidebar-dragging="true"] {
+	cursor: grabbing;
+	user-select: none;
+}
+
+.sidebar-drag-overlay {
+	pointer-events: none;
+	max-width: min(320px, calc(100vw - 24px));
+	padding: 8px 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--sidebar);
+	color: var(--text);
+	box-shadow: 0 8px 24px var(--shadow);
+	font-size: var(--font-ui-size);
+	opacity: 0.7;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 @media (any-pointer: coarse) {

@@ -109,3 +109,34 @@ test("post-pack verifier rejects a missing real maintenance entry", async () => 
 		},
 	);
 });
+
+test("production ASAR gate binds exact independently captured provenance, not a self-consistent stale archive", async () => {
+	let captured;
+	await fixture(
+		async (app) => {
+			captured = await readFile(join(app, "build-provenance.json"));
+			const stale = JSON.parse(captured.toString("utf8"));
+			await writeFile(join(app, "dist/main.mjs"), "stale but internally consistent");
+			stale.payload = (await inventory(app)).filter((item) => item.file !== "build-provenance.json");
+			await writeFile(join(app, "build-provenance.json"), JSON.stringify(stale));
+		},
+		async (context) => {
+			await verifyPack(context);
+			await assert.rejects(verifyPack(context, captured), /captured candidate/);
+		},
+	);
+});
+
+test("production ASAR gate accepts captured provenance and rejects unpacked utility drift", async () => {
+	let captured;
+	await fixture(
+		async (app) => {
+			captured = await readFile(join(app, "build-provenance.json"));
+		},
+		async (context) => {
+			await verifyPack(context, captured);
+			await writeFile(join(context.appOutDir, "resources/app.asar.unpacked/dist/runtime.mjs"), "tampered");
+			await assert.rejects(verifyPack(context, captured));
+		},
+	);
+});

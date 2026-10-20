@@ -120,18 +120,20 @@ export function PinRecovery({ session }: { session: PresentationSession }) {
 	return (
 		<section className="nav-feedback pin-recovery" aria-live="polite">
 			<p role={state.failed || state.incompatible ? "alert" : undefined}>
-				{l[state.incompatible ? "incompatible" : state.rejected ? "rejected" : state.pending ? "pending" : "failed"]}
+				{state.order && !state.incompatible
+					? l[state.rejected ? "orderRejected" : state.pending ? "orderPending" : "orderFailed"]
+					: l[state.incompatible ? "incompatible" : state.rejected ? "rejected" : state.pending ? "pending" : "failed"]}
 			</p>
 			{state.pending && (
 				<Button size="sm" variant="ghost" disabled={state.busy} onClick={() => void session.check()}>
-					{l.check}
+					{state.order ? l.orderCheck : l.check}
 				</Button>
 			)}
 			{state.pending && state.notFound && (
 				<>
 					<p>{l.notFound}</p>
 					<Button size="sm" variant="ghost" disabled={state.busy} onClick={() => void session.retry()}>
-						{l.retry}
+						{state.order ? l.orderRetry : l.retry}
 					</Button>
 				</>
 			)}

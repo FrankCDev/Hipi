@@ -1,15 +1,19 @@
 import { AppError, type Page } from "@hipi/work-runtime/contracts";
 import { infiniteQueryOptions, type QueryKey, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 
-type CatalogPagesOptions<T> = {
+type CatalogPagesOptions<T, P extends Page<T> = Page<T>> = {
 	queryKey: QueryKey;
-	queryPage: (cursor: string | undefined, signal: AbortSignal) => Promise<Page<T>>;
+	queryPage: (cursor: string | undefined, signal: AbortSignal) => Promise<P>;
 	itemKey: (item: T) => string;
 	enabled?: boolean;
 };
 
 /** Read-only catalog projection. The cache owns pages; selection and command recovery remain independent. */
-export function catalogPagesOptions<T>({ queryKey, queryPage, enabled = true }: CatalogPagesOptions<T>) {
+export function catalogPagesOptions<T, P extends Page<T> = Page<T>>({
+	queryKey,
+	queryPage,
+	enabled = true,
+}: CatalogPagesOptions<T, P>) {
 	return infiniteQueryOptions({
 		queryKey: [...queryKey, "pages"],
 		initialPageParam: undefined as string | undefined,
@@ -23,7 +27,7 @@ export function catalogPagesOptions<T>({ queryKey, queryPage, enabled = true }: 
 	});
 }
 
-export function useCatalogPages<T>(options: CatalogPagesOptions<T>) {
+export function useCatalogPages<T, P extends Page<T> = Page<T>>(options: CatalogPagesOptions<T, P>) {
 	const cache = useQueryClient();
 	const queryOptions = catalogPagesOptions(options);
 	const query = useInfiniteQuery(queryOptions);
@@ -43,6 +47,7 @@ export function useCatalogPages<T>(options: CatalogPagesOptions<T>) {
 		await cache.resetQueries({ queryKey: queryOptions.queryKey, exact: true });
 	};
 	return {
+		pages,
 		items: [...items.values()],
 		hasData: query.data !== undefined,
 		hasMore: query.hasNextPage,

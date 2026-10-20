@@ -69,9 +69,9 @@ UI 遇到未知响应先精确只读核对，不生成新请求覆盖原意图�
 
 ## 7. 单向存储屏障
 
-当前 transport protocol 为 5，工具包 formatVersion 为 1，两者含义不同。root catalog schema 3 在 runtime 可用前持久建立单向屏障，使仅接受 schema 1/2 的旧程序拒绝打开新数据，避免旧模型出站路径忽略工具包历史依赖。
+应用 transport protocol 以[共享契约的 PROTOCOL_VERSION](../../packages/work-runtime/src/contracts.ts)为准，与工具包 formatVersion 1 和存储 schema 含义不同。握手要求精确匹配；不兼容客户端不能继续发送业务命令。root catalog schema 3 在 runtime 可用前持久建立单向屏障，使仅接受 schema 1/2 的旧程序拒绝打开新数据，避免旧模型出站路径忽略工具包历史依赖。
 
-schema 3 是首次引入该屏障的版本，当前正常 catalog 为 schema 8，仍保留此安全要求。即使只打开目录也会升级。不能手工降低版本或只替换旧二进制回滚。手工回滚原则要求停机并持有升级前完整一致的 root 与全部 workspace 备份；当前[离线维护入口](STORE-MAINTENANCE.md)支持 schema 3、5、6、7、8 源库，但 restore 只创建新的 schema 4 非执行历史档案，不能用作可执行回滚。详细边界和未完成门禁见[长期容量与会话归档](CAPACITY-AND-ARCHIVAL.md#工具包授权的单向版本屏障schema-3)。
+schema 3 是首次引入该屏障的版本，后续正常 catalog 仍保留此安全要求；当前版本和备份支持范围统一见[存储版本兼容性](STORE-MAINTENANCE.md#存储版本兼容性)。即使只打开目录也会升级。不能手工降低版本或只替换旧二进制回滚。手工回滚原则要求停机并持有升级前完整一致的 root 与全部 workspace 备份；当前离线维护 restore 只创建新的 schema 4 非执行历史档案，不能用作可执行回滚。详细边界和未完成门禁见[长期容量与会话归档](CAPACITY-AND-ARCHIVAL.md#工具包授权的单向版本屏障schema-3)。
 
 ## 8. 验证范围
 

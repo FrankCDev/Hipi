@@ -31,7 +31,7 @@
 
 ### 历史实现与验证记录
 
-当前开发协议为 5，公共命令见 [contracts.ts](../../packages/work-runtime/src/contracts.ts)；17:44 已交付的容量/归档阶段包为协议 4，17:07 工具授权阶段包为协议 3。已接入模型目录、固定会话模型、凭据状态、运行中执行取消及显式工作区恢复；默认桌面组装使用真实模型 adapter，确定性模式独立保留。暂停任务取消会持久化取消意图而不启动 scheduler；`cancellation_pending` 与最终 `cancelled` 回执分开，均不表示已发生副作用回滚。分页目录、永久请求核对、归档/恢复、授权审计分页及安全工作区逐出已接入；[扩展生命周期](TOOL-PACK-LIFECYCLE.md)和[工具活动与成果入口](TOOL-ACTIVITIES.md)已有源码，最新整体验证正在收敛。Agent 文件工具、持久审批和历史上下文重新授权见 [TOOL-AUTHORIZATION.md](TOOL-AUTHORIZATION.md)。文件独立端口、CodeMirror 工作台及受限预览已有源码接入，真实交互验收仍待完成。
+当前应用协议与公共命令以 [contracts.ts 的 PROTOCOL_VERSION](../../packages/work-runtime/src/contracts.ts)为准，握手要求精确版本匹配；17:44 已交付的容量/归档阶段包为协议 4，17:07 工具授权阶段包为协议 3。已接入模型目录、固定会话模型、凭据状态、运行中执行取消及显式工作区恢复；默认桌面组装使用真实模型 adapter，确定性模式独立保留。暂停任务取消会持久化取消意图而不启动 scheduler；`cancellation_pending` 与最终 `cancelled` 回执分开，均不表示已发生副作用回滚。分页目录、永久请求核对、归档/恢复、授权审计分页及安全工作区逐出已接入；[扩展生命周期](TOOL-PACK-LIFECYCLE.md)和[工具活动与成果入口](TOOL-ACTIVITIES.md)已有源码，最新整体验证正在收敛。Agent 文件工具、持久审批和历史上下文重新授权见 [TOOL-AUTHORIZATION.md](TOOL-AUTHORIZATION.md)。文件独立端口、CodeMirror 工作台及受限预览已有源码接入，真实交互验收仍待完成。
 
 2026-10-19 15:59 UTC 检查点：整仓 `npm --offline run check` 通过；定向 runtime 62 项、UI 15 项、desktop 29 项通过；桌面生产构建通过。这些验证没有调用真实模型，没有验证系统密钥链或真实 Electron GUI。渲染主包约 721 kB，仍有超过 500 kB 的构建警告，未隐藏或当作性能达标。之后新增文件链路需再次统一检查，不能继承此结果。
 

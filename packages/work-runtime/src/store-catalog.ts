@@ -22,6 +22,7 @@ import {
 import { commandKey, DIRECTORY_LIMITS, directoryDigest } from "./conversation-directory.ts";
 import {
 	ConversationPresentations,
+	PRESENTATION_ORDER_SCHEMA,
 	PRESENTATION_SCHEMA,
 	type PresentationFailpoint,
 	validatePresentationStore,
@@ -178,15 +179,16 @@ export class StoreCatalog {
 						row.version !== 5 &&
 						row.version !== 6 &&
 						row.version !== 7 &&
-						row.version !== 8
+						row.version !== 8 &&
+						row.version !== 9
 					)
 						throw new AppError("STORE_MISMATCH");
 					if (
-						(row?.version === 6 || row?.version === 7 || row?.version === 8) &&
+						(row?.version === 6 || row?.version === 7 || row?.version === 8 || row?.version === 9) &&
 						!database.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders' AND type='table'").get()
 					)
 						throw new AppError("STORE_MISMATCH");
-					if (row?.version === 7 || row?.version === 8) {
+					if (row?.version === 7 || row?.version === 8 || row?.version === 9) {
 						for (const name of ["conversation_presentations", "presentation_state", "presentation_commands"]) {
 							if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'").get(name))
 								throw new AppError("STORE_MISMATCH");
@@ -197,8 +199,8 @@ export class StoreCatalog {
 								.get()
 						)
 							throw new AppError("STORE_MISMATCH");
-						validatePresentationStore(database);
-						if (row.version === 8) {
+						validatePresentationStore(database, row.version === 9);
+						if (row.version === 8 || row.version === 9) {
 							for (const name of ["search_state", "search_sources", "search_chunks"]) {
 								if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name=? AND type='table'").get(name))
 									throw new AppError("STORE_MISMATCH");
@@ -254,11 +256,12 @@ export class StoreCatalog {
 					identity.version !== 5 &&
 					identity.version !== 6 &&
 					identity.version !== 7 &&
-					identity.version !== 8) ||
+					identity.version !== 8 &&
+					identity.version !== 9) ||
 				identity.root !== root
 			)
 				throw new AppError("STORE_MISMATCH");
-			// Version 8 adds rebuildable search; version 7 presentation metadata and pin receipts remain authoritative.
+			// Version 9 adds order generation; search and presentation membership remain unchanged.
 			// Version 4 remains reserved for non-executing recovery archives.
 			// Schema and version move together under the existing exclusive root owner.
 			database.exec("BEGIN IMMEDIATE");
@@ -268,14 +271,18 @@ export class StoreCatalog {
 				);
 				database.exec(PRESENTATION_SCHEMA);
 				database.exec(
-					"INSERT OR IGNORE INTO presentation_state VALUES (1,0,0); UPDATE identity SET version=7 WHERE singleton=1 AND version=6",
+					"INSERT OR IGNORE INTO presentation_state(singleton,generation,next_ordinal) VALUES (1,0,0); UPDATE identity SET version=7 WHERE singleton=1 AND version=6",
 				);
 				database.exec(SEARCH_SCHEMA);
 				database
 					.prepare("INSERT OR IGNORE INTO search_state VALUES (1,?,?,0,'',NULL,'',NULL,NULL,1)")
 					.run(randomUUID(), randomUUID());
 				database.exec("UPDATE identity SET version=8 WHERE singleton=1 AND version=7");
-				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 8)
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version === 8) {
+					database.exec(PRESENTATION_ORDER_SCHEMA);
+					database.exec("UPDATE identity SET version=9 WHERE singleton=1");
+				}
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 9)
 					throw new AppError("STORE_MISMATCH");
 				database.exec("COMMIT");
 			} catch (error) {
@@ -318,6 +325,9 @@ export class StoreCatalog {
 	}
 	setConversationPinned(input: Params<"setConversationPinned">): Promise<Result<"setConversationPinned">> {
 		return this.#presentations.set(input);
+	}
+	reorderPinnedConversation(input: Params<"reorderPinnedConversation">): Promise<Result<"reorderPinnedConversation">> {
+		return this.#presentations.reorder(input);
 	}
 	async getPresentationCommandResult(
 		input: Params<"getPresentationCommandResult">,

@@ -5,6 +5,7 @@ import {
 	inPreviewCorridor,
 	type PreviewMode,
 } from "./conversation-preview-interaction.ts";
+import { type SidebarOrderAction, useSidebarDragging, useSidebarSortable } from "./sidebar-drag-provider.tsx";
 
 const focusableSelector =
 	'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -36,17 +37,22 @@ export function SidebarPreviewRow({
 	preview,
 	menuPreview,
 	renderActions,
+	orderAction,
 }: {
 	className: string;
 	selected: boolean;
 	containsCurrent?: boolean;
 	dialogOpen?: boolean;
 	titleId: string;
-	children: ReactNode | ((state: { hovered: boolean }) => ReactNode);
+	children: ReactNode | ((state: { hovered: boolean; describedBy?: string }) => ReactNode);
 	preview: (controls: { close: () => void; returnFocus: () => void }) => ReactNode;
 	menuPreview?: ReactNode;
 	renderActions?: PreviewActions;
+	orderAction?: SidebarOrderAction;
 }) {
+	const dragging = useSidebarDragging();
+	const row = useRef<HTMLDivElement>(null);
+	const sortable = useSidebarSortable(orderAction, true, row);
 	const [mode, setMode] = useState<PreviewMode>("closed");
 	const [hovered, setHovered] = useState(false);
 	const [focused, setFocused] = useState(false);
@@ -54,11 +60,16 @@ export function SidebarPreviewRow({
 	const [menuPosition, setMenuPosition] = useState({ sideOffset: 2, alignOffset: 0 });
 	const [interaction] = useState(() => new ConversationPreviewInteraction(setMode));
 	const trigger = useRef<HTMLButtonElement>(null);
-	const row = useRef<HTMLDivElement>(null);
 	const card = useRef<HTMLDivElement>(null);
 	const restoringFocus = useRef(false);
 	const source = useRef<HTMLElement | null>(null);
 	useEffect(() => () => interaction.release(), [interaction]);
+	useEffect(() => {
+		if (!dragging) return;
+		setHovered(false);
+		setCorridor(null);
+		interaction.close("navigate");
+	}, [dragging, interaction]);
 	useEffect(() => interaction.setOverlayOpen("dialog", dialogOpen), [dialogOpen, interaction]);
 	useEffect(() => {
 		if (typeof document !== "undefined" && mode === "closed" && !row.current?.contains(document.activeElement))
@@ -127,11 +138,19 @@ export function SidebarPreviewRow({
 					data-current={selected}
 					data-contains-current={containsCurrent}
 					data-preview-open={mode !== "closed"}
+					data-drag-source={sortable["data-drag-source"]}
+					data-drag-edge={sortable["data-drag-edge"]}
+					data-sidebar-sortable={!!orderAction && !orderAction.item.disabled}
+					onPointerDown={(event) => {
+						if (event.target instanceof Element && event.target.closest(".project-open, .conversation-link"))
+							sortable.onPointerDown(event);
+					}}
 					role="group"
 					aria-labelledby={titleId}
 					onPointerEnter={(event) => {
 						if (event.pointerType !== "mouse" && event.currentTarget.contains(event.target as Node)) setFocused(true);
 						if (
+							!dragging &&
 							!dialogOpen &&
 							event.pointerType === "mouse" &&
 							event.target instanceof Node &&
@@ -144,6 +163,8 @@ export function SidebarPreviewRow({
 					}}
 					onPointerMove={(event) => {
 						if (
+							!dragging &&
+							!dialogOpen &&
 							event.pointerType === "mouse" &&
 							event.target instanceof Element &&
 							event.currentTarget.contains(event.target) &&
@@ -160,6 +181,7 @@ export function SidebarPreviewRow({
 					onFocusCapture={(event) => {
 						if (event.currentTarget.contains(event.target)) setFocused(true);
 						if (
+							!dragging &&
 							!dialogOpen &&
 							!restoringFocus.current &&
 							event.currentTarget.contains(event.target) &&
@@ -190,6 +212,10 @@ export function SidebarPreviewRow({
 							interaction.close("navigate");
 					}}
 					onKeyDown={(event) => {
+						if (event.target instanceof Element && event.target.matches(".project-open, .conversation-link")) {
+							sortable.onKeyDown(event);
+							if (event.defaultPrevented) return;
+						}
 						if (
 							event.key !== "Tab" ||
 							event.shiftKey ||
@@ -212,7 +238,9 @@ export function SidebarPreviewRow({
 						first.focus();
 					}}
 				>
-					{typeof children === "function" ? children({ hovered }) : children}
+					{typeof children === "function"
+						? children({ hovered: hovered && !dragging, describedBy: sortable.describedBy })
+						: children}
 					{renderActions?.({
 						previewContent: menuPreview ?? previewContent,
 						menuPosition,

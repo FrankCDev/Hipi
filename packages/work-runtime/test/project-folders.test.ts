@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { PROTOCOL_VERSION } from "../src/contracts.ts";
@@ -9,6 +9,14 @@ import { createRuntimeFileHost } from "../src/files/host.ts";
 import { parseFileRoots, parseProjectFolder, parseProjectFolderSelection } from "../src/files/protocol.ts";
 import { createRuntimeProjectFolders } from "../src/node.ts";
 import { openTestRuntime } from "../src/testing.ts";
+
+async function expectedHostPath(path: string): Promise<string> {
+	const canonical = await realpath(path);
+	const fromHome = relative(homedir(), canonical);
+	return fromHome === ".." || fromHome.startsWith(`..${sep}`) || isAbsolute(fromHome)
+		? canonical
+		: join("~", fromHome);
+}
 
 async function fixture(options: { includeDisplayPath?: boolean } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-project-folder-"));
@@ -370,7 +378,7 @@ test("opt-in paths follow verified bindings and disappear when their identity is
 		const bound = await app.projects.attach("one", selected.selectionId);
 		assert.equal(bound.status, "available");
 		if (bound.status !== "available") assert.fail("Expected an available binding");
-		assert.equal(bound.displayPath, await realpath(app.folder));
+		assert.equal(bound.displayPath, await expectedHostPath(app.folder));
 		assert.equal("displayPath" in bound.root, false);
 		assert.equal(JSON.stringify(await app.service.listRoots("one")).includes(app.directory), false);
 		const otherFolder = join(app.directory, "replacement");
@@ -380,7 +388,7 @@ test("opt-in paths follow verified bindings and disappear when their identity is
 		if (replacement.status !== "available") assert.fail("Expected an available replacement");
 		assert.notEqual(replacement.bindingId, bound.bindingId);
 		assert.equal(replacement.revision, bound.revision + 1);
-		assert.equal(replacement.displayPath, await realpath(otherFolder));
+		assert.equal(replacement.displayPath, await expectedHostPath(otherFolder));
 		await assert.rejects(app.projects.bind("one", app.folder, bound.bindingId), { code: "VERSION_CONFLICT" });
 		assert.deepEqual(await app.projects.get("one"), replacement);
 		await rename(otherFolder, join(app.directory, "moved"));
@@ -458,7 +466,7 @@ test("a missing project directory is not silently rebuilt as an empty binding ca
 		await assert.rejects(openTestRuntime(join(app.directory, "store")), { code: "STORE_MISMATCH" });
 		const inspected = new DatabaseSync(join(app.directory, "store", "catalog.sqlite"), { readOnly: true });
 		try {
-			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 8);
+			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 9);
 			assert.equal(inspected.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders'").get(), undefined);
 		} finally {
 			inspected.close();

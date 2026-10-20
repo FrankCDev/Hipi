@@ -13,6 +13,11 @@ const en = {
 	retry: "Retry original pin change",
 	notFound: "No result was found. Only the unchanged saved request can be retried.",
 	listError: "Could not load pinned conversations.",
+	orderPending: "Pinned order is unconfirmed. The exact move is saved.",
+	orderFailed: "Could not verify the pinned order change.",
+	orderRejected: "Pinned order changed elsewhere. Reload the list before moving again.",
+	orderCheck: "Check order change",
+	orderRetry: "Retry original order change",
 } as const;
 const zh: Record<keyof typeof en, string> = {
 	pinned: "已固定",
@@ -29,5 +34,10 @@ const zh: Record<keyof typeof en, string> = {
 	retry: "重试原固定操作",
 	notFound: "尚未查到结果，只能重试已保留的同一请求。",
 	listError: "无法读取已固定会话。",
+	orderPending: "固定会话顺序尚未确认，原始移动请求已保留。",
+	orderFailed: "未能核实固定会话顺序更改。",
+	orderRejected: "固定会话顺序已发生变化，请重新读取列表后再移动。",
+	orderCheck: "核对顺序更改",
+	orderRetry: "重试原顺序更改",
 };
 export const pinLabels = (locale: string) => (locale === "en" ? en : zh);

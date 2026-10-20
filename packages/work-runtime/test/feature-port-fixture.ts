@@ -11,6 +11,7 @@ export const deniedFeatureReads = {
 	getConversationPresentation: denied,
 	listPinnedConversations: denied,
 	setConversationPinned: denied,
+	reorderPinnedConversation: denied,
 	getPresentationCommandResult: denied,
 	listCustomProviders: denied,
 	saveCustomProvider: denied,

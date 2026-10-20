@@ -1,4 +1,11 @@
-import { AppError, type ConversationModel, type Receipt, type Scope, type Snapshot } from "../src/contracts.ts";
+import {
+	AppError,
+	type ConversationModel,
+	parseRequest,
+	type Receipt,
+	type Scope,
+	type Snapshot,
+} from "../src/contracts.ts";
 import { WorkRuntime } from "../src/core.ts";
 import type { TransportRuntime } from "../src/transport-http.ts";
 import { serveNodeIpc } from "../src/transport-ipc.ts";
@@ -214,5 +221,31 @@ if (process.send && process.argv.includes("--transport-fixture")) {
 	process.once("disconnect", () => {
 		stop();
 		void runtime.close();
+	});
+}
+if (process.send && process.argv.includes("--protocol-admission-fixture")) {
+	serveNodeIpc({
+		async execute() {
+			throw new Error("Protocol mismatch must be rejected before runtime admission");
+		},
+		async observe() {
+			throw new Error("Protocol mismatch must not start an observation");
+		},
+	});
+}
+if (process.send && process.argv.includes("--stale-protocol-fixture")) {
+	const methods: string[] = [];
+	process.on("message", (raw) => {
+		if (raw === "received-methods") {
+			process.send?.(JSON.stringify({ id: "inspection", kind: "result", result: methods }));
+			return;
+		}
+		const message: unknown = JSON.parse(String(raw));
+		if (!message || typeof message !== "object" || !("id" in message) || !("request" in message))
+			throw new Error("Unexpected fixture message");
+		methods.push(parseRequest(message.request).method);
+		process.send?.(
+			JSON.stringify({ id: message.id, kind: "result", result: { protocolVersion: 7, storeId: "old-store" } }),
+		);
 	});
 }

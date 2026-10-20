@@ -32,5 +32,8 @@ export const DEFAULT_APP_KEYBINDINGS = {
 	pinConversation: "",
 	// Desktop reference assigns Mod-K to its broader command menu, not this search-only command.
 	searchConversations: "",
+	moveSidebarUp: "Alt-ArrowUp",
+	moveSidebarDown: "Alt-ArrowDown",
+	cancelSidebarMove: "Escape",
 } as const;
 export type AppKeybindings = { [K in keyof typeof DEFAULT_APP_KEYBINDINGS]: string };

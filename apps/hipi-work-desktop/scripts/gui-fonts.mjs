@@ -1,5 +1,22 @@
 import assert from "node:assert/strict";
 
+const sidebarText = ".workspace-branch .conversation-link .sidebar-title-content";
+
+export function visibleFontTarget(document, selector, text, width, height) {
+	const nodes = [...document.querySelectorAll(selector)];
+	if (nodes.length !== 1 || nodes[0].textContent !== text) return false;
+	const visible = (node) => {
+		const r = node.getBoundingClientRect();
+		return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < height && r.left < width;
+	};
+	if (!visible(nodes[0])) return false;
+	if (selector.includes(".sidebar-title-content")) {
+		const rows = [...document.querySelectorAll(".workspace-branch .conversation-link")];
+		return rows.length === 1 && rows[0].textContent === text && rows[0].contains(nodes[0]) && visible(rows[0]);
+	}
+	return true;
+}
+
 export function readFontLayout(document, getComputedStyle, performance, selector) {
 	const style = (query) => {
 		const element = document.querySelector(query);
@@ -59,7 +76,7 @@ export async function renderedFonts(cdp, fixture, platform = process.platform, o
 	const result = [];
 	const missingBundled = [];
 	for (const [target, selector, text] of [
-		["sidebar-conversation", ".conversation-link", fixture.conversation],
+		["sidebar-conversation", sidebarText, fixture.conversation],
 		["user-message", ".message-user .message-text", fixture.prompt],
 		["conversation-title", ".toolbar-conversation", fixture.conversation],
 	]) {
@@ -71,7 +88,7 @@ export async function renderedFonts(cdp, fixture, platform = process.platform, o
 		});
 		observation.layout = metadata.result?.value;
 		const checked = await cdp.request("Runtime.evaluate", {
-			expression: `(() => { const e=document.querySelector(${JSON.stringify(selector)}); if(!e || e.textContent!==${JSON.stringify(text)})return false; const r=e.getBoundingClientRect(); return r.width>0 && r.height>0 && r.bottom>0 && r.right>0 && r.top<innerHeight && r.left<innerWidth; })()`,
+			expression: `(${visibleFontTarget.toString()})(document,${JSON.stringify(selector)},${JSON.stringify(text)},innerWidth,innerHeight)`,
 			returnByValue: true,
 		});
 		assert.equal(checked.result?.value, true, "Chinese font target must display the exact visible fixture");

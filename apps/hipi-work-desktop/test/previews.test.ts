@@ -104,6 +104,7 @@ test("desktop files and previews share grants; revoke blocks cached handles and 
 		getConversationPresentation: rejectFeatureRead,
 		listPinnedConversations: rejectFeatureRead,
 		setConversationPinned: rejectFeatureRead,
+		reorderPinnedConversation: rejectFeatureRead,
 		getPresentationCommandResult: rejectFeatureRead,
 		listCustomProviders: rejectFeatureRead,
 		saveCustomProvider: rejectFeatureRead,

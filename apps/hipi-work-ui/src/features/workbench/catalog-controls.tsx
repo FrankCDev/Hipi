@@ -23,6 +23,9 @@ import type { PresentationSession } from "./presentation-session.ts";
 import type { PreviewActions } from "./sidebar-preview-row.tsx";
 import "./conversation-rename.css";
 
+const noPresentationSubscription = () => () => {};
+const noPresentationSnapshot = () => null;
+
 export function CatalogRecovery({
 	session,
 	onResolve,
@@ -113,6 +116,11 @@ export function ConversationActions({
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
+	const presentationState = useSyncExternalStore(
+		presentation?.subscribe ?? noPresentationSubscription,
+		presentation?.getSnapshot ?? noPresentationSnapshot,
+		presentation?.getSnapshot ?? noPresentationSnapshot,
+	);
 	const titleId = useId();
 	const titleInput = useRef<HTMLInputElement>(null);
 	const renameKeyboard = useRef(new ComposerKeyboard());
@@ -120,6 +128,8 @@ export function ConversationActions({
 	const ownTrigger = useRef<HTMLButtonElement>(null);
 	const trigger = triggerRef ?? ownTrigger;
 	const disabled = state.busy || !!state.pending || state.incompatible;
+	const archiveDisabled =
+		disabled || !!(presentationState?.busy || presentationState?.pending || presentationState?.incompatible);
 	const renameDisabled = disabled || !!state.initialSend;
 	const closeRename = () => {
 		if (session.getSnapshot().busy) return;
@@ -178,7 +188,9 @@ export function ConversationActions({
 			},
 		});
 	};
-	const archive = () =>
+	const archive = () => {
+		const current = presentation?.getSnapshot();
+		if (current?.busy || current?.pending || current?.incompatible) return;
 		execute({
 			version: PROTOCOL_VERSION,
 			method: conversation.archivedAt === null ? "archiveConversation" : "restoreConversation",
@@ -189,6 +201,7 @@ export function ConversationActions({
 				expectedRevision: conversation.revision,
 			},
 		});
+	};
 	return (
 		<Dialog
 			open={renaming}
@@ -218,7 +231,7 @@ export function ConversationActions({
 						variant="ghost"
 						aria-label={l[conversation.archivedAt === null ? "archive" : "restore"]}
 						title={l[conversation.archivedAt === null ? "archive" : "restore"]}
-						disabled={disabled}
+						disabled={archiveDisabled}
 						onClick={archive}
 					>
 						{conversation.archivedAt === null ? (
@@ -289,7 +302,7 @@ export function ConversationActions({
 							{l.rename}
 						</DropdownMenuItem>
 						<DropdownMenuSeparator />
-						<DropdownMenuItem disabled={disabled} onSelect={archive}>
+						<DropdownMenuItem disabled={archiveDisabled} onSelect={archive}>
 							{conversation.archivedAt === null ? (
 								<Archive size={15} aria-hidden="true" />
 							) : (

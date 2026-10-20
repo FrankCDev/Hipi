@@ -20,7 +20,7 @@
 
 ## 2. 当前代码事实与关键差异
 
-- [StoreCatalog](../../packages/work-runtime/src/store-catalog.ts)：root owner 使用 `BEGIN EXCLUSIVE`，`busy_timeout=0`；`catalog.sqlite.identity` 含 version、store_id、canonical root。当前正常工作库为 schema 8；schema 3 引入的包历史披露权限单向安全屏障仍保留。打开时会升级、扫描并补登记工作区，因此不能拿 `StoreCatalog.open()` 当只读备份入口。
+- [StoreCatalog](../../packages/work-runtime/src/store-catalog.ts)：root owner 使用 `BEGIN EXCLUSIVE`，`busy_timeout=0`；`catalog.sqlite.identity` 含 version、store_id、canonical root。当前正常库和备份版本见[存储版本兼容性](STORE-MAINTENANCE.md#存储版本兼容性)；schema 3 引入的包历史披露权限单向安全屏障仍保留。打开时会升级、扫描并补登记工作区，因此不能拿 `StoreCatalog.open()` 当只读备份入口。
 - [Node runtime](../../packages/work-runtime/src/node.ts)：root canonicalization；各工作区 `owner.sqlite` 的独占事务；关闭失败保留 owner。维护入口不能实例化 WorkRuntime/PiWorkspace，也不能用超时或 PID 文件判断可以接管。
 - [Chord SQLite adapter](../../packages/chord/src/sqlite/node.ts)：通用 writer 默认仍是 WAL、`synchronous=NORMAL`；Hipi 的四个工作库打开路径已明确选择 FULL，关闭仍会尝试 checkpoint。该设置属于连接，不能只在首次建库配置。关过一次数据库不证明 WAL 已空，也不等于真实断电资格通过；旧版本 NORMAL 写入的持久性不能追溯改善。
 - [Durable SQLite Storage](../../packages/durable/src/storage/sqlite/storage.ts)：`SqliteStorage.open()` 会运行迁移；构造器私有。当前 `openNodeSqliteStorage()` 没有只读选项，不得假设已有安全的只读入口。
@@ -80,7 +80,7 @@
 
 清单包含 formatVersion=1、backupId、createdAt、源 catalog schema/PI schema、sourceStoreId、source canonical root（来自已验证 catalog）、生产程序版本/可用源码摘要、固定文件集合、每文件字节数与 SHA-256、workspaceId/名称/登记状态、未完成空 reservation 清单、explicit exclusions。root 属于私有元数据，不能上传遥测。恢复目标路径永不取自 manifest。清单中的源 catalog 摘要只验证备份内的 catalog；恢复 catalog 是新建的，不能拿该摘要比对新 catalog。档案重新打开时校验新 catalog 的严格结构、身份和 recovery_state，再用对应清单逐项验证未改写的 workspace payload。
 
-当前备份源和备份核验支持 catalog schema 3、5、6、7、8 的普通工作库，以及 PI SQLite schema 2。正常工作库当前为 schema 8；支持的旧备份版本逐版核验，不在维护读取时迁移。schema 7、8 的权威置顶元数据和不可变回执必须完整有效；schema 8 搜索投影另行严格校验。明确拒绝 schema 4 档案再备份，避免将 preparing 状态或未经完整核验的档案重新发布为有效备份。其他版本同样拒绝；新增兼容性和档案再备份必须另有评审和测试，不能把档案“洗白”为工作库。
+当前普通库、备份源及备份核验支持范围统一见[存储版本兼容性](STORE-MAINTENANCE.md#存储版本兼容性)。支持的旧备份版本逐版核验，不在维护读取时迁移。权威置顶成员、当前顺序、独立排序代际、归档屏障和按方法区分的不可变首次回执均按对应 schema 严格校验；旧排序回执不是当前顺序，搜索投影也不能替代置顶事实。明确拒绝 schema 4 档案再备份，避免将 preparing 状态或未经完整核验的档案重新发布为有效备份。其他不支持的版本同样拒绝；新增兼容性和档案再备份必须另有评审和测试，不能把档案“洗白”为工作库。
 
 工作区清单取 catalog 与真实目录的并集。ready=1 但主数据库缺失、身份不符、重复 ID、读出损坏直接失败。ready=0 且不存在 PI 数据可保留为未完成 reservation 元数据，明确不显示为完整工作区；有完整 PI 数据则必须纳入并验证。不可读取的 PI 文件不能降格为空 reservation。
 
@@ -139,7 +139,7 @@
 
 如果恢复仅修改 root/storeId 而保留 schema3，当前旧程序会接受 catalog；用户或 host 可以重新 handshake 获得新 storeId。随后 `openWorkspace` → `PiWorkspace.open` 恢复 broker/回执；显式 `continueWorkspace` → `#schedule` → `harness.resume`。`resume:false` 只挡自动启动，无法挡这条显式执行链。快照后的消息发送/文件写入可能已经在现实世界完成，备份却仍是 pending/authorized；此时可能重复执行。
 
-因此 schema4 是**磁盘安全屏障**，不是另一个 UI 协议编号。上述旧 StoreCatalog 只接受 1/2/3，在读 PI 前以 STORE_MISMATCH 拒绝 4；当前 schema 8 runtime 同样拒绝 schema 4。新 runtime 必须先读 identity/recovery_state，再做任何迁移/恢复；对于 mode=recovery_archive 或 preparing，普通 openRuntime 一律拒绝。不得把 4 迁回 3 或迁为 8 等可执行格式；不得以版本兼容把 unknown mode 当普通工作库。schema3 的包历史披露安全要求全部保留。恢复不是可执行回滚，也不把源库的项目文件夹授权、置顶状态/回执或搜索投影复制进档案 catalog。
+因此 schema4 是**磁盘安全屏障**，不是另一个 UI 协议编号。上述旧 StoreCatalog 只接受 1/2/3，在读 PI 前以 STORE_MISMATCH 拒绝 4；当前 runtime 同样拒绝 schema 4。新 runtime 必须先读 identity/recovery_state，再做任何迁移/恢复；对于 mode=recovery_archive 或 preparing，普通 openRuntime 一律拒绝。不得把 4 迁回 3 或迁为任何可执行格式；不得以版本兼容把 unknown mode 当普通工作库。schema3 的包历史披露安全要求全部保留。恢复不是可执行回滚，也不把源库的项目文件夹授权、置顶成员/顺序及回执或搜索投影复制进档案 catalog。
 
 ### 最小只读档案实现
 

@@ -44,7 +44,7 @@ export type BackupManifest = {
 	createdAt: string;
 	sourceStoreId: string;
 	sourceRoot: string;
-	catalogSchema: 3 | 5 | 6 | 7 | 8;
+	catalogSchema: 3 | 5 | 6 | 7 | 8 | 9;
 	piSchema: 2;
 	producer: string;
 	files: BackupFile[];

@@ -12,16 +12,18 @@ function assertToolEnvironment(environment) {
 	}
 }
 
-function expectedDesktop(version) {
+function expectedDesktop(version, channel = "unsigned-local-staging") {
 	assert.match(version, /^[0-9A-Za-z.+-]+$/);
-	return `[Desktop Entry]\nName=Hipi Work\nExec=AppRun %U\nTerminal=false\nType=Application\nIcon=hipi-work\nStartupWMClass=hipi-work\nX-AppImage-Version=${version}\nComment=Hipi Work desktop unsigned staging build\nCategories=Utility;\n`;
+	assert.ok(["unsigned-local-staging", "production-candidate"].includes(channel), "Unknown AppImage channel");
+	const description = channel === "production-candidate" ? "production candidate" : "unsigned staging build";
+	return `[Desktop Entry]\nName=Hipi Work\nExec=AppRun %U\nTerminal=false\nType=Application\nIcon=hipi-work\nStartupWMClass=hipi-work\nX-AppImage-Version=${version}\nComment=Hipi Work desktop ${description}\nCategories=Utility;\n`;
 }
 
-function assertLauncherEntries(listing, readEntry, version) {
+function assertLauncherEntries(listing, readEntry, version, channel = "unsigned-local-staging") {
 	const sections = listing.split(/\r?\n\r?\n/);
 	for (const [name, mode, expected] of [
 		["AppRun", "-rwxr-xr-x", readFileSync(path.join(__dirname, "AppRun"))],
-		["hipi-work.desktop", "-rw-r--r--", Buffer.from(expectedDesktop(version))],
+		["hipi-work.desktop", "-rw-r--r--", Buffer.from(expectedDesktop(version, channel))],
 		...portableExecutables.map((name) => [name, "-rwxr-xr-x", null]),
 	]) {
 		const entries = sections.filter((section) => section.split(/\r?\n/).includes(`Path = ${name}`));
@@ -36,11 +38,11 @@ function assertLauncherEntries(listing, readEntry, version) {
 	}
 }
 
-function verifyAppImage(archive, version, reader, criticalFiles = []) {
+function verifyAppImage(archive, version, reader, criticalFiles = [], channel = "unsigned-local-staging") {
 	// Read archive bytes through the packager's pinned 7zip tool, never execute AppImage/AppRun.
 	const options = { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } };
 	const listing = execFileSync(reader, ["l", "-slt", archive], options).toString("utf8");
-	assertLauncherEntries(listing, (name) => execFileSync(reader, ["x", "-so", archive, name], options), version);
+	assertLauncherEntries(listing, (name) => execFileSync(reader, ["x", "-so", archive, name], options), version, channel);
 	assertAppImageCriticalFiles(listing, (name, bytes) => {
 		assert.ok(bytes < 512 * 1024 * 1024, "Critical AppImage payload exceeds read budget");
 		return execFileSync(reader, ["x", "-so", archive, name], { ...options, maxBuffer: bytes + 1 });

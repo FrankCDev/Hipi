@@ -160,6 +160,15 @@ test("catalog pin queries and mutations do not acquire a workspace owner or resu
 		try {
 			lock.exec("BEGIN EXCLUSIVE");
 			await runtime.call("setConversationPinned", pin(conversation));
+			assert.deepEqual(
+				await runtime.call("reorderPinnedConversation", {
+					requestId: "reorder-cold",
+					moved: scope(conversation),
+					before: null,
+					expectedOrderGeneration: 1,
+				}),
+				{ orderGeneration: 1 },
+			);
 			assert.equal((await runtime.call("getConversationPresentation", scope(conversation))).pinned, true);
 			assert.equal((await runtime.call("listPinnedConversations", {})).items.length, 1);
 			assert.ok(await runtime.call("getPresentationCommandResult", { requestId: "pin" }));
@@ -251,7 +260,12 @@ test("lost pin reply and caller cancellation retain one atomic receipt, includin
 		runtime = await openTestRuntime(directory);
 		assert.deepEqual(await runtime.call("getPresentationCommandResult", { requestId: "pin" }), receipt);
 		assert.equal((await runtime.call("getConversationPresentation", scope(conversation))).pinned, false);
-		assert.deepEqual(await runtime.call("listPinnedConversations", {}), { items: [], nextCursor: null });
+		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
+			items: [],
+			nextCursor: null,
+			orderGeneration: 2,
+			nextPinnedScope: null,
+		});
 	} finally {
 		release.resolve();
 		await runtime.close();
@@ -372,7 +386,12 @@ test("catalog reads remove pending archive cleanup after restart, while the firs
 		);
 		await runtime.close();
 		runtime = await openTestRuntime(directory);
-		assert.deepEqual(await runtime.call("listPinnedConversations", {}), { items: [], nextCursor: null });
+		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
+			items: [],
+			nextCursor: null,
+			orderGeneration: 2,
+			nextPinnedScope: null,
+		});
 		assert.deepEqual(await runtime.call("getConversationPresentation", scope(conversation)), {
 			...scope(conversation),
 			revision: 2,
@@ -384,7 +403,12 @@ test("catalog reads remove pending archive cleanup after restart, while the firs
 			result: pinned,
 		});
 		await runtime.call("restoreConversation", { ...scope(conversation), requestId: "restore", expectedRevision: 2 });
-		assert.deepEqual(await runtime.call("listPinnedConversations", {}), { items: [], nextCursor: null });
+		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
+			items: [],
+			nextCursor: null,
+			orderGeneration: 2,
+			nextPinnedScope: null,
+		});
 	} finally {
 		await runtime.close();
 		await rm(directory, { recursive: true, force: true });
@@ -506,6 +530,25 @@ for (const transport of ["http", "ipc"] as const) {
 				assert.deepEqual((await client.call("listPinnedConversations", {})).items, [
 					{ conversation, presentation: result },
 				]);
+				const second = await create(client, "other", "create-other");
+				await client.call("setConversationPinned", pin(second, "pin-other"));
+				const reorder: Params<"reorderPinnedConversation"> = {
+					requestId: "reorder",
+					moved: scope(second),
+					before: scope(conversation),
+					expectedOrderGeneration: 2,
+				};
+				const order = await client.call("reorderPinnedConversation", reorder);
+				assert.deepEqual(order, { orderGeneration: 3 });
+				assert.deepEqual(await client.call("getPresentationCommandResult", { requestId: "reorder" }), {
+					method: "reorderPinnedConversation",
+					params: reorder,
+					result: order,
+				});
+				assert.deepEqual(
+					(await client.call("listPinnedConversations", {})).items.map((item) => item.conversation),
+					[second, conversation],
+				);
 				if ("close" in client && typeof client.close === "function") client.close();
 			} finally {
 				if (child && child.exitCode === null && child.signalCode === null) {

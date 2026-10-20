@@ -52,7 +52,8 @@ export function parseBackupManifest(bytes: Uint8Array): BackupManifest {
 			m.catalogSchema !== 5 &&
 			m.catalogSchema !== 6 &&
 			m.catalogSchema !== 7 &&
-			m.catalogSchema !== 8) ||
+			m.catalogSchema !== 8 &&
+			m.catalogSchema !== 9) ||
 		m.piSchema !== 2
 	)
 		throw new MaintenanceError("UNSUPPORTED_SCHEMA");

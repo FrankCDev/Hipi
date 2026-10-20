@@ -8,12 +8,19 @@ const asarLookupPath = require("./asar-path.cjs");
 const builderRequire = createRequire(require.resolve("app-builder-lib/package.json"));
 const { extractFile, listPackage, statFile } = builderRequire("@electron/asar");
 
-module.exports = async function verifyPack(context) {
+module.exports = async function verifyPack(context, expectedProvenanceBytes) {
 	const resources = context.electronPlatformName === "darwin"
 		? path.join(context.appOutDir, "Hipi Work.app/Contents/Resources")
 		: path.join(context.appOutDir, "resources");
 	const archive = path.join(resources, "app.asar");
-	const provenance = JSON.parse(extractFile(archive, "build-provenance.json").toString("utf8"));
+	const provenanceBytes = extractFile(archive, "build-provenance.json");
+	// The production caller captures this independently from the verified stage.
+	// Self-consistent metadata inside an archive cannot authenticate its source.
+	if (expectedProvenanceBytes !== undefined) {
+		assert.ok(Buffer.isBuffer(expectedProvenanceBytes), "Expected captured provenance bytes");
+		assert.ok(provenanceBytes.equals(expectedProvenanceBytes), "Packaged provenance differs from captured candidate");
+	}
+	const provenance = JSON.parse(provenanceBytes.toString("utf8"));
 	const expected = new Set([...provenance.payload.map((item) => item.file), "build-provenance.json"]);
 	const files = listPackage(archive).map((file) => file.replaceAll("\\", "/").replace(/^\//, ""))
 		.filter((file) => !statFile(archive, asarLookupPath(file)).files);
@@ -21,6 +28,7 @@ module.exports = async function verifyPack(context) {
 	for (const item of provenance.payload) {
 		const bytes = extractFile(archive, asarLookupPath(item.file));
 		assert.equal(createHash("sha256").update(bytes).digest("hex"), item.sha256, `Packaged digest: ${item.file}`);
+		assert.equal(bytes.length, item.bytes, `Packaged size: ${item.file}`);
 	}
 	for (const file of ["runtime.mjs", "preview-parser.mjs", "maintenance.mjs"]) {
 		const bytes = await readFile(path.join(resources, "app.asar.unpacked/dist", file));

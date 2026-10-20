@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,9 +10,121 @@ import { LIMITS, PROTOCOL_VERSION, parseRequest, parseResult } from "../src/cont
 import { openTestRuntime } from "../src/testing.ts";
 import { serveLoopback } from "../src/transport-http.ts";
 import { createHttpClient } from "../src/transport-http-client.ts";
-import { serveNodeIpc } from "../src/transport-ipc.ts";
+import { createNodeIpcClient, serveNodeIpc } from "../src/transport-ipc.ts";
 
 const origin = "http://127.0.0.1:5173";
+
+test("HTTP and IPC reject protocol 7 and future requests before runtime admission", { timeout: 15000 }, async () => {
+	let admissions = 0;
+	const server = await serveLoopback(
+		{
+			async execute() {
+				admissions++;
+				throw new Error("Protocol mismatch must be rejected before runtime admission");
+			},
+			async observe() {
+				throw new Error("Protocol mismatch must not start an observation");
+			},
+		},
+		{ origin },
+	);
+	const child = fork(new URL("./transport-fixture.ts", import.meta.url), ["--protocol-admission-fixture"], {
+		stdio: ["ignore", "ignore", "pipe", "ipc"],
+	});
+	try {
+		for (const version of [7, 9, PROTOCOL_VERSION]) {
+			for (const method of ["handshake", "createWorkspace"]) {
+				const request = {
+					version,
+					method,
+					params: method === "handshake" ? {} : { workspaceId: "must-not-exist", name: "Blocked" },
+					...(method === "handshake" ? {} : { expectedStoreId: "fixture-store" }),
+				};
+				const expected = version === PROTOCOL_VERSION ? "INTERNAL" : "INVALID_REQUEST";
+				const response = await fetch(`${server.url}/call`, {
+					method: "POST",
+					headers: {
+						Origin: origin,
+						Authorization: `Bearer ${server.token}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(request),
+				});
+				assert.equal(response.status, version === PROTOCOL_VERSION ? 500 : 400);
+				assert.deepEqual(await response.json(), { error: expected });
+				const message = once(child, "message");
+				child.send(JSON.stringify({ id: "protocol", kind: "call", request }));
+				const [raw] = await message;
+				assert.deepEqual(JSON.parse(String(raw)), { id: "protocol", kind: "error", error: expected });
+			}
+			assert.equal(admissions, version === PROTOCOL_VERSION ? 2 : 0);
+		}
+	} finally {
+		const exited = once(child, "exit");
+		child.kill();
+		await exited;
+		await server.close();
+	}
+});
+
+test(
+	"HTTP and IPC clients reject protocol 7 handshake results before sending commands or observing",
+	{ timeout: 15000 },
+	async () => {
+		const methods: string[] = [];
+		const server = createServer((request, response) => {
+			void (async () => {
+				const chunks: Buffer[] = [];
+				for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+				methods.push(parseRequest(JSON.parse(Buffer.concat(chunks).toString("utf8"))).method);
+				response.writeHead(200, { "Content-Type": "application/json" });
+				response.end(JSON.stringify({ result: { protocolVersion: 7, storeId: "old-store" } }));
+			})().catch(() => response.destroy());
+		});
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		const address = server.address();
+		assert.ok(address && typeof address !== "string");
+		const child = fork(new URL("./transport-fixture.ts", import.meta.url), ["--stale-protocol-fixture"], {
+			stdio: ["ignore", "ignore", "pipe", "ipc"],
+		});
+		const ipc = createNodeIpcClient(child);
+		try {
+			for (const client of [
+				createHttpClient({ url: `http://127.0.0.1:${address.port}`, token: "fixture-token", origin }),
+				ipc,
+			]) {
+				await assert.rejects(client.call("createWorkspace", { workspaceId: "must-not-exist", name: "Blocked" }), {
+					code: "INVALID_REQUEST",
+				});
+				await assert.rejects(
+					client.observe({ workspaceId: "test", conversationId: "conversation" }, () => {
+						assert.fail("Protocol mismatch must not deliver frames");
+					}),
+					{ code: "INVALID_REQUEST" },
+				);
+			}
+			assert.deepEqual(methods, ["handshake", "handshake"]);
+			const message = once(child, "message");
+			child.send("received-methods");
+			const [raw] = await message;
+			assert.deepEqual(JSON.parse(String(raw)), {
+				id: "inspection",
+				kind: "result",
+				result: ["handshake", "handshake"],
+			});
+		} finally {
+			ipc.close();
+			if (child.exitCode === null && child.signalCode === null) {
+				const exited = once(child, "exit");
+				child.kill();
+				await exited;
+			}
+			server.closeAllConnections();
+			await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+		}
+	},
+);
 
 test("authenticated handshake is read-only and identity binding rejects replacement behind the same endpoint", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-identity-"));

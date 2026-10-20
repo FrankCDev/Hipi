@@ -89,3 +89,54 @@ For each candidate artifact, record exact SHA-256, OS/build, architecture, hardw
 5. Confirm dependency-license review, source/lock/toolchain provenance, performance budgets, and all remaining [RC gates](RC-TRACKER.md).
 
 Use `passed`, `failed`, `blocked`, or `not_run` with actual evidence. A CI green job only closes the source/package checks it executed. Native installation, GUI, signing, update and recovery gates remain open until separately observed. No commit, push, tag, publication, credential provisioning or user-device access is authorized by this document.
+
+## Separate production-candidate controls
+
+The optional `scripts/package-production.mjs` entry point is separate from the unsigned command above. It implements local candidate preparation and verification, not publication or production acceptance. The desktop manifest is still `0.0.1`; no version was changed by adding this path. There is no automatic updater, update feed, signing-secret provisioning or production CI workflow.
+
+Before invoking the packager, this path requires:
+
+- A native supported target: Linux x64, Windows x64, or macOS x64/arm64. Cross-architecture builds, `--dir`, duplicate arguments and arbitrary builder flags are rejected.
+- A stable desktop version at least `1.0.0`, a matching desktop lock entry, and a nonempty dated section for that exact version in `apps/hipi-work-desktop/CHANGELOG.md`. The changelog is a release-preparation prerequisite, not a generated claim of acceptance.
+- Current source snapshot and exact staged payload hashes, complete collected licenses, and matching version/platform/architecture. The unsigned staging directory is retained unchanged. Artifact-tree directory redirects and linked inputs are rejected. The candidate is copied into a new exclusive `.artifacts/hipi-work/production/app` directory, and its payload hashes are recomputed after changing only candidate metadata.
+- On macOS, explicit `HIPI_MAC_IDENTITY` (the certificate qualifier without `Developer ID Application:`), `HIPI_MAC_TEAM_ID`, absolute `HIPI_MAC_KEYCHAIN`, and an already-provisioned `APPLE_KEYCHAIN_PROFILE`. The qualifier must include the expected team in parentheses. This implementation supports that one existing keychain route only; it does not import certificates, store passwords, or create notarization credentials.
+- On Windows, explicit `HIPI_WIN_CERT_SHA1` and `HIPI_WIN_PUBLISHER` for an already-provisioned native certificate/signing environment. PFX imports, cloud-signing setup and credential creation are not implemented or authorized.
+
+The candidate wrapper removes ambient publishing and unrelated credential variables from the child environment. It rejects alternate certificate, Apple authentication, Azure and Node injection settings rather than silently choosing among them. Both builder configurations retain `publish: null`; both entry points always pass `--publish never`. No command bumps versions, creates a tag or Release, pushes a branch, uploads assets, or installs an application.
+
+macOS uses `forceCodeSigning`, hardened runtime, strict signature verification and an explicit JIT entitlement. It does not inherit the builder template's library-validation exception. This entitlement choice still requires actual signed execution on both Mac architectures; source tests do not qualify it. Missing notarization settings fail before packaging because builder 26.15.3 can otherwise merely warn and skip notarization. The pinned builder's v26 fields are used, not the different v27 configuration.
+
+Final verification checks the following before producing a distribution directory:
+
+- Exact target filenames, version, architecture and channel; missing, duplicate or extra distributable names and nonregular/empty artifacts fail. Linux AppImage uses `x86_64` in its name, while tar.gz uses `x64`.
+- Final ASAR provenance bytes must equal the independently captured production-stage provenance, then every payload hash and unpacked utility must match. Self-consistent but stale embedded metadata is rejected. Final archive checks bind that verified application to distributable bytes.
+- macOS bundle version, application identifier, exact Developer ID identity and Team ID, hardened-runtime signature with secure timestamp, stapled ticket and Gatekeeper assessment. Final ZIP entry bytes, types and Unix modes must match the signed application tree. The final DMG is verified and mounted read-only to compare and verify its actual application; detach failure prevents success and cleanup.
+- Windows Authenticode validity, exact certificate/publisher and timestamp for packaged executables and the NSIS installer; main application and installer product versions must match. ZIP entry bytes and types must match the signed application tree. NSIS installation and installed payload behavior remain separate acceptance, not something signature verification proves.
+- Linux retains its final AppImage/tar launcher, native critical-file, fuse and maintenance checks. Linux signing/notarization are recorded as `not_applicable`, not `verified`. Checksums are integrity records, not independent source authentication; the eventual authorized distribution source must also be verified.
+- Artifact bytes, source inputs and the captured desktop release-note digest remain unchanged across verification. `.artifacts/hipi-work/production/distribution` contains only the exact artifacts, `SHA256SUMS` and `release-provenance.json`; builder working files remain outside it.
+
+When the prerequisites and execution authorization exist, the command is:
+
+```sh
+node apps/hipi-work-desktop/scripts/package-production.mjs --x64
+```
+
+Use `--arm64` on an authorized native Apple Silicon host. Signing, notarization transmission and the corresponding host actions require their own authorization; this example does not grant it. A failed production directory is retained for inspection. Do not rerun over it or silently remove it.
+
+The separate read-only integrity command takes an expected identity from a trusted release record:
+
+```sh
+node apps/hipi-work-desktop/scripts/verify-release-artifacts.mjs \
+  --directory /path/to/distribution --version 1.0.0 \
+  --platform linux --architecture x64 --channel production-candidate
+```
+
+It recomputes artifact bytes and cross-checks exact names, manifest and checksum contents. It does not authenticate an arbitrary manifest or rerun native signature assessment; its output explicitly reports native trust and product acceptance as `not_checked`. Packaging records installation, GUI and update/recovery as `not_run`, even after native signature verification succeeds. Synthetic command-result tests only verify the rejection/control logic.
+
+### Desktop version and release-note ownership
+
+The product version comes only from `apps/hipi-work-desktop/package.json`. The root Pi version and internal UI/runtime package versions are independent; do not run root `npm version --workspaces`, `scripts/release.mjs` or upstream Pi release commands for desktop release preparation. A later authorized desktop bump changes only its manifest and corresponding lock entry, with a fresh source snapshot and acceptance run.
+
+Desktop release notes belong in the desktop changelog and must cover user-visible changes, compatibility, migration/recovery limits and known issues. Follow the repository's main/PR changelog rule; no released section is invented by these controls. A future desktop tag should use `hipi-work-v<version>`, not `v<version>`, which matches the existing upstream Pi publishing triggers. Creating even the distinct tag still requires explicit authorization.
+
+The supported manual-upgrade qualification plan is in [DESKTOP-UPGRADE-ACCEPTANCE.md](DESKTOP-UPGRADE-ACCEPTANCE.md). Application rollback, data downgrade and read-only archive recovery are distinct outcomes.

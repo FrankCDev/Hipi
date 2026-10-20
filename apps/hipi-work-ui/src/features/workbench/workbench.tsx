@@ -44,6 +44,9 @@ import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
 import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
 import { PresentationSession } from "./presentation-session.ts";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./project-folder.tsx";
+import { SidebarDragProvider, type SidebarOrderAction, SidebarOrderSection } from "./sidebar-drag-provider.tsx";
+import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar-layout-session.ts";
+import { sidebarOrderLabels } from "./sidebar-order-labels.ts";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
@@ -94,6 +97,22 @@ export function Workbench({
 		return () => catalog.dispose();
 	}, [catalog]);
 	const presentation = useMemo(() => new PresentationSession(client, local), [client, local]);
+	const layout = useMemo(() => new SidebarLayoutSession(local), [local]);
+	const layoutState = useSyncExternalStore(layout.subscribe, layout.getSnapshot, layout.getSnapshot);
+	const [pinnedVisible, setPinnedVisible] = useState(false);
+	const [orderAnnouncement, setOrderAnnouncement] = useState("");
+	useEffect(() => {
+		layout.activate();
+		void layout.refresh();
+		const refresh = (event: StorageEvent) => {
+			if (event.key === null || event.key.endsWith(".value.sidebar.layout")) void layout.refresh();
+		};
+		window.addEventListener("storage", refresh);
+		return () => {
+			window.removeEventListener("storage", refresh);
+			layout.dispose();
+		};
+	}, [layout]);
 	const presentationState = useSyncExternalStore(
 		presentation.subscribe,
 		presentation.getSnapshot,
@@ -104,10 +123,25 @@ export function Workbench({
 		return () => presentation.dispose();
 	}, [presentation]);
 	useEffect(() => {
-		if (presentationState.busy || (!presentationState.result && !presentationState.rejected)) return;
-		void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
+		if (
+			presentationState.busy ||
+			(!presentationState.result && !presentationState.orderResult && !presentationState.rejected)
+		)
+			return;
+		if (presentationState.orderResult)
+			cache.setQueryData(["pinned-conversations", "pages"], {
+				pages: [presentationState.orderResult],
+				pageParams: [undefined],
+			});
+		else void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
 		void cache.invalidateQueries({ queryKey: ["conversation-presentation"] });
-	}, [presentationState.busy, presentationState.result, presentationState.rejected, cache]);
+	}, [
+		presentationState.busy,
+		presentationState.result,
+		presentationState.orderResult,
+		presentationState.rejected,
+		cache,
+	]);
 	const panel = useMemo(() => new FilePanelController(local), [local]);
 	const panelState = useSyncExternalStore(panel.subscribe, panel.snapshot, panel.snapshot);
 	const panelTrigger = useRef<HTMLButtonElement>(null);
@@ -225,8 +259,77 @@ export function Workbench({
 	const workspaces = useCatalogPages({
 		queryKey: ["workspaces"],
 		queryPage: (cursor, signal) => client.call("listWorkspaces", cursor ? { cursor } : {}, signal),
-		itemKey: (item) => item.workspaceId,
+		itemKey: (item: Workspace) => item.workspaceId,
 	});
+	const projectIds = workspaces.items
+		.filter((item) => item.workspaceId !== catalog.defaultWorkspaceId())
+		.map((item) => item.workspaceId);
+	const projectOrder = mergeOrder(layoutState.projects, projectIds);
+	const orderedProjects = layout.orderedProjects(projectIds);
+	const workspaceById = new Map(workspaces.items.map((item) => [item.workspaceId, item]));
+	const orderedWorkspaces = [
+		...orderedProjects.flatMap((id) => {
+			const item = workspaceById.get(id);
+			return item ? [item] : [];
+		}),
+		...workspaces.items.filter((item) => item.workspaceId === catalog.defaultWorkspaceId()),
+	];
+	const layoutBlocked = layoutState.busy || layoutState.incompatible || !!layoutState.pending;
+	const visibleSections = layoutState.sections.filter(
+		(id) => id === "projects" || (id === "pinned" ? pinnedVisible : !!catalog.defaultWorkspaceId()),
+	);
+	const sectionAction = (id: SidebarSection): SidebarOrderAction => {
+		const index = visibleSections.indexOf(id);
+		const fullIndex = layoutState.sections.indexOf(id);
+		const next = visibleSections[index + 1];
+		return {
+			item: {
+				id,
+				group: "sections",
+				label: id === "pinned" ? pinLabels(locale).pinned : id === "recent" ? cl.recent : t("nav.workspaces"),
+				revision: `${layoutState.revision}:${layoutBlocked}`,
+				disabled: layoutBlocked,
+				after: layoutState.sections[fullIndex + 1] ?? null,
+				move: (before) => {
+					if (before !== null && before !== "pinned" && before !== "projects" && before !== "recent") return;
+					void layout.moveSection(id, before, layoutState.revision).then((saved) => {
+						if (saved && connectionLease.active)
+							setOrderAnnouncement(
+								`${sidebarOrderLabels(locale).movedTo} ${layout.getSnapshot().sections.indexOf(id) + 1}`,
+							);
+					});
+				},
+			},
+			up: index > 0 ? visibleSections[index - 1] : undefined,
+			down: next ? (layoutState.sections[layoutState.sections.indexOf(next) + 1] ?? null) : undefined,
+		};
+	};
+	const projectAction = (item: Workspace): SidebarOrderAction => {
+		const index = orderedProjects.indexOf(item.workspaceId);
+		const after = (id: string) => projectOrder[projectOrder.indexOf(id) + 1] ?? null;
+		const disabled = layoutBlocked || workspaces.isFetching || workspaces.isError;
+		const next = orderedProjects[index + 1];
+		return {
+			item: {
+				id: item.workspaceId,
+				group: "projects",
+				label: item.name,
+				revision: `${layoutState.revision}:${disabled}:${projectIds.join(",")}`,
+				disabled,
+				after: after(item.workspaceId),
+				move: (before) => {
+					void layout.moveProject(item.workspaceId, before, projectIds, layoutState.revision).then((saved) => {
+						if (saved && connectionLease.active)
+							setOrderAnnouncement(
+								`${item.name}: ${sidebarOrderLabels(locale).movedTo} ${layout.orderedProjects(projectIds).indexOf(item.workspaceId) + 1}`,
+							);
+					});
+				},
+			},
+			up: index > 0 ? orderedProjects[index - 1] : undefined,
+			down: next ? after(next) : undefined,
+		};
+	};
 	const selectedQuery = useQuery({
 		queryKey: ["conversation", selectedWorkspace, selectedConversation],
 		queryFn: ({ signal }) =>
@@ -526,6 +629,22 @@ export function Workbench({
 		)
 			throw new Error("UNCONFIRMED");
 	};
+	const workspaceTreeProps = {
+		workspaces: orderedWorkspaces,
+		catalog,
+		presentation,
+		guard: (action: () => void) => action(),
+		selectedWorkspace,
+		selectedConversation,
+		isExpanded,
+		onToggle: (id: string) => setProjectExpanded(id, !isExpanded(id)),
+		onOpenProject: selectWorkspace,
+		onSelect: selectConversation,
+		onNewConversation: openNewConversation,
+		defaultWorkspaceId: catalog.defaultWorkspaceId(),
+		onManageProjectFolder: manageProjectFolder,
+		projectOrder: projectAction,
+	};
 
 	return (
 		<div
@@ -607,73 +726,103 @@ export function Workbench({
 						</Button>
 					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
-						<PinnedConversations
-							catalog={catalog}
-							presentation={presentation}
-							selectedWorkspace={selectedWorkspace}
-							selectedConversation={selectedConversation}
-							onSelect={selectConversation}
-						/>
-						<div className="nav-section-heading">
-							<span>{t("nav.workspaces")}</span>
-							<CreateDialog
-								disabled={catalogBlocked}
-								kind="workspace"
-								compact
-								onCreate={createWorkspace}
-								chooseFolder={fileAuthority?.prepareProject}
-								forgetFolder={fileAuthority?.forgetProjectSelection}
-							/>
-						</div>
-						{workspaces.isPending && !workspaces.hasData && (
-							<output className="nav-feedback">{t("common.loading")}</output>
-						)}
-						{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
-							<output className="catalog-refresh-status">{t("common.loading")}</output>
-						)}
-						{workspaces.isError && (
-							<div className="nav-feedback" role="alert">
-								<p>
-									{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-										? t("connection.storeMismatch")
-										: workspaces.staleCursor
-											? cl.staleList
-											: workspaces.isLoadMoreError
-												? cl.loadMoreFailed
-												: workspaces.hasData
-													? cl.refreshFailed
-													: t("nav.loadError")}
+						<SidebarDragProvider
+							scrollRef={navigationList}
+							keybindings={keybindings}
+							disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
+						>
+							{layoutState.sections.map((section) =>
+								section === "pinned" ? (
+									<PinnedConversations
+										key={section}
+										catalog={catalog}
+										presentation={presentation}
+										selectedWorkspace={selectedWorkspace}
+										selectedConversation={selectedConversation}
+										onSelect={selectConversation}
+										sectionAction={sectionAction(section)}
+										onVisibleChange={setPinnedVisible}
+									/>
+								) : section === "recent" ? (
+									catalog.defaultWorkspaceId() ? (
+										<SidebarOrderSection key={section} action={sectionAction(section)}>
+											<WorkspaceTree {...workspaceTreeProps} section="recent" />
+										</SidebarOrderSection>
+									) : null
+								) : (
+									<SidebarOrderSection key={section} action={sectionAction(section)}>
+										<div className="nav-section-heading">
+											<span>{t("nav.workspaces")}</span>
+											<CreateDialog
+												disabled={catalogBlocked}
+												kind="workspace"
+												compact
+												onCreate={createWorkspace}
+												chooseFolder={fileAuthority?.prepareProject}
+												forgetFolder={fileAuthority?.forgetProjectSelection}
+											/>
+										</div>
+										{workspaces.isPending && !workspaces.hasData && (
+											<output className="nav-feedback">{t("common.loading")}</output>
+										)}
+										{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
+											<output className="catalog-refresh-status">{t("common.loading")}</output>
+										)}
+										{workspaces.isError && (
+											<div className="nav-feedback" role="alert">
+												<p>
+													{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
+														? t("connection.storeMismatch")
+														: workspaces.staleCursor
+															? cl.staleList
+															: workspaces.isLoadMoreError
+																? cl.loadMoreFailed
+																: workspaces.hasData
+																	? cl.refreshFailed
+																	: t("nav.loadError")}
+												</p>
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={workspaces.isFetching}
+													onClick={() => void workspaces.retry()}
+												>
+													<Icon name="refresh" size={14} />
+													{t("nav.refresh")}
+												</Button>
+											</div>
+										)}
+										{workspaces.isSuccess && workspaces.items.length === 0 && (
+											<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
+										)}
+										<WorkspaceTree {...workspaceTreeProps} section="projects" />
+										<CatalogPagination pages={workspaces} listRef={navigationList} />
+									</SidebarOrderSection>
+								),
+							)}
+						</SidebarDragProvider>
+						<output className="sr-only" aria-live="polite">
+							{orderAnnouncement}
+						</output>
+						{(layoutState.failed || layoutState.stale || layoutState.incompatible) && (
+							<section className="nav-feedback" aria-live="polite">
+								<p role="alert">
+									{
+										sidebarOrderLabels(locale)[
+											layoutState.incompatible ? "incompatible" : layoutState.stale ? "stale" : "failed"
+										]
+									}
 								</p>
-								<Button
-									variant="outline"
-									size="sm"
-									disabled={workspaces.isFetching}
-									onClick={() => void workspaces.retry()}
-								>
-									<Icon name="refresh" size={14} />
-									{t("nav.refresh")}
+								<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.refresh()}>
+									{sidebarOrderLabels(locale).refresh}
 								</Button>
-							</div>
+								{layoutState.pending && (
+									<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.retry()}>
+										{sidebarOrderLabels(locale).retry}
+									</Button>
+								)}
+							</section>
 						)}
-						{workspaces.isSuccess && workspaces.items.length === 0 && (
-							<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
-						)}
-						<WorkspaceTree
-							workspaces={workspaces.items}
-							catalog={catalog}
-							presentation={presentation}
-							guard={(action) => action()}
-							selectedWorkspace={selectedWorkspace}
-							selectedConversation={selectedConversation}
-							isExpanded={isExpanded}
-							onToggle={(id) => setProjectExpanded(id, !isExpanded(id))}
-							onOpenProject={selectWorkspace}
-							onSelect={selectConversation}
-							onNewConversation={openNewConversation}
-							defaultWorkspaceId={catalog.defaultWorkspaceId()}
-							onManageProjectFolder={manageProjectFolder}
-						/>
-						<CatalogPagination pages={workspaces} listRef={navigationList} />
 						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
 						<PinRecovery session={presentation} />
 						{pinLookupFailed && (

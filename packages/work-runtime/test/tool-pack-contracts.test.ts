@@ -56,9 +56,9 @@ function request(method: string, params: unknown) {
 	return parseRequest({ version: PROTOCOL_VERSION, expectedStoreId: "store", method, params });
 }
 
-test("protocol 7 refuses old and future requests and server handshakes", () => {
-	assert.equal(PROTOCOL_VERSION, 7);
-	for (const version of [4, 5, 6, 8]) {
+test("protocol 8 refuses old and future requests and server handshakes", () => {
+	assert.equal(PROTOCOL_VERSION, 8);
+	for (const version of [4, 5, 6, 7, 9]) {
 		assert.throws(() => parseRequest({ version, method: "handshake", params: {} }), { code: "INVALID_REQUEST" });
 		assert.throws(() => parseResult("handshake", { protocolVersion: version, storeId: "store" }), {
 			code: "INVALID_REQUEST",

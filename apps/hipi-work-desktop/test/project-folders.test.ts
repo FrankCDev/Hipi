@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { test } from "node:test";
 import { createFileClient, parseProjectFolder, parseProjectFolderSelection } from "@hipi/work-runtime/files/protocol";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
@@ -10,6 +10,12 @@ import { chooseProjectDirectory } from "../src/file-messages.ts";
 import { manageFileRoots, ProjectFolderSelections } from "../src/file-picker.ts";
 import { rootRequest } from "../src/file-protocol.ts";
 import { createFileRuntime } from "../src/file-runtime.ts";
+
+async function expectedHostPath(path: string): Promise<string> {
+	const canonical = await realpath(path);
+	const fromHome = relative(homedir(), canonical);
+	return fromHome === ".." || fromHome.startsWith(`..${sep}`) || isAbsolute(fromHome) ? canonical : join("~", fromHome);
+}
 
 async function fixture() {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-desktop-project-"));
@@ -100,7 +106,7 @@ test("prepared directory attaches once after intentional creation, and replay ca
 			"work",
 		);
 		assert.equal(folder.status, "available");
-		if (folder.status === "available") assert.equal(folder.displayPath, await realpath(app.folder));
+		if (folder.status === "available") assert.equal(folder.displayPath, await expectedHostPath(app.folder));
 		assert.ok(folder.root);
 		assert.equal(folder.root.writable, false);
 		assert.equal(
@@ -292,7 +298,7 @@ test("desktop project responses expose the verified current path without changin
 		);
 		assert.equal(first.status, "available");
 		if (first.status !== "available") assert.fail("Expected an available binding");
-		assert.equal(first.displayPath, await realpath(app.folder));
+		assert.equal(first.displayPath, await expectedHostPath(app.folder));
 		assert.notEqual(first.displayPath, picked);
 		assert.equal(first.displayName, "project");
 		assert.equal("displayPath" in first.root, false);
