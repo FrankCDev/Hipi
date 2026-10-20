@@ -145,7 +145,7 @@ export function ConversationPane({
 									model={controller.model.data?.model}
 									connected={observation.connection === "connected"}
 								/>
-								<ConversationModelControls controller={controller} />
+								<ConversationModelControls controller={controller} onOpenModelSettings={onOpenModelSettings} />
 							</div>
 						}
 					/>

@@ -1,10 +1,18 @@
-import { AppearanceError, type AppearanceRequest, type AppearanceStatus } from "@hipi/work-runtime/appearance";
+import {
+	AppearanceError,
+	type AppearanceRequest,
+	type AppearanceStatus,
+	type AppearanceThemeMode,
+} from "@hipi/work-runtime/appearance";
 
 export interface AppearanceWindow {
 	isDestroyed(): boolean;
 	setVibrancy(value: "sidebar" | null): void;
 	setBackgroundMaterial(value: "mica" | "none"): void;
 	setBackgroundColor(value: string): void;
+}
+export interface AppearanceNativeTheme {
+	themeSource: AppearanceThemeMode;
 }
 export function backdropSupport(platform: string, release: string): AppearanceStatus["backdrop"] {
 	if (platform === "darwin") return "vibrancy";
@@ -13,20 +21,28 @@ export function backdropSupport(platform: string, release: string): AppearanceSt
 	if (platform === "win32" && version && Number(version[1]) >= 10 && Number(version[3]) >= 22621) return "mica";
 	return "unsupported";
 }
-/** Owns only this window's material, and respects the OS accessibility setting without changing it. */
+/** Owns window material and the app's theme override, never the OS appearance/accessibility settings. */
 export class WindowAppearanceService {
 	readonly #window: AppearanceWindow;
 	readonly #platform: string;
 	readonly #backdrop: AppearanceStatus["backdrop"];
 	readonly #reduced: () => boolean;
+	readonly #theme: AppearanceNativeTheme;
 	#requested = false;
 	#enabled = false;
 	#background = "#ffffff";
-	constructor(window: AppearanceWindow, platform: string, release: string, reduced: () => boolean) {
+	constructor(
+		window: AppearanceWindow,
+		platform: string,
+		release: string,
+		reduced: () => boolean,
+		theme: AppearanceNativeTheme,
+	) {
 		this.#window = window;
 		this.#platform = platform;
 		this.#backdrop = backdropSupport(platform, release);
 		this.#reduced = reduced;
+		this.#theme = theme;
 	}
 	status(): AppearanceStatus {
 		if (this.#window.isDestroyed()) throw new AppearanceError("CLOSED");
@@ -44,10 +60,21 @@ export class WindowAppearanceService {
 			reducedTransparency: this.#reduced(),
 			backdropEnabled: this.#enabled && !this.#reduced(),
 			fontSmoothing: this.#platform === "darwin",
+			themeMode: this.#theme.themeSource,
 		};
 	}
 	request(request: AppearanceRequest): AppearanceStatus {
 		if (request.method === "status") return this.status();
+		this.status();
+		if (request.method === "theme") {
+			try {
+				// The setter emits native updates. A status notification must not write it again.
+				if (this.#theme.themeSource !== request.mode) this.#theme.themeSource = request.mode;
+			} catch {
+				throw new AppearanceError("FAILED");
+			}
+			return this.status();
+		}
 		if (request.enabled && this.#backdrop === "unsupported") throw new AppearanceError("UNSUPPORTED");
 		this.#requested = request.enabled;
 		this.#background = request.background;

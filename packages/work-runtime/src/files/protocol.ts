@@ -7,6 +7,8 @@ import type {
 	FileService,
 	FileTarget,
 	FileText,
+	ProjectFolder,
+	ProjectFolderSelection,
 } from "./contracts.ts";
 import { FILE_LIMITS, FileServiceError, validateRelativePath } from "./contracts.ts";
 
@@ -121,6 +123,50 @@ export function parseFileRoots(raw: unknown, workspaceId: string): FileRoot[] {
 		seen.add(rootId);
 		return { workspaceId, rootId, writable: value.writable, ...(displayName === undefined ? {} : { displayName }) };
 	});
+}
+export function parseProjectFolder(raw: unknown, workspaceId: string): ProjectFolder {
+	const value = object(raw, ["workspaceId", "status", "bindingId", "revision", "displayName", "root"]);
+	fileIdentifier(workspaceId);
+	if (value.workspaceId !== workspaceId) invalid();
+	if (value.status === "unbound") {
+		if (value.bindingId !== null || value.revision !== 0 || value.displayName !== null || value.root !== null)
+			invalid();
+		return { workspaceId, status: "unbound", bindingId: null, revision: 0, displayName: null, root: null };
+	}
+	const bindingId = fileIdentifier(value.bindingId);
+	if (typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 1) invalid();
+	const displayName = value.displayName;
+	if (
+		displayName !== null &&
+		(typeof displayName !== "string" ||
+			!displayName ||
+			[...displayName].length > 255 ||
+			/[\p{Cc}\p{Cf}\p{Cs}/\\]/u.test(displayName))
+	)
+		invalid();
+	const base = { workspaceId, bindingId, revision: value.revision, displayName };
+	if (value.status === "available") {
+		const root = parseFileRoots([value.root], workspaceId)[0];
+		if (!root || root.writable || (root.displayName ?? null) !== displayName) invalid();
+		return { ...base, status: "available", root };
+	}
+	if (!["unavailable", "moved", "revoked"].includes(String(value.status)) || value.root !== null) invalid();
+	if (value.status !== "unavailable" && value.status !== "moved" && value.status !== "revoked") return invalid();
+	return { ...base, status: value.status, root: null };
+}
+export function parseProjectFolderSelection(raw: unknown): ProjectFolderSelection {
+	const value = object(raw, ["selectionId", "displayName"]);
+	const selectionId = fileIdentifier(value.selectionId);
+	const displayName = value.displayName;
+	if (
+		displayName !== null &&
+		(typeof displayName !== "string" ||
+			!displayName ||
+			[...displayName].length > 255 ||
+			/[\p{Cc}\p{Cf}\p{Cs}/\\]/u.test(displayName))
+	)
+		invalid();
+	return { selectionId, displayName };
 }
 export function parseFileText(raw: unknown): FileText {
 	const value = object(raw, ["text", "revision", "encoding", "bytes"]);

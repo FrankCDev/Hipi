@@ -1,0 +1,86 @@
+.project-folder-summary {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 14px 16px;
+	margin-bottom: 18px;
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	text-align: left;
+	background: var(--background);
+}
+.project-folder-summary:hover {
+	background: var(--accent);
+}
+.project-folder-copy,
+.project-folder-identity > div {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+.project-folder-summary strong,
+.project-folder-identity strong {
+	font-size: 14px;
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+.project-folder-identity span,
+.project-folder-secondary,
+.project-folder-summary-action,
+.project-folder-disclosure,
+.project-folder-recovery {
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--muted-foreground);
+}
+.project-folder-summary-action {
+	margin-left: auto;
+	flex-shrink: 0;
+}
+.project-folder-identity {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 16px;
+	background: var(--muted);
+	border-radius: 12px;
+}
+.project-folder-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.project-folder-dirty-paths {
+	max-height: 160px;
+	overflow: auto;
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+.project-context-notice {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	flex-wrap: wrap;
+	padding: 6px 10px;
+	font-size: 12px;
+	color: var(--muted-foreground);
+}
+.project-context-notice > span {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.context-project-folder {
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+}
+.context-project-folder strong {
+	display: block;
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}

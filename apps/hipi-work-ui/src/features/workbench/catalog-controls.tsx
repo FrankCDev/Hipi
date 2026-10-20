@@ -17,7 +17,9 @@ import { Input } from "../../components/ui/input.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
+import { ComposerKeyboard } from "./composer-keyboard.ts";
 import type { PreviewActions } from "./sidebar-preview-row.tsx";
+import "./conversation-rename.css";
 
 export function CatalogRecovery({
 	session,
@@ -103,9 +105,20 @@ export function ConversationActions({
 	const [title, setTitle] = useState(conversation.title);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const titleId = useId();
+	const titleInput = useRef<HTMLInputElement>(null);
+	const renameKeyboard = useRef(new ComposerKeyboard());
+	const renameOpen = useRef(false);
 	const ownTrigger = useRef<HTMLButtonElement>(null);
 	const trigger = triggerRef ?? ownTrigger;
 	const disabled = state.busy || !!state.pending || state.incompatible;
+	const renameDisabled = disabled || !!state.initialSend;
+	const closeRename = () => {
+		if (session.getSnapshot().busy) return;
+		renameOpen.current = false;
+		renameKeyboard.current.reset();
+		setRenaming(false);
+		onOverlayChange?.("dialog", false);
+	};
 	const execute = (command: CatalogCommand) => {
 		guard(() => {
 			const previous = session.getSnapshot();
@@ -130,21 +143,31 @@ export function ConversationActions({
 					cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
 					void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
 					if (command.method === "renameConversation") {
-						setRenaming(false);
-						onOverlayChange?.("dialog", false);
+						closeRename();
 					}
 				}
 			});
+		});
+	};
+	const saveRename = () => {
+		if (!renameOpen.current || renameDisabled || !title.trim()) return;
+		execute({
+			version: PROTOCOL_VERSION,
+			method: "renameConversation",
+			params: {
+				workspaceId: conversation.workspaceId,
+				conversationId: conversation.conversationId,
+				requestId: crypto.randomUUID(),
+				expectedRevision: conversation.revision,
+				title: title.trim(),
+			},
 		});
 	};
 	return (
 		<Dialog
 			open={renaming}
 			onOpenChange={(open) => {
-				if (!open && !state.busy) {
-					setRenaming(false);
-					onOverlayChange?.("dialog", false);
-				}
+				if (!open) closeRename();
 			}}
 		>
 			<DropdownMenu
@@ -182,9 +205,13 @@ export function ConversationActions({
 					<DropdownMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</DropdownMenuLabel>
 					<DropdownMenuSeparator />
 					<DropdownMenuItem
-						disabled={disabled}
+						disabled={renameDisabled}
 						onSelect={() => {
+							const current = session.getSnapshot();
+							if (current.busy || current.pending || current.initialSend || current.incompatible) return;
 							setTitle(conversation.title);
+							renameKeyboard.current.reset();
+							renameOpen.current = true;
 							onOverlayChange?.("dialog", true);
 							setRenaming(true);
 						}}
@@ -218,8 +245,17 @@ export function ConversationActions({
 				</DropdownMenuContent>
 			</DropdownMenu>
 			<DialogContent
+				className="conversation-rename-dialog"
 				closeLabel={l.close}
 				closeDisabled={state.busy}
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					titleInput.current?.focus();
+					titleInput.current?.select();
+				}}
+				onEscapeKeyDown={(event) => {
+					if (event.isComposing || event.keyCode === 229 || session.getSnapshot().busy) event.preventDefault();
+				}}
 				onCloseAutoFocus={(event) => {
 					event.preventDefault();
 					if (onReturnFocus) onReturnFocus();
@@ -228,37 +264,57 @@ export function ConversationActions({
 			>
 				<DialogTitle>{l.rename}</DialogTitle>
 				<DialogDescription>{l.renameNote}</DialogDescription>
-				<label htmlFor={titleId}>
-					{l.title}
-					<Input
-						id={titleId}
-						value={title}
-						disabled={disabled}
-						maxLength={128}
-						onChange={(event) => setTitle(event.target.value)}
-					/>
-				</label>
-				{state.failed && <p role="alert">{l.failed}</p>}
-				{state.pending && <p role="alert">{l.pending}</p>}
-				<Button
-					disabled={disabled || !title.trim()}
-					onClick={() => {
-						if (!renaming || disabled || !title.trim()) return;
-						execute({
-							version: PROTOCOL_VERSION,
-							method: "renameConversation",
-							params: {
-								workspaceId: conversation.workspaceId,
-								conversationId: conversation.conversationId,
-								requestId: crypto.randomUUID(),
-								expectedRevision: conversation.revision,
-								title: title.trim(),
-							},
-						});
+				<form
+					className="conversation-rename-form"
+					onSubmit={(event) => {
+						event.preventDefault();
+						// Enter is owned below so confirming IME input cannot submit implicitly.
 					}}
 				>
-					{l.confirm}
-				</Button>
+					<label htmlFor={titleId}>
+						{l.title}
+						<Input
+							ref={titleInput}
+							className="conversation-rename-input"
+							id={titleId}
+							value={title}
+							disabled={renameDisabled}
+							maxLength={128}
+							autoComplete="off"
+							onChange={(event) => setTitle(event.target.value)}
+							onCompositionStart={() => renameKeyboard.current.compositionStart()}
+							onCompositionEnd={(event) => renameKeyboard.current.compositionEnd(event.timeStamp)}
+							onBlur={() => renameKeyboard.current.reset()}
+							onKeyUp={() => renameKeyboard.current.keyUp()}
+							onKeyDown={(event) => {
+								const action = renameKeyboard.current.keyDown(event.nativeEvent);
+								if (action !== "native") event.preventDefault();
+								if (action === "submit") saveRename();
+							}}
+						/>
+					</label>
+					{state.failed && <p role="alert">{l.failed}</p>}
+					{state.pending && <p role="alert">{l.pending}</p>}
+					<div className="conversation-rename-actions">
+						<Button
+							type="button"
+							className="conversation-rename-cancel"
+							variant="ghost"
+							disabled={state.busy}
+							onClick={closeRename}
+						>
+							{state.pending ? l.close : l.cancel}
+						</Button>
+						<Button
+							type="button"
+							className="conversation-rename-save"
+							disabled={renameDisabled || !title.trim()}
+							onClick={saveRename}
+						>
+							{l.save}
+						</Button>
+					</div>
+				</form>
 			</DialogContent>
 		</Dialog>
 	);

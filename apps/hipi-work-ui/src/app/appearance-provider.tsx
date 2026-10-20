@@ -52,7 +52,10 @@ export function AppearanceProvider({ client, children }: { client: AppearanceCli
 		const controller = new AbortController();
 		const apply = async () => {
 			try {
-				const current = await client.status(controller.signal);
+				// Preserve the user's original preference: custom canvas colors and an OS
+				// update must never turn "system" into a permanent light/dark override.
+				const current = await client.setThemeMode(config.mode, controller.signal);
+				if (controller.signal.aborted) return;
 				const status =
 					current.backdrop === "unsupported"
 						? current
@@ -70,7 +73,7 @@ export function AppearanceProvider({ client, children }: { client: AppearanceCli
 		};
 		void apply();
 		return () => controller.abort();
-	}, [client, config.translucentSidebar, background]);
+	}, [client, config.mode, config.translucentSidebar, background]);
 	return (
 		<Context.Provider
 			value={{

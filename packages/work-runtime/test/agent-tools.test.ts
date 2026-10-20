@@ -6,7 +6,7 @@ import test from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ToolApproval } from "../src/contracts.ts";
 import { createFileAuthority, type TrustedAgentFileService } from "../src/files/service.ts";
-import { openRuntime } from "../src/node.ts";
+import { createRuntimeProjectFolders, openRuntime } from "../src/node.ts";
 import type { Failpoint } from "../src/pi-workspace.ts";
 
 async function until<T>(read: () => Promise<T | undefined>): Promise<T> {
@@ -305,6 +305,113 @@ test("authorized roots are discoverable and UTF-8 read pages never flood the mod
 			{ code: "CONTEXT_AUTHORIZATION_REQUIRED" },
 		);
 	} finally {
+		await f.close();
+	}
+});
+
+test("a bound project is discovered only after explicit chat consent, without exposing host paths or another project", async () => {
+	const f = await fixture();
+	const projects = createRuntimeProjectFolders(f.runtime, f.authority, "owner");
+	assert.ok(projects);
+	const scope = { workspaceId: "work", conversationId: f.scope.conversationId };
+	const run = async (requestId: string, conversationId = scope.conversationId) => {
+		await f.runtime.call("submit", {
+			workspaceId: "work",
+			conversationId,
+			requestId,
+			text: "What is in this project?",
+		});
+		return until(async () => {
+			const receipt = await f.runtime.call("getReceipt", { workspaceId: "work", requestId });
+			return receipt?.execution === "done" || receipt?.execution === "unanswered" ? receipt : undefined;
+		});
+	};
+	try {
+		const bound = await projects.bind("work", f.directory, null);
+		assert.ok(bound.root);
+		const rootId = bound.root.rootId;
+		assert.equal(bound.root.writable, false);
+		await f.runtime.call("createWorkspace", { workspaceId: "other-project", name: "Other project" });
+		const other = await projects.bind("other-project", f.directory, null);
+		assert.ok(other.root);
+		const otherRootId = other.root.rootId;
+		f.faux.setResponses([
+			(context) => {
+				const transcript = JSON.stringify(context.messages);
+				assert.ok(!transcript.includes(rootId));
+				assert.ok(!transcript.includes(otherRootId));
+				assert.ok(!transcript.includes(f.directory));
+				return fauxAssistantMessage("Project access needs your permission.");
+			},
+		]);
+		await run("before-project-consent");
+		const grant = await f.runtime.call("authorizeAgentContext", {
+			...scope,
+			requestId: "project-consent",
+			rootId,
+			pathPrefixes: [""],
+			model: { provider: "faux", modelId: "faux-1" },
+			expiresAt: Date.now() + 60000,
+			disclosureVersion: 1,
+		});
+		f.faux.setResponses([
+			(context) => {
+				const discovery = JSON.stringify(context.messages.filter((message) => message.role === "system").at(-1));
+				assert.ok(
+					discovery.includes(rootId),
+					"the existing bounded grant prompt supplies the current project root",
+				);
+				assert.ok(!discovery.includes(otherRootId));
+				assert.ok(!discovery.includes(f.root.rootId), "a separate manual writable grant is not model consent");
+				assert.ok(!JSON.stringify(context.messages).includes(f.directory), "absolute host paths stay private");
+				return fauxAssistantMessage([fauxToolCall("hipi_files_list", { rootId, path: "" })], {
+					stopReason: "toolUse",
+				});
+			},
+			(context) => {
+				const result = context.messages.filter((message) => message.role === "toolResult").at(-1);
+				assert.ok(result && result.role === "toolResult" && !result.isError);
+				assert.ok(JSON.stringify(result).includes("note.txt"));
+				return fauxAssistantMessage("The project contains note.txt.");
+			},
+		]);
+		assert.equal((await run("after-project-consent")).answer, "The project contains note.txt.");
+		await f.runtime.call("revokeAgentContext", {
+			...scope,
+			requestId: "revoke-project-consent",
+			grantId: grant.grantId,
+			expectedRevision: grant.revision,
+		});
+		const calls = f.faux.state.callCount;
+		await assert.rejects(
+			f.runtime.call("submit", { ...scope, requestId: "after-project-revoke", text: "Continue" }),
+			{ code: "CONTEXT_AUTHORIZATION_REQUIRED" },
+		);
+		assert.equal(f.faux.state.callCount, calls);
+		const second = await f.runtime.call("createConversation", {
+			workspaceId: "work",
+			requestId: "new-chat",
+			title: "New chat",
+		});
+		f.faux.setResponses([
+			(context) => {
+				assert.ok(
+					!JSON.stringify(context.messages).includes(rootId),
+					"project membership never inherits another chat's consent",
+				);
+				return fauxAssistantMessage("This chat needs its own permission.");
+			},
+		]);
+		await run("new-chat-no-consent", second.conversationId);
+		assert.deepEqual(
+			await f.runtime.call("listActiveAgentContexts", {
+				workspaceId: "work",
+				conversationId: second.conversationId,
+			}),
+			[],
+		);
+	} finally {
+		await projects.close();
 		await f.close();
 	}
 });

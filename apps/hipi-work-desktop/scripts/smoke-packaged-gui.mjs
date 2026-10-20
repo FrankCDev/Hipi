@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
 import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
+import { fileFixture } from "./gui-file-workbench-fixture.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
 import {
 	readNativeLog,
@@ -34,10 +35,25 @@ export function sourceProvenanceEvidence(provenance) {
 	assert.equal(hash(JSON.stringify(sourceSnapshot)), provenance.sourceSnapshotSha256);
 	return { sourceSnapshotSha256: provenance.sourceSnapshotSha256, sourceSnapshot };
 }
-export async function assertScenarioWorkspaceDatabases(storeRoot, scenario) {
+export async function assertScenarioWorkspaceDatabases(storeRoot, scenario, bindingWorkspaceId) {
 	assert.ok(["baseline", "long-history", "file-workbench"].includes(scenario));
 	const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
-	assert.equal(workspaces.length, scenario === "long-history" ? 1 : 2, "Unexpected exact scenario workspace count");
+	assert.equal(
+		workspaces.length,
+		scenario === "long-history" ? 1 : scenario === "file-workbench" ? 3 : 2,
+		"Unexpected exact scenario workspace count",
+	);
+	if (scenario === "file-workbench") {
+		assert.ok(
+			typeof bindingWorkspaceId === "string" && workspaces.some((workspace) => workspace.name === bindingWorkspaceId),
+			"Native-created binding project database identity is missing",
+		);
+		assert.deepEqual(
+			workspaces.map((workspace) => workspace.name).sort(),
+			[fileFixture.workspaceId, fileFixture.otherWorkspaceId, bindingWorkspaceId].sort(),
+			"File scenario must retain exact A/B and native-created binding database identities",
+		);
+	}
 	for (const workspace of workspaces) {
 		for (const database of ["owner.sqlite", "workspace.sqlite"]) {
 			const path = join(storeRoot, workspace.name, database);
@@ -299,7 +315,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 				assert.deepEqual(flow.toolPacks.scope, toolPackScope, "Restart changed tool-pack scope");
 			}
 			const storeRoot = join(profile, "profile/deterministic-store");
-			await assertScenarioWorkspaceDatabases(storeRoot, scenario);
+			await assertScenarioWorkspaceDatabases(storeRoot, scenario, flow.projectBinding?.workspaceId);
 			evidence.checks.push({ iteration, ownedWorkspaceDatabases: true });
 			evidence.checks.push({ iteration, flow });
 			assert.equal(evidence.errors.length, 0, "Renderer reported errors");

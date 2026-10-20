@@ -1,12 +1,20 @@
 import { LIMITS, type ModelReference } from "@hipi/work-runtime/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, Settings2 } from "lucide-react";
+import { ChevronDown, Settings2 } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { ComposerKeyboard } from "./composer-keyboard.ts";
 import { COMPOSER_ROWS, resizeComposerTextarea } from "./composer-textarea.ts";
@@ -35,6 +43,7 @@ export function PreparedTaskEntry({
 	const { t, locale } = usePreferences();
 	const input = useRef<HTMLTextAreaElement>(null);
 	const modelTrigger = useRef<HTMLButtonElement>(null);
+	const modelSettingsHandoff = useRef(false);
 	const keyboard = useRef(new ComposerKeyboard());
 	const sending = useRef(false);
 	const [modelOpen, setModelOpen] = useState(false);
@@ -104,8 +113,14 @@ export function PreparedTaskEntry({
 				</form>
 				<div className="composer-actions">
 					<div className="composer-controls new-chat-controls">
-						<Popover open={modelOpen} onOpenChange={setModelOpen}>
-							<PopoverTrigger asChild>
+						<DropdownMenu
+							open={modelOpen}
+							onOpenChange={(open) => {
+								if (open) modelSettingsHandoff.current = false;
+								setModelOpen(open);
+							}}
+						>
+							<DropdownMenuTrigger asChild>
 								<Button
 									ref={modelTrigger}
 									variant="ghost"
@@ -116,54 +131,77 @@ export function PreparedTaskEntry({
 									<span>{selected?.name ?? t(catalog.isPending ? "common.loading" : "model.select")}</span>
 									<ChevronDown size={14} aria-hidden="true" />
 								</Button>
-							</PopoverTrigger>
-							<PopoverContent className="new-chat-model-menu" align="start">
-								{catalog.data?.models.map((model) => {
-									const key = JSON.stringify([model.provider, model.modelId]);
-									const active = selected?.provider === model.provider && selected.modelId === model.modelId;
-									return (
-										<Button
-											key={key}
-											variant="ghost"
-											className="new-chat-model-choice"
-											aria-pressed={active}
-											onClick={() => {
-												setModelKey(key);
-												local.write("new-chat-model", key);
-												setModelOpen(false);
-											}}
-										>
-											<span>
-												<strong>{model.name}</strong>
-												<span>
-													{catalog.data?.providers.find((item) => item.provider === model.provider)?.name ??
-														model.provider}
+							</DropdownMenuTrigger>
+							<DropdownMenuContent
+								className="new-chat-model-menu"
+								align="start"
+								side="top"
+								aria-label={t("model.select")}
+								onCloseAutoFocus={(event) => {
+									if (modelSettingsHandoff.current) event.preventDefault();
+								}}
+							>
+								<DropdownMenuRadioGroup
+									value={selected ? JSON.stringify([selected.provider, selected.modelId]) : ""}
+									onValueChange={(key) => {
+										if (
+											catalog.isError ||
+											!catalog.data?.models.some((model) => JSON.stringify([model.provider, model.modelId]) === key)
+										)
+											return;
+										setModelKey(key);
+										local.write("new-chat-model", key);
+										setModelOpen(false);
+									}}
+								>
+									{catalog.data?.models.map((model) => {
+										const key = JSON.stringify([model.provider, model.modelId]);
+										return (
+											<DropdownMenuRadioItem
+												key={key}
+												value={key}
+												textValue={model.name}
+												disabled={catalog.isError}
+												className="new-chat-model-choice"
+											>
+												<span className="model-choice-copy">
+													<strong>{model.name}</strong>
+													<span>
+														{catalog.data?.providers.find((item) => item.provider === model.provider)?.name ??
+															model.provider}
+													</span>
 												</span>
-											</span>
-											{active && <Check size={16} aria-hidden="true" />}
-										</Button>
-									);
-								})}
+											</DropdownMenuRadioItem>
+										);
+									})}
+								</DropdownMenuRadioGroup>
 								{(catalog.isError || catalog.data?.models.length === 0) && (
 									<p role="alert">{t(catalog.isError ? "model.failed" : "model.empty")}</p>
 								)}
-								<Button variant="ghost" disabled={catalog.isFetching} onClick={() => void catalog.refetch()}>
+								<DropdownMenuSeparator />
+								<DropdownMenuItem
+									disabled={catalog.isFetching}
+									onSelect={(event) => {
+										event.preventDefault();
+										void catalog.refetch();
+									}}
+								>
 									<Icon name="refresh" size={15} />
 									{t("model.refresh")}
-								</Button>
-								<Button
-									variant="ghost"
+								</DropdownMenuItem>
+								<DropdownMenuItem
 									className="new-chat-manage-models"
-									onClick={() => {
+									onSelect={() => {
+										modelSettingsHandoff.current = true;
 										setModelOpen(false);
 										onManageModels(modelTrigger.current);
 									}}
 								>
 									<Settings2 size={15} aria-hidden="true" />
 									{t("model.settings")}
-								</Button>
-							</PopoverContent>
-						</Popover>
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
 						{selected && !configured(selected.provider) && (
 							<output className="new-chat-model-warning">
 								{t(

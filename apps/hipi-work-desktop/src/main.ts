@@ -37,8 +37,8 @@ import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts"
 import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
 import { diagnosticMessages } from "./diagnostic-messages.ts";
 import { DesktopDiagnostics, DiagnosticExporter, finishFailedStartup, writeDiagnosticFile } from "./diagnostics.ts";
-import { filePickerLabels } from "./file-messages.ts";
-import { manageFileRoots } from "./file-picker.ts";
+import { chooseProjectDirectory, filePickerLabels } from "./file-messages.ts";
+import { manageFileRoots, ProjectFolderSelections } from "./file-picker.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./file-protocol.ts";
 import { FontRequests } from "./font-requests.ts";
 import type { HostConnection } from "./host-connection.ts";
@@ -309,6 +309,7 @@ async function start(mode: "production" | "deterministic") {
 		process.platform,
 		release(),
 		() => nativeTheme.prefersReducedTransparency,
+		nativeTheme,
 	);
 	const fonts = new NativeFontService(process.platform);
 	const fontRequests = new FontRequests((signal) => fonts.list(signal));
@@ -356,6 +357,7 @@ async function start(mode: "production" | "deterministic") {
 		ipcMain.removeListener(FONT_CANCEL_CHANNEL, cancelFontAccess);
 	});
 	let rendererLifetime = 0;
+	const projectSelections = new ProjectFolderSelections();
 	let fileCalls = 0;
 	let picking = false;
 	for (const channel of [FILE_CHANNEL, FILE_ROOT_CHANNEL])
@@ -373,19 +375,20 @@ async function start(mode: "production" | "deterministic") {
 					decode(raw),
 					() => activeSupervisor.connection().files,
 					() => lifetime === rendererLifetime && !owner.isDestroyed() && trustedSender(event, owner, PAGE),
-					async (writable) => {
+					async (writable, project, locale) => {
 						if (picking) throw new FileServiceError("BUSY");
 						picking = true;
 						try {
 							const selected = await dialog.showOpenDialog(window, {
 								properties: ["openDirectory"],
-								...filePickerLabels(app.getLocale(), writable),
+								...(project ? chooseProjectDirectory(locale ?? "en") : filePickerLabels(app.getLocale(), writable)),
 							});
 							return selected.canceled ? null : (selected.filePaths[0] ?? null);
 						} finally {
 							picking = false;
 						}
 					},
+					projectSelections,
 				);
 				return { ok: true, result };
 			} catch (error) {
@@ -489,6 +492,7 @@ async function start(mode: "production" | "deterministic") {
 	const subscriptions = new Map<string, { ack(): void; dispose(): void }>();
 	const clearRenderer = () => {
 		rendererLifetime++;
+		projectSelections.clear();
 		fontRequests.reset();
 		try {
 			appearance.reset();

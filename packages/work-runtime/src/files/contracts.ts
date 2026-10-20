@@ -2,6 +2,34 @@
 export const FILE_LIMITS = { bytes: 131072, page: 50, directoryEntries: 4096, roots: 32, concurrent: 8 } as const;
 export type FileTarget = { workspaceId: string; rootId: string; path: string };
 export type FileRoot = { workspaceId: string; rootId: string; writable: boolean; displayName?: string };
+/** Ephemeral native-picker result. No workspace or persistent access exists until explicit attach. */
+export type ProjectFolderSelection = { selectionId: string; displayName: string | null };
+/** Persistent local association, not Agent consent. Only an available folder has a live read-only root. */
+export type ProjectFolder =
+	| {
+			workspaceId: string;
+			status: "unbound";
+			bindingId: null;
+			revision: 0;
+			displayName: null;
+			root: null;
+	  }
+	| {
+			workspaceId: string;
+			status: "available";
+			bindingId: string;
+			revision: number;
+			displayName: string | null;
+			root: FileRoot;
+	  }
+	| {
+			workspaceId: string;
+			status: "unavailable" | "moved" | "revoked";
+			bindingId: string;
+			revision: number;
+			displayName: string | null;
+			root: null;
+	  };
 export type FileEntry = { name: string; path: string; kind: "file" | "directory" | "blocked" };
 export type FilePage = { entries: FileEntry[]; nextCursor: string | null };
 export type FileText = { text: string; revision: string; encoding: "utf-8"; bytes: number };

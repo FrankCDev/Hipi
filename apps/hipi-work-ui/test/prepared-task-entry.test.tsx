@@ -4,9 +4,18 @@ import type * as React from "react";
 import { isValidElement } from "react";
 import { beforeEach, test, vi } from "vitest";
 import { Button } from "../src/components/ui/button.tsx";
+import {
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+} from "../src/components/ui/dropdown-menu.tsx";
+import { Popover, PopoverContent } from "../src/components/ui/popover.tsx";
 import { Textarea } from "../src/components/ui/textarea.tsx";
+import { ConversationModelControls } from "../src/features/workbench/conversation-model.tsx";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 import { PreparedTaskEntry } from "../src/features/workbench/prepared-task-entry.tsx";
+import type { ConversationController } from "../src/features/workbench/use-conversation.ts";
 
 const hooks = vi.hoisted(() => ({ cells: [] as unknown[], cursor: 0 }));
 // Production handlers and synchronous submission fence; DOM sizing/focus stay native acceptance gates.
@@ -42,21 +51,23 @@ vi.mock("../src/app/client-provider.tsx", () => ({
 vi.mock("@tanstack/react-query", () => ({
 	useQuery: () => ({
 		data: {
-			models: [{ provider: "faux", modelId: "one", name: "One" }],
-			providers: [{ provider: "faux", credentialState }],
+			models,
+			providers: [{ provider: "faux", name: "Faux", credentialState }],
 		},
 		isPending: false,
 		isError: catalogFailed,
-		refetch: vi.fn(),
+		refetch,
 	}),
 }));
 let local = new LocalState();
 let credentialState = "configured";
 let catalogFailed = false;
+let models = [{ provider: "faux", modelId: "one", name: "One" }];
 let draft = "";
 const runtimeCall = vi.fn();
 const sent = vi.fn(async (_text: string, _model: ModelReference) => {});
 const manageModels = vi.fn();
+const refetch = vi.fn();
 function find<C extends React.ElementType>(
 	node: React.ReactNode,
 	type: C,
@@ -126,10 +137,12 @@ beforeEach(() => {
 	draft = "";
 	credentialState = "configured";
 	catalogFailed = false;
+	models = [{ provider: "faux", modelId: "one", name: "One" }];
 	sent.mockReset();
 	sent.mockResolvedValue(undefined);
 	runtimeCall.mockClear();
 	manageModels.mockClear();
+	refetch.mockClear();
 });
 test("opening and editing new chat never creates an object or sends", () => {
 	render();
@@ -194,10 +207,115 @@ test("missing credentials, failed model read, busy and pending recovery preserve
 });
 test("model setup navigation preserves input and never submits on return", () => {
 	change("My detailed goal");
-	const action = find(render(), Button).find((item) => item.props.className === "new-chat-manage-models");
-	assert.ok(action?.props.onClick);
-	Reflect.apply(action.props.onClick, undefined, []);
+	const node = render();
+	const action = find(node, DropdownMenuItem).find((item) => item.props.className === "new-chat-manage-models");
+	assert.ok(action?.props.onSelect);
+	Reflect.apply(action.props.onSelect, undefined, [new Event("select")]);
 	assert.equal(manageModels.mock.calls.length, 1);
 	assert.equal(sent.mock.calls.length, 0);
 	assert.equal(only(render(), Textarea).props.value, "My detailed goal");
+	const preventDefault = vi.fn();
+	only(node, DropdownMenuContent).props.onCloseAutoFocus?.({ preventDefault } as Event);
+	assert.equal(preventDefault.mock.calls.length, 1, "Menu closure must not steal focus from model settings");
+});
+
+test("model choices use a controlled radio menu and selection changes only the next Send preference", () => {
+	models.push({ provider: "faux", modelId: "two", name: "Two" });
+	change("Keep the prompt");
+	const node = render();
+	const group = only(node, DropdownMenuRadioGroup);
+	assert.equal(group.props.value, '["faux","one"]');
+	assert.deepEqual(
+		find(node, DropdownMenuRadioItem).map((item) => [item.props.value, item.props.textValue]),
+		[
+			['["faux","one"]', "One"],
+			['["faux","two"]', "Two"],
+		],
+	);
+	group.props.onValueChange?.('["faux","two"]');
+	assert.equal(only(render(), DropdownMenuRadioGroup).props.value, '["faux","two"]');
+	assert.equal(local.read("new-chat-model"), '["faux","two"]');
+	assert.equal(sent.mock.calls.length, 0);
+	assert.equal(runtimeCall.mock.calls.length, 0);
+	assert.equal(draft, "Keep the prompt");
+	submit();
+	assert.deepEqual(sent.mock.calls, [["Keep the prompt", { provider: "faux", modelId: "two" }]]);
+});
+
+test("unknown or stale model values cannot redirect Send and catalog errors block selection", () => {
+	change("Keep me");
+	only(render(), DropdownMenuRadioGroup).props.onValueChange?.('["other","unlisted"]');
+	assert.equal(local.read("new-chat-model"), null);
+	models.push({ provider: "faux", modelId: "two", name: "Two" });
+	only(render(), DropdownMenuRadioGroup).props.onValueChange?.('["faux","two"]');
+	models = models.filter((model) => model.modelId !== "two");
+	assert.equal(only(render(), DropdownMenuRadioGroup).props.value, "");
+	submit();
+	assert.equal(sent.mock.calls.length, 0, "A removed choice must not fall back to another provider/model");
+	catalogFailed = true;
+	const node = render();
+	assert.ok(find(node, DropdownMenuRadioItem).every((item) => item.props.disabled));
+	only(node, DropdownMenuRadioGroup).props.onValueChange?.('["faux","one"]');
+	assert.equal(local.read("new-chat-model"), '["faux","two"]');
+});
+
+test("model Refresh retains the open menu, while ordinary dismissal keeps library focus restoration", () => {
+	const node = render();
+	const refresh = find(node, DropdownMenuItem).find((item) => item.props.className !== "new-chat-manage-models");
+	const preventDefault = vi.fn();
+	assert.ok(refresh?.props.onSelect);
+	Reflect.apply(refresh.props.onSelect, undefined, [{ preventDefault }]);
+	assert.equal(preventDefault.mock.calls.length, 1);
+	assert.equal(refetch.mock.calls.length, 1);
+	preventDefault.mockClear();
+	only(node, DropdownMenuContent).props.onCloseAutoFocus?.({ preventDefault } as Event);
+	assert.equal(preventDefault.mock.calls.length, 0);
+});
+
+function renderExistingModel() {
+	hooks.cursor = 0;
+	// Only the model presentation's dependencies are populated; mutation behavior
+	// remains independently covered by useConversation and native execution suites.
+	const controller = {
+		workspaceId: "workspace",
+		model: {
+			data: {
+				model: { provider: "faux", modelId: "one" },
+				credentialState,
+				executionState: "ready",
+			},
+			isPending: false,
+			isError: false,
+			isFetching: false,
+			refetch,
+		},
+		execution: { isPending: false, isError: false, mutate: runtimeCall },
+	} as ConversationController;
+	return ConversationModelControls({ controller, onOpenModelSettings: manageModels });
+}
+
+test("an existing conversation opens missing-credential settings without model switching or execution", () => {
+	credentialState = "missing";
+	const node = renderExistingModel();
+	assert.equal(find(node, DropdownMenuRadioGroup).length, 0, "Existing models are immutable");
+	const trigger = find(node, Button).find((item) => item.props.className === "model-status-trigger");
+	assert.ok(trigger?.props.ref && typeof trigger.props.ref === "object");
+	const focusTarget = { focus: vi.fn() } as unknown as HTMLButtonElement;
+	trigger.props.ref.current = focusTarget;
+	const action = find(node, Button).find((item) => item.props.className === "conversation-manage-models");
+	assert.ok(action?.props.onClick);
+	Reflect.apply(action.props.onClick, undefined, []);
+	assert.deepEqual(manageModels.mock.calls, [[focusTarget]]);
+	assert.equal(only(renderExistingModel(), Popover).props.open, false);
+	assert.equal(runtimeCall.mock.calls.length, 0);
+	const preventDefault = vi.fn();
+	only(node, PopoverContent).props.onCloseAutoFocus?.({ preventDefault } as Event);
+	assert.equal(preventDefault.mock.calls.length, 1);
+});
+
+test("configured conversations keep status controls without redundant credential setup", () => {
+	const node = renderExistingModel();
+	assert.equal(find(node, Button).filter((item) => item.props.className === "conversation-manage-models").length, 0);
+	assert.equal(manageModels.mock.calls.length, 0);
+	assert.equal(runtimeCall.mock.calls.length, 0);
 });

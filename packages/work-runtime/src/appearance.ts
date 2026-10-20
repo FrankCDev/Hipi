@@ -13,6 +13,7 @@ export type InstalledFontFace = { family: string; fullName: string; postscriptNa
 /** null means the host cannot report an authoritative spacing classification. */
 export type InstalledFontFamily = { family: string; faces: InstalledFontFace[]; monospace: boolean | null };
 export type InstalledFontCatalog = { families: InstalledFontFamily[]; truncated: boolean };
+export type AppearanceThemeMode = "system" | "light" | "dark";
 export type AppearanceStatus = {
 	version: 1;
 	platform: "macos" | "windows" | "linux" | "web" | "other";
@@ -20,13 +21,17 @@ export type AppearanceStatus = {
 	reducedTransparency: boolean;
 	backdropEnabled: boolean;
 	fontSmoothing: boolean;
+	/** The app-scoped native preference; null means this host owns no native chrome. */
+	themeMode: AppearanceThemeMode | null;
 };
 export type AppearanceRequest =
 	| { version: 1; method: "status" }
+	| { version: 1; method: "theme"; mode: AppearanceThemeMode }
 	| { version: 1; method: "backdrop"; enabled: boolean; background: string };
 export interface AppearanceClient {
 	readonly localFontsSupported: boolean;
 	status(signal?: AbortSignal): Promise<AppearanceStatus>;
+	setThemeMode(mode: AppearanceThemeMode, signal?: AbortSignal): Promise<AppearanceStatus>;
 	setBackdrop(enabled: boolean, background: string, signal?: AbortSignal): Promise<AppearanceStatus>;
 	listFonts(signal?: AbortSignal): Promise<InstalledFontCatalog>;
 	subscribe(listener: (status: AppearanceStatus) => void): () => void;
@@ -157,6 +162,12 @@ export function parseAppearanceRequest(value: unknown): AppearanceRequest {
 		exact(input, ["version", "method"]);
 		return { version: 1, method: "status" };
 	}
+	if (input.method === "theme") {
+		exact(input, ["version", "method", "mode"]);
+		if (input.mode !== "system" && input.mode !== "light" && input.mode !== "dark")
+			throw new AppearanceError("INVALID");
+		return { version: 1, method: "theme", mode: input.mode };
+	}
 	exact(input, ["version", "method", "enabled", "background"]);
 	if (
 		input.method !== "backdrop" ||
@@ -169,7 +180,15 @@ export function parseAppearanceRequest(value: unknown): AppearanceRequest {
 }
 export function parseAppearanceStatus(value: unknown): AppearanceStatus {
 	const input = record(value);
-	exact(input, ["version", "platform", "backdrop", "reducedTransparency", "backdropEnabled", "fontSmoothing"]);
+	exact(input, [
+		"version",
+		"platform",
+		"backdrop",
+		"reducedTransparency",
+		"backdropEnabled",
+		"fontSmoothing",
+		"themeMode",
+	]);
 	if (
 		input.version !== 1 ||
 		typeof input.platform !== "string" ||
@@ -179,6 +198,10 @@ export function parseAppearanceStatus(value: unknown): AppearanceStatus {
 		typeof input.reducedTransparency !== "boolean" ||
 		typeof input.backdropEnabled !== "boolean" ||
 		typeof input.fontSmoothing !== "boolean" ||
+		(input.themeMode !== null &&
+			input.themeMode !== "system" &&
+			input.themeMode !== "light" &&
+			input.themeMode !== "dark") ||
 		(input.backdropEnabled && (input.backdrop === "unsupported" || input.reducedTransparency))
 	)
 		throw new AppearanceError("INVALID");

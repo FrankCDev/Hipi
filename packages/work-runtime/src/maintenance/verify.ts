@@ -46,7 +46,11 @@ export function parseBackupManifest(bytes: Uint8Array): BackupManifest {
 		"reservations",
 		"excludedFiles",
 	]);
-	if (m.formatVersion !== 1 || (m.catalogSchema !== 3 && m.catalogSchema !== 5) || m.piSchema !== 2)
+	if (
+		m.formatVersion !== 1 ||
+		(m.catalogSchema !== 3 && m.catalogSchema !== 5 && m.catalogSchema !== 6) ||
+		m.piSchema !== 2
+	)
 		throw new MaintenanceError("UNSUPPORTED_SCHEMA");
 	const producer = text(m.producer, 128);
 	const version =

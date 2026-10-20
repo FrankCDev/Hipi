@@ -11,6 +11,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuLabel,
 } from "../src/components/ui/dropdown-menu.tsx";
+import { Input } from "../src/components/ui/input.tsx";
 import { Popover, PopoverContent } from "../src/components/ui/popover.tsx";
 import { ConversationActions } from "../src/features/workbench/catalog-controls.tsx";
 import { CatalogPagination } from "../src/features/workbench/catalog-pagination.tsx";
@@ -151,6 +152,242 @@ function rowAndActions() {
 		drive("actions", () => ConversationActions({ conversation, session, guard: (action) => action(), ...controls }));
 	return { renderRow, renderActions, focus, returned };
 }
+
+function renameActions(client: AppClient) {
+	const local = new LocalState();
+	const session = new CatalogSession(client, local);
+	const returned = vi.fn();
+	const source = { ...conversation };
+	const render = () =>
+		drive("rename", () =>
+			ConversationActions({
+				conversation: source,
+				session,
+				guard: (action) => action(),
+				onReturnFocus: returned,
+			}),
+		);
+	const open = () => {
+		const rename = elements(render(), DropdownMenuItem).find((item) =>
+			JSON.stringify(item.props.children).includes("Rename conversation"),
+		);
+		assert.ok(rename?.props.onSelect);
+		rename.props.onSelect(new Event("select"));
+	};
+	const change = (value: string) => {
+		const input = element(render(), Input);
+		assert.ok(input.props.onChange);
+		Reflect.apply(input.props.onChange, undefined, [{ target: { value } }]);
+	};
+	return { local, session, source, returned, render, open, change };
+}
+
+function renameButton(node: React.ReactNode, action: "save" | "cancel") {
+	const button = elements(node, Button).find((item) => item.props.className === `conversation-rename-${action}`);
+	assert.ok(button?.props.onClick);
+	return button;
+}
+
+function renameEnter(node: React.ReactNode, overrides: Partial<KeyboardEvent> = {}) {
+	const input = element(node, Input);
+	assert.ok(input.props.onKeyDown);
+	const preventDefault = vi.fn();
+	Reflect.apply(input.props.onKeyDown, undefined, [
+		{
+			preventDefault,
+			nativeEvent: {
+				key: "Enter",
+				ctrlKey: false,
+				metaKey: false,
+				shiftKey: false,
+				altKey: false,
+				isComposing: false,
+				keyCode: 13,
+				repeat: false,
+				timeStamp: 1000,
+				...overrides,
+			},
+		},
+	]);
+	return preventDefault;
+}
+
+function catalogSettled(session: CatalogSession) {
+	return new Promise<void>((resolve) => {
+		const unsubscribe = session.subscribe(() => {
+			if (!session.getSnapshot().busy) {
+				unsubscribe();
+				resolve();
+			}
+		});
+	});
+}
+
+test("Rename focuses and selects the current title, Cancel sends nothing and returns to its exact trigger", () => {
+	const call = vi.fn();
+	const ui = renameActions({ call, observe: vi.fn() });
+	ui.open();
+	const input = element(ui.render(), Input);
+	assert.equal(input.props.value, conversation.title);
+	assert.ok(input.props.ref && typeof input.props.ref === "object");
+	const focus = vi.fn();
+	const select = vi.fn();
+	Object.assign(input.props.ref, { current: { focus, select } });
+	const event = new Event("open", { cancelable: true });
+	element(ui.render(), DialogContent).props.onOpenAutoFocus?.(event);
+	assert.equal(event.defaultPrevented, true);
+	assert.equal(focus.mock.calls.length, 1);
+	assert.equal(select.mock.calls.length, 1);
+	ui.change("Uncommitted title");
+	const cancel = renameButton(ui.render(), "cancel");
+	assert.equal(cancel.props.children, "Cancel");
+	assert.equal(renameButton(ui.render(), "save").props.children, "Save");
+	Reflect.apply(cancel.props.onClick, undefined, []);
+	assert.equal(element(ui.render(), Dialog).props.open, false);
+	element(ui.render(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(ui.returned.mock.calls.length, 1);
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.local.read("command.catalog"), null);
+	ui.source.title = "Latest current title";
+	ui.open();
+	assert.equal(element(ui.render(), Input).props.value, "Latest current title");
+	ui.session.dispose();
+});
+
+test("Rename blocks empty titles, implicit form submission, repeated Enter and IME confirmation", () => {
+	const call = vi.fn();
+	const ui = renameActions({ call, observe: vi.fn() });
+	ui.open();
+	ui.change("   ");
+	assert.equal(renameButton(ui.render(), "save").props.disabled, true);
+	renameEnter(ui.render());
+	ui.change("中文标题");
+	let input = element(ui.render(), Input);
+	assert.ok(input.props.onCompositionStart);
+	Reflect.apply(input.props.onCompositionStart, undefined, []);
+	assert.equal(renameEnter(ui.render()).mock.calls.length, 0, "IME keeps its native key behavior");
+	input = element(ui.render(), Input);
+	assert.ok(input.props.onCompositionEnd);
+	Reflect.apply(input.props.onCompositionEnd, undefined, [{ timeStamp: 1000 }]);
+	assert.equal(renameEnter(ui.render(), { timeStamp: 1050 }).mock.calls.length, 1);
+	assert.ok(input.props.onKeyUp);
+	Reflect.apply(input.props.onKeyUp, undefined, []);
+	renameEnter(ui.render(), { isComposing: true });
+	renameEnter(ui.render(), { keyCode: 229 });
+	assert.equal(renameEnter(ui.render(), { repeat: true }).mock.calls.length, 1);
+	renameEnter(ui.render(), { shiftKey: true });
+	const form = element(ui.render(), "form");
+	assert.ok(form.props.onSubmit);
+	const preventDefault = vi.fn();
+	Reflect.apply(form.props.onSubmit, undefined, [{ preventDefault }]);
+	assert.equal(preventDefault.mock.calls.length, 1);
+	const escapeEvent = new Event("keydown", { cancelable: true });
+	Object.assign(escapeEvent, { isComposing: true, keyCode: 229 });
+	Reflect.apply(element(ui.render(), DialogContent).props.onEscapeKeyDown, undefined, [escapeEvent]);
+	assert.equal(escapeEvent.defaultPrevented, true);
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.local.read("command.catalog"), null);
+	assert.equal(element(ui.render(), Dialog).props.open, true);
+	ui.session.dispose();
+});
+
+test("Rename Enter saves once with immutable title and revision, guards pending dismissal and closes after confirmation", async () => {
+	const calls: { method: Method; params: unknown }[] = [];
+	const result = { ...conversation, title: "New title", revision: 2 };
+	let finishRename: ((value: Conversation) => void) | undefined;
+	const response = new Promise<Conversation>((resolve) => {
+		finishRename = resolve;
+	});
+	const ui = renameActions({
+		call: async (method, params) => {
+			calls.push({ method, params });
+			return parseResult(method, method === "renameConversation" ? await response : result);
+		},
+		observe: vi.fn(),
+	});
+	ui.open();
+	ui.change("  New title  ");
+	const before = ui.render();
+	const cancelBeforeDispatch = renameButton(before, "cancel");
+	const saveBeforeDispatch = renameButton(before, "save");
+	const finished = catalogSettled(ui.session);
+	assert.equal(renameEnter(before).mock.calls.length, 1);
+	renameEnter(before);
+	Reflect.apply(saveBeforeDispatch.props.onClick, undefined, []);
+	Reflect.apply(cancelBeforeDispatch.props.onClick, undefined, []);
+	element(before, Dialog).props.onOpenChange?.(false);
+	assert.equal(element(ui.render(), Dialog).props.open, true);
+	assert.equal(element(ui.render(), DialogContent).props.closeDisabled, true);
+	assert.equal(element(ui.render(), Input).props.disabled, true);
+	assert.equal(renameButton(ui.render(), "cancel").props.disabled, true);
+	assert.equal(renameButton(ui.render(), "save").props.disabled, true);
+	const escapeEvent = new Event("keydown", { cancelable: true });
+	Reflect.apply(element(ui.render(), DialogContent).props.onEscapeKeyDown, undefined, [escapeEvent]);
+	assert.equal(escapeEvent.defaultPrevented, true);
+	ui.source.title = "Later UI label";
+	ui.source.revision = 9;
+	finishRename?.(result);
+	await finished;
+	await Promise.resolve();
+	assert.deepEqual(
+		calls.map((call) => call.method),
+		["renameConversation", "getConversation"],
+	);
+	assert.deepEqual(calls[0]?.params, {
+		workspaceId: "project",
+		conversationId: "task",
+		requestId: (calls[0]?.params as { requestId: string }).requestId,
+		expectedRevision: 1,
+		title: "New title",
+	});
+	assert.equal(ui.session.getSnapshot().pending, null);
+	assert.equal(element(ui.render(), Dialog).props.open, false);
+	element(ui.render(), DialogContent).props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
+	assert.equal(ui.returned.mock.calls.length, 1);
+	assert.equal(cache.setQueryData.mock.calls.length, 1);
+	ui.session.dispose();
+});
+
+test("unknown Rename keeps its original request and input, disables Save, and Close never cancels or replaces it", async () => {
+	const calls: Method[] = [];
+	const ui = renameActions({
+		call: async (method) => {
+			calls.push(method);
+			if (method === "getConversationCommandResult") return parseResult(method, null);
+			throw new Error("Lost rename response");
+		},
+		observe: vi.fn(),
+	});
+	ui.open();
+	ui.change("Unconfirmed title");
+	const before = ui.render();
+	const save = renameButton(before, "save");
+	const finished = catalogSettled(ui.session);
+	Reflect.apply(save.props.onClick, undefined, []);
+	await finished;
+	await Promise.resolve();
+	const saved = ui.local.read("command.catalog");
+	assert.match(saved ?? "", /Unconfirmed title/);
+	assert.equal(ui.session.getSnapshot().pending?.method, "renameConversation");
+	assert.equal(element(ui.render(), Dialog).props.open, true);
+	assert.equal(element(ui.render(), Input).props.value, "Unconfirmed title");
+	assert.equal(element(ui.render(), Input).props.disabled, true);
+	assert.equal(renameButton(ui.render(), "save").props.disabled, true);
+	renameEnter(before);
+	Reflect.apply(save.props.onClick, undefined, []);
+	const close = renameButton(ui.render(), "cancel");
+	assert.equal(close.props.children, "Close", "Closing an unknown request must not imply cancellation");
+	assert.equal(close.props.disabled, false);
+	Reflect.apply(close.props.onClick, undefined, []);
+	assert.equal(element(ui.render(), Dialog).props.open, false);
+	Reflect.apply(save.props.onClick, undefined, []);
+	await Promise.resolve();
+	assert.deepEqual(calls, ["renameConversation", "getConversationCommandResult"]);
+	assert.equal(ui.local.read("command.catalog"), saved);
+	assert.equal(cache.setQueryData.mock.calls.length, 0);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	ui.session.dispose();
+});
 
 test("sidebar action menus align to the full row's right edge and top, not the trailing button", () => {
 	const ui = rowAndActions();

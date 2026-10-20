@@ -7,6 +7,9 @@ import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
+import { fileLabels } from "../files/file-labels.ts";
+import { projectFolderLabels } from "../workbench/project-folder-labels.ts";
+import { useProjectFolder } from "../workbench/use-project-folder.ts";
 import { contextPaths } from "./context-paths.ts";
 import { permissionLabels } from "./labels.ts";
 import type { PermissionSession } from "./permission-session.ts";
@@ -34,22 +37,35 @@ export function ContextDialog({
 	contentId: string;
 	status: ReactNode;
 }) {
-	const { files } = useFiles();
+	const { files, fileAuthority } = useFiles();
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
+	const fl = fileLabels(locale);
+	const pl = projectFolderLabels(locale);
+	const project = useProjectFolder(scope.workspaceId, open);
 	const [rootId, setRootId] = useState("");
 	const [paths, setPaths] = useState("");
-	const [range, setRange] = useState("paths");
-	const pathPrefixes = contextPaths(paths, range === "whole");
+	const [range, setRange] = useState<string>();
 	const [duration, setDuration] = useState("900000");
 	const pathsId = useId();
 	const roots = useQuery({
 		queryKey: ["agent-context-roots", scope.workspaceId],
-		queryFn: ({ signal }) => (files ? files.listRoots(scope.workspaceId, signal) : Promise.resolve([])),
+		queryFn: async ({ signal }) => {
+			await fileAuthority?.getProject?.(scope.workspaceId);
+			signal.throwIfAborted();
+			return files ? files.listRoots(scope.workspaceId, signal) : [];
+		},
 		enabled: open,
 		retry: false,
 		staleTime: 0,
 	});
+	const selectedRoot =
+		roots.data?.find((root) => root.rootId === rootId) ??
+		roots.data?.find((root) => root.rootId === project.data?.root?.rootId) ??
+		(roots.data?.length === 1 ? roots.data[0] : undefined);
+	const projectSelected = !!selectedRoot && selectedRoot.rootId === project.data?.root?.rootId;
+	const selectedRange = range ?? (projectSelected ? "whole" : "paths");
+	const pathPrefixes = contextPaths(paths, selectedRange === "whole");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -62,20 +78,30 @@ export function ContextDialog({
 				<DialogDescription>{l["permissions.context.disclosure"]}</DialogDescription>
 				{status}
 				{disabledReason && <output>{disabledReason}</output>}
-				<p className="break-all">
-					{l["permissions.context.scope"]}: {scope.workspaceId} / {scope.conversationId}
-				</p>
+				<p>{pl.consentScope}</p>
 				<p className="break-all">
 					{l["permissions.context.model"]}: {model?.provider} / {model?.modelId}
 				</p>
-				<Select value={rootId} onValueChange={setRootId} disabled={roots.isFetching || roots.isError}>
+				{projectSelected && (
+					<div className="context-project-folder">
+						<span>{pl.consentFolder}</span>
+						<strong>{selectedRoot.displayName ?? pl.title}</strong>
+					</div>
+				)}
+				<Select
+					value={selectedRoot?.rootId ?? ""}
+					onValueChange={setRootId}
+					disabled={roots.isFetching || roots.isError}
+				>
 					<SelectTrigger aria-label={l["permissions.context.root"]}>
 						<SelectValue placeholder={l["permissions.context.root"]} />
 					</SelectTrigger>
 					<SelectContent>
 						{roots.data?.map((root) => (
 							<SelectItem key={root.rootId} value={root.rootId}>
-								{root.displayName ?? root.rootId}
+								{root.displayName ?? l["permissions.context.root"]}
+								{" · "}
+								{root.writable ? fl["access.readWrite"] : fl.readonly}
 							</SelectItem>
 						))}
 					</SelectContent>
@@ -83,26 +109,29 @@ export function ContextDialog({
 				{roots.isPending && <output>{l["permissions.action.loading"]}</output>}
 				{roots.isError && <p role="alert">{l["permissions.action.failed"]}</p>}
 				{roots.data?.length === 0 && <p>{l["permissions.context.noRoots"]}</p>}
-				<Select value={range} onValueChange={setRange}>
+				<Select value={selectedRange} onValueChange={setRange}>
 					<SelectTrigger aria-label={l["permissions.context.range"]}>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
 						<SelectItem value="paths">{l["permissions.context.selectedPaths"]}</SelectItem>
-						<SelectItem value="whole">{l["permissions.context.wholeRoot"]}</SelectItem>
+						<SelectItem value="whole">
+							{projectSelected ? pl.consentWhole : l["permissions.context.wholeRoot"]}
+						</SelectItem>
 					</SelectContent>
 				</Select>
-				<label htmlFor={pathsId}>{l["permissions.context.paths"]}</label>
-				<Textarea
-					disabled={range === "whole"}
-					aria-invalid={range === "paths" && paths !== "" && !pathPrefixes}
-					id={pathsId}
-					value={paths}
-					onChange={(event) => setPaths(event.target.value)}
-					maxLength={8192}
-					className="rounded-md border border-input p-2 bg-background text-foreground"
-				/>
-				{range === "paths" && paths !== "" && !pathPrefixes && (
+				{selectedRange === "paths" && <label htmlFor={pathsId}>{l["permissions.context.paths"]}</label>}
+				{selectedRange === "paths" && (
+					<Textarea
+						aria-invalid={paths !== "" && !pathPrefixes}
+						id={pathsId}
+						value={paths}
+						onChange={(event) => setPaths(event.target.value)}
+						maxLength={8192}
+						className="rounded-md border border-input p-2 bg-background text-foreground"
+					/>
+				)}
+				{selectedRange === "paths" && paths !== "" && !pathPrefixes && (
 					<p role="alert">{l["permissions.context.invalidPaths"]}</p>
 				)}
 				<Select value={duration} onValueChange={setDuration}>
@@ -116,21 +145,14 @@ export function ContextDialog({
 				</Select>
 				<p className="text-muted-foreground">{l["permissions.context.revokeNote"]}</p>
 				<Button
-					disabled={
-						disabled ||
-						!model ||
-						!pathPrefixes ||
-						roots.isError ||
-						roots.isFetching ||
-						!roots.data?.some((root) => root.rootId === rootId)
-					}
+					disabled={disabled || !model || !pathPrefixes || roots.isError || roots.isFetching || !selectedRoot}
 					onClick={() => {
-						if (disabled || !model || !pathPrefixes) return;
+						if (disabled || !model || !pathPrefixes || !selectedRoot) return;
 						void session
 							.authorize({
 								...scope,
 								requestId: crypto.randomUUID(),
-								rootId,
+								rootId: selectedRoot.rootId,
 								pathPrefixes,
 								model,
 								expiresAt: Date.now() + Number(duration),

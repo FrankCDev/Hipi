@@ -1,5 +1,10 @@
 import { type FileErrorCode, FileServiceError } from "@hipi/work-runtime/files";
-import { parseFileResponse, parseFileRoots } from "@hipi/work-runtime/files/protocol";
+import {
+	parseFileResponse,
+	parseFileRoots,
+	parseProjectFolder,
+	parseProjectFolderSelection,
+} from "@hipi/work-runtime/files/protocol";
 import { type FileOperation, fileOperation } from "./file-protocol.ts";
 import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
 
@@ -75,6 +80,22 @@ export class FileConnection {
 			if (pending.input.operation === "request") result = parseFileResponse(value.result, pending.input.request);
 			else if (pending.input.operation === "grant")
 				result = parseFileRoots([value.result], pending.input.workspaceId)[0];
+			else if (
+				pending.input.operation === "project-get" ||
+				pending.input.operation === "project-bind" ||
+				pending.input.operation === "project-unbind" ||
+				pending.input.operation === "project-attach"
+			) {
+				const folder = parseProjectFolder(value.result, pending.input.workspaceId);
+				if (
+					(pending.input.operation === "project-unbind" &&
+						(folder.status !== "revoked" || folder.bindingId !== pending.input.expectedBindingId)) ||
+					((pending.input.operation === "project-bind" || pending.input.operation === "project-attach") &&
+						folder.status !== "available")
+				)
+					throw new FileServiceError("INVALID_PATH");
+				result = folder;
+			} else if (pending.input.operation === "project-prepare") result = parseProjectFolderSelection(value.result);
 			else if (value.result !== null) throw new FileServiceError("INVALID_PATH");
 			else result = null;
 		} else throw new FileServiceError("INVALID_PATH");

@@ -6,6 +6,8 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
+import { projectFolderLabels } from "../workbench/project-folder-labels.ts";
+import { useProjectFolder } from "../workbench/use-project-folder.ts";
 import { DocumentPreviewPane } from "./document-preview.tsx";
 import { FileBuffer } from "./file-buffer.tsx";
 import { fileLabels } from "./file-labels.ts";
@@ -38,6 +40,7 @@ export function FileWorkbench({
 	const { files, fileAuthority, previews } = useFiles();
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
+	const pl = projectFolderLabels(locale);
 	const cache = useQueryClient();
 	const state = useSyncExternalStore(
 		session?.subscribe ?? noSubscription,
@@ -76,15 +79,23 @@ export function FileWorkbench({
 	const currentAuthorityLease = useRef(authorityLease);
 	currentAuthorityLease.current = authorityLease;
 	const fallbackTrees = useRef(new Map<string, FileTreeMemory>());
+	const project = useProjectFolder(workspaceId);
 	const roots = useQuery({
 		queryKey: ["fileRoots", workspaceId],
-		queryFn: ({ signal }) => {
+		queryFn: async ({ signal }) => {
 			if (!files) throw new Error("Unavailable");
+			await fileAuthority?.getProject?.(workspaceId);
+			signal.throwIfAborted();
 			return files.listRoots(workspaceId, signal);
 		},
 		enabled: !!files && !!workspaceId,
 	});
-	const selectedRoot = roots.data?.find((root) => root.rootId === rootId) ?? roots.data?.[0];
+	const projectRoot = project.data?.root;
+	const projectRootId = projectRoot?.rootId;
+	const selectedRoot =
+		roots.data?.find((root) => root.rootId === rootId) ??
+		roots.data?.find((root) => root.rootId === projectRootId) ??
+		roots.data?.[0];
 	const currentRoots = useRef(roots.data);
 	currentRoots.current = roots.data;
 	if (roots.data) {
@@ -103,6 +114,10 @@ export function FileWorkbench({
 	useEffect(() => {
 		if (activeRootId) setRootId(activeRootId);
 	}, [activeRootId]);
+	useEffect(() => {
+		// Navigation chooses the current project's root, never the previous project's root selection.
+		setRootId(projectRoot?.workspaceId === workspaceId ? projectRoot.rootId : undefined);
+	}, [workspaceId, projectRoot]);
 	useEffect(() => {
 		if (!visible) session?.suspendPreviews();
 		else if (session && active?.kind === "preview") session.resumePreview(active.id);
@@ -125,7 +140,11 @@ export function FileWorkbench({
 		try {
 			await action();
 			if (!authorityLease.active || currentAuthorityLease.current !== authorityLease) return;
-			await cache.invalidateQueries({ queryKey: ["fileRoots", workspaceId] });
+			await Promise.all([
+				cache.invalidateQueries({ queryKey: ["fileRoots", workspaceId] }),
+				cache.invalidateQueries({ queryKey: ["projectFolder", workspaceId] }),
+				cache.invalidateQueries({ queryKey: ["agent-context-roots", workspaceId] }),
+			]);
 			if (!authorityLease.active || currentAuthorityLease.current !== authorityLease) return;
 			setManage(null);
 		} catch {
@@ -444,6 +463,8 @@ export function FileWorkbench({
 												{roots.data?.map((root) => (
 													<SelectItem key={root.rootId} value={root.rootId}>
 														{root.displayName ?? l.root}
+														{" · "}
+														{root.writable ? l["access.readWrite"] : l.readonly}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -466,6 +487,11 @@ export function FileWorkbench({
 									</Button>
 								</div>
 								{roots.isPending && <output className="file-loading">{l.loading}</output>}
+								{project.data && ["unavailable", "moved", "revoked"].includes(project.data.status) && (
+									<p className="file-state" role="alert">
+										{pl[project.data.status]} {pl.recoverFromMenu}
+									</p>
+								)}
 								{roots.isError && (
 									<p className="file-state" role="alert">
 										{l.failed}

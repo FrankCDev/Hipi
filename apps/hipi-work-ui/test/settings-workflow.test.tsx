@@ -542,6 +542,9 @@ test("browser installed font selection stays explicit and persists exact family/
 			setBackdrop: async () => {
 				throw new Error("not called by form");
 			},
+			setThemeMode: async () => {
+				throw new Error("not called by form");
+			},
 			subscribe: () => () => {},
 			listFonts: async () => {
 				calls++;
@@ -597,12 +600,14 @@ const nativeStatus: AppearanceStatus = {
 	backdropEnabled: false,
 	reducedTransparency: false,
 	fontSmoothing: false,
+	themeMode: "system",
 };
 function fontClient(listFonts: AppearanceClient["listFonts"]): AppearanceClient {
 	return {
 		localFontsSupported: true,
 		status: async () => nativeStatus,
 		setBackdrop: async () => nativeStatus,
+		setThemeMode: async () => nativeStatus,
 		subscribe: () => () => {},
 		listFonts,
 	};
@@ -868,6 +873,7 @@ test("native-only settings reflect actual host support and honor reduced-transpa
 		backdropEnabled: false,
 		reducedTransparency: true,
 		fontSmoothing: true,
+		themeMode: "system",
 	};
 	const tree = driveForm();
 	const toggle = find(tree, (node) => node.type === "input" && node.props["aria-label"] === "Translucent sidebar");

@@ -689,7 +689,7 @@ test("recipient identity and exact URL are rechecked after the context authoriza
 	}
 });
 
-test("catalog schema 3 migration, schema 5 backup and non-executing restore preserve profile snapshots without credentials", async () => {
+test("catalog schema 3 migration, schema 6 backup and non-executing restore preserve profile snapshots without credentials", async () => {
 	const parent = await realpath(await mkdtemp(join(tmpdir(), "hipi-provider-backup-")));
 	const source = join(parent, "source");
 	const credentials = credentialFixture();
@@ -700,7 +700,9 @@ test("catalog schema 3 migration, schema 5 backup and non-executing restore pres
 	try {
 		await runtime.close();
 		const legacy = new DatabaseSync(join(source, "catalog.sqlite"));
-		legacy.exec("DROP TABLE custom_providers; DROP TABLE provider_commands; UPDATE identity SET version=3");
+		legacy.exec(
+			"DROP TABLE project_folders; DROP TABLE custom_providers; DROP TABLE provider_commands; UPDATE identity SET version=3",
+		);
 		legacy.close();
 		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 3);
 		const oldBackup = await backupStore({ source, destination: join(parent, "old-backup") });
@@ -712,9 +714,9 @@ test("catalog schema 3 migration, schema 5 backup and non-executing restore pres
 		const profile = await runtime.call("saveCustomProvider", { ...settings(), requestId: "save" });
 		credentials.keys.set(profile.provider, "synthetic-key-not-for-backup");
 		await runtime.close();
-		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 5);
+		assert.equal(inspectCatalog(join(source, "catalog.sqlite")).catalogSchema, 6);
 		const backup = await backupStore({ source, destination: join(parent, "backup") });
-		assert.equal(backup.manifest.catalogSchema, 5);
+		assert.equal(backup.manifest.catalogSchema, 6);
 		await verifyBackup({ directory: backup.directory });
 		const db = new DatabaseSync(join(backup.directory, "catalog.sqlite"), { readOnly: true });
 		assert.deepEqual(
@@ -740,7 +742,7 @@ test("catalog schema 3 migration, schema 5 backup and non-executing restore pres
 			{ code: "STORE_MISMATCH" },
 		);
 		const future = new DatabaseSync(join(source, "catalog.sqlite"));
-		future.exec("UPDATE identity SET version=6");
+		future.exec("UPDATE identity SET version=7");
 		future.close();
 		assert.throws(() => inspectCatalog(join(source, "catalog.sqlite")), { code: "UNSUPPORTED_SCHEMA" });
 		await assert.rejects(

@@ -1,3 +1,4 @@
+import { posix, win32 } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { SQLITE_MIGRATIONS } from "@earendil-works/pi-durable/storage/sqlite";
@@ -26,6 +27,7 @@ async function closeStorage(storage: ReadonlySqliteStorage): Promise<void> {
 let expectedPiSchema: string | undefined;
 let expectedCatalogSchema: string | undefined;
 let expectedConfiguredCatalogSchema: string | undefined;
+let expectedProjectCatalogSchema: string | undefined;
 function assertSchemaBudget(db: DatabaseSync): void {
 	const count = db.prepare("SELECT count(*) AS total FROM sqlite_schema").get()?.total;
 	if (
@@ -102,7 +104,7 @@ export function assertSqliteIntegrity(path: string, standalone = false): void {
 		closeDatabase(db);
 	}
 }
-function assertCatalogSchema(db: DatabaseSync): 3 | 5 {
+function assertCatalogSchema(db: DatabaseSync): 3 | 5 | 6 {
 	if (expectedCatalogSchema === undefined) {
 		const reference = new DatabaseSync(":memory:");
 		try {
@@ -114,6 +116,10 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 {
 				"CREATE TABLE custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL)",
 			);
 			expectedConfiguredCatalogSchema = schemaSignature(reference);
+			reference.exec(
+				"CREATE TABLE project_folders (workspace_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, revision INTEGER NOT NULL, canonical_path TEXT, device TEXT, inode TEXT, display_name TEXT, revoked INTEGER NOT NULL CHECK(revoked IN (0,1)))",
+			);
+			expectedProjectCatalogSchema = schemaSignature(reference);
 		} finally {
 			reference.close();
 		}
@@ -121,7 +127,64 @@ function assertCatalogSchema(db: DatabaseSync): 3 | 5 {
 	const signature = schemaSignature(db);
 	if (signature === expectedCatalogSchema) return 3;
 	if (signature === expectedConfiguredCatalogSchema) return 5;
+	if (signature === expectedProjectCatalogSchema) return 6;
 	throw new MaintenanceError("UNSUPPORTED_SCHEMA");
+}
+function assertProjectFolders(db: DatabaseSync): void {
+	const count = db
+		.prepare("SELECT count(*) AS total FROM (SELECT 1 FROM project_folders LIMIT ?)")
+		.get(MAINTENANCE_LIMITS.workspaces + 1)?.total;
+	if (
+		typeof count !== "number" ||
+		count > MAINTENANCE_LIMITS.workspaces ||
+		db
+			.prepare(
+				"SELECT 1 FROM project_folders WHERE length(CAST(workspace_id AS BLOB))>128 OR length(CAST(binding_id AS BLOB))>128 OR length(CAST(canonical_path AS BLOB))>12288 OR length(CAST(device AS BLOB))>40 OR length(CAST(inode AS BLOB))>40 OR length(CAST(display_name AS BLOB))>1020 LIMIT 1",
+			)
+			.get()
+	)
+		throw new MaintenanceError("CAPACITY_EXCEEDED");
+	if (
+		db
+			.prepare(
+				"SELECT 1 FROM project_folders WHERE typeof(revision)!='integer' OR revision<1 OR revision>9007199254740991 OR typeof(revoked)!='integer' OR revoked NOT IN (0,1) OR NOT EXISTS (SELECT 1 FROM workspaces WHERE workspaces.workspace_id=project_folders.workspace_id AND ready=1) LIMIT 1",
+			)
+			.get()
+	)
+		throw new MaintenanceError("IDENTITY_MISMATCH");
+	for (const row of db
+		.prepare("SELECT workspace_id,binding_id,canonical_path,device,inode,display_name,revoked FROM project_folders")
+		.iterate()) {
+		if (
+			typeof row.workspace_id !== "string" ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(row.workspace_id) ||
+			typeof row.binding_id !== "string" ||
+			!/^[A-Za-z0-9_-]{1,128}$/.test(row.binding_id) ||
+			(row.display_name !== null &&
+				(typeof row.display_name !== "string" ||
+					!row.display_name ||
+					[...row.display_name].length > 255 ||
+					/[\p{Cc}\p{Cf}\p{Cs}/\\]/u.test(row.display_name)))
+		)
+			throw new MaintenanceError("IDENTITY_MISMATCH");
+		// A backup can be verified on another platform. Paths remain inert metadata:
+		// never resolve them, inspect their filesystem identity, or grant access here.
+		if (row.revoked === 1) {
+			if (row.canonical_path !== null || row.device !== null || row.inode !== null)
+				throw new MaintenanceError("IDENTITY_MISMATCH");
+		} else if (
+			typeof row.canonical_path !== "string" ||
+			row.canonical_path.length > 4096 ||
+			row.canonical_path.includes("\0") ||
+			(!posix.isAbsolute(row.canonical_path) && !win32.isAbsolute(row.canonical_path)) ||
+			typeof row.device !== "string" ||
+			!/^(0|[1-9][0-9]{0,39})$/.test(row.device) ||
+			typeof row.inode !== "string" ||
+			!/^(0|[1-9][0-9]{0,39})$/.test(row.inode)
+		) {
+			throw new MaintenanceError("IDENTITY_MISMATCH");
+		}
+	}
 }
 export function inspectCatalog(path: string, expectedRoot?: string) {
 	const db = openReadOnly(path);
@@ -132,7 +195,8 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			"workspaces",
 			"conversations",
 			"directory_checkpoints",
-			...(version === 5 ? ["custom_providers", "provider_commands"] : []),
+			...(version >= 5 ? ["custom_providers", "provider_commands"] : []),
+			...(version === 6 ? ["project_folders"] : []),
 		]);
 		for (const row of db.prepare("SELECT type,name,sql FROM sqlite_schema").iterate()) {
 			if (row.type === "table" && typeof row.name === "string" && allowed.delete(row.name)) continue;
@@ -182,7 +246,8 @@ export function inspectCatalog(path: string, expectedRoot?: string) {
 			(expectedRoot !== undefined && identity.root !== expectedRoot)
 		)
 			throw new MaintenanceError("IDENTITY_MISMATCH");
-		if (version === 5) {
+		if (version === 6) assertProjectFolders(db);
+		if (version >= 5) {
 			const providerCount = db
 				.prepare("SELECT count(*) AS total FROM (SELECT 1 FROM custom_providers LIMIT ?)")
 				.get(CUSTOM_PROVIDER_LIMITS.providers + 1)?.total;

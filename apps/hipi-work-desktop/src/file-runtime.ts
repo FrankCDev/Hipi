@@ -1,6 +1,7 @@
 import type { AppClient } from "@hipi/work-runtime/contracts";
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { createRuntimeFileHost } from "@hipi/work-runtime/files/host";
+import { createRuntimeProjectFolders } from "@hipi/work-runtime/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { fileOperation } from "./file-protocol.ts";
 import { createPreviewRuntime } from "./preview-runtime.ts";
@@ -14,6 +15,7 @@ export async function createFileRuntime(
 	options: { workerUrl?: URL } = {},
 ) {
 	const { authority, handler, storeId } = await createRuntimeFileHost(runtime, generation);
+	const projects = createRuntimeProjectFolders(runtime, authority, generation);
 	const previewHost = createRuntimePreviewHost({ authority, principalId: generation, storeId, ...options });
 	const previews = createPreviewRuntime(previewHost.handler, generation, post);
 	async function check(expectedStoreId: string, workspaceId: string) {
@@ -44,10 +46,38 @@ export async function createFileRuntime(
 				const input = fileOperation(value.input);
 				let result: unknown;
 				if (input.operation === "request") result = await handler.execute(input.request);
-				else {
+				else if (
+					input.operation === "project-store-check" ||
+					input.operation === "project-prepare" ||
+					input.operation === "project-forget"
+				) {
+					if (input.expectedStoreId !== storeId) throw new FileServiceError("UNAUTHORIZED");
+					if (closed) throw new FileServiceError("CLOSED");
+					if (!projects) throw new FileServiceError("BLOCKED_RESOURCE");
+					if (input.operation === "project-prepare") result = await projects.prepare(input.absolutePath);
+					else {
+						if (input.operation === "project-forget") projects.forget(input.selectionId);
+						result = null;
+					}
+				} else {
 					await check(input.expectedStoreId, input.workspaceId);
 					if (closed) throw new FileServiceError("CLOSED");
-					if (input.operation === "grant")
+					if (
+						input.operation === "project-get" ||
+						input.operation === "project-bind" ||
+						input.operation === "project-unbind" ||
+						input.operation === "project-attach"
+					) {
+						if (!projects) throw new FileServiceError("BLOCKED_RESOURCE");
+						result =
+							input.operation === "project-get"
+								? await projects.get(input.workspaceId)
+								: input.operation === "project-bind"
+									? await projects.bind(input.workspaceId, input.absolutePath, input.expectedBindingId)
+									: input.operation === "project-attach"
+										? await projects.attach(input.workspaceId, input.selectionId)
+										: await projects.unbind(input.workspaceId, input.expectedBindingId);
+					} else if (input.operation === "grant")
 						result = await authority.grantRoot({
 							principalId: generation,
 							workspaceId: input.workspaceId,
@@ -57,7 +87,7 @@ export async function createFileRuntime(
 					else if (input.operation === "revoke") {
 						const roots = await service.listRoots(input.workspaceId);
 						if (!roots.some((root) => root.rootId === input.rootId)) throw new FileServiceError("UNAUTHORIZED");
-						authority.revokeRoot(input.rootId);
+						if (!projects?.revokeRoot(input.workspaceId, input.rootId)) authority.revokeRoot(input.rootId);
 						result = null;
 					} else result = null;
 				}
@@ -71,6 +101,7 @@ export async function createFileRuntime(
 		},
 		async close() {
 			closed = true;
+			await projects?.close();
 			await previews.close();
 			await previewHost.close();
 			await authority.close();

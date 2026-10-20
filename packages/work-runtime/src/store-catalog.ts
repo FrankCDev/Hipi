@@ -27,6 +27,9 @@ import {
 	readToolPackSource,
 	readToolPacks,
 } from "./extensions/lifecycle-read.ts";
+import { FileServiceError } from "./files/contracts.ts";
+import { fileIdentifier } from "./files/protocol.ts";
+import { type ProjectFolderBinding, type ProjectFolderRecord, parseProjectFolderRecord } from "./project-folders.ts";
 import { checkDatabasePath, StoreOwnerLease } from "./store-owner.ts";
 
 async function readDocument(storage: Storage, kind: string, key?: string) {
@@ -108,7 +111,19 @@ export class StoreCatalog {
 					throw new AppError("STORE_MISMATCH");
 				if (database.prepare("SELECT 1 FROM sqlite_schema WHERE name='identity' AND type='table'").get()) {
 					const row = database.prepare("SELECT version FROM identity WHERE singleton=1").get();
-					if (row && row.version !== 1 && row.version !== 2 && row.version !== 3 && row.version !== 5)
+					if (
+						row &&
+						row.version !== 1 &&
+						row.version !== 2 &&
+						row.version !== 3 &&
+						row.version !== 5 &&
+						row.version !== 6
+					)
+						throw new AppError("STORE_MISMATCH");
+					if (
+						row?.version === 6 &&
+						!database.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders' AND type='table'").get()
+					)
 						throw new AppError("STORE_MISMATCH");
 				}
 				try {
@@ -142,19 +157,23 @@ export class StoreCatalog {
 			}
 			if (
 				!identity ||
-				(identity.version !== 1 && identity.version !== 2 && identity.version !== 3 && identity.version !== 5) ||
+				(identity.version !== 1 &&
+					identity.version !== 2 &&
+					identity.version !== 3 &&
+					identity.version !== 5 &&
+					identity.version !== 6) ||
 				identity.root !== root
 			)
 				throw new AppError("STORE_MISMATCH");
-			// Version 5 fences older runtimes that cannot enforce configured recipient identities.
+			// Version 6 adds local project associations; older runtimes cannot silently omit their revocation state.
 			// Version 4 remains reserved for non-executing recovery archives.
 			// Schema and version move together under the existing exclusive root owner.
 			database.exec("BEGIN IMMEDIATE");
 			try {
 				database.exec(
-					"CREATE TABLE IF NOT EXISTS conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX IF NOT EXISTS conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE IF NOT EXISTS directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL); UPDATE identity SET version=5 WHERE singleton=1 AND version IN (1,2,3)",
+					"CREATE TABLE IF NOT EXISTS conversations (workspace_id TEXT NOT NULL, public_id TEXT NOT NULL, ordinal INTEGER NOT NULL, revision INTEGER NOT NULL, archived INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(workspace_id,public_id)); CREATE INDEX IF NOT EXISTS conversation_page ON conversations(workspace_id,archived,ordinal,public_id); CREATE TABLE IF NOT EXISTS directory_checkpoints (workspace_id TEXT PRIMARY KEY,generation TEXT NOT NULL,seq INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS custom_providers (provider TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS provider_commands (request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,result TEXT NOT NULL); CREATE TABLE IF NOT EXISTS project_folders (workspace_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, revision INTEGER NOT NULL, canonical_path TEXT, device TEXT, inode TEXT, display_name TEXT, revoked INTEGER NOT NULL CHECK(revoked IN (0,1))); UPDATE identity SET version=6 WHERE singleton=1 AND version IN (1,2,3,5)",
 				);
-				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 5)
+				if (database.prepare("SELECT version FROM identity WHERE singleton=1").get()?.version !== 6)
 					throw new AppError("STORE_MISMATCH");
 				database.exec("COMMIT");
 			} catch (error) {
@@ -180,6 +199,90 @@ export class StoreCatalog {
 			owner.close();
 			throw error;
 		}
+	}
+	/** Local host capability only. AppClient has no path-bearing catalog command. */
+	readProjectFolder(workspaceId: string): ProjectFolderRecord | null {
+		if (this.#closed) throw new FileServiceError("CLOSED");
+		fileIdentifier(workspaceId);
+		if (!this.registered(workspaceId)) throw new FileServiceError("UNAUTHORIZED");
+		if (
+			this.#database
+				.prepare(
+					"SELECT 1 FROM project_folders WHERE workspace_id=? AND (length(CAST(binding_id AS BLOB))>128 OR length(CAST(canonical_path AS BLOB))>12288 OR length(CAST(device AS BLOB))>40 OR length(CAST(inode AS BLOB))>40 OR length(CAST(display_name AS BLOB))>1020)",
+				)
+				.get(workspaceId)
+		)
+			throw new AppError("STORE_MISMATCH");
+		const row = this.#database.prepare("SELECT * FROM project_folders WHERE workspace_id=?").get(workspaceId);
+		if (!row) return null;
+		if (
+			typeof row.binding_id !== "string" ||
+			typeof row.revision !== "number" ||
+			(row.display_name !== null && typeof row.display_name !== "string") ||
+			(row.revoked !== 0 && row.revoked !== 1)
+		)
+			throw new AppError("STORE_MISMATCH");
+		const base = {
+			workspaceId,
+			bindingId: row.binding_id,
+			revision: row.revision,
+			displayName: row.display_name,
+		};
+		if (row.revoked === 1) {
+			if (row.canonical_path !== null || row.device !== null || row.inode !== null)
+				throw new AppError("STORE_MISMATCH");
+			return parseProjectFolderRecord({ ...base, revoked: true, canonicalPath: null, device: null, inode: null });
+		}
+		if (typeof row.canonical_path !== "string" || typeof row.device !== "string" || typeof row.inode !== "string")
+			throw new AppError("STORE_MISMATCH");
+		return parseProjectFolderRecord({
+			...base,
+			revoked: false,
+			canonicalPath: row.canonical_path,
+			device: row.device,
+			inode: row.inode,
+		});
+	}
+	bindProjectFolder(input: ProjectFolderBinding, expectedBindingId: string | null): ProjectFolderRecord {
+		const prior = this.readProjectFolder(input.workspaceId);
+		if ((prior?.bindingId ?? null) !== expectedBindingId) throw new FileServiceError("VERSION_CONFLICT");
+		const record = parseProjectFolderRecord({
+			...input,
+			revision: (prior?.revision ?? 0) + 1,
+		});
+		this.#database
+			.prepare(
+				"INSERT INTO project_folders VALUES (?,?,?,?,?,?,?,0) ON CONFLICT(workspace_id) DO UPDATE SET binding_id=excluded.binding_id,revision=excluded.revision,canonical_path=excluded.canonical_path,device=excluded.device,inode=excluded.inode,display_name=excluded.display_name,revoked=0",
+			)
+			.run(
+				record.workspaceId,
+				record.bindingId,
+				record.revision,
+				record.canonicalPath,
+				record.device,
+				record.inode,
+				record.displayName,
+			);
+		return record;
+	}
+	unbindProjectFolder(workspaceId: string, expectedBindingId: string): ProjectFolderRecord {
+		const prior = this.readProjectFolder(workspaceId);
+		if (!prior || prior.bindingId !== expectedBindingId) throw new FileServiceError("VERSION_CONFLICT");
+		if (prior.revoked) return prior;
+		const record = parseProjectFolderRecord({
+			...prior,
+			revision: prior.revision + 1,
+			revoked: true,
+			canonicalPath: null,
+			device: null,
+			inode: null,
+		});
+		this.#database
+			.prepare(
+				"UPDATE project_folders SET revision=?,canonical_path=NULL,device=NULL,inode=NULL,revoked=1 WHERE workspace_id=? AND binding_id=?",
+			)
+			.run(record.revision, workspaceId, expectedBindingId);
+		return record;
 	}
 	listCustomProviders(): Result<"listCustomProviders"> {
 		if (

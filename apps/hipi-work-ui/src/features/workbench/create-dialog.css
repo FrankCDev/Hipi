@@ -29,3 +29,16 @@
 	gap: 8px;
 	padding-top: 4px;
 }
+.project-create-folder {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+.project-create-folder > button:first-child {
+	flex: 1;
+	min-width: 0;
+	justify-content: flex-start;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}

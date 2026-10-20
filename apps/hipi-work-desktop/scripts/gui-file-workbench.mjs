@@ -6,6 +6,7 @@ import { previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { documentPreviewState, exerciseDocumentPreviews } from "./gui-file-previews.mjs";
 import { changeOwnedFixture, fileFixture, fileFixtureNames, readOwnedFixture } from "./gui-file-workbench-fixture.mjs";
 import { assertNoAlerts, capture, click, evaluate, pressKey, selectEnglish, until } from "./gui-flow.mjs";
+import { assertBindingEvidence, exerciseProjectBinding } from "./gui-project-binding.mjs";
 
 export function fileCodePresentation(panel, path) {
 	const text = (container) => {
@@ -572,6 +573,7 @@ export function assertFileWorkbenchLayout(value) {
 }
 
 export function validateFileWorkbenchEvidence({ first, reopened }) {
+	assertBindingEvidence(first?.projectBinding, reopened?.projectBinding);
 	for (const key of [
 		"listedAndOpened",
 		"editorTreeSplit",
@@ -614,7 +616,7 @@ export function validateFileWorkbenchEvidence({ first, reopened }) {
 		assert.equal(reopened?.[key], true, `Missing restarted file-workbench evidence: ${key}`);
 }
 
-export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeContext, record }) {
+export async function exerciseFileWorkbench({ cdp, directory, reopened, previous, nativeContext, record }) {
 	assert.equal(process.platform, "linux", "File-workbench native candidate is Linux-only");
 	assert.ok(nativeContext?.ownedProfileRoot && nativeContext?.xvfbPid);
 	await cdp.request("Runtime.enable");
@@ -700,7 +702,23 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 		);
 		await click(cdp, '[role="dialog"] button[aria-label="Close"]');
 		await assertNoAlerts(cdp);
-		return { reopened: true, freshlyAuthorized: true, coldSavedContent: true, coldTabsEmpty: true, rootRevoked: true };
+		const projectBinding = await exerciseProjectBinding({
+			cdp,
+			directory,
+			reopened,
+			nativeContext,
+			record,
+			previous: previous?.projectBinding,
+			helpers: { showFiles, expectListing, selectFile, expectEditor },
+		});
+		return {
+			reopened: true,
+			freshlyAuthorized: true,
+			coldSavedContent: true,
+			coldTabsEmpty: true,
+			rootRevoked: true,
+			projectBinding,
+		};
 	}
 	const geometry = await until(
 		() =>
@@ -941,7 +959,16 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 	await selectTab(cdp, primaryId);
 	await expectEditor(cdp, fileFixture.external, { id: primaryId });
 	await assertNoAlerts(cdp);
+	const projectBinding = await exerciseProjectBinding({
+		cdp,
+		directory,
+		reopened,
+		nativeContext,
+		record,
+		helpers: { showFiles, expectListing, selectFile, expectEditor },
+	});
 	return {
+		projectBinding,
 		reopened: false,
 		listedAndOpened: true,
 		editorTreeSplit: true,

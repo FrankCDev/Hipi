@@ -36,6 +36,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-work-experience.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-settings-route.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-disclosure.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-binding.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/smoke-packaged-gui.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
@@ -54,6 +55,9 @@ nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
 nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/custom-providers.test.ts");
+nodeTests.push("packages/work-runtime/test/project-folder-backup.test.ts");
+nodeTests.push("packages/work-runtime/test/project-folders.test.ts");
+nodeTests.push("apps/hipi-work-desktop/test/project-folders.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
 nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
@@ -89,12 +93,14 @@ const uiTests = [
 	"file-splitter-interaction",
 	"file-revocation-interaction",
 	"appearance-settings",
+	"appearance-provider",
 	"settings-dialog",
 	"settings-workflow",
 	"custom-provider-settings",
 	"legacy-provider-editor",
 	"conversation-turn-failure",
 	"observation-recovery-ui",
+	"project-folder-interaction",
 	"conversation-capabilities",
 	"conversation-capabilities-interaction",
 	"conversation-preview-card",
@@ -122,6 +128,7 @@ uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-settings.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-application.test.ts");
 uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
+uiTests.push("apps/hipi-work-ui/test/project-folder-change.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");

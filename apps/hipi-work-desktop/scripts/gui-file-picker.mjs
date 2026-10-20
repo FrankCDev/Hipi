@@ -8,7 +8,10 @@ import { maxPickerImageBytes, pickerOpenTarget, pickerXwdToPng } from "./gui-fil
 import { ownedFileDirectory } from "./gui-file-workbench-fixture.mjs";
 
 const execute = promisify(execFile);
-const titles = ["Allow Hipi Work to read and edit this folder", "允许 Hipi Work 读取和编辑此文件夹"];
+const pickerTitles = {
+	files: ["Allow Hipi Work to read and edit this folder", "允许 Hipi Work 读取和编辑此文件夹"],
+	project: ["Choose project folder", "选择项目文件夹"],
+};
 
 function numericOutput(stdout, keys) {
 	const entries = stdout
@@ -85,9 +88,14 @@ export async function chooseOwnedFileFolder(
 		pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 		now = Date.now,
 		observe,
+		purpose = "files",
+		action = "choose",
 	} = {},
 ) {
 	assert.equal(process.platform, "linux", "Native file-picker candidate currently supports Linux only");
+	assert.ok(Object.hasOwn(pickerTitles, purpose), "Unknown fixed picker purpose");
+	assert.ok(["choose", "cancel"].includes(action), "Unknown fixed picker action");
+	const titles = pickerTitles[purpose];
 	assert.ok(observe === undefined || typeof observe === "function");
 	const directory = await ownedFileDirectory(context.ownedProfileRoot);
 	assert.match(directory, /^[\x20-\x7e]+$/, "Native helper accepts only an ASCII temporary path");
@@ -106,7 +114,7 @@ export async function chooseOwnedFileFolder(
 				"--pid",
 				String(context.pid),
 				"--name",
-				`^(${titles.join("|")})$`,
+				`^(${titles.map((title) => title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`,
 			]);
 			const ids = stdout.trim().split(/\s+/).filter(Boolean);
 			assert.ok(
@@ -160,6 +168,17 @@ export async function chooseOwnedFileFolder(
 		await command(args);
 	};
 	await capture("before-input");
+	if (action === "cancel") {
+		await input(["key", "--clearmodifiers", "Escape"]);
+		const deadline = now() + 3000;
+		while (now() < deadline) {
+			if (!(await find()))
+				return { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true, cancelled: true };
+			await pause(50);
+		}
+		await capture("bounded-failure");
+		throw new Error("Native folder picker did not close after single Escape");
+	}
 	await input(["key", "--clearmodifiers", "ctrl+l"]);
 	await input(["key", "--clearmodifiers", "ctrl+a"]);
 	await input(["type", "--clearmodifiers", "--delay", "1", "--", directory]);

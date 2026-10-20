@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button.tsx";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
+	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuRadioGroup,
 	DropdownMenuRadioItem,
@@ -20,6 +21,7 @@ import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
 import type { CatalogSession } from "./catalog-session.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
+import { projectFolderLabels } from "./project-folder-labels.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 import "./sidebar.css";
@@ -37,6 +39,7 @@ type TreeProps = {
 	onOpenProject: (id: string) => void;
 	onSelect: (conversation: Conversation) => void;
 	onNewConversation: (workspaceId: string) => void;
+	onManageProjectFolder?: (workspace: Workspace, restoreFocus?: () => void) => void;
 };
 
 /** Each expanded branch shows a bounded catalog window, never execution streams. */
@@ -124,6 +127,11 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 								name={workspace.name}
 								filter={filter}
 								controls={controls}
+								onManageFolder={
+									props.onManageProjectFolder
+										? () => props.onManageProjectFolder?.(workspace, controls.onReturnFocus)
+										: undefined
+								}
 								onFilterChange={(value) => {
 									setFilter(value);
 									if (!expanded) props.onToggle(workspace.workspaceId);
@@ -259,11 +267,13 @@ function ProjectConversationMenu({
 	filter,
 	onFilterChange,
 	controls,
+	onManageFolder,
 }: {
 	name: string;
 	filter: "active" | "archived";
 	onFilterChange: (filter: "active" | "archived") => void;
 	controls?: Parameters<PreviewActions>[0];
+	onManageFolder?: () => void;
 }) {
 	const { locale } = usePreferences();
 	const cl = catalogLabels(locale);
@@ -300,6 +310,15 @@ function ProjectConversationMenu({
 			>
 				<DropdownMenuLabel className="sidebar-menu-preview">{controls?.previewContent ?? name}</DropdownMenuLabel>
 				<DropdownMenuSeparator />
+				{onManageFolder && (
+					<>
+						<DropdownMenuItem onSelect={onManageFolder}>
+							<Icon name="folder" size={16} />
+							{projectFolderLabels(locale).title}
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+					</>
+				)}
 				<DropdownMenuRadioGroup
 					aria-label={cl.filter}
 					value={filter}

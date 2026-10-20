@@ -7,6 +7,7 @@ import {
 	buildInstalledFontCatalog,
 	type InstalledFontCatalog,
 	parseAppearanceReply,
+	parseAppearanceRequest,
 	parseAppearanceStatus,
 	parseFontReply,
 	parseInstalledFontFace,
@@ -32,6 +33,7 @@ export const webAppearance: AppearanceStatus = {
 	reducedTransparency: false,
 	backdropEnabled: false,
 	fontSmoothing: false,
+	themeMode: null,
 };
 /** A timeout or cancellation ends waiting, never claims to revoke a browser permission prompt. */
 export function waitForAppearance<T>(operation: Promise<T>, signal?: AbortSignal, deadline = 30000): Promise<T> {
@@ -82,12 +84,13 @@ export function createAppearanceClient(bridge?: AppearanceBridge): AppearanceCli
 	let fontsPending = false;
 	const request = async (input: AppearanceRequest, signal?: AbortSignal) => {
 		if (signal?.aborted) throw new AppearanceError("CLOSED");
+		const validated = parseAppearanceRequest(input);
 		if (!bridge) {
-			if (input.method === "backdrop" && input.enabled) throw new AppearanceError("UNSUPPORTED");
+			if (validated.method === "backdrop" && validated.enabled) throw new AppearanceError("UNSUPPORTED");
 			return webAppearance;
 		}
 		try {
-			return parseAppearanceReply(await waitForAppearance(bridge.request(input), signal, 5000));
+			return parseAppearanceReply(await waitForAppearance(bridge.request(validated), signal, 5000));
 		} catch (error) {
 			throw error instanceof AppearanceError ? error : new AppearanceError("FAILED");
 		}
@@ -95,6 +98,7 @@ export function createAppearanceClient(bridge?: AppearanceBridge): AppearanceCli
 	return {
 		localFontsSupported: bridge ? bridge.fontsSupported : typeof window.queryLocalFonts === "function",
 		status: (signal) => request({ version: 1, method: "status" }, signal),
+		setThemeMode: (mode, signal) => request({ version: 1, method: "theme", mode }, signal),
 		setBackdrop: (enabled, background, signal) =>
 			request({ version: 1, method: "backdrop", enabled, background }, signal),
 		subscribe(listener) {

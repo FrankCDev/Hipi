@@ -241,6 +241,8 @@ function renderer({
 						? Object.values(rows)
 						: [],
 	};
+	// React-backed DOM nodes can contain cycles and cannot be returned with CDP returnByValue.
+	route.rendererOwner = route;
 	advanced.parentElement = route;
 	const geometryNodes = {
 		[`${routeSelector} [data-slot="dialog-close"]`]: nodes.close,
@@ -310,7 +312,11 @@ function renderer({
 		localStorage: { getItem: () => JSON.stringify(stored) },
 	};
 	const helpers = {
-		evaluate: async (_cdp, expression) => runInNewContext(expression, context),
+		evaluate: async (_cdp, expression) => {
+			const result = await runInNewContext(expression, context);
+			if (result !== undefined) JSON.stringify(result);
+			return result;
+		},
 		until: async (check, label) => {
 			for (let i = 0; i < 4; i++) {
 				const result = await check();
@@ -425,6 +431,16 @@ test("open and Close require initial search focus and exact opener identity, not
 	const wrongTrigger = renderer();
 	await wrongTrigger.harness.open();
 	await assert.rejects(wrongTrigger.harness.close(".different-settings-trigger"), /recorded original opener/);
+});
+
+test("modal capture retains the actual cyclic DOM node without returning it through CDP", async () => {
+	const fixture = renderer();
+	await fixture.harness.open();
+	const surface = fixture.document.querySelector(".settings-modal");
+	assert.equal(fixture.context.window.__hipiGuiSettingsSurface, surface);
+	assert.throws(() => JSON.stringify(surface), /circular/i);
+	await fixture.harness.close();
+	assert.equal(fixture.context.window.__hipiGuiSettingsSurface, surface);
 });
 
 test("sidebar-only Settings opens through narrow/collapsed navigation then restores it after exact modal focus return", async () => {

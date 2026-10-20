@@ -8,11 +8,14 @@ import {
 	type Submit,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
-import type { FileText } from "@hipi/work-runtime/files";
+import type { FileText, ProjectFolder } from "@hipi/work-runtime/files";
 import { createFileClient, type FileRequest, fileRequestTarget } from "@hipi/work-runtime/files/protocol";
+import type * as Query from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import type { FileAuthority } from "../src/app/file-client.ts";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog } from "../src/components/ui/dialog.tsx";
 import { InputGroupInput } from "../src/components/ui/input-group.tsx";
@@ -22,12 +25,14 @@ import { CatalogSession } from "../src/features/workbench/catalog-session.ts";
 import { type CatalogCommand, saveCommand } from "../src/features/workbench/command-recovery.ts";
 import { ConnectionActions } from "../src/features/workbench/connection-actions.tsx";
 import { ConversationPane } from "../src/features/workbench/conversation-pane.tsx";
+import { CreateDialog } from "../src/features/workbench/create-dialog.tsx";
 import { FilePanel } from "../src/features/workbench/file-panel.tsx";
 import { admitInitialSend } from "../src/features/workbench/initial-send.ts";
 import type { BrowserStorage } from "../src/features/workbench/local-persistence.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 import { PreparedTaskEntry } from "../src/features/workbench/prepared-task-entry.tsx";
 import { PreparedTaskRecovery } from "../src/features/workbench/prepared-task-recovery.tsx";
+import { ProjectFolderDialog } from "../src/features/workbench/project-folder.tsx";
 import { Workbench } from "../src/features/workbench/workbench.tsx";
 import { WorkbenchWelcome } from "../src/features/workbench/workbench-welcome.tsx";
 import { WorkspaceTree } from "../src/features/workbench/workspace-tree.tsx";
@@ -86,7 +91,8 @@ vi.mock("react", async () => {
 		},
 	};
 });
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async () => ({
+	...(await vi.importActual<typeof Query>("@tanstack/react-query")),
 	useQueryClient: () => cache,
 	useQuery: ({ queryKey, enabled = true }: { queryKey: readonly unknown[]; enabled?: boolean }) => {
 		const [kind, workspaceId, conversationId] = queryKey;
@@ -123,7 +129,7 @@ vi.mock("../src/features/workbench/use-catalog-pages.ts", () => ({
 }));
 vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => client,
-	useFiles: () => ({ files: fileFixture.files }),
+	useFiles: () => ({ files: fileFixture.files, fileAuthority }),
 	useLocalState: () => local,
 }));
 
@@ -174,7 +180,10 @@ const catalogCommand: CatalogCommand = {
 		title: "New title",
 	},
 };
-const cache = { setQueryData: vi.fn(), invalidateQueries: vi.fn(async () => {}) };
+const cache = {
+	setQueryData: vi.fn(),
+	invalidateQueries: vi.fn(async (_filters: { queryKey: readonly unknown[] }) => {}),
+};
 const disconnect = vi.fn();
 const client: AppClient = {
 	call: vi.fn(async () => {
@@ -237,6 +246,7 @@ function createFileFixture() {
 let storage = new MemoryStorage();
 let local = new LocalState("store", storage);
 let fileFixture = createFileFixture();
+let fileAuthority: FileAuthority | undefined;
 
 function elements<C extends React.ElementType>(
 	node: React.ReactNode,
@@ -330,6 +340,7 @@ beforeEach(() => {
 	storage = new MemoryStorage();
 	local = new LocalState("store", storage);
 	fileFixture = createFileFixture();
+	fileAuthority = undefined;
 	local.write("workspace", "current");
 	local.write("conversation", "task");
 	local.write(`draft.${scope}`, draft);
@@ -927,3 +938,135 @@ test("save-to-unknown transition and retired connection cannot silently reuse an
 	assert.equal(beforeRetirement.commit(), false);
 	assert.equal(disconnect.mock.calls.length, 0);
 });
+
+test.each([false, true])(
+	"project creation retains the same project on lost binding response without stealing later navigation=%s",
+	async (navigateAway) => {
+		saveCommand(local, "catalog", null);
+		const binding = Promise.withResolvers<never>();
+		let created: Workspace | undefined;
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
+			assert.equal(method, "createWorkspace");
+			assert.ok(input && typeof input === "object" && "workspaceId" in input && "name" in input);
+			created = { workspaceId: String(input.workspaceId), name: String(input.name) };
+			return parseResult(method, created);
+		});
+		const attach = vi.fn(() => binding.promise);
+		fileAuthority = {
+			chooseRoot: async () => {},
+			revokeRoot: async () => {},
+			attachProject: attach,
+		};
+		const initial = drive();
+		const creating = element(initial.content, CreateDialog).props.onCreate("Created project", {
+			selectionId: "opaque-selection",
+			displayName: "Chosen folder",
+		});
+		await vi.waitFor(() => assert.equal(attach.mock.calls.length, 1));
+		assert.ok(created);
+		assert.equal(drive().tree.selectedWorkspace, created.workspaceId);
+		if (navigateAway) drive().tree.onOpenProject("other");
+		binding.reject(new Error("Binding response lost"));
+		await creating;
+		const current = drive();
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "createWorkspace").length, 1);
+		assert.deepEqual(attach.mock.calls, [[created.workspaceId, "opaque-selection"]]);
+		assert.equal(current.tree.selectedWorkspace, navigateAway ? "other" : created.workspaceId);
+		const manager = elements(current.content, ProjectFolderDialog)[0];
+		if (navigateAway) {
+			assert.equal(manager, undefined, "late failure must not open a modal over newer work");
+			current.tree.onManageProjectFolder?.(created);
+			assert.equal(elements(drive().content, ProjectFolderDialog)[0]?.props.initialFailure, true);
+		} else {
+			assert.equal(manager?.props.workspaceId, created.workspaceId);
+			assert.equal(manager?.props.initialFailure, true);
+		}
+	},
+);
+
+test.each(["empty", "BUSY"] as const)(
+	"confirmed delayed project attachment refreshes only its %s root lists",
+	async (initialState) => {
+		saveCommand(local, "catalog", null);
+		const binding = Promise.withResolvers<ProjectFolder>();
+		let created: Workspace | undefined;
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, input: unknown) => {
+			assert.equal(method, "createWorkspace");
+			assert.ok(input && typeof input === "object" && "workspaceId" in input && "name" in input);
+			created = { workspaceId: String(input.workspaceId), name: String(input.name) };
+			return parseResult(method, created);
+		});
+		const attach = vi.fn(() => binding.promise);
+		fileAuthority = { chooseRoot: async () => {}, revokeRoot: async () => {}, attachProject: attach };
+		const initial = drive();
+		const creating = element(initial.content, CreateDialog).props.onCreate("Created project", {
+			selectionId: "opaque-selection",
+			displayName: "Chosen folder",
+		});
+		await vi.waitFor(() => assert.equal(attach.mock.calls.length, 1));
+		assert.ok(created);
+		const workspaceId = created.workspaceId;
+		assert.equal(drive().tree.selectedWorkspace, workspaceId);
+		// These two active queries may have observed unbound [] or BUSY while attachment was exclusive.
+		const rootRefreshes = () =>
+			cache.invalidateQueries.mock.calls
+				.map(([options]) => options)
+				.filter(({ queryKey }) => ["fileRoots", "agent-context-roots"].includes(String(queryKey[0])));
+		assert.deepEqual(rootRefreshes(), []);
+		const result: ProjectFolder = {
+			workspaceId,
+			bindingId: "bound-project",
+			revision: 1,
+			displayName: "Chosen folder",
+			status: "available",
+			root: { workspaceId, rootId: "new-project-root", writable: false },
+		};
+		const queryCache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryCache.setQueryData(["fileRoots", "other"], []);
+		queryCache.setQueryData(["agent-context-roots", "other"], []);
+		cache.invalidateQueries.mockImplementation((filters) => queryCache.invalidateQueries(filters));
+		let ready = false;
+		const observers = ["fileRoots", "agent-context-roots"].map(
+			(kind) =>
+				new QueryObserver(queryCache, {
+					queryKey: [kind, workspaceId],
+					queryFn: async () => {
+						if (!ready && initialState === "BUSY") throw new Error("BUSY");
+						return ready ? [result.root] : [];
+					},
+				}),
+		);
+		const unsubscribe = observers.map((observer) => observer.subscribe(() => {}));
+		try {
+			await vi.waitFor(() => {
+				for (const observer of observers) {
+					assert.equal(observer.getCurrentResult().status, initialState === "BUSY" ? "error" : "success");
+					assert.deepEqual(observer.getCurrentResult().data, initialState === "BUSY" ? undefined : []);
+				}
+			});
+			ready = true;
+			binding.resolve(result);
+			await creating;
+			assert.deepEqual(rootRefreshes(), [
+				{ queryKey: ["fileRoots", workspaceId] },
+				{ queryKey: ["agent-context-roots", workspaceId] },
+			]);
+			for (const observer of observers) {
+				assert.equal(observer.getCurrentResult().status, "success");
+				assert.deepEqual(observer.getCurrentResult().data, [result.root]);
+			}
+			assert.equal(queryCache.getQueryState(["fileRoots", "other"])?.isInvalidated, false);
+			assert.equal(queryCache.getQueryState(["agent-context-roots", "other"])?.isInvalidated, false);
+			assert.ok(
+				cache.setQueryData.mock.calls.some(
+					([key, value]) => JSON.stringify(key) === JSON.stringify(["projectFolder", workspaceId]) && value === result,
+				),
+			);
+			assert.equal(attach.mock.calls.length, 1);
+		} finally {
+			for (const close of unsubscribe) close();
+			queryCache.clear();
+			cache.invalidateQueries.mockImplementation(async () => {});
+		}
+	},
+);

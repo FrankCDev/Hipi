@@ -26,6 +26,9 @@ type WorkspaceMutation = {
 const hooks = vi.hoisted(() => ({
 	active: false,
 	cells: [] as unknown[],
+	memos: new Map<number, { value: unknown; deps: React.DependencyList | undefined }>(),
+	effects: new Map<number, { deps: React.DependencyList | undefined; cleanup?: () => void }>(),
+	commits: [] as (() => void)[],
 	cursor: 0,
 	pending: false,
 	error: false,
@@ -44,8 +47,9 @@ vi.mock("react", async () => {
 				hooks.cells[index] = typeof initial === "function" ? (initial as () => T)() : initial;
 			return [
 				hooks.cells[index],
-				(value: T) => {
-					hooks.cells[index] = value;
+				(value: React.SetStateAction<T>) => {
+					hooks.cells[index] =
+						typeof value === "function" ? (value as (current: T) => T)(hooks.cells[index] as T) : value;
 				},
 			];
 		},
@@ -55,6 +59,37 @@ vi.mock("react", async () => {
 			const index = hooks.cursor++;
 			if (!(index in hooks.cells)) hooks.cells[index] = { current: initial };
 			return hooks.cells[index];
+		},
+		useMemo: <T,>(create: () => T, deps: React.DependencyList | undefined) => {
+			// biome-ignore lint/correctness/useHookAtTopLevel: Real hooks remain unchanged for SSR; direct callbacks retain memo identity.
+			if (!hooks.active) return actual.useMemo(create, deps);
+			const index = hooks.cursor++;
+			const prior = hooks.memos.get(index);
+			if (
+				!prior?.deps ||
+				!deps ||
+				deps.length !== prior.deps.length ||
+				deps.some((value, i) => !Object.is(value, prior.deps?.[i]))
+			)
+				hooks.memos.set(index, { value: create(), deps });
+			return hooks.memos.get(index)?.value as T;
+		},
+		useEffect: (effect: React.EffectCallback, deps?: React.DependencyList) => {
+			// biome-ignore lint/correctness/useHookAtTopLevel: Direct callbacks commit effects after rendering and clean them up on replacement/unmount.
+			if (!hooks.active) return actual.useEffect(effect, deps);
+			const index = hooks.cursor++;
+			const prior = hooks.effects.get(index);
+			if (
+				!prior?.deps ||
+				!deps ||
+				deps.length !== prior.deps.length ||
+				deps.some((value, i) => !Object.is(value, prior.deps?.[i]))
+			)
+				hooks.commits.push(() => {
+					prior?.cleanup?.();
+					const cleanup = effect();
+					hooks.effects.set(index, { deps, cleanup: typeof cleanup === "function" ? cleanup : undefined });
+				});
 		},
 		// biome-ignore lint/correctness/useHookAtTopLevel: Test mode selects a direct callback harness or an unchanged real SSR render.
 		useId: () => (hooks.active ? `workspace-${hooks.cursor++}` : actual.useId()),
@@ -106,7 +141,13 @@ vi.mock("../src/app/client-provider.tsx", () => ({
 	useLocalState: () => ({ read: () => null, hasUnsavedWork: () => false }),
 }));
 
+function unmountWorkspace() {
+	for (const effect of hooks.effects.values()) effect.cleanup?.();
+	hooks.effects.clear();
+	hooks.commits = [];
+}
 afterEach(() => {
+	unmountWorkspace();
 	hooks.active = false;
 });
 
@@ -168,12 +209,17 @@ function nodes(node: React.ReactNode): Node[] {
 function workspaceHarness(onCreate: (name: string) => Promise<void>) {
 	hooks.active = true;
 	hooks.cells = [];
+	hooks.memos.clear();
+	hooks.effects.clear();
+	hooks.commits = [];
 	hooks.pending = false;
 	hooks.error = false;
 	const onOpenChange = vi.fn();
 	function render(disabled = false) {
 		hooks.cursor = 0;
-		return CreateDialog({ kind: "workspace", onCreate, onOpenChange, disabled });
+		const result = CreateDialog({ kind: "workspace", onCreate, onOpenChange, disabled });
+		for (const commit of hooks.commits.splice(0)) commit();
+		return result;
 	}
 	function find(type: React.ElementType, className?: string) {
 		const node = nodes(render()).find(
@@ -209,7 +255,7 @@ test("project creation submits its trimmed name once and cannot close while pend
 	hooks.pending = false;
 	invoke(find(Dialog), "onOpenChange", false);
 	hooks.pending = true;
-	assert.deepEqual(onCreate.mock.calls, [["Named project"]]);
+	assert.deepEqual(onCreate.mock.calls, [["Named project", undefined]]);
 	assert.deepEqual(onOpenChange.mock.calls, [[true]]);
 	assert.equal(find(Input).props.disabled, true);
 	assert.ok(complete);
@@ -217,6 +263,20 @@ test("project creation submits its trimmed name once and cannot close while pend
 	await hooks.completion;
 	assert.deepEqual(onOpenChange.mock.calls, [[true], [false]]);
 	assert.equal(find(Input).props.value, "");
+});
+
+test("project creation completion after unmount cannot dismiss a replacement dialog", async () => {
+	const pending = Promise.withResolvers<void>();
+	const onCreate = vi.fn(() => pending.promise);
+	const { find, invoke, onOpenChange } = workspaceHarness(onCreate);
+	invoke(find(Dialog), "onOpenChange", true);
+	invoke(find(Input), "onChange", { target: { value: "Creating project" } });
+	invoke(find(Button, "task-create-confirm"), "onClick");
+	unmountWorkspace();
+	pending.resolve();
+	await hooks.completion;
+	assert.deepEqual(onCreate.mock.calls, [["Creating project", undefined]]);
+	assert.deepEqual(onOpenChange.mock.calls, [[true]]);
 });
 
 test("project creation keeps uncertain input and requires closing before another attempt", async () => {
@@ -262,7 +322,7 @@ test("project name Enter respects IME confirmation and implicit form submission 
 	assert.equal(onCreate.mock.calls.length, 0);
 	invoke(find(Input), "onKeyUp");
 	invoke(find(Input), "onKeyDown", event);
-	assert.deepEqual(onCreate.mock.calls, [["项目"]]);
+	assert.deepEqual(onCreate.mock.calls, [["项目", undefined]]);
 	await hooks.completion;
 });
 

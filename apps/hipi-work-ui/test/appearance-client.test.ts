@@ -92,6 +92,7 @@ function queryClient(listFonts: AppearanceClient["listFonts"]): AppearanceClient
 	return {
 		localFontsSupported: true,
 		status: async () => webAppearance,
+		setThemeMode: async () => webAppearance,
 		setBackdrop: async () => webAppearance,
 		subscribe: () => () => {},
 		listFonts,
@@ -126,6 +127,45 @@ test("native lazy queries share only exact client/platform identities and cache 
 	await flushCatalog();
 	assert.equal(calls, 1);
 	second();
+});
+test("native theme requests retain original modes on hosts without backdrop support", async () => {
+	const calls: unknown[] = [];
+	const client = createAppearanceClient({
+		request: async (input) => {
+			calls.push(input);
+			return { ok: true, result: { ...webAppearance, platform: "linux", themeMode: "system" } };
+		},
+		fontsSupported: false,
+		listFonts: async () => {
+			throw new Error("unrelated capability");
+		},
+		cancelFonts() {},
+		subscribe: () => () => {},
+	});
+	for (const mode of ["light", "dark", "system"] as const) await client.setThemeMode(mode);
+	assert.deepEqual(calls, [
+		{ version: 1, method: "theme", mode: "light" },
+		{ version: 1, method: "theme", mode: "dark" },
+		{ version: 1, method: "theme", mode: "system" },
+	]);
+	const controller = new AbortController();
+	controller.abort();
+	await assert.rejects(
+		client.setThemeMode("dark", controller.signal),
+		(error) => error instanceof AppearanceError && error.code === "CLOSED",
+	);
+	await assert.rejects(
+		Reflect.apply(client.setThemeMode, client, ["auto"]),
+		(error) => error instanceof AppearanceError && error.code === "INVALID",
+	);
+	assert.equal(calls.length, 3);
+});
+test("web theme choice is a renderer preference, not a claimed native chrome capability", async () => {
+	vi.stubGlobal("window", {});
+	const client = createAppearanceClient();
+	for (const mode of ["light", "dark", "system"] as const) {
+		assert.equal((await client.setThemeMode(mode)).themeMode, null);
+	}
 });
 test("StrictMode cleanup/setup retains one query; final release aborts and fences late results without automatic retry", async () => {
 	let calls = 0;

@@ -7,7 +7,7 @@ import { FILE_LIMITS, FileServiceError, validateRelativePath } from "./contracts
 
 import { rootDisplayName } from "./display-name.ts";
 
-type Grant = FileRoot & { principalId: string; canonicalPath: string; dev: number; ino: number };
+type Grant = FileRoot & { principalId: string; canonicalPath: string; dev: bigint; ino: bigint };
 /** Trusted Node consumers only; never forward renderer-selected byte budgets. */
 export interface TrustedFileSnapshotSource {
 	/** Returns independently owned bytes. Consumers must not mutate retained snapshot content. */
@@ -38,6 +38,8 @@ export interface TrustedFileAuthority {
 		workspaceId: string;
 		absolutePath: string;
 		writable: boolean;
+		/** Reopening a persisted association must match the original canonical directory identity. */
+		expectedIdentity?: { canonicalPath: string; device: string; inode: string };
 	}): Promise<FileRoot>;
 	revokeRoot(rootId: string): void;
 	forPrincipal(principalId: string): FileService;
@@ -100,7 +102,7 @@ export function createFileAuthority(options: FileAuthorityOptions): TrustedFileA
 		return grant;
 	}
 	async function resolve(grant: Grant, path: string): Promise<string> {
-		const root = await lstat(grant.canonicalPath);
+		const root = await lstat(grant.canonicalPath, { bigint: true });
 		if (
 			!root.isDirectory() ||
 			root.isSymbolicLink() ||
@@ -276,8 +278,15 @@ export function createFileAuthority(options: FileAuthorityOptions): TrustedFileA
 					throw new FileServiceError("INVALID_PATH");
 				await options.assertWorkspaceAccess(input.principalId, input.workspaceId);
 				const canonicalPath = await realpath(input.absolutePath);
-				const info = await lstat(canonicalPath);
+				const info = await lstat(canonicalPath, { bigint: true });
 				if (!info.isDirectory()) throw new FileServiceError("BLOCKED_RESOURCE");
+				if (
+					input.expectedIdentity &&
+					(canonicalPath !== input.expectedIdentity.canonicalPath ||
+						info.dev.toString() !== input.expectedIdentity.device ||
+						info.ino.toString() !== input.expectedIdentity.inode)
+				)
+					throw new FileServiceError("BLOCKED_RESOURCE");
 				if (closed) throw new FileServiceError("CLOSED");
 				if (grants.size >= FILE_LIMITS.roots) throw new FileServiceError("LIMIT_EXCEEDED");
 				const displayName = rootDisplayName(canonicalPath);

@@ -13,7 +13,10 @@ import {
 	configureCustomProviders,
 } from "./model-provider.ts";
 import { PiWorkspace, type PiWorkspaceOptions, WorkspaceShutdownFailed } from "./pi-workspace.ts";
+import { registerRuntimeProjectFolders } from "./project-folders.ts";
 import { checkDatabasePath, StoreCatalog } from "./store-catalog.ts";
+
+export { createRuntimeProjectFolders } from "./project-folders.ts";
 
 // Keep a strong reference until process exit if startup teardown cannot prove the writer stopped.
 const retainedOwners = new Set<DatabaseSync>();
@@ -54,7 +57,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		catalog.close();
 		throw error;
 	}
-	return new WorkRuntime({
+	const runtime = new WorkRuntime({
 		storeId: catalog.storeId,
 		listCustomProviders: async () => catalog.listCustomProviders(),
 		listBuiltInProviders: async () => builtInProviderCatalog(),
@@ -240,4 +243,6 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 			}
 		},
 	});
+	registerRuntimeProjectFolders(runtime, catalog);
+	return runtime;
 }

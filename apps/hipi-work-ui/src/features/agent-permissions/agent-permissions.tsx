@@ -13,6 +13,8 @@ import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import { projectFolderLabels } from "../workbench/project-folder-labels.ts";
+import { useProjectFolder } from "../workbench/use-project-folder.ts";
 import { ApprovalCard } from "./approval-card.tsx";
 import { ContextDialog } from "./context-dialog.tsx";
 import { permissionLabels } from "./labels.ts";
@@ -55,6 +57,8 @@ export function AgentPermissionManagement({
 	const boundScope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
+	const pl = projectFolderLabels(locale);
+	const project = useProjectFolder(scope.workspaceId, connected);
 	const [session] = useState(
 		() =>
 			new PermissionSession(client, { workspaceId: scope.workspaceId, conversationId: scope.conversationId }, local),
@@ -121,6 +125,17 @@ export function AgentPermissionManagement({
 		"aria-controls": contextId,
 	};
 	const pending = session.getPending();
+	const projectAuthorized =
+		project.data?.root &&
+		state.activeContexts.some(
+			(context) =>
+				context.purpose === "live-files" &&
+				context.rootId === project.data?.root?.rootId &&
+				context.status === "active" &&
+				context.expiresAt > now &&
+				context.model.provider === model?.provider &&
+				context.model.modelId === model?.modelId,
+		);
 	const approval = state.approval;
 	const operation = state.operation;
 	const date = (value: number) =>
@@ -400,6 +415,17 @@ export function AgentPermissionManagement({
 	);
 	const attention = !detailsOpen && (
 		<div className="permission-attention" aria-live="polite">
+			{project.data?.status === "available" && !projectAuthorized && !archived && (
+				<div className="project-context-notice">
+					<span>
+						<ShieldCheck size={14} aria-hidden="true" />
+						{pl.currentChat}
+					</span>
+					<Button variant="ghost" size="sm" {...contextAction}>
+						{pl.authorize}
+					</Button>
+				</div>
+			)}
 			{state.unresolvedOperations.length > 0 && (
 				<>
 					<p role="alert">{l["permissions.operation.unknown"]}</p>

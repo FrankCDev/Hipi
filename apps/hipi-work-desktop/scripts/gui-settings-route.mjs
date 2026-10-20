@@ -197,7 +197,8 @@ export function createSettingsHarness(cdp, helpers) {
 				),
 			"Settings modal and initial search focus",
 		);
-		await read("window.__hipiGuiSettingsSurface = document.querySelector('.settings-modal')");
+		// Retain the actual node in the renderer, never serialize a React-backed DOM node through CDP.
+		await read("void (window.__hipiGuiSettingsSurface = document.querySelector('.settings-modal'))");
 		await retained(true);
 		await navigate(category);
 	};

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { smokeProfile } from "../src/smoke-profile.ts";
+import { fileFixture } from "./gui-file-workbench-fixture.mjs";
 import {
 	assertScenarioWorkspaceDatabases,
 	baselineResponseArguments,
@@ -24,23 +25,42 @@ test("known stream response is opt-in only for the isolated baseline scenario", 
 		assert.throws(() => baselineResponseArguments(scenario), /Unknown fixed GUI scenario/);
 });
 
-test("baseline and file flow validate both exact owned workspace databases; long history retains one", async () => {
+test("exact final counts are baseline two, file binding three, long history one, with every database required", async () => {
 	const root = await createGuiProfile();
 	try {
-		for (const workspace of ["a", "b"]) {
+		for (const workspace of [fileFixture.workspaceId, fileFixture.otherWorkspaceId]) {
 			await mkdir(join(root, workspace));
 			for (const file of ["owner.sqlite", "workspace.sqlite"]) await writeFile(join(root, workspace, file), "fixture");
 		}
-		for (const scenario of ["baseline", "file-workbench"]) await assertScenarioWorkspaceDatabases(root, scenario);
+		await assertScenarioWorkspaceDatabases(root, "baseline");
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench"), /workspace count/);
 		await assert.rejects(assertScenarioWorkspaceDatabases(root, "long-history"), /workspace count/);
-		await mkdir(join(root, "unexpected-third"));
-		for (const scenario of ["baseline", "file-workbench", "long-history"])
+		await mkdir(join(root, "native-third"));
+		for (const scenario of ["baseline", "long-history"])
 			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /workspace count/);
-		await rm(join(root, "unexpected-third"), { recursive: true });
-		await rm(join(root, "b", "workspace.sqlite"));
-		for (const scenario of ["baseline", "file-workbench"])
-			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /ENOENT/);
-		await rm(join(root, "b"), { recursive: true });
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench", "native-third"), /ENOENT/);
+		for (const file of ["owner.sqlite", "workspace.sqlite"])
+			await writeFile(join(root, "native-third", file), "fixture");
+		await assertScenarioWorkspaceDatabases(root, "file-workbench", "native-third");
+		for (const original of [fileFixture.workspaceId, fileFixture.otherWorkspaceId]) {
+			await rename(join(root, original), join(root, "replacement"));
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench", "native-third"), /exact A\/B/);
+			await rename(join(root, "replacement"), join(root, original));
+		}
+		for (const identity of [undefined, "not-created"])
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench", identity), /identity is missing/);
+		for (const identity of [fileFixture.workspaceId, fileFixture.otherWorkspaceId])
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench", identity), /exact A\/B/);
+		await rm(join(root, "native-third", "owner.sqlite"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench", "native-third"), /ENOENT/);
+		await writeFile(join(root, "native-third", "owner.sqlite"), "fixture");
+		await mkdir(join(root, "unexpected-fourth"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "file-workbench"), /workspace count/);
+		await rm(join(root, "unexpected-fourth"), { recursive: true });
+		await rm(join(root, "native-third"), { recursive: true });
+		await rm(join(root, fileFixture.otherWorkspaceId, "workspace.sqlite"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "baseline"), /ENOENT/);
+		await rm(join(root, fileFixture.otherWorkspaceId), { recursive: true });
 		for (const scenario of ["baseline", "file-workbench"])
 			await assert.rejects(assertScenarioWorkspaceDatabases(root, scenario), /workspace count/);
 		await assertScenarioWorkspaceDatabases(root, "long-history");

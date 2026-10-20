@@ -44,7 +44,18 @@ test("seeded file fixture passes the real native launch boundary without expandi
 	const root = await profile();
 	try {
 		await seedFileWorkbench({ ownedProfileRoot: root, assertAllOwnedProcessesExited: async () => {} });
-		await assertScenarioWorkspaceDatabases(join(root, "profile", "deterministic-store"), "file-workbench");
+		// Seed stage has only A/B. The third project must come from the actual native Create journey.
+		assert.deepEqual(
+			(await readdir(join(root, "profile", "deterministic-store"), { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name)
+				.sort(),
+			[fileFixture.workspaceId, fileFixture.otherWorkspaceId].sort(),
+		);
+		await assert.rejects(
+			assertScenarioWorkspaceDatabases(join(root, "profile", "deterministic-store"), "file-workbench"),
+			/workspace count/,
+		);
 		const args = [`--smoke-data-root=${root}`];
 		const paths = smokeProfile(args, "deterministic");
 		assert.equal(await ownedFileDirectory(root), join(paths.userData, fileFixture.folder));
@@ -1305,12 +1316,30 @@ test("completion gate requires every first-run, native-picker and cold-restart o
 		].map((key) => [key, true]),
 	);
 	first.nativePicker = { nativePicker: true, ownedDisplay: true, ownedPid: true, syntheticFolderOnly: true };
+	first.projectBinding = {
+		workspaceId: "third-native-project",
+		noModelGrant: "native_not_run; empty conversation UI is not authoritative grant evidence",
+		cancelNoCreate: true,
+		nativeChosen: true,
+		readOnlyRoot: true,
+		noConversationCreated: true,
+		restoredOriginal: true,
+	};
 	const reopened = {
 		reopened: true,
 		freshlyAuthorized: true,
 		coldSavedContent: true,
 		coldTabsEmpty: true,
 		rootRevoked: true,
+		projectBinding: {
+			workspaceId: "third-native-project",
+			noModelGrant: "native_not_run; empty conversation UI is not authoritative grant evidence",
+			persistedWithoutPicker: true,
+			readOnlyRoot: true,
+			noConversationCreated: true,
+			unbound: true,
+			tabsRevoked: true,
+		},
 	};
 	validateFileWorkbenchEvidence({ first, reopened });
 	for (const key of Object.keys(first))

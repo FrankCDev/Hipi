@@ -1,8 +1,15 @@
-import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
+import {
+	AppError,
+	type Conversation,
+	type ModelReference,
+	PROTOCOL_VERSION,
+	type Workspace,
+} from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings, SquarePen, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
+import type { ProjectFolderSelection } from "../../app/file-client.ts";
 import { usePreferences } from "../../app/preferences.tsx";
 import { BrandMark } from "../../components/brand-mark.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -27,6 +34,7 @@ import { filePanelLabels } from "./file-panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
 import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
+import { ProjectFolderDialog, ProjectFolderSummary } from "./project-folder.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
@@ -34,7 +42,7 @@ import { WorkspaceTree } from "./workspace-tree.tsx";
 
 export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const client = useAppClient();
-	const { files, previews } = useFiles();
+	const { files, fileAuthority, previews } = useFiles();
 	const session = useMemo(() => (files ? new FileWorkspaceSession(files, previews) : undefined), [files, previews]);
 	const connectionLease = useMemo(() => ({ client, session, active: true }), [client, session]);
 	const currentConnection = useRef(connectionLease);
@@ -107,6 +115,15 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [folderProject, setFolderProject] = useState<Workspace>();
+	const [folderCreationFailed, setFolderCreationFailed] = useState(false);
+	const [folderCreationFailures, setFolderCreationFailures] = useState<Record<string, boolean>>({});
+	const folderRestoreFocus = useRef<(() => void) | undefined>(undefined);
+	const manageProjectFolder = (value: Workspace, restoreFocus?: () => void) => {
+		folderRestoreFocus.current = restoreFocus;
+		setFolderCreationFailed(!!folderCreationFailures[value.workspaceId]);
+		setFolderProject(value);
+	};
 	const [settingsCategory, setSettingsCategory] = useState<"general" | "appearance" | "models" | "runtime">("general");
 	const [composerFocusRevision, setComposerFocusRevision] = useState(0);
 	const settingsTrigger = useRef<HTMLButtonElement>(null);
@@ -292,7 +309,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		await operation();
 		applyCatalogResult(origin);
 	};
-	const createWorkspace = async (name: string) => {
+	const createWorkspace = async (name: string, folder?: ProjectFolderSelection) => {
 		const origin = navigationRevision.current;
 		await catalog.execute({
 			version: PROTOCOL_VERSION,
@@ -301,7 +318,31 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		});
 		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
 			throw new Error("UNCONFIRMED");
+		const ownsNavigation = navigationRevision.current === origin;
 		applyCatalogResult(origin);
+		const bindingNavigation = ownsNavigation ? navigationRevision.current : undefined;
+		const result = catalog.getSnapshot().result;
+		if (folder && result && !("conversationId" in result) && fileAuthority?.attachProject) {
+			try {
+				const binding = await fileAuthority.attachProject(result.workspaceId, folder.selectionId);
+				if (connectionLease.active && currentConnection.current === connectionLease) {
+					cache.setQueryData(["projectFolder", result.workspaceId], binding);
+					await Promise.all([
+						cache.invalidateQueries({ queryKey: ["fileRoots", result.workspaceId] }),
+						cache.invalidateQueries({ queryKey: ["agent-context-roots", result.workspaceId] }),
+					]);
+				}
+			} catch {
+				if (connectionLease.active && currentConnection.current === connectionLease) {
+					setFolderCreationFailures((current) => ({ ...current, [result.workspaceId]: true }));
+					if (bindingNavigation !== undefined && navigationRevision.current === bindingNavigation) {
+						folderRestoreFocus.current = undefined;
+						setFolderCreationFailed(true);
+						setFolderProject(result);
+					}
+				}
+			}
+		}
 	};
 	const sendInitial = async (text: string, model: ModelReference) => {
 		const origin = navigationRevision.current;
@@ -451,7 +492,14 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					</div>
 					<div className="nav-section-heading">
 						<span>{t("nav.workspaces")}</span>
-						<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
+						<CreateDialog
+							disabled={catalogBlocked}
+							kind="workspace"
+							compact
+							onCreate={createWorkspace}
+							chooseFolder={fileAuthority?.prepareProject}
+							forgetFolder={fileAuthority?.forgetProjectSelection}
+						/>
 					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
 						{workspaces.isPending && !workspaces.hasData && (
@@ -500,6 +548,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							onSelect={selectConversation}
 							onNewConversation={openNewConversation}
 							defaultWorkspaceId={catalog.defaultWorkspaceId()}
+							onManageProjectFolder={manageProjectFolder}
 						/>
 						<CatalogPagination pages={workspaces} listRef={navigationList} />
 						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
@@ -646,20 +695,33 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<WorkbenchWelcome
 								workspaceName={workspace?.name}
 								action={
-									<PreparedTaskEntry
-										key={selectedWorkspace || "global"}
-										draft={preparedDraft(selectedWorkspace)}
-										onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
-										disabled={catalogBlocked}
-										busy={catalogState.busy}
-										onSend={sendInitial}
-										focusRevision={composerFocusRevision}
-										onManageModels={(returnFocus) => {
-											settingsReturn.current = returnFocus;
-											setSettingsCategory("models");
-											setSettingsOpen(true);
-										}}
-									/>
+									<>
+										{workspace && workspace.workspaceId !== catalog.defaultWorkspaceId() && (
+											<ProjectFolderSummary
+												workspaceId={workspace.workspaceId}
+												failed={folderCreationFailures[workspace.workspaceId]}
+												onManage={(trigger) =>
+													manageProjectFolder(workspace, () => {
+														if (trigger.isConnected) trigger.focus({ preventScroll: true });
+													})
+												}
+											/>
+										)}
+										<PreparedTaskEntry
+											key={selectedWorkspace || "global"}
+											draft={preparedDraft(selectedWorkspace)}
+											onDraftChange={(value) => changePreparedDraft(selectedWorkspace, value)}
+											disabled={catalogBlocked}
+											busy={catalogState.busy}
+											onSend={sendInitial}
+											focusRevision={composerFocusRevision}
+											onManageModels={(returnFocus) => {
+												settingsReturn.current = returnFocus;
+												setSettingsCategory("models");
+												setSettingsOpen(true);
+											}}
+										/>
+									</>
 								}
 							/>
 						)}
@@ -675,6 +737,23 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					/>
 				</main>
 			</div>
+			{folderProject && (
+				<ProjectFolderDialog
+					key={folderProject.workspaceId}
+					workspaceId={folderProject.workspaceId}
+					name={folderProject.name}
+					session={session}
+					initialFailure={folderCreationFailed}
+					onConfirmed={() =>
+						setFolderCreationFailures((current) => ({ ...current, [folderProject.workspaceId]: false }))
+					}
+					onClose={() => setFolderProject(undefined)}
+					onRestoreFocus={() => {
+						if (folderRestoreFocus.current) folderRestoreFocus.current();
+						else navigationToggle.current?.focus({ preventScroll: true });
+					}}
+				/>
+			)}
 			<SettingsDialog
 				open={settingsOpen}
 				initialCategory={settingsCategory}
