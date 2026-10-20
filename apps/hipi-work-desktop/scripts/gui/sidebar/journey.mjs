@@ -156,7 +156,12 @@ export function assertHomeDraftContext(value, workspaceId, draft, continuousHome
 	if (continuousHome) assert.equal(value.sameInput, true, "Changing the destination must retain the actual input node");
 }
 
-async function exerciseNewChatContext(cdp, seed) {
+export function homeInputAcceptsEditing(document) {
+	const input = document.querySelector(".prepared-task-input");
+	return !!input && !input.disabled && !input.readOnly;
+}
+
+async function exerciseNewChatContext(cdp, seed, directory) {
 	const draft = "SIDEBAR_HOME_SHARED 中文";
 	const inputFocused = () =>
 		until(
@@ -169,44 +174,61 @@ async function exerciseNewChatContext(cdp, seed) {
 		);
 	await click(cdp, ".new-conversation-trigger");
 	await until(
-		() => evaluate(cdp, "!!document.querySelector('.prepared-task-input:not(:disabled)')"),
-		"inherited project home input ready",
+		() => evaluate(cdp, `(${homeInputAcceptsEditing.toString()})(document)`),
+		"inherited project home input admits editing",
 	);
 	await inputFocused();
 	assert.equal(await evaluate(cdp, "document.querySelector('.prepared-task-input').value"), "");
 	await click(cdp, ".prepared-task-input");
+	const inputBeforeTyping = await evaluate(
+		cdp,
+		"(()=>{const input=document.querySelector('.prepared-task-input');return {value:input.value,readOnly:input.readOnly,ariaBusy:input.getAttribute('aria-busy'),focused:document.activeElement===input}})()",
+	);
 	await cdp.request("Input.insertText", { text: draft });
+	const inputAfterTyping = await evaluate(
+		cdp,
+		"(()=>{const input=document.querySelector('.prepared-task-input');return {value:input.value,readOnly:input.readOnly,ariaBusy:input.getAttribute('aria-busy'),focused:document.activeElement===input}})()",
+	);
 	await evaluate(
 		cdp,
 		"(()=>{const input=document.querySelector('.prepared-task-input');if(!input?.isConnected)throw Error('Missing shared home input');window.__sidebarHomeInput=input;return true})()",
 	);
-	const evidence = [];
-	const verify = async (workspaceId, continuousHome = true) => {
+	const evidence = [{ step: "native home input", beforeTyping: inputBeforeTyping, afterTyping: inputAfterTyping }];
+	let failure;
+	const verify = async (step, workspaceId, continuousHome = true) => {
+		await until(
+			() => evaluate(cdp, `(${homeInputAcceptsEditing.toString()})(document)`),
+			`${step}: home input admits editing`,
+		);
 		const value = await evaluate(
 			cdp,
 			`({
 			projects:[...document.querySelectorAll('.project-open[aria-current="page"]')].map(node=>node.closest('.workspace-branch').dataset.workspaceId),
 			conversations:document.querySelectorAll('.conversation-panel').length,
 			draft:document.querySelector('.prepared-task-input')?.value,
+			readOnly:document.querySelector('.prepared-task-input')?.readOnly,
+			ariaBusy:document.querySelector('.prepared-task-input')?.getAttribute('aria-busy'),
+			inputFocused:document.activeElement===document.querySelector('.prepared-task-input'),
 			sameInput:window.__sidebarHomeInput===document.querySelector('.prepared-task-input')
 		})`,
 		);
+		evidence.push({ step, expectedProject: workspaceId, expectedDraft: draft, ...value, continuousHome });
+		await writeFile(join(directory, "sidebar-new-chat-context.json"), `${JSON.stringify({ evidence }, null, 2)}\n`);
 		assertHomeDraftContext(value, workspaceId, draft, continuousHome);
-		evidence.push({ ...value, continuousHome });
 	};
 	try {
-		await verify(seed.alias.workspaceId);
+		await verify("typed inherited project draft", seed.alias.workspaceId);
 		const otherProject = seed.workspaceIds.find(
 			(id) => id !== seed.defaultWorkspaceId && id !== seed.alias.workspaceId,
 		);
 		assert.ok(otherProject);
 		await click(cdp, project(otherProject));
-		await verify(otherProject);
+		await verify("switch project destination", otherProject);
 		await click(cdp, ".new-conversation-trigger");
 		await inputFocused();
-		await verify(otherProject);
+		await verify("repeat New chat in selected project", otherProject);
 		await click(cdp, ".brand-home");
-		await verify(null);
+		await verify("switch to projectless home", null);
 		const ordinary = seed.snapshot.conversations.find(
 			({ conversation }) => conversation.workspaceId === seed.defaultWorkspaceId,
 		)?.conversation;
@@ -221,7 +243,7 @@ async function exerciseNewChatContext(cdp, seed) {
 		);
 		await click(cdp, ".new-conversation-trigger");
 		await inputFocused();
-		await verify(null, false);
+		await verify("New chat from default conversation", null, false);
 		const alias = `.recent-conversations .conversation-link[data-workspace-id="${seed.alias.workspaceId}"][data-conversation-id="${seed.alias.conversationId}"]`;
 		await click(cdp, alias);
 		await until(
@@ -230,19 +252,22 @@ async function exerciseNewChatContext(cdp, seed) {
 		);
 		await click(cdp, ".new-conversation-trigger");
 		await inputFocused();
-		await until(
-			() => evaluate(cdp, `document.querySelector('.prepared-task-input')?.value===${JSON.stringify(draft)}`),
-			"home draft returns after conversation navigation",
-		);
 		// Entering a conversation intentionally unmounts the home. Subsequent home routes
 		// must still preserve text and destination; this is not a same-node claim across views.
-		await verify(seed.alias.workspaceId, false);
+		await verify("New chat from project conversation", seed.alias.workspaceId, false);
 		await click(cdp, ".prepared-task-input");
 		await key(cdp, "a", process.platform === "darwin" ? 4 : 2);
 		await key(cdp, "Backspace");
 		assert.equal(await evaluate(cdp, "document.querySelector('.prepared-task-input').value"), "");
 		return evidence;
+	} catch (error) {
+		failure = error.message;
+		throw error;
 	} finally {
+		await writeFile(
+			join(directory, "sidebar-new-chat-context.json"),
+			`${JSON.stringify({ evidence, failure }, null, 2)}\n`,
+		);
 		await evaluate(cdp, "delete window.__sidebarHomeInput");
 	}
 }
@@ -468,7 +493,7 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		const aliasSelection = await exerciseAliasSelection(cdp, seed);
 		actions.push({ name: "native project Recent alias ownership and disclosure fallback", aliasSelection });
 		record({ sidebarAction: "native project Recent alias ownership and disclosure fallback" });
-		const newChatContext = await exerciseNewChatContext(cdp, seed);
+		const newChatContext = await exerciseNewChatContext(cdp, seed, directory);
 		actions.push({ name: "native New chat project inheritance and shared draft", newChatContext });
 		record({ sidebarAction: "native New chat project inheritance and shared draft" });
 		await click(cdp, pin(seed.pins[0]));

@@ -84,6 +84,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-editor-escape.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-reopen.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/linux-sidebar-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-between-runs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/packaging/appimage-launcher.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/probe-linux-sandbox.test.mjs");
@@ -120,6 +121,7 @@ const uiTests = [
 	"workbench/files/file-canvas-presentation",
 	"workbench/composer/work-experience-presentation",
 	"workbench/composer/prepared-task-entry",
+	"workbench/composer/use-home-draft",
 	"dialog-placement",
 	"agent-permission-card",
 	"permission-presentation",
@@ -160,6 +162,7 @@ const uiTests = [
 	"workbench/sidebar/selection-provider",
 	"workbench/sidebar/selection-hooks",
 	"workbench/sidebar/use-navigation",
+	"workbench/sidebar/startup-publication",
 	"workbench/sidebar/pinned-focus-lifecycle",
 	"tool-packs-panel-lifecycle",
 	"workbench/conversation/archived-conversation",

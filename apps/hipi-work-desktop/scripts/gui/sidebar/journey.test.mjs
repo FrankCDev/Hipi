@@ -7,6 +7,7 @@ import {
 	assertSidebarAcceptance,
 	assertSidebarState,
 	expectedPinnedPreview,
+	homeInputAcceptsEditing,
 } from "./journey.mjs";
 import { defaultRoleEntry, sidebarWorkspaceIds } from "./manifest.mjs";
 
@@ -29,6 +30,12 @@ const state = () => ({
 	messages: [{ id: "message-1", text: "synthetic history" }],
 	dragging: false,
 	overlay: false,
+});
+
+test("native home typing waits for editing admission, not merely mounted or focused input", () => {
+	for (const input of [null, { disabled: true, readOnly: false }, { disabled: false, readOnly: true }])
+		assert.equal(homeInputAcceptsEditing({ querySelector: () => input }), false);
+	assert.equal(homeInputAcceptsEditing({ querySelector: () => ({ disabled: false, readOnly: false }) }), true);
 });
 
 test("alias oracle rejects duplicate highlights, wrong location and remounted conversation owners", () => {

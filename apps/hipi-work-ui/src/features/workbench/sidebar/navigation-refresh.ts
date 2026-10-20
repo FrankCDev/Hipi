@@ -37,6 +37,9 @@ export function reconcileNavigationPublication(cache: QueryClient, coverage: Sid
 				if (query.state.error && now - query.state.errorUpdatedAt < 10000) return false;
 				return (
 					!!query.state.error ||
+					// A first building page has no rows, but publication retains its generation.
+					// Read the published rows before treating that cached page as complete.
+					(published?.state === "building" && coverage.state !== "building") ||
 					(!!window?.rebuilding && coverage.state !== "building") ||
 					(!!published && !sameNavigationPublication(published, coverage))
 				);

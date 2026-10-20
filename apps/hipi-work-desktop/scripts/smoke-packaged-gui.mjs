@@ -20,6 +20,7 @@ import {
 import { assertNoPackageProcesses, debuggerClosed, startProcess } from "./gui-process.mjs";
 import { profileEvidence, profileRootEvidence } from "./gui-profile-evidence.mjs";
 import { captureWindowsIdentity, readWindowsDialogs } from "./gui-windows-dialogs.mjs";
+import { createSidebarPolicy } from "./linux-sidebar-policy.mjs";
 import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -163,6 +164,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			"updates",
 		],
 	};
+	let sidebarPolicy;
 	let native;
 	let windowsIdentity;
 	let xvfb;
@@ -185,6 +187,9 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			appDirectory,
 			{ linux: "hipi-work", win32: "Hipi Work.exe", darwin: "Contents/MacOS/Hipi Work" }[process.platform],
 		);
+		sidebarPolicy = createSidebarPolicy({ owned, binary, scenario });
+		evidence.linuxSidebarPolicy = sidebarPolicy.evidence;
+		await sidebarPolicy.setup();
 		const resources = join(appDirectory, key === "mac" ? "Contents/Resources" : "resources");
 		evidence.binarySha256 = hash(await readFile(binary));
 		evidence.asarSha256 = hash(await readFile(join(resources, "app.asar")));
@@ -266,6 +271,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 				"private DevToolsActivePort",
 				30000,
 			);
+			await sidebarPolicy.assertAttached(native.child.pid, iteration);
 			browser = await Cdp.connect(connection.browser, connection.port, "browser");
 			const target = await until(() => pageTarget(connection.port), "packaged application target");
 			const catalog = join(profile, "profile/deterministic-store/catalog.sqlite");
@@ -398,6 +404,17 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			await writeFile(join(artifacts, "failure-native.log"), redactNativeLog(native.output, [owned, profile]));
 		process.exitCode = 1;
 	} finally {
+		try {
+			await sidebarPolicy?.cleanup(async () => {
+				await native?.terminate();
+				await assertNoPackageProcesses(appDirectory);
+			});
+		} catch (error) {
+			evidence.status = "failed";
+			safeCleanup = false;
+			recordGuiFailure(evidence, "policyCleanupFailure", error, [owned, profile]);
+			process.exitCode = 1;
+		}
 		evidence.nativeFileLogs = [];
 		for (const iteration of [0, 1]) {
 			try {

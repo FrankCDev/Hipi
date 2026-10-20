@@ -28,13 +28,15 @@ export function useNavigation(view: SidebarView, filter: ConversationFilter, ena
 			items.set(JSON.stringify([item.conversation.workspaceId, item.conversation.conversationId]), item);
 	const published = pages[0]?.coverage;
 	const coverage =
-		published && query.data?.rebuilding
-			? { ...published, state: "refreshing" as const }
-			: published && probe.data
-				? sameNavigationPublication(published, probe.data.coverage)
-					? probe.data.coverage
-					: { ...published, state: "refreshing" as const }
-				: published;
+		published?.state === "building"
+			? published
+			: published && query.data?.rebuilding
+				? { ...published, state: "refreshing" as const }
+				: published && probe.data
+					? sameNavigationPublication(published, probe.data.coverage)
+						? probe.data.coverage
+						: { ...published, state: "refreshing" as const }
+					: published;
 	const hasMore = !query.data?.rebuilding && !!pages.at(-1)?.nextCursor;
 	const run = async (next: typeof action) => {
 		if (!enabled || cache.getQueryState(options.queryKey)?.fetchStatus === "fetching") return;
