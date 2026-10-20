@@ -1,6 +1,6 @@
 import { AppError, type Conversation, type ModelReference, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings } from "lucide-react";
+import { ChevronUp, Settings } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -27,6 +27,8 @@ import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
 import { FilePanelController } from "./file-panel-controller.ts";
 import { filePanelLabels } from "./file-panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
+import { workbenchLabels } from "./workbench-labels.ts";
+import { WorkbenchWelcome } from "./workbench-welcome.tsx";
 import { WorkspaceTree } from "./workspace-tree.tsx";
 
 export function Workbench({ disconnect }: { disconnect: () => void }) {
@@ -65,6 +67,18 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 		currentScope.current = { workspaceId: selectedWorkspace, conversationId: selectedConversation };
 	}, [selectedWorkspace, selectedConversation]);
 	const [navigationOpen, setNavigationOpen] = useState(false);
+	const [navigationCollapsed, setNavigationCollapsed] = useState(false);
+	const [narrow, setNarrow] = useState(false);
+	useEffect(() => {
+		const media = window.matchMedia("(max-width: 720px)");
+		const update = () => {
+			setNarrow(media.matches);
+			if (!media.matches) setNavigationOpen(false);
+		};
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const detailsTrigger = useRef<HTMLButtonElement>(null);
@@ -102,6 +116,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const [search, setSearch] = useState("");
 	const [workspaceCursor, setWorkspaceCursor] = useState<string | undefined>();
 	const cl = catalogLabels(locale);
+	const wl = workbenchLabels(locale);
 	const catalogBlocked = catalogState.busy || !!catalogState.pending || catalogState.incompatible;
 	const workspaces = useQuery({
 		queryKey: ["workspaces", workspaceCursor],
@@ -196,8 +211,13 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	};
 
 	return (
-		<div className="work-shell" data-navigation-open={navigationOpen}>
-			<aside className="sidebar" id="work-navigation" aria-label={t("nav.workspaces")}>
+		<div className="work-shell" data-navigation-open={navigationOpen} data-navigation-collapsed={navigationCollapsed}>
+			<aside
+				className="sidebar"
+				id="work-navigation"
+				aria-label={t("nav.workspaces")}
+				inert={narrow ? !navigationOpen : navigationCollapsed}
+			>
 				<div className="sidebar-brand-row">
 					<button
 						type="button"
@@ -210,6 +230,19 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							Hipi <strong>Work</strong>
 						</span>
 					</button>
+					<Button
+						className="sidebar-collapse"
+						variant="ghost"
+						size="icon-sm"
+						aria-label={wl["workbench.hideNavigation"]}
+						title={wl["workbench.hideNavigation"]}
+						onClick={() => {
+							setNavigationCollapsed(true);
+							navigationToggle.current?.focus();
+						}}
+					>
+						<Icon name="panel" size={17} />
+					</Button>
 					<Button
 						ref={navigationClose}
 						className="mobile-close"
@@ -226,13 +259,22 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 				</div>
 				<section className="conversation-nav">
 					<div className="workspace-create">
-						<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
+						{workspace ? (
+							<CreateDialog
+								disabled={catalogBlocked}
+								kind="conversation"
+								onCreate={(title, model) => createConversation(selectedWorkspace, title, model)}
+							/>
+						) : (
+							<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
+						)}
 					</div>
 					<label className="sr-only" htmlFor={searchInputId}>
 						{t("nav.search")}
 					</label>
 					<InputGroup className="nav-search">
 						<InputGroupInput
+							className="text-[13px]"
 							id={searchInputId}
 							placeholder={t("nav.search")}
 							aria-describedby={`${searchInputId}-scope`}
@@ -265,82 +307,108 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					<p className="sr-only" id={`${searchInputId}-scope`}>
 						{cl.searchScope}
 					</p>
-					{workspaces.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
-					{workspaces.isError && (
-						<div className="nav-feedback" role="alert">
-							<p>
-								{t(
-									workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-										? "connection.storeMismatch"
-										: "nav.loadError",
-								)}
-							</p>
-							<Button variant="outline" size="sm" onClick={() => void workspaces.refetch()}>
-								<Icon name="refresh" size={14} />
-								{t("nav.refresh")}
-							</Button>
-						</div>
-					)}
-					{workspaces.isSuccess && workspaces.data.items.length === 0 && (
-						<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
-					)}
-					<WorkspaceTree
-						workspaces={workspaces.data?.items ?? []}
-						catalog={catalog}
-						guard={guard}
-						selectedWorkspace={selectedWorkspace}
-						selectedConversation={selectedConversation}
-						search={search}
-						isExpanded={isExpanded}
-						onToggle={(id) => {
-							if (id !== selectedWorkspace) selectWorkspace(id);
-							else setProjectExpanded(id, !isExpanded(id));
-						}}
-						onSelect={selectConversation}
-						onCreate={createConversation}
-						onDetails={(item, returnFocus) => {
-							selectConversation(item, () => {
-								detailsReturn.current = returnFocus;
-								setDetailsOpen(true);
-							});
-						}}
-					/>
-					{!!(workspaceCursor || workspaces.data?.nextCursor) && (
-						<div className="flex gap-1">
-							<Button
-								size="sm"
-								variant="ghost"
-								disabled={workspaces.isFetching || !workspaceCursor}
-								onClick={() => setWorkspaceCursor(undefined)}
-							>
-								{cl.first}
-							</Button>
-							<Button
-								size="sm"
-								variant="ghost"
-								disabled={workspaces.isFetching || !workspaces.data?.nextCursor}
-								onClick={() => {
-									if (workspaces.data?.nextCursor) setWorkspaceCursor(workspaces.data.nextCursor);
-								}}
-							>
-								{cl.next}
-							</Button>
-						</div>
-					)}
-					<CatalogRecovery session={catalog} onResolved={applyCatalogResult} />
+					<div className="nav-section-heading">
+						<span>{t("nav.workspaces")}</span>
+						{workspace && (
+							<CreateDialog disabled={catalogBlocked} kind="workspace" compact onCreate={createWorkspace} />
+						)}
+					</div>
+					<div className="navigation-list">
+						{workspaces.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
+						{workspaces.isError && (
+							<div className="nav-feedback" role="alert">
+								<p>
+									{t(
+										workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
+											? "connection.storeMismatch"
+											: "nav.loadError",
+									)}
+								</p>
+								<Button variant="outline" size="sm" onClick={() => void workspaces.refetch()}>
+									<Icon name="refresh" size={14} />
+									{t("nav.refresh")}
+								</Button>
+							</div>
+						)}
+						{workspaces.isSuccess && workspaces.data.items.length === 0 && (
+							<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
+						)}
+						<WorkspaceTree
+							workspaces={workspaces.data?.items ?? []}
+							catalog={catalog}
+							guard={guard}
+							selectedWorkspace={selectedWorkspace}
+							selectedConversation={selectedConversation}
+							search={search}
+							isExpanded={isExpanded}
+							onToggle={(id) => {
+								if (id !== selectedWorkspace) selectWorkspace(id);
+								else setProjectExpanded(id, !isExpanded(id));
+							}}
+							onSelect={selectConversation}
+							onCreate={createConversation}
+							onDetails={(item, returnFocus) => {
+								selectConversation(item, () => {
+									detailsReturn.current = returnFocus;
+									setDetailsOpen(true);
+								});
+							}}
+						/>
+						{!!(workspaceCursor || workspaces.data?.nextCursor) && (
+							<div className="flex gap-1">
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={workspaces.isFetching || !workspaceCursor}
+									onClick={() => setWorkspaceCursor(undefined)}
+								>
+									{cl.first}
+								</Button>
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={workspaces.isFetching || !workspaces.data?.nextCursor}
+									onClick={() => {
+										if (workspaces.data?.nextCursor) setWorkspaceCursor(workspaces.data.nextCursor);
+									}}
+								>
+									{cl.next}
+								</Button>
+							</div>
+						)}
+						<CatalogRecovery session={catalog} onResolved={applyCatalogResult} />
+					</div>
 				</section>
 				<div className="sidebar-footer">
-					<div className="runtime-label">
-						<span className="status-dot" />
-						{t("app.localRuntime")}
-					</div>
-					<ConnectionActions
-						disconnect={() => guard(disconnect)}
-						onOpen={(opened, item) => {
-							cache.setQueryData(["workspace", opened.workspaceId], opened);
-							selectConversation(item);
-						}}
-					/>
+					<Popover>
+						<PopoverTrigger asChild>
+							<Button variant="ghost" className="runtime-menu-trigger" aria-label={wl["workbench.runtimeControls"]}>
+								<span className="runtime-label">
+									<span className="status-dot" />
+									{t("app.localRuntime")}
+								</span>
+								<ChevronUp size={14} aria-hidden="true" />
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent
+							className="runtime-menu"
+							side="top"
+							align="start"
+							aria-label={wl["workbench.runtimeControls"]}
+							onInteractOutside={(event) => {
+								if (document.querySelector('[data-slot="dialog-content"]')) event.preventDefault();
+							}}
+						>
+							<p className="eyebrow">{wl["workbench.runtimeControls"]}</p>
+							<ConnectionActions
+								disconnect={() => guard(disconnect)}
+								onOpen={(opened, item) => {
+									cache.setQueryData(["workspace", opened.workspaceId], opened);
+									selectConversation(item);
+								}}
+							/>
+						</PopoverContent>
+					</Popover>
 				</div>
 			</aside>
 			<div className="main-shell" inert={navigationOpen}>
@@ -352,9 +420,12 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							variant="ghost"
 							size="icon"
 							aria-label={t("nav.toggle")}
-							aria-expanded={navigationOpen}
+							aria-expanded={narrow ? navigationOpen : !navigationCollapsed}
 							aria-controls="work-navigation"
-							onClick={() => setNavigationOpen((value) => !value)}
+							onClick={() => {
+								if (narrow) setNavigationOpen((value) => !value);
+								else setNavigationCollapsed((value) => !value);
+							}}
 						>
 							<Icon name="panel" />
 						</Button>
@@ -370,6 +441,9 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 					<div className="toolbar-actions">
 						<Button
 							ref={panelTrigger}
+							className="file-panel-toggle"
+							data-active={panelState.open}
+							aria-label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
 							variant="ghost"
 							size="sm"
 							aria-expanded={panelState.open}
@@ -467,15 +541,10 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							}}
 						/>
 					) : (
-						<section className="welcome">
-							<div className="welcome-mark" aria-hidden="true">
-								<Icon name="chat" size={30} />
-							</div>
-							<p className="eyebrow">Hipi Work</p>
-							<h1>{t("work.emptyTitle")}</h1>
-							<p>{t("work.emptyBody")}</p>
-							<div className="welcome-action">
-								{workspace ? (
+						<WorkbenchWelcome
+							workspaceName={workspace?.name}
+							action={
+								workspace ? (
 									<CreateDialog
 										kind="conversation"
 										disabled={catalogBlocked}
@@ -483,13 +552,9 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 									/>
 								) : (
 									<CreateDialog disabled={catalogBlocked} kind="workspace" onCreate={createWorkspace} />
-								)}
-							</div>
-							<div className="welcome-footnote">
-								<Icon name="info" size={15} />
-								<span>{t("model.runtimeNote")}</span>
-							</div>
-						</section>
+								)
+							}
+						/>
 					)}
 					<FilePanel
 						controller={panel}

@@ -241,7 +241,8 @@ test("task-dialog accessibility stays under an owned HWND with bounded, read-onl
 	assert.match(script, /controls >= 16 \|\| depth > 4/);
 	assert.match(script, /clock\.ElapsedMilliseconds >= 2000/);
 	assert.match(script, /value = value\.Substring\(0, 2047\)/);
-	assert.match(script, /element\.Current\.ControlType == ControlType\.Text/);
+	assert.match(script, /var controlType = element\.Current\.ControlType/);
+	assert.match(script, /controlType == ControlType\.Text/);
 	assert.doesNotMatch(
 		script,
 		/AutomationElement\.RootElement|FindAll\(|FindFirst\(|SetFocus\(|InvokePattern|SendKeys|PostMessage/,
@@ -271,6 +272,32 @@ test("task-dialog accessibility stays under an owned HWND with bounded, read-onl
 			}),
 		}),
 		{ status: "observed", codes: ["TASK_DIALOG_TEXT_OBSERVED"] },
+	);
+	const diagnostics = [
+		"DIRECTUI_CONTROL_OBSERVED",
+		"SYSLINK_CONTROL_OBSERVED",
+		"STATIC_CONTROL_OBSERVED",
+		"UIA_ROOT_OBSERVED",
+		"UIA_TEXT_EMPTY",
+		"UIA_PANE_OBSERVED",
+		"UIA_HYPERLINK_OBSERVED",
+		"UIA_CUSTOM_OBSERVED",
+		"UIA_BUTTON_OBSERVED",
+		"UIA_WINDOW_OBSERVED",
+		"UIA_OTHER_OBSERVED",
+		"UIA_TIME_LIMIT",
+		"UIA_CONTROL_LIMIT",
+		"UIA_DEPTH_LIMIT",
+		"NATIVE_TIME_LIMIT",
+		"NATIVE_CONTROL_LIMIT",
+		"NATIVE_WINDOW_LIMIT",
+	];
+	assert.deepEqual(
+		await readWindowsDialogs(confirmed, {
+			platform: "win32",
+			run: async () => ({ stdout: JSON.stringify({ status: "observed", codes: diagnostics, text: "private" }) }),
+		}),
+		{ status: "observed", codes: [...diagnostics].sort() },
 	);
 });
 
@@ -359,7 +386,7 @@ test("untrusted output, excessive text, platform mismatch and unknown codes cann
 test(
 	"Windows helper parses requests without profile or module search environment",
 	{ skip: process.platform !== "win32", timeout: 15000 },
-	async () => {
+	async (context) => {
 		const binary = join(
 			process.env.SystemRoot ?? process.env.SYSTEMROOT,
 			"System32/WindowsPowerShell/v1.0/powershell.exe",
@@ -368,15 +395,49 @@ test(
 		let phases;
 		const identity = await captureWindowsIdentity(input, {
 			run: async (_command, args, options) => {
-				const result = await execute(binary, args, {
+				const started = performance.now();
+				const timings = [];
+				let bytes = 0;
+				let pending = "";
+				const execution = execute(binary, args, {
 					...options,
 					env: { ...options.env, HIPI_WINDOW_REQUEST: "{invalid-private-request" },
 				});
-				phases = result.stdout
-					.trim()
-					.split(/\r?\n/)
-					.map((line) => JSON.parse(line));
-				return result;
+				function record(chunk) {
+					bytes += typeof chunk === "string" ? Buffer.byteLength(chunk, "utf8") : chunk.length;
+					if (bytes > 4096 || timings.length >= 8) return;
+					pending += chunk.toString("utf8");
+					const lines = pending.split(/\r?\n/);
+					pending = lines.pop();
+					for (const rawLine of lines) {
+						if (timings.length >= 8) break;
+						const line = rawLine.replace(/^\uFEFF/, "");
+						// Exact constants only; no exception, request, path or other output is logged.
+						const phase =
+							line === '{"status":"unknown","reason":"request"}'
+								? "request-rejected"
+								: line === '{"phase":"utility-import"}' || line === '{"phase":"request"}'
+									? JSON.parse(line).phase
+									: undefined;
+						if (phase)
+							timings.push({
+								phase,
+								afterMs: Math.min(10000, Math.max(0, Math.round(performance.now() - started))),
+							});
+					}
+				}
+				execution.child.stdout.on("data", record);
+				try {
+					const result = await execution;
+					phases = result.stdout
+						.trim()
+						.split(/\r?\n/)
+						.map((line) => JSON.parse(line));
+					return result;
+				} finally {
+					execution.child.stdout.off("data", record);
+					context.diagnostic(JSON.stringify({ malformedRequestPhaseTimings: timings }));
+				}
 			},
 		});
 		assert.deepEqual(identity, { status: "unknown", reason: "request" });
@@ -456,11 +517,13 @@ for (const kind of ["classic", "task"])
 				assert.equal(primary.child.exitCode, null, "Primary fixture must remain alive during observation");
 				assert.equal(decoy.child.exitCode, null, "Decoy must remain alive during observation");
 				const result = await readWindowsDialogs(identity, { run });
+				// The boundary returns reviewed constants only, never raw window content.
+				context.diagnostic(JSON.stringify({ ownedDialogObservation: result }));
 				assert.equal(result.status, "observed", JSON.stringify(result));
 				assert.equal(decoy.child.exitCode, null, "Decoy must not disappear before isolation is checked");
-				assert.ok(result.codes.includes("ERR_MODULE_NOT_FOUND"));
-				assert.ok(result.codes.includes("ELECTRON_MAIN_JS_ERROR"));
-				if (kind === "task") assert.ok(result.codes.includes("TASK_DIALOG_TEXT_OBSERVED"));
+				assert.ok(result.codes.includes("ERR_MODULE_NOT_FOUND"), JSON.stringify(result));
+				assert.ok(result.codes.includes("ELECTRON_MAIN_JS_ERROR"), JSON.stringify(result));
+				if (kind === "task") assert.ok(result.codes.includes("TASK_DIALOG_TEXT_OBSERVED"), JSON.stringify(result));
 				assert.ok(!result.codes.includes("ReferenceError"), "The separate decoy process must not be read");
 				assert.ok(!JSON.stringify(result).includes("private-fixture-secret"));
 			} finally {

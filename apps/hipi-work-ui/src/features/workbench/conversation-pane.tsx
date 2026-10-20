@@ -71,24 +71,30 @@ export function ConversationPane({
 					</DialogBody>
 				</DialogContent>
 			</Dialog>
-			<div className="conversation-tools">
-				<ConversationModelControls controller={controller} />
-				<AgentPermissions
-					key={`${conversation.workspaceId}/${conversation.conversationId}`}
-					scope={conversation}
-					archived={conversation.archivedAt !== null}
-					model={controller.model.data?.model}
-					connected={observation.connection === "connected"}
-				/>
-			</div>
-			<ToolActivities
-				scope={conversation}
-				connected={observation.connection === "connected"}
-				running={observation.snapshot?.running ?? false}
-				onOpenArtifact={onOpenArtifact}
-			/>
 			<ConversationHistory scope={conversation} snapshot={observation.snapshot} error={observation.error} />
-			<ConversationComposer controller={controller} />
+			<ConversationComposer
+				controller={controller}
+				activity={
+					<ToolActivities
+						scope={conversation}
+						connected={observation.connection === "connected"}
+						running={observation.snapshot?.running ?? false}
+						onOpenArtifact={onOpenArtifact}
+					/>
+				}
+				controls={
+					<div className="conversation-tools">
+						<ConversationModelControls controller={controller} />
+						<AgentPermissions
+							key={`${conversation.workspaceId}/${conversation.conversationId}`}
+							scope={conversation}
+							archived={conversation.archivedAt !== null}
+							model={controller.model.data?.model}
+							connected={observation.connection === "connected"}
+						/>
+					</div>
+				}
+			/>
 		</section>
 	);
 }

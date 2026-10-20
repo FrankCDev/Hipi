@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createFileAuthority } from "@hipi/work-runtime/files/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { createPreviewClient } from "@hipi/work-runtime/previews/protocol";
+import { smokeProfile } from "../src/smoke-profile.ts";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { assertPdfPaint, documentPreviewState, pdfPreviewPaint } from "./gui-file-previews.mjs";
@@ -22,6 +23,22 @@ import {
 async function profile() {
 	return realpath(await mkdtemp(join(await realpath(tmpdir()), "Hipi GUI profile-")));
 }
+
+test("seeded file fixture passes the real native launch boundary without expanding its root allowlist", async () => {
+	const root = await profile();
+	try {
+		await seedFileWorkbench({ ownedProfileRoot: root, assertAllOwnedProcessesExited: async () => {} });
+		const args = [`--smoke-data-root=${root}`];
+		const paths = smokeProfile(args, "deterministic");
+		assert.equal(await ownedFileDirectory(root), join(paths.userData, fileFixture.folder));
+		assert.equal((await readOwnedFixture(root)).toString("utf8"), fileFixture.initial);
+		assert.deepEqual(smokeProfile(args, "deterministic"), paths, "Cold reopen must accept the same seeded profile");
+		await mkdir(join(root, fileFixture.folder));
+		assert.throws(() => smokeProfile(args, "deterministic"), /Unexpected smoke profile contents/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
 
 test("synthetic fixture exercises real file CAS and all preview transports without model or grant bypass", async () => {
 	const root = await profile();
@@ -158,6 +175,19 @@ test("fixture rejects foreign roots, duplicate seed and unexpected prior content
 	}
 });
 
+test("fixture rejects a redirected userData parent before creating any synthetic files", async () => {
+	const root = await profile();
+	const target = await profile();
+	try {
+		await symlink(target, join(root, "profile"), process.platform === "win32" ? "junction" : "dir");
+		await assert.rejects(ownedFileDirectory(root, { create: true }), /escaped owned profile/);
+		assert.deepEqual(await readdir(target), []);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+		await rm(target, { recursive: true, force: true });
+	}
+});
+
 test(
 	"fixture rejects symlink resources without needing privileged Windows symlink setup",
 	{ skip: process.platform === "win32" },
@@ -219,7 +249,7 @@ test(
 			if (args[0] === "getwindowfocus") return { stdout: "900\n" };
 			if (args[0] === "type") {
 				assert.ok(args.includes("--window") && args.includes("900"));
-				assert.match(args.at(-1), /Hipi GUI profile-[A-Za-z0-9]+\/workbench-files$/);
+				assert.match(args.at(-1), /Hipi GUI profile-[A-Za-z0-9]+\/profile\/workbench-files$/);
 			}
 			if (args.at(-1) === "Return") closed = true;
 			return { stdout: "" };

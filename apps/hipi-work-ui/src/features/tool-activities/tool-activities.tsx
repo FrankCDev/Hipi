@@ -4,6 +4,7 @@ import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
+import { Icon } from "../../components/ui/icon.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
 
@@ -67,16 +68,23 @@ function ScopedActivities({ scope, connected, running, onOpenArtifact }: Props) 
 	const first =
 		state.page?.items.find((item) => item.phase !== "terminal" && item.phase !== "unavailable") ?? state.page?.items[0];
 	const disabled = state.busy || !connected || !visible;
+	const snapshot = first
+		? [
+				`${l["activity.snapshot"]}: ${toolLabel(first.toolName, locale)}`,
+				l[`activity.phase.${first.phase}`],
+				first.outcome && l[`activity.outcome.${first.outcome}`],
+				first.toolResult === "error" && l["activity.result.error"],
+			]
+				.filter(Boolean)
+				.join(" · ")
+		: undefined;
 	return (
-		<div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border px-4 py-1 text-sm">
-			<span className="shrink-0 text-muted-foreground">{l["activity.title"]}</span>
-			<span ref={summary} className="min-w-0 flex-1 truncate text-muted-foreground">
-				{state.failed
-					? l["activity.failed"]
-					: first
-						? `${l["activity.snapshot"]}: ${toolLabel(first.toolName, locale)} · ${l[`activity.phase.${first.phase}`]}`
-						: l[state.page ? "activity.empty" : "activity.notLoaded"]}
-			</span>
+		<div className="activity-context" data-state={state.failed ? "error" : first ? "record" : "idle"}>
+			{snapshot && (
+				<span ref={summary} className="activity-summary min-w-0 flex-1 truncate" title={snapshot}>
+					{snapshot}
+				</span>
+			)}
 			<Dialog
 				open={open}
 				onOpenChange={(next) => {
@@ -85,8 +93,9 @@ function ScopedActivities({ scope, connected, running, onOpenArtifact }: Props) 
 				}}
 			>
 				<DialogTrigger asChild>
-					<Button variant="ghost" size="sm" aria-expanded={open} aria-controls={id}>
+					<Button className="activity-trigger" variant="ghost" size="sm" aria-expanded={open} aria-controls={id}>
 						{l["activity.open"]}
+						<Icon name="chevron" size={14} />
 					</Button>
 				</DialogTrigger>
 				<DialogContent
@@ -154,6 +163,12 @@ function ScopedActivities({ scope, connected, running, onOpenArtifact }: Props) 
 					</div>
 				</DialogContent>
 			</Dialog>
+			{state.failed && (
+				<p className="activity-read-error" role="alert">
+					{l["activity.failed"]}
+				</p>
+			)}
+			{!connected && first && <output className="activity-offline">{l["activity.offline"]}</output>}
 		</div>
 	);
 }

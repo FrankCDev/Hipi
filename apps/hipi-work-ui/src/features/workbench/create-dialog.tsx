@@ -53,7 +53,7 @@ export function CreateDialog({
 	const trigger = (
 		<DialogTrigger asChild>
 			<Button
-				variant={compact ? "outline" : "ghost"}
+				variant="ghost"
 				size={compact ? "icon-sm" : "default"}
 				disabled={disabled}
 				aria-label={title}

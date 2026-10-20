@@ -31,36 +31,67 @@ export function ApprovalCard({
 	const date = (value: number) =>
 		new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "medium" }).format(value);
 	return (
-		<article className="rounded-md border border-border p-3 grid gap-2 break-all">
-			<h3>
-				{l["permissions.approval.title"]}: {approval.toolName}
-			</h3>
-			<p>
-				{l["permissions.context.scope"]}: {approval.workspaceId} / {approval.conversationId}
-			</p>
-			<p>
+		<article className="approval-card">
+			<header className="approval-header">
+				<div className="approval-heading">
+					<h3>{l["permissions.approval.title"]}</h3>
+					<p>{approval.toolName}</p>
+				</div>
+				<span className="approval-status" data-status={approval.status}>
+					{l[`permissions.status.${approval.status}`]}
+				</span>
+			</header>
+			<p className="approval-target">
 				{approval.rootId} / {approval.path}
 			</p>
-			<p>
-				{l["permissions.context.model"]}: {approval.model.provider} / {approval.model.modelId}
-			</p>
-			<p>
-				{l[`permissions.status.${approval.status}`]} · {l["permissions.context.expires"]}: {date(approval.expiresAt)}
-			</p>
-			<p>
-				{l["permissions.approval.version"]}: {approval.ifMatch}
-			</p>
-			<details>
-				<summary>{l["permissions.approval.digest"]}</summary>
-				<p>{approval.argumentsDigest}</p>
-				<p>{approval.contentDigest}</p>
-				<p>
-					{l["permissions.approval.task"]}: {approval.taskId} / {approval.callId} / {approval.submissionIds.join(", ")}{" "}
-					/ {approval.receiptIds.join(", ")}
+			<dl className="approval-facts">
+				<div>
+					<dt>{l["permissions.context.scope"]}</dt>
+					<dd>
+						{approval.workspaceId} / {approval.conversationId}
+					</dd>
+				</div>
+				<div>
+					<dt>{l["permissions.context.model"]}</dt>
+					<dd>
+						{approval.model.provider} / {approval.model.modelId}
+					</dd>
+				</div>
+				<div>
+					<dt>{l["permissions.context.expires"]}</dt>
+					<dd>{date(approval.expiresAt)}</dd>
+				</div>
+				<div>
+					<dt>{l["permissions.approval.version"]}</dt>
+					<dd className="approval-version">{approval.ifMatch}</dd>
+				</div>
+			</dl>
+			{operation && (
+				<output className="approval-outcome" data-status={operation.status}>
+					<p>{l[`permissions.status.${operation.status}`]}</p>
+					{operation.status === "observed_match" && <p>{l["permissions.operation.observed"]}</p>}
+					{(operation.status === "unknown" || operation.status === "executing") && (
+						<p>{l["permissions.operation.unknown"]}</p>
+					)}
+				</output>
+			)}
+			{approval.operationId && (
+				<Button
+					className="approval-reconcile"
+					variant="outline"
+					size="sm"
+					disabled={reconcileDisabled}
+					onClick={onReconcile}
+				>
+					{l["permissions.operation.reconcile"]}
+				</Button>
+			)}
+			{approval.beforeTextTruncated && (
+				<p className="approval-warning" role="note">
+					{l["permissions.approval.partial"]}
 				</p>
-			</details>
-			{approval.beforeTextTruncated && <p role="note">{l["permissions.approval.partial"]}</p>}
-			<details>
+			)}
+			<details className="approval-diff" open>
 				<summary>{l["permissions.approval.diff"]}</summary>
 				<div className="h-64 overflow-auto">
 					<CodeDiff
@@ -71,8 +102,17 @@ export function ApprovalCard({
 					/>
 				</div>
 			</details>
-			<p>{l["permissions.approval.note"]}</p>
-			<div className="flex flex-wrap gap-2">
+			<details className="approval-provenance">
+				<summary>{l["permissions.approval.digest"]}</summary>
+				<p>{approval.argumentsDigest}</p>
+				<p>{approval.contentDigest}</p>
+				<p>
+					{l["permissions.approval.task"]}: {approval.taskId} / {approval.callId} / {approval.submissionIds.join(", ")}{" "}
+					/ {approval.receiptIds.join(", ")}
+				</p>
+			</details>
+			<p className="approval-note">{l["permissions.approval.note"]}</p>
+			<div className="approval-actions">
 				{(["approve", "reject"] as const).map((decision) => (
 					<Button
 						key={decision}
@@ -84,20 +124,6 @@ export function ApprovalCard({
 					</Button>
 				))}
 			</div>
-			{operation && (
-				<output>
-					<p>{l[`permissions.status.${operation.status}`]}</p>
-					{operation.status === "observed_match" && <p>{l["permissions.operation.observed"]}</p>}
-					{(operation.status === "unknown" || operation.status === "executing") && (
-						<p>{l["permissions.operation.unknown"]}</p>
-					)}
-				</output>
-			)}
-			{approval.operationId && (
-				<Button variant="outline" size="sm" disabled={reconcileDisabled} onClick={onReconcile}>
-					{l["permissions.operation.reconcile"]}
-				</Button>
-			)}
 		</article>
 	);
 }

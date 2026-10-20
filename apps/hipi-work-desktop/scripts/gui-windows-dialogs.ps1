@@ -79,22 +79,41 @@ public static class HipiOwnedDialogReader {
     // Start at this already-verified dialog only. Never use RootElement or a global search.
     static bool ReadAccessible(AutomationElement element, IntPtr dialog, int pid, int depth,
         Stopwatch clock, HashSet<string> codes, ref int controls, ref int readable, ref bool limited) {
-        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16 || depth > 4) { limited = true; return false; }
+        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16 || depth > 4) {
+            if (clock.ElapsedMilliseconds >= 2000) codes.Add("UIA_TIME_LIMIT");
+            if (controls >= 16) codes.Add("UIA_CONTROL_LIMIT");
+            if (depth > 4) codes.Add("UIA_DEPTH_LIMIT");
+            limited = true; return false;
+        }
         controls++;
         if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
-        if (element.Current.ControlType == ControlType.Text) {
+        if (depth == 0) codes.Add("UIA_ROOT_OBSERVED");
+        var controlType = element.Current.ControlType;
+        if (controlType == ControlType.Text) {
             if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
             string value = element.Current.Name;
             if (!AccessibleOwned(element, dialog, pid)) { codes.Add("IDENTITY_CHANGED"); return false; }
+            if (value.Length == 0) codes.Add("UIA_TEXT_EMPTY");
             Classify(value, codes);
             readable++;
             codes.Add("TASK_DIALOG_TEXT_OBSERVED");
+        } else if (controlType == ControlType.Pane) codes.Add("UIA_PANE_OBSERVED");
+        else if (controlType == ControlType.Hyperlink) codes.Add("UIA_HYPERLINK_OBSERVED");
+        else if (controlType == ControlType.Custom) codes.Add("UIA_CUSTOM_OBSERVED");
+        else if (controlType == ControlType.Button) codes.Add("UIA_BUTTON_OBSERVED");
+        else if (controlType == ControlType.Window) codes.Add("UIA_WINDOW_OBSERVED");
+        else codes.Add("UIA_OTHER_OBSERVED");
+        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) {
+            codes.Add(clock.ElapsedMilliseconds >= 2000 ? "UIA_TIME_LIMIT" : "UIA_CONTROL_LIMIT");
+            limited = true; return false;
         }
-        if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) { limited = true; return false; }
         var child = TreeWalker.RawViewWalker.GetFirstChild(element);
         while (child != null) {
             if (!ReadAccessible(child, dialog, pid, depth + 1, clock, codes, ref controls, ref readable, ref limited)) return false;
-            if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) { limited = true; return false; }
+            if (clock.ElapsedMilliseconds >= 2000 || controls >= 16) {
+                codes.Add(clock.ElapsedMilliseconds >= 2000 ? "UIA_TIME_LIMIT" : "UIA_CONTROL_LIMIT");
+                limited = true; return false;
+            }
             child = TreeWalker.RawViewWalker.GetNextSibling(child);
         }
         return true;
@@ -105,9 +124,15 @@ public static class HipiOwnedDialogReader {
         int windows = 0, controls = 0;
         bool limited = false;
         foreach (ProcessThread thread in process.Threads) {
-            if (clock.ElapsedMilliseconds >= 2000 || windows >= 8) { limited = true; break; }
+            if (clock.ElapsedMilliseconds >= 2000 || windows >= 8) {
+                codes.Add(clock.ElapsedMilliseconds >= 2000 ? "NATIVE_TIME_LIMIT" : "NATIVE_WINDOW_LIMIT");
+                limited = true; break;
+            }
             bool enumerated = EnumThreadWindows((uint)thread.Id, delegate(IntPtr hwnd, IntPtr ignored) {
-                if (clock.ElapsedMilliseconds >= 2000 || windows++ >= 8) { limited = true; return false; }
+                if (clock.ElapsedMilliseconds >= 2000 || windows++ >= 8) {
+                    codes.Add(clock.ElapsedMilliseconds >= 2000 ? "NATIVE_TIME_LIMIT" : "NATIVE_WINDOW_LIMIT");
+                    limited = true; return false;
+                }
                 if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                 var kind = new StringBuilder(64);
                 if (GetClassName(hwnd, kind, kind.Capacity) == 0) { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }
@@ -120,12 +145,17 @@ public static class HipiOwnedDialogReader {
                 int readable = 0;
                 bool taskDialog = false;
                 EnumChildWindows(hwnd, delegate(IntPtr child, IntPtr unused) {
-                    if (clock.ElapsedMilliseconds >= 2000 || controls++ >= 16) { limited = true; return false; }
+                    if (clock.ElapsedMilliseconds >= 2000 || controls++ >= 16) {
+                        codes.Add(clock.ElapsedMilliseconds >= 2000 ? "NATIVE_TIME_LIMIT" : "NATIVE_CONTROL_LIMIT");
+                        limited = true; return false;
+                    }
                     if (!Owned(child, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                     var childKind = new StringBuilder(64);
                     if (GetClassName(child, childKind, childKind.Capacity) == 0) { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }
-                    if (childKind.ToString() == "DirectUIHWND") taskDialog = true;
+                    if (childKind.ToString() == "DirectUIHWND") { taskDialog = true; codes.Add("DIRECTUI_CONTROL_OBSERVED"); }
+                    if (childKind.ToString() == "SysLink") codes.Add("SYSLINK_CONTROL_OBSERVED");
                     if (childKind.ToString() != "Static") return true;
+                    codes.Add("STATIC_CONTROL_OBSERVED");
                     var text = new StringBuilder(2048); UIntPtr length;
                     // WM_GETTEXT only; never broadcast or wait without a timeout.
                     if (SendMessageTimeout(child, 13, (UIntPtr)2048, text, 0x22, 100, out length) == IntPtr.Zero) { codes.Add("TEXT_UNAVAILABLE"); return true; }

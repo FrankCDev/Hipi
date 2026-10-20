@@ -1,5 +1,18 @@
 import type { FileRoot, FileTarget } from "@hipi/work-runtime/files";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	ChevronRight,
+	Eye,
+	FileText,
+	Folder,
+	FolderOpen,
+	FolderPlus,
+	RefreshCw,
+	Save,
+	Shield,
+	ShieldX,
+	TriangleAlert,
+} from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useFiles } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -25,11 +38,13 @@ function Directory({
 	path,
 	open,
 	preview,
+	selected,
 }: {
 	root: FileRoot;
 	path: string;
 	open: (target: FileTarget, writable: boolean) => void;
 	preview?: (target: FileTarget) => void;
+	selected?: FileTarget;
 }) {
 	const { files } = useFiles();
 	const { locale } = usePreferences();
@@ -47,40 +62,64 @@ function Directory({
 	});
 	return (
 		<div className="file-directory">
-			{query.isPending && <output>{l.loading}</output>}
+			{query.isPending && <output className="file-loading">{l.loading}</output>}
 			{query.isError && (
-				<div role="alert">
+				<div role="alert" className="file-state" data-tone="error">
 					{l.failed}
 					<Button variant="outline" size="sm" onClick={() => void query.refetch()}>
 						{l.retry}
 					</Button>
 				</div>
 			)}
-			{query.data?.entries.length === 0 && <p>{l.empty}</p>}
+			{query.data?.entries.length === 0 && <p className="file-directory-empty">{l.empty}</p>}
 			<ul>
 				{query.data?.entries.map((entry) => (
 					<li key={entry.path}>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="file-entry"
-							disabled={entry.kind === "blocked"}
-							aria-expanded={entry.kind === "directory" ? expanded === entry.path : undefined}
-							onClick={() => {
-								if (entry.kind === "directory") setExpanded(expanded === entry.path ? null : entry.path);
-								else open(fileTarget(root, entry.path), root.writable);
-							}}
+						<div
+							className="file-entry-row"
+							data-selected={selected?.rootId === root.rootId && selected.path === entry.path ? "true" : undefined}
 						>
-							<span aria-hidden="true">{entry.kind === "directory" ? (expanded === entry.path ? "▾" : "▸") : "·"}</span>
-							<span>{entry.name}</span>
-						</Button>
-						{entry.kind === "file" && preview && (
-							<Button size="sm" variant="outline" onClick={() => preview(fileTarget(root, entry.path))}>
-								{previewLabels(locale)["preview.open"]}
+							<Button
+								variant="ghost"
+								size="sm"
+								className="file-entry"
+								title={entry.name}
+								disabled={entry.kind === "blocked"}
+								aria-current={selected?.rootId === root.rootId && selected.path === entry.path ? "true" : undefined}
+								aria-expanded={entry.kind === "directory" ? expanded === entry.path : undefined}
+								onClick={() => {
+									if (entry.kind === "directory") setExpanded(expanded === entry.path ? null : entry.path);
+									else open(fileTarget(root, entry.path), root.writable);
+								}}
+							>
+								{entry.kind === "directory" ? (
+									<>
+										<ChevronRight aria-hidden="true" className="file-chevron" />
+										<Folder aria-hidden="true" />
+									</>
+								) : entry.kind === "blocked" ? (
+									<ShieldX aria-hidden="true" />
+								) : (
+									<FileText aria-hidden="true" />
+								)}
+								<span>{entry.name}</span>
 							</Button>
-						)}
+							{entry.kind === "blocked" && <span className="file-entry-status">{l["state.blocked"]}</span>}
+							{entry.kind === "file" && preview && (
+								<Button
+									size="sm"
+									variant="ghost"
+									className="file-preview-action"
+									title={entry.name}
+									onClick={() => preview(fileTarget(root, entry.path))}
+								>
+									<Eye aria-hidden="true" />
+									{previewLabels(locale)["preview.open"]}
+								</Button>
+							)}
+						</div>
 						{entry.kind === "directory" && expanded === entry.path && (
-							<Directory root={root} path={entry.path} open={open} preview={preview} />
+							<Directory root={root} path={entry.path} open={open} preview={preview} selected={selected} />
 						)}
 					</li>
 				))}
@@ -171,39 +210,102 @@ export function FileWorkbench({
 	};
 	return (
 		<aside className="file-workbench" aria-label={l.title}>
-			<header className="file-heading">
-				<h2>{l.title}</h2>
-				<Button
-					variant="ghost"
-					size="sm"
-					disabled={!files || !workspaceId || roots.isFetching}
-					onClick={() => {
-						void roots.refetch();
-						void cache.invalidateQueries({ queryKey: ["files", workspaceId] });
-					}}
-				>
-					{l.refresh}
-				</Button>
-			</header>
 			{!files ? (
-				<p>{l.unavailable}</p>
+				<div className="file-state file-state-empty">
+					<ShieldX aria-hidden="true" />
+					<h3>{l["state.unavailable"]}</h3>
+					<p>{l.unavailable}</p>
+				</div>
 			) : !workspaceId ? (
-				<p>{l.noWorkspace}</p>
+				<div className="file-state file-state-empty">
+					<Folder aria-hidden="true" />
+					<h3>{l["state.noWorkspace"]}</h3>
+					<p>{l.noWorkspace}</p>
+				</div>
 			) : (
 				<>
-					{fileAuthority && (
-						<Button
-							variant="outline"
-							disabled={manage === "pending"}
-							onClick={() => void mutateAuthority(() => fileAuthority.chooseRoot(workspaceId))}
-						>
-							{l.choose}
-						</Button>
+					{(fileAuthority || !!roots.data?.length) && (
+						<details className="file-access" open={roots.data?.length === 0}>
+							<summary>
+								<Shield aria-hidden="true" />
+								<span>{l["access.title"]}</span>
+								<ChevronRight aria-hidden="true" className="file-chevron" />
+							</summary>
+							<div className="file-access-body">
+								{fileAuthority && (
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={manage === "pending"}
+										onClick={() => void mutateAuthority(() => fileAuthority.chooseRoot(workspaceId))}
+									>
+										<FolderPlus aria-hidden="true" />
+										{l.choose}
+									</Button>
+								)}
+								<ul className="file-access-list">
+									{roots.data?.map((root) => (
+										<li className="file-access-row" key={root.rootId}>
+											<div>
+												<span className="file-access-name">{root.displayName ?? l.root}</span>
+												<span className="file-access-kind">{root.writable ? l["access.readWrite"] : l.readonly}</span>
+											</div>
+											{fileAuthority && (
+												<Button
+													size="sm"
+													variant="ghost"
+													disabled={manage === "pending"}
+													onClick={() =>
+														guard(() => {
+															session?.clear();
+															previewSession?.clear();
+															void mutateAuthority(() => fileAuthority.revokeRoot(workspaceId, root.rootId));
+														})
+													}
+												>
+													{l.revoke}
+												</Button>
+											)}
+										</li>
+									))}
+								</ul>
+							</div>
+						</details>
 					)}
-					{manage === "failed" && <p role="alert">{l.failed}</p>}
-					{roots.isPending && <output>{l.loading}</output>}
-					{roots.isError && <p role="alert">{l.failed}</p>}
-					{roots.data?.length === 0 && <p>{l.noRoots}</p>}
+					{manage === "failed" && (
+						<p className="file-state" data-tone="error" role="alert">
+							{l.failed}
+						</p>
+					)}
+					<div className="file-browser-heading">
+						<h3>{l["browse.title"]}</h3>
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							aria-label={l.refresh}
+							title={l.refresh}
+							disabled={roots.isFetching}
+							onClick={() => {
+								void roots.refetch();
+								void cache.invalidateQueries({ queryKey: ["files", workspaceId] });
+							}}
+						>
+							<RefreshCw aria-hidden="true" />
+						</Button>
+					</div>
+					{roots.isPending && <output className="file-loading">{l.loading}</output>}
+					{roots.isError && (
+						<p className="file-state" data-tone="error" role="alert">
+							{l.failed}
+						</p>
+					)}
+					{roots.data?.length === 0 && (
+						<div className="file-state file-state-empty">
+							<FolderOpen aria-hidden="true" />
+							<h3>{l["empty.title"]}</h3>
+							<p>{l.noRoots}</p>
+						</div>
+					)}
 					<div className="file-tree">
 						{roots.data?.map((root) => (
 							<section key={root.rootId}>
@@ -211,33 +313,21 @@ export function FileWorkbench({
 									<Button
 										variant="ghost"
 										size="sm"
+										className="file-root-toggle"
 										aria-expanded={expandedRoot === root.rootId}
 										onClick={() => setExpandedRoot(expandedRoot === root.rootId ? null : root.rootId)}
 									>
-										{root.displayName ?? l.root}
+										<ChevronRight aria-hidden="true" className="file-chevron" />
+										<Folder aria-hidden="true" />
+										<span>{root.displayName ?? l.root}</span>
 									</Button>
-									{!root.writable && <span>{l.readonly}</span>}
-									{fileAuthority && (
-										<Button
-											size="sm"
-											variant="ghost"
-											disabled={manage === "pending"}
-											onClick={() =>
-												guard(() => {
-													session?.clear();
-													previewSession?.clear();
-													void mutateAuthority(() => fileAuthority.revokeRoot(workspaceId, root.rootId));
-												})
-											}
-										>
-											{l.revoke}
-										</Button>
-									)}
+									{!root.writable && <span className="file-access-kind">{l.readonly}</span>}
 								</div>
 								{expandedRoot === root.rootId && (
 									<Directory
 										root={root}
 										path=""
+										selected={previewState?.target ?? editorState?.document?.target}
 										preview={
 											previewSession
 												? (target) =>
@@ -261,7 +351,13 @@ export function FileWorkbench({
 					</div>
 				</>
 			)}
-			{session && !previewState?.target && <FileBuffer session={session} guard={guard} />}
+			{session &&
+				!previewState?.target &&
+				(editorState?.document ||
+					editorState?.operation ||
+					editorState?.error ||
+					editorState?.unknown !== undefined ||
+					(files && workspaceId && !!roots.data?.length)) && <FileBuffer session={session} guard={guard} />}
 			{previewSession && <DocumentPreviewPane session={previewSession} />}
 		</aside>
 	);
@@ -287,24 +383,57 @@ function FileBuffer({ session, guard }: { session: EditorSession; guard: Guard }
 							: l.failed;
 	return (
 		<section className="file-buffer">
-			{state.error && (
-				<p role="alert" className="error-text">
-					{error}
-				</p>
+			{(state.error || state.unknown !== undefined) && (
+				<div
+					role="alert"
+					className="file-state file-state-alert"
+					data-tone={state.unknown !== undefined || state.error === "VERSION_CONFLICT" ? "warning" : "error"}
+				>
+					<TriangleAlert aria-hidden="true" />
+					<div>
+						<strong>
+							{state.unknown !== undefined
+								? l["state.unknown"]
+								: state.error === "VERSION_CONFLICT"
+									? l["state.conflict"]
+									: l["state.failed"]}
+						</strong>
+						<p>{error}</p>
+					</div>
+				</div>
 			)}
 			{state.operation && (
-				<div className="file-actions">
-					<output>{l.loading}</output>
+				<div className="file-actions file-operation">
+					<output>{l[`operation.${state.operation}`]}</output>
 					<Button variant="outline" size="sm" onClick={() => session.cancel()}>
 						{l.cancel}
 					</Button>
 				</div>
 			)}
 			{!document ? (
-				<p>{l.open}</p>
+				!state.operation &&
+				!state.error &&
+				state.unknown === undefined && (
+					<div className="file-state file-state-empty">
+						<FileText aria-hidden="true" />
+						<h3>{l["empty.selection"]}</h3>
+						<p>{l.open}</p>
+					</div>
+				)
 			) : (
 				<>
-					<h3 className="file-path">{document.target.path}</h3>
+					<header className="file-document-header">
+						<div className="file-document-title">
+							<FileText aria-hidden="true" />
+							<h3 className="file-path">{document.target.path}</h3>
+						</div>
+						<div className="file-document-status">
+							<span data-dirty={document.text !== document.baseline.text ? "true" : undefined}>
+								{document.text === document.baseline.text ? l.clean : l.dirty}
+							</span>
+							{!document.writable && <span className="file-access-kind">{l.readonly}</span>}
+						</div>
+					</header>
 					{document.artifactReference && (
 						<output className="small-copy block">
 							{l["artifact.current"]}{" "}
@@ -317,71 +446,82 @@ function FileBuffer({ session, guard }: { session: EditorSession; guard: Guard }
 								: l["artifact.noRevision"]}
 						</output>
 					)}
-					<p className="small-copy">
-						{document.text === document.baseline.text ? l.clean : l.dirty} · {l.memory}
-					</p>
-					<div className="file-actions">
-						<Button
-							size="sm"
-							disabled={
-								!document.writable ||
-								!!state.operation ||
-								state.unknown !== undefined ||
-								state.error === "VERSION_CONFLICT" ||
-								document.text === document.baseline.text
-							}
-							onClick={() => void session.save()}
-						>
-							{l.save}
-						</Button>
-						<Button
-							size="sm"
-							variant="outline"
-							disabled={!!state.operation}
-							onClick={() => {
-								void session.compare();
-								setDiff(true);
-							}}
-						>
-							{l.compare}
-						</Button>
-						<Button
-							size="sm"
-							variant="ghost"
-							disabled={!!state.operation}
-							onClick={() => guard(() => session.reload())}
-						>
-							{l.reload}
-						</Button>
-						<Button size="sm" variant="ghost" aria-pressed={diff} onClick={() => setDiff((v) => !v)}>
-							{diff ? l.edit : l.diff}
-						</Button>
-						{state.disk && (state.error === "VERSION_CONFLICT" || state.unknown !== undefined) && (
-							<Dialog open={adopt} onOpenChange={setAdopt}>
-								<DialogTrigger asChild>
-									<Button size="sm" variant="outline" disabled={!!state.operation}>
-										{l.adopt}
-									</Button>
-								</DialogTrigger>
-								<DialogContent closeLabel={l.cancel}>
-									<DialogTitle>{l.adopt}</DialogTitle>
-									<DialogDescription>{l.adoptNote}</DialogDescription>
-									<Button
-										disabled={!!state.operation}
-										onClick={() => {
-											session.adoptComparedRevision();
-											setAdopt(false);
-										}}
-									>
-										{l.adoptConfirm}
-									</Button>
-								</DialogContent>
-							</Dialog>
-						)}
+					<p className="small-copy file-memory-note">{l.memory}</p>
+					<div className="file-editor-toolbar">
+						<fieldset className="file-action-group">
+							<legend className="sr-only">{l["toolbar.edit"]}</legend>
+							<Button
+								size="sm"
+								disabled={
+									!document.writable ||
+									!!state.operation ||
+									state.unknown !== undefined ||
+									state.error === "VERSION_CONFLICT" ||
+									document.text === document.baseline.text
+								}
+								onClick={() => void session.save()}
+							>
+								<Save aria-hidden="true" />
+								{l.save}
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={!!state.operation}
+								onClick={() => guard(() => session.reload())}
+							>
+								{l.reload}
+							</Button>
+						</fieldset>
+						<fieldset className="file-action-group">
+							<legend className="sr-only">{l["toolbar.compare"]}</legend>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={!!state.operation}
+								onClick={() => {
+									void session.compare();
+									setDiff(true);
+								}}
+							>
+								{l.compare}
+							</Button>
+							{state.disk && (state.error === "VERSION_CONFLICT" || state.unknown !== undefined) && (
+								<Dialog open={adopt} onOpenChange={setAdopt}>
+									<DialogTrigger asChild>
+										<Button size="sm" variant="outline" disabled={!!state.operation}>
+											{l.adopt}
+										</Button>
+									</DialogTrigger>
+									<DialogContent closeLabel={l.cancel}>
+										<DialogTitle>{l.adopt}</DialogTitle>
+										<DialogDescription>{l.adoptNote}</DialogDescription>
+										<Button
+											disabled={!!state.operation}
+											onClick={() => {
+												session.adoptComparedRevision();
+												setAdopt(false);
+											}}
+										>
+											{l.adoptConfirm}
+										</Button>
+									</DialogContent>
+								</Dialog>
+							)}
+						</fieldset>
 					</div>
+					<fieldset className="file-view-switch">
+						<legend className="sr-only">{l["toolbar.view"]}</legend>
+						<Button size="sm" variant="ghost" aria-pressed={!diff} onClick={() => setDiff(false)}>
+							{l.edit}
+						</Button>
+						<Button size="sm" variant="ghost" aria-pressed={diff} onClick={() => setDiff(true)}>
+							{l.diff}
+						</Button>
+					</fieldset>
 					{diff ? (
 						<>
-							<p className="small-copy">{state.disk ? l.disk : l.baseline}</p>
+							<p className="small-copy file-baseline-note">{state.disk ? l.disk : l.baseline}</p>
 							<CodeDiff
 								before={state.disk?.text ?? document.diffBaseline.text}
 								after={document.text}

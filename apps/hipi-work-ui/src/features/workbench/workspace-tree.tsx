@@ -134,7 +134,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						}
 					}}
 				>
-					<SelectTrigger aria-label={cl.filter}>
+					<SelectTrigger aria-label={cl.filter} className="conversation-filter" size="sm">
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>

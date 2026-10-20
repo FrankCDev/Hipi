@@ -48,7 +48,24 @@ export async function ownedFileDirectory(ownedProfileRoot, { create = false } = 
 		assert.equal(info.uid, process.getuid());
 		assert.equal(info.mode & 0o077, 0, "File profile must be private");
 	}
-	const directory = join(root, fileFixture.folder);
+	// The native launch boundary permits only its four known children at the profile root.
+	// Keep synthetic files inside userData, separate from the deterministic runtime store.
+	const userData = join(root, "profile");
+	if (create) {
+		try {
+			await mkdir(userData, { mode: 0o700 });
+		} catch (error) {
+			if (error.code !== "EEXIST") throw error;
+		}
+	}
+	assert.equal(await realpath(userData), userData, "File userData escaped owned profile");
+	const parent = await lstat(userData);
+	assert.ok(parent.isDirectory() && !parent.isSymbolicLink());
+	if (process.platform !== "win32") {
+		assert.equal(parent.uid, process.getuid());
+		assert.equal(parent.mode & 0o077, 0, "File userData must be private");
+	}
+	const directory = join(userData, fileFixture.folder);
 	if (create) await mkdir(directory, { mode: 0o700 });
 	assert.equal(await realpath(directory), directory, "File fixture escaped owned profile");
 	const files = await lstat(directory);
@@ -93,7 +110,6 @@ export async function seedFileWorkbench({ ownedProfileRoot, assertAllOwnedProces
 	])
 		await writeFile(join(directory, name), contents, { flag: "wx", mode: 0o600 });
 	const profile = join(ownedProfileRoot, "profile");
-	await mkdir(profile, { mode: 0o700 });
 	const store = join(profile, "deterministic-store");
 	const runtime = await openRuntime(store, runtimeOptions());
 	try {

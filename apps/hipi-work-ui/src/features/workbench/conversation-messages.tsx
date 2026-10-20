@@ -2,6 +2,7 @@ import type { Message, Snapshot } from "@hipi/work-runtime/contracts";
 import { type Range, useVirtualizer } from "@tanstack/react-virtual";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
+import { BrandMark } from "../../components/brand-mark.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { MessageMarkdown } from "./message-markdown.tsx";
@@ -187,8 +188,8 @@ export function ConversationMessages({
 				{!snapshot && <output className="empty-copy">{t(error ? "work.error" : "common.loading")}</output>}
 				{snapshot && rows.length === 0 && !snapshot.historyCursor && (
 					<div className="conversation-empty">
-						<div className="brand-mark large" aria-hidden="true">
-							H
+						<div className="conversation-empty-mark" aria-hidden="true">
+							<BrandMark size={40} />
 						</div>
 						<h2>{t("work.readyTitle")}</h2>
 						<p>{t("work.readyBody")}</p>
@@ -211,7 +212,7 @@ export function ConversationMessages({
 									{row.message ? (
 										<article className={`message message-${row.message.role}`}>
 											<div className="message-avatar" aria-hidden="true">
-												{row.message.role === "assistant" ? "H" : <Icon name="chat" size={16} />}
+												{row.message.role === "assistant" ? <BrandMark size={26} /> : <Icon name="chat" size={16} />}
 											</div>
 											<div className="message-content">
 												<div className="message-author">
@@ -266,7 +267,7 @@ export function StreamingMessage({ snapshot }: { snapshot: Snapshot }) {
 			{snapshot.partial && (
 				<article className="message message-assistant" aria-busy={snapshot.running}>
 					<div className="message-avatar" aria-hidden="true">
-						H
+						<BrandMark size={26} />
 					</div>
 					<div className="message-content">
 						<div className="message-author">

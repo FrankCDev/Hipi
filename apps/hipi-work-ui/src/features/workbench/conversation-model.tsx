@@ -13,7 +13,7 @@ export function ConversationModelControls({ controller }: { controller: Conversa
 	const { model, execution } = controller;
 	const info = model.data;
 	return (
-		<div className="conversation-model-controls">
+		<div className="conversation-model-controls" data-execution-state={info?.executionState}>
 			<Popover>
 				<PopoverTrigger asChild>
 					<Button

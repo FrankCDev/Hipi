@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { AppClient, ConversationModel } from "@hipi/work-runtime/contracts";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
 import { AppClientProvider } from "../src/app/client-provider.tsx";
@@ -35,7 +36,14 @@ vi.mock("../src/features/workbench/use-conversation.ts", () => ({
 	}),
 }));
 vi.mock("../src/features/workbench/conversation-history.tsx", () => ({ ConversationHistory: () => null }));
-vi.mock("../src/features/workbench/conversation-composer.tsx", () => ({ ConversationComposer: () => null }));
+vi.mock("../src/features/workbench/conversation-composer.tsx", () => ({
+	ConversationComposer: ({ controls, activity }: { controls: ReactNode; activity: ReactNode }) => (
+		<>
+			{activity}
+			{controls}
+		</>
+	),
+}));
 vi.mock("../src/features/workbench/conversation-receipt.tsx", () => ({ ConversationReceipt: () => null }));
 vi.mock("../src/features/agent-permissions/agent-permissions.tsx", () => ({ AgentPermissions: () => null }));
 

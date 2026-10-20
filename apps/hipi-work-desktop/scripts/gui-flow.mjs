@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderedFonts } from "./gui-fonts.mjs";
 import { exerciseToolPacks } from "./gui-tool-packs.mjs";
+import { exerciseWorkExperience } from "./gui-work-experience.mjs";
 
 export const fixture = {
 	workspace: "GUI 工作区",
@@ -569,6 +570,12 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			directory,
 			{ reopened: true, expectedScope: scope },
 		);
+		const workExperience = await exerciseWorkExperience(
+			cdp,
+			{ evaluate, click, until, pressKey, capture, waitForOverlayClosed, appearanceChoice, assertNoAlerts },
+			directory,
+			{ reopened: true },
+		);
 		return {
 			reopened: true,
 			fonts,
@@ -576,11 +583,16 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			controls,
 			theme,
 			toolPacks,
+			workExperience,
 			noUnexpectedAlerts: true,
 			messageKeys: await historyEvidence(cdp),
 		};
 	}
 	await capture(cdp, directory, "initial");
+	await evaluate(
+		cdp,
+		`window.__hipiGuiCreateTrigger = document.querySelector('.conversation-nav .workspace-create button[aria-label="New workspace"]')`,
+	);
 	await click(cdp, '.conversation-nav button[aria-label="New workspace"]');
 	await fill(cdp, '[role="dialog"] input', fixture.workspace);
 	await click(cdp, '[role="dialog"] button[type="submit"]');
@@ -589,7 +601,17 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 			evaluate(cdp, `document.querySelector('.project-name')?.textContent === ${JSON.stringify(fixture.workspace)}`),
 		"workspace persisted",
 	);
-	await waitForOverlayClosed(cdp, '.conversation-nav button[aria-label="New workspace"]');
+	// The same primary trigger becomes New conversation after selecting the created workspace.
+	// The compact New workspace action is a different sibling, not a valid focus-return target.
+	await waitForOverlayClosed(cdp, '.conversation-nav .workspace-create button[aria-label="New conversation"]');
+	assert.equal(
+		await evaluate(
+			cdp,
+			`(() => { const retained = window.__hipiGuiCreateTrigger === document.activeElement; delete window.__hipiGuiCreateTrigger; return retained; })()`,
+		),
+		true,
+		"Creation must retain and focus the original primary action element",
+	);
 	await click(cdp, '.workspace-branch button[aria-label="New conversation"]');
 	await fill(cdp, '[role="dialog"] input', fixture.conversation);
 	await click(cdp, '[role="dialog"] [role="combobox"]');
@@ -655,6 +677,11 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		directory,
 		{ expectedScope: scope },
 	);
+	const workExperience = await exerciseWorkExperience(
+		cdp,
+		{ evaluate, click, until, pressKey, capture, waitForOverlayClosed, appearanceChoice, assertNoAlerts },
+		directory,
+	);
 	return {
 		...observed,
 		fonts,
@@ -663,6 +690,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		controls,
 		theme,
 		toolPacks,
+		workExperience,
 		noUnexpectedAlerts: true,
 		messageKeys: await historyEvidence(cdp),
 	};

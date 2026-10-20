@@ -28,6 +28,7 @@ nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-work-experience.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-fonts.test.mjs");
@@ -57,6 +58,9 @@ const storageTests = [
 	"packages/durable/test/sqlite-migrations.test.ts",
 ];
 const uiTests = [
+	"activity-approval-presentation",
+	"file-canvas-presentation",
+	"work-experience-presentation",
 	"dialog-placement",
 	"agent-permission-card",
 	"permission-presentation",

@@ -59,7 +59,7 @@ test("compact create actions retain one named button with the official size and 
 		cache.clear();
 		assert.equal((html.match(/<button\b/g) ?? []).length, 1);
 		assert.match(html, /data-size="icon-sm"/);
-		assert.match(html, /data-variant="outline"/);
+		assert.match(html, /data-variant="ghost"/);
 		assert.match(html, /aria-haspopup="dialog"/);
 		assert.ok(html.includes(`aria-label="${kind === "workspace" ? "新建工作区" : "新建会话"}"`));
 	}
@@ -103,6 +103,7 @@ test("Tailwind emits group focus, addon spacing and disabled colors without lega
 		css,
 		/:has\(:is\(\[data-slot=input-group-control\]:disabled\)\)\s*\{\s*background-color: var\(--disabled-surface\)/,
 	);
-	assert.match(css, /\.nav-search\s*\{\s*margin: 12px 0 7px;\s*\}/);
+	assert.match(css, /\.nav-search\s*\{[^{}]*margin: 10px 0 0;[^{}]*background: transparent;[^{}]*\}/);
+	assert.match(css, /\.nav-search:focus-within\s*\{[^{}]*background: var\(--raised\);/);
 	assert.doesNotMatch(css, /\.nav-search input|\.composer textarea/);
 });

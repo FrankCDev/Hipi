@@ -1,3 +1,4 @@
+import { FolderOpen, X } from "lucide-react";
 import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -61,13 +62,29 @@ export function FilePanel({
 					id={id}
 					className="file-panel-dialog"
 					closeLabel={l["filePanel.hide"]}
+					showCloseButton={false}
 					onCloseAutoFocus={(event) => {
 						event.preventDefault();
 						trigger.current?.focus();
 					}}
 				>
-					<DialogTitle>{l["filePanel.title"]}</DialogTitle>
-					<DialogDescription>{l["filePanel.description"]}</DialogDescription>
+					<header className="file-panel-header">
+						<div className="file-panel-title">
+							<FolderOpen aria-hidden="true" size={18} />
+							<DialogTitle>{l["filePanel.title"]}</DialogTitle>
+						</div>
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							className="file-panel-close"
+							aria-label={l["filePanel.hide"]}
+							title={l["filePanel.hide"]}
+							onClick={() => controller.setOpen(false)}
+						>
+							<X aria-hidden="true" />
+						</Button>
+					</header>
+					<DialogDescription className="sr-only">{l["filePanel.description"]}</DialogDescription>
 					{content}
 				</DialogContent>
 			</Dialog>
@@ -136,18 +153,25 @@ export function FilePanel({
 				{l["filePanel.resizeHint"]}
 			</span>
 			<div id={`${id}-content`} className="file-panel-content">
-				<div className="file-panel-controls">
+				<header className="file-panel-header">
+					<div className="file-panel-title">
+						<FolderOpen aria-hidden="true" size={18} />
+						<h2>{l["filePanel.title"]}</h2>
+					</div>
 					<Button
-						size="sm"
+						size="icon-sm"
 						variant="ghost"
+						className="file-panel-close"
+						aria-label={l["filePanel.hide"]}
+						title={l["filePanel.hide"]}
 						onClick={() => {
 							controller.setOpen(false);
 							trigger.current?.focus();
 						}}
 					>
-						{l["filePanel.hide"]}
+						<X aria-hidden="true" />
 					</Button>
-				</div>
+				</header>
 				{content}
 			</div>
 		</section>
