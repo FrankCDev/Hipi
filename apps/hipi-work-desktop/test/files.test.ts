@@ -18,6 +18,9 @@ function catalog() {
 	};
 	return new WorkRuntime({
 		storeId: "store",
+		refreshConversationSearch: rejectFeatureRead,
+		searchConversations: rejectFeatureRead,
+		getHistoryAroundMatch: rejectFeatureRead,
 		getConversationPresentation: rejectFeatureRead,
 		listPinnedConversations: rejectFeatureRead,
 		setConversationPinned: rejectFeatureRead,

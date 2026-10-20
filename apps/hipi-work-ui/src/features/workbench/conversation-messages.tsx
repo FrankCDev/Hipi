@@ -1,4 +1,4 @@
-import type { Message, Scope, Snapshot } from "@hipi/work-runtime/contracts";
+import type { Message, Scope, SearchHistoryWindow, Snapshot } from "@hipi/work-runtime/contracts";
 import { type Range, useVirtualizer } from "@tanstack/react-virtual";
 import {
 	type CSSProperties,
@@ -55,6 +55,8 @@ export function ConversationMessages({
 	readingPositions,
 	failure,
 	onOpenModelSettings,
+	searchAnchor,
+	onJumpLatest,
 }: {
 	snapshot: Snapshot | undefined;
 	error: boolean;
@@ -65,6 +67,8 @@ export function ConversationMessages({
 	readingPositions?: ConversationReadingPositions;
 	failure?: ConversationFailure;
 	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
+	searchAnchor?: SearchHistoryWindow;
+	onJumpLatest?: () => void;
 }) {
 	const { t } = usePreferences();
 	const incoming: DisplaySnapshot | undefined = useMemo(
@@ -79,7 +83,7 @@ export function ConversationMessages({
 	const [positions] = useState(() => readingPositions ?? new ConversationReadingPositions());
 	const [savedPosition] = useState(() => {
 		const boundScope = scope ?? incoming;
-		return boundScope ? positions.read(boundScope) : undefined;
+		return boundScope && !searchAnchor ? positions.read(boundScope) : undefined;
 	});
 	const pendingRestore = useRef(savedPosition?.following === false ? savedPosition : undefined);
 	const restorationFrames = useRef<number[]>([]);
@@ -87,7 +91,8 @@ export function ConversationMessages({
 	const interruptReading = useRef<(direction: number) => void>(() => {});
 	const projection = useRef<MessageProjection<DisplaySnapshot | undefined> | null>(null);
 	const [nearEnd, setNearEnd] = useState(true);
-	const [followIntent, setFollowIntent] = useState(savedPosition?.following ?? true);
+	const [followIntent, setFollowIntent] = useState(searchAnchor ? false : (savedPosition?.following ?? true));
+	const [initialSearchAnchor] = useState(searchAnchor);
 	const [footerHeight, setFooterHeight] = useState(0);
 	const [displayPaused, setDisplayPaused] = useState(false);
 	const [selectionRange, setSelectionRange] = useState<number[] | null>(null);
@@ -122,10 +127,10 @@ export function ConversationMessages({
 		getItemKey,
 		rangeExtractor,
 		anchorTo: selectionRange ? "start" : "end",
-		followOnAppend: followIntent && selectionRange === null,
+		followOnAppend: !searchAnchor && followIntent && selectionRange === null,
 		// Core also follows size changes when anchorTo=end. A negative threshold
 		// disables that path without disabling stable-key prepend anchoring.
-		scrollEndThreshold: followIntent && selectionRange === null ? CONVERSATION_END_THRESHOLD : -1,
+		scrollEndThreshold: !searchAnchor && followIntent && selectionRange === null ? CONVERSATION_END_THRESHOLD : -1,
 		overscan: TRANSCRIPT_OVERSCAN,
 		gap: TRANSCRIPT_GAP,
 		paddingEnd: footerRef ? footerHeight + 16 : 32,
@@ -156,12 +161,13 @@ export function ConversationMessages({
 			},
 			cancel: () => virtualizer.cancelScroll(),
 			follow: (following) => {
-				setFollowIntent(following);
+				const follow = following && !initialSearchAnchor;
+				setFollowIntent(follow);
 				// Stop growth immediately, even before React processes this gesture.
 				virtualizer.setOptions({
 					...virtualizer.options,
-					followOnAppend: following,
-					scrollEndThreshold: following ? CONVERSATION_END_THRESHOLD : -1,
+					followOnAppend: follow,
+					scrollEndThreshold: follow ? CONVERSATION_END_THRESHOLD : -1,
 				});
 			},
 			nearEnd: setNearEnd,
@@ -173,7 +179,7 @@ export function ConversationMessages({
 			cancelFrame: (frame) => cancelAnimationFrame(frame),
 			now: () => performance.now(),
 		});
-		controller.setFollow(savedPosition?.following ?? true);
+		controller.setFollow(initialSearchAnchor ? false : (savedPosition?.following ?? true));
 		scrollIntent.current = controller;
 		const intent = (direction: number) => {
 			pendingRestore.current = undefined;
@@ -238,6 +244,8 @@ export function ConversationMessages({
 			controller.dispose();
 			scrollIntent.current = null;
 			for (const frame of restorationFrames.current) cancelAnimationFrame(frame);
+			restorationFrames.current = [];
+			if (initialSearchAnchor) initialized.current = false;
 			node.removeEventListener("wheel", wheel);
 			node.removeEventListener("keydown", keyboard);
 			node.removeEventListener("touchstart", touchStart);
@@ -247,20 +255,22 @@ export function ConversationMessages({
 			window.removeEventListener("pointerup", pointerUp);
 			window.removeEventListener("pointercancel", pointerUp);
 		};
-	}, [savedPosition, virtualizer]);
+	}, [savedPosition, virtualizer, initialSearchAnchor]);
 	useEffect(() => {
 		const footer = footerRef?.current;
 		if (!footer) return;
 		let frame: number | undefined;
 		const measure = () => {
 			const following =
-				scrollIntent.current?.follows && !selectionIntersects(messages.current, document.getSelection());
+				!initialSearchAnchor &&
+				scrollIntent.current?.follows &&
+				!selectionIntersects(messages.current, document.getSelection());
 			setFooterHeight(footer.getBoundingClientRect().height);
 			if (following) {
 				if (frame !== undefined) cancelAnimationFrame(frame);
 				frame = requestAnimationFrame(() => {
 					frame = undefined;
-					if (scrollIntent.current?.follows) virtualizer.scrollToEnd();
+					if (!initialSearchAnchor && scrollIntent.current?.follows) virtualizer.scrollToEnd();
 				});
 			}
 		};
@@ -271,7 +281,7 @@ export function ConversationMessages({
 			observer.disconnect();
 			if (frame !== undefined) cancelAnimationFrame(frame);
 		};
-	}, [footerRef, virtualizer]);
+	}, [footerRef, virtualizer, initialSearchAnchor]);
 	useLayoutEffect(() => {
 		const controller = new MessageProjection<DisplaySnapshot | undefined>(
 			undefined,
@@ -325,6 +335,22 @@ export function ConversationMessages({
 	}, [incoming]);
 	useLayoutEffect(() => {
 		if (!snapshot) return;
+		if (initialSearchAnchor && !initialized.current) {
+			const index = rows.findIndex((row) => row.message?.id === initialSearchAnchor.target.messageId);
+			if (index < 0) return;
+			initialized.current = true;
+			virtualizer.scrollToIndex(index, { align: "center" });
+			restorationFrames.current.push(
+				requestAnimationFrame(() => {
+					restorationFrames.current.push(
+						requestAnimationFrame(() => {
+							messages.current?.querySelector("[data-search-match]")?.scrollIntoView({ block: "center" });
+						}),
+					);
+				}),
+			);
+			return;
+		}
 		const restore = pendingRestore.current;
 		if (restore) {
 			const index = rows.findIndex((row) => row.key === restore.key);
@@ -356,7 +382,7 @@ export function ConversationMessages({
 		initialized.current = true;
 		followFinal.current = false;
 		virtualizer.scrollToEnd();
-	}, [snapshot, virtualizer, rows, onNearTop]);
+	}, [snapshot, virtualizer, rows, onNearTop, initialSearchAnchor]);
 	const readingScope = scope ?? incoming;
 	const readingState = useRef({ scope: readingScope, rows });
 	useLayoutEffect(() => {
@@ -365,6 +391,8 @@ export function ConversationMessages({
 	useLayoutEffect(() => {
 		const node = messages.current;
 		return () => {
+			// A locator-backed window must not be restored by walking normal history.
+			if (initialSearchAnchor) return;
 			const { scope: boundScope, rows: retained } = readingState.current;
 			if (!node || !boundScope || !initialized.current || pendingRestore.current) return;
 			const offset = virtualizer.scrollOffset ?? node.scrollTop;
@@ -380,7 +408,7 @@ export function ConversationMessages({
 				virtualizer.takeSnapshot(),
 			);
 		};
-	}, [virtualizer, positions]);
+	}, [virtualizer, positions, initialSearchAnchor]);
 	// Re-evaluate after prepend anchoring and dynamic measurement, rather than draining
 	// history from the old scroll offset before React has committed the new page.
 	useEffect(() => {
@@ -425,6 +453,7 @@ export function ConversationMessages({
 				tabIndex={0}
 				aria-label={t("nav.conversations")}
 				data-following={followIntent}
+				data-reading-mode={searchAnchor ? "search" : "live"}
 				onScroll={(event) => {
 					if (!initialized.current) return;
 					const node = event.currentTarget;
@@ -479,6 +508,7 @@ export function ConversationMessages({
 											stream={row.message ? undefined : snapshot}
 											offset={originalOffsets.get(row.key)}
 											onOffsetChange={setOriginalOffsets}
+											searchAnchor={row.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
 										/>
 									)}
 								</div>
@@ -489,7 +519,7 @@ export function ConversationMessages({
 			{historyStatus}
 			<ResponseAnnouncement snapshot={snapshot} error={error} failure={snapshot?.requestFailure} />
 			{displayPaused && <output className="message-pending small-copy">{t("markdown.pending")}</output>}
-			{!nearEnd && (
+			{(searchAnchor || !nearEnd) && (
 				<Button
 					className="jump-latest bg-popover rounded-full"
 					variant="outline"
@@ -498,7 +528,10 @@ export function ConversationMessages({
 					title={t("work.jumpLatest")}
 					style={{ bottom: footerHeight + 24 }}
 					disabled={selectionRange !== null}
-					onClick={() => scrollIntent.current?.jump()}
+					onClick={() => {
+						if (onJumpLatest) onJumpLatest();
+						else scrollIntent.current?.jump();
+					}}
 				>
 					<Icon name="arrowDown" size={16} />
 				</Button>
@@ -514,12 +547,14 @@ const TranscriptMessage = memo(
 		stream,
 		offset,
 		onOffsetChange,
+		searchAnchor,
 	}: {
 		row: Exclude<TranscriptRow, { kind: "request-failure" }>;
 		scope: Scope;
 		stream?: Snapshot;
 		offset: number | undefined;
 		onOffsetChange: (update: (current: ReadonlyMap<string, number>) => ReadonlyMap<string, number>) => void;
+		searchAnchor?: SearchHistoryWindow;
 	}) {
 		const { t } = usePreferences();
 		const message: Message = row.message ?? {
@@ -545,6 +580,7 @@ const TranscriptMessage = memo(
 						offset={offset}
 						streaming={stream?.running}
 						streamId={row.key}
+						searchAnchor={searchAnchor}
 						onOffsetChange={(nextOffset) => {
 							onOffsetChange((current) => {
 								const next = new Map(current);
@@ -578,6 +614,7 @@ const TranscriptMessage = memo(
 		before.scope.workspaceId === after.scope.workspaceId &&
 		before.scope.conversationId === after.scope.conversationId &&
 		before.offset === after.offset &&
+		before.searchAnchor === after.searchAnchor &&
 		before.onOffsetChange === after.onOffsetChange,
 );
 

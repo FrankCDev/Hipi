@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { test } from "node:test";
 import { createFileClient, parseProjectFolder, parseProjectFolderSelection } from "@hipi/work-runtime/files/protocol";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
@@ -100,6 +100,7 @@ test("prepared directory attaches once after intentional creation, and replay ca
 			"work",
 		);
 		assert.equal(folder.status, "available");
+		if (folder.status === "available") assert.equal(folder.displayPath, await realpath(app.folder));
 		assert.ok(folder.root);
 		assert.equal(folder.root.writable, false);
 		assert.equal(
@@ -251,6 +252,7 @@ test("revoking a project through the existing file bridge persists across querie
 		await app.manage({ operation: "revoke", workspaceId: "work", rootId: folder.root.rootId });
 		const revoked = parseProjectFolder(await app.manage({ operation: "project-get", workspaceId: "work" }), "work");
 		assert.equal(revoked.status, "revoked");
+		assert.equal("displayPath" in revoked, false);
 		assert.equal(revoked.bindingId, folder.bindingId);
 		assert.deepEqual(await app.client.listRoots("work"), []);
 		await app.files.close();
@@ -277,6 +279,64 @@ test("revoking a project through the existing file bridge persists across querie
 	}
 });
 
+test("desktop project responses expose the verified current path without changing root or runtime context", async () => {
+	const app = await fixture();
+	try {
+		await app.runtime.call("createWorkspace", { workspaceId: "work", name: "Work" });
+		const unbound = parseProjectFolder(await app.manage({ operation: "project-get", workspaceId: "work" }), "work");
+		assert.equal("displayPath" in unbound, false);
+		const picked = `${app.folder}${sep}.`;
+		const first = parseProjectFolder(
+			await app.manage({ operation: "project-pick", workspaceId: "work", expectedBindingId: null }, async () => picked),
+			"work",
+		);
+		assert.equal(first.status, "available");
+		if (first.status !== "available") assert.fail("Expected an available binding");
+		assert.equal(first.displayPath, await realpath(app.folder));
+		assert.notEqual(first.displayPath, picked);
+		assert.equal(first.displayName, "project");
+		assert.equal("displayPath" in first.root, false);
+		assert.equal(JSON.stringify(await app.client.listRoots("work")).includes(app.directory), false);
+		assert.equal(
+			JSON.stringify(await app.runtime.call("getWorkspace", { workspaceId: "work" })).includes(app.directory),
+			false,
+		);
+		assert.deepEqual(await app.files.agentFiles.listRoots("work"), [first.root]);
+		await app.files.close();
+		await app.runtime.close();
+		const runtime = await openTestRuntime(join(app.directory, "store"));
+		const host = new FileConnection("reopened", (raw) => {
+			void files.receive(raw).catch(() => host.close());
+		});
+		const files = await createFileRuntime(runtime, "reopened", (raw) => host.receive(raw));
+		try {
+			const restored = parseProjectFolder(
+				await host.call({ operation: "project-get", expectedStoreId: app.base.expectedStoreId, workspaceId: "work" }),
+				"work",
+			);
+			assert.equal(restored.status, "available");
+			if (restored.status !== "available") assert.fail("Expected an available restored binding");
+			assert.equal(restored.displayPath, first.displayPath);
+			assert.equal(restored.bindingId, first.bindingId);
+			assert.equal(restored.revision, first.revision);
+			await rename(app.folder, join(app.directory, "moved"));
+			const missing = parseProjectFolder(
+				await host.call({ operation: "project-get", expectedStoreId: app.base.expectedStoreId, workspaceId: "work" }),
+				"work",
+			);
+			assert.equal(missing.status, "unavailable");
+			assert.equal("displayPath" in missing, false);
+			assert.equal(missing.bindingId, first.bindingId);
+		} finally {
+			host.close();
+			await files.close();
+			await runtime.close();
+		}
+	} finally {
+		await app.close();
+	}
+});
+
 test("renderer project requests cannot supply paths, identity, permissions, or another principal", () => {
 	const base = { version: 1, expectedStoreId: "store" };
 	for (const request of [
@@ -285,6 +345,7 @@ test("renderer project requests cannot supply paths, identity, permissions, or a
 		{ operation: "project-attach", workspaceId: "work", selectionId: "selected", writable: true },
 		{ operation: "project-pick", workspaceId: "work", expectedBindingId: null, device: "1" },
 		{ operation: "project-get", workspaceId: "work", principalId: "other" },
+		{ operation: "project-get", workspaceId: "work", displayPath: "~/Project" },
 		{ operation: "project-bind", workspaceId: "work", absolutePath: "/private", expectedBindingId: null },
 	])
 		assert.throws(() => rootRequest({ ...base, ...request }));

@@ -18,7 +18,7 @@ import { catalogLabels } from "./catalog-labels.ts";
 import type { CatalogSession } from "./catalog-session.ts";
 import type { CatalogCommand } from "./command-recovery.ts";
 import { ComposerKeyboard } from "./composer-keyboard.ts";
-import { PinConversationItem } from "./pin-conversation.tsx";
+import { PinConversationButton, PinConversationItem } from "./pin-conversation.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import type { PreviewActions } from "./sidebar-preview-row.tsx";
 import "./conversation-rename.css";
@@ -90,6 +90,8 @@ export function ConversationActions({
 	onReturnFocus,
 	triggerRef,
 	presentation,
+	inlineActions = false,
+	active = false,
 }: {
 	conversation: Conversation;
 	session: CatalogSession;
@@ -101,6 +103,8 @@ export function ConversationActions({
 	onReturnFocus?: () => void;
 	triggerRef?: RefObject<HTMLButtonElement | null>;
 	presentation?: PresentationSession;
+	inlineActions?: boolean;
+	active?: boolean;
 }) {
 	const { locale } = usePreferences();
 	const l = catalogLabels(locale);
@@ -174,6 +178,17 @@ export function ConversationActions({
 			},
 		});
 	};
+	const archive = () =>
+		execute({
+			version: PROTOCOL_VERSION,
+			method: conversation.archivedAt === null ? "archiveConversation" : "restoreConversation",
+			params: {
+				workspaceId: conversation.workspaceId,
+				conversationId: conversation.conversationId,
+				requestId: crypto.randomUUID(),
+				expectedRevision: conversation.revision,
+			},
+		});
 	return (
 		<Dialog
 			open={renaming}
@@ -181,89 +196,110 @@ export function ConversationActions({
 				if (!open) closeRename();
 			}}
 		>
-			<DropdownMenu
-				onOpenChange={(open) => {
-					setMenuOpen(open);
-					onOverlayChange?.("menu", open);
-					if (open) onMenuOpen?.();
-				}}
+			<div
+				className={inlineActions ? "conversation-hover-actions" : undefined}
+				data-preview-immediate={inlineActions ? "" : undefined}
 			>
-				<DropdownMenuTrigger asChild>
+				{inlineActions && presentation && (
+					<PinConversationButton
+						conversation={conversation}
+						session={presentation}
+						open={active || menuOpen}
+						disabled={disabled}
+					/>
+				)}
+				{inlineActions && (
 					<Button
-						ref={trigger}
-						className="conversation-actions-trigger"
+						className="conversation-quick-action"
+						data-action={
+							conversation.archivedAt === null ? "archive-conversation-direct" : "restore-conversation-direct"
+						}
 						size="icon-sm"
 						variant="ghost"
-						aria-label={`${l.actions}: ${conversation.title}`}
-					>
-						<Ellipsis size={16} aria-hidden="true" />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent
-					side={menuPosition ? "right" : "bottom"}
-					align={menuPosition ? "start" : "end"}
-					sideOffset={menuPosition?.sideOffset}
-					alignOffset={menuPosition?.alignOffset}
-					collisionPadding={12}
-					className="conversation-action-menu"
-					onCloseAutoFocus={(event) => {
-						if (renaming) event.preventDefault();
-						else if (onReturnFocus) {
-							event.preventDefault();
-							onReturnFocus();
-						}
-					}}
-				>
-					<DropdownMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</DropdownMenuLabel>
-					<DropdownMenuSeparator />
-					{presentation && (
-						<PinConversationItem
-							conversation={conversation}
-							session={presentation}
-							open={menuOpen}
-							disabled={disabled}
-						/>
-					)}
-					<DropdownMenuItem
-						disabled={renameDisabled}
-						onSelect={() => {
-							const current = session.getSnapshot();
-							if (current.busy || current.pending || current.initialSend || current.incompatible) return;
-							setTitle(conversation.title);
-							renameKeyboard.current.reset();
-							renameOpen.current = true;
-							onOverlayChange?.("dialog", true);
-							setRenaming(true);
-						}}
-					>
-						<Pencil size={15} aria-hidden="true" />
-						{l.rename}
-					</DropdownMenuItem>
-					<DropdownMenuSeparator />
-					<DropdownMenuItem
+						aria-label={l[conversation.archivedAt === null ? "archive" : "restore"]}
+						title={l[conversation.archivedAt === null ? "archive" : "restore"]}
 						disabled={disabled}
-						onSelect={() => {
-							execute({
-								version: PROTOCOL_VERSION,
-								method: conversation.archivedAt === null ? "archiveConversation" : "restoreConversation",
-								params: {
-									workspaceId: conversation.workspaceId,
-									conversationId: conversation.conversationId,
-									requestId: crypto.randomUUID(),
-									expectedRevision: conversation.revision,
-								},
-							});
-						}}
+						onClick={archive}
 					>
 						{conversation.archivedAt === null ? (
 							<Archive size={15} aria-hidden="true" />
 						) : (
 							<ArchiveRestore size={15} aria-hidden="true" />
 						)}
-						{l[conversation.archivedAt === null ? "archive" : "restore"]}
-					</DropdownMenuItem>
-				</DropdownMenuContent>
-			</DropdownMenu>
+					</Button>
+				)}
+				<DropdownMenu
+					onOpenChange={(open) => {
+						setMenuOpen(open);
+						onOverlayChange?.("menu", open);
+						if (open) onMenuOpen?.();
+					}}
+				>
+					<DropdownMenuTrigger asChild>
+						<Button
+							ref={trigger}
+							className="conversation-actions-trigger"
+							size="icon-sm"
+							variant="ghost"
+							aria-label={`${l.actions}: ${conversation.title}`}
+						>
+							<Ellipsis size={16} aria-hidden="true" />
+						</Button>
+					</DropdownMenuTrigger>
+					<DropdownMenuContent
+						side={menuPosition ? "right" : "bottom"}
+						align={menuPosition ? "start" : "end"}
+						sideOffset={menuPosition?.sideOffset}
+						alignOffset={menuPosition?.alignOffset}
+						collisionPadding={12}
+						className="conversation-action-menu"
+						onCloseAutoFocus={(event) => {
+							if (renaming) event.preventDefault();
+							else if (onReturnFocus) {
+								event.preventDefault();
+								onReturnFocus();
+							}
+						}}
+					>
+						<DropdownMenuLabel className="sidebar-menu-preview">
+							{previewContent ?? conversation.title}
+						</DropdownMenuLabel>
+						<DropdownMenuSeparator />
+						{presentation && (
+							<PinConversationItem
+								conversation={conversation}
+								session={presentation}
+								open={menuOpen}
+								disabled={disabled}
+							/>
+						)}
+						<DropdownMenuItem
+							disabled={renameDisabled}
+							onSelect={() => {
+								const current = session.getSnapshot();
+								if (current.busy || current.pending || current.initialSend || current.incompatible) return;
+								setTitle(conversation.title);
+								renameKeyboard.current.reset();
+								renameOpen.current = true;
+								onOverlayChange?.("dialog", true);
+								setRenaming(true);
+							}}
+						>
+							<Pencil size={15} aria-hidden="true" />
+							{l.rename}
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem disabled={disabled} onSelect={archive}>
+							{conversation.archivedAt === null ? (
+								<Archive size={15} aria-hidden="true" />
+							) : (
+								<ArchiveRestore size={15} aria-hidden="true" />
+							)}
+							{l[conversation.archivedAt === null ? "archive" : "restore"]}
+						</DropdownMenuItem>
+					</DropdownMenuContent>
+				</DropdownMenu>
+			</div>
 			<DialogContent
 				className="conversation-rename-dialog"
 				closeLabel={l.close}

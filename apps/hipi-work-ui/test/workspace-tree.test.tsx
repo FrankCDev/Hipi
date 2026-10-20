@@ -26,7 +26,6 @@ function renderTree(
 	expanded: boolean,
 	count = 1,
 	nextCursor: string | null = "next-page",
-	search = "",
 	selectedConversation = "conversation-id",
 	defaultWorkspaceId?: string,
 ) {
@@ -62,7 +61,6 @@ function renderTree(
 					selectedWorkspace="workspace-id"
 					defaultWorkspaceId={defaultWorkspaceId}
 					selectedConversation={selectedConversation}
-					search={search}
 					isExpanded={() => expanded}
 					onToggle={() => {}}
 					onOpenProject={() => {}}
@@ -99,7 +97,7 @@ test("current conversation and its containing project have distinct surfaces wit
 });
 
 test("project overview alone marks the project as current", () => {
-	const html = renderTree(true, 1, null, "", "");
+	const html = renderTree(true, 1, null, "");
 	assert.match(
 		html,
 		/class="sidebar-preview-row project-row" data-selected="true" data-current="true" data-contains-current="false"/,
@@ -131,7 +129,8 @@ test("project disclosure and navigation have distinct names and only disclosure 
 	assert.equal(openLabels?.length, 2);
 	assert.notEqual(disclosureLabels?.[0], openLabels?.[0]);
 	assert.equal(disclosureLabels?.[1], openLabels?.[1], "Both actions identify the same visible project title");
-	assert.ok(open.includes(`id="${openLabels?.[1]}" class="project-name">My project 0</span>`));
+	assert.ok(open.includes(`id="${openLabels?.[1]}" class="project-name sidebar-title"`));
+	assert.match(open, /class="sidebar-title-content">My project 0<\/span>/);
 	assert.match(disclosure, /收起项目/);
 	assert.match(open, /打开项目/);
 	assert.doesNotMatch(disclosure, /project-icon|project-name|project-page-count/);
@@ -170,21 +169,20 @@ test("healthy project lists contain no persistent filter bar, counts or creation
 	assert.match(html, /class="project-pagination"/);
 });
 
-test("search keeps bounded pagination without counters or injecting the current conversation", () => {
-	const html = renderTree(true, 1, "next-page", "not on this page");
+test("the sidebar remains an unfiltered bounded list independently of the search dialog", () => {
+	const html = renderTree(true, 1, "next-page");
 	assert.doesNotMatch(html, /project-page-summary|project-match-count|project-page-count/);
-	assert.match(html, /没有匹配的会话/);
-	assert.doesNotMatch(html, /class="conversation-link"/);
+	assert.match(html, /class="conversation-link"/);
 	assert.match(html, /加载更多/);
 });
 
 test("only the verified default workspace becomes Recent and remains available outside the project catalog window", () => {
-	const known = renderTree(false, 1, null, "", "conversation-id", "workspace-id");
+	const known = renderTree(false, 1, null, "conversation-id", "workspace-id");
 	assert.match(known, /recent-conversations-heading/);
 	assert.match(known, />最近<\/h3>/);
 	assert.match(known, /class="conversation-link"/);
 	assert.doesNotMatch(known, /project-row|project-toggle|project-open|project-new-conversation|My project 0/);
-	const outsideWindow = renderTree(false, 1, null, "", "conversation-id", "verified-default");
+	const outsideWindow = renderTree(false, 1, null, "conversation-id", "verified-default");
 	assert.match(outsideWindow, /My project 0/);
 	assert.match(outsideWindow, /recent-conversations-heading/);
 	assert.equal((outsideWindow.match(/class="project-toggle"/g) ?? []).length, 1);
@@ -227,9 +225,7 @@ test("selected conversation remains mounted when it is outside the displayed dir
 	assert.doesNotMatch(empty, /第一页|加载更多/);
 	assert.match(empty, /aria-label="新建项目"/);
 	assert.match(empty, /aria-label="工作台设置"/);
-	assert.match(empty, /<p class="search-scope"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
-	assert.match(empty, /class="sidebar-search-panel"[^>]*hidden=""/);
-	assert.match(empty, /aria-label="搜索聊天"[^>]*aria-expanded="false"/);
+	assert.match(empty, /aria-label="搜索聊天"/);
 	assert.equal(local.read("draft.selected-workspace.selected-conversation"), "keep this draft");
 	cache.clear();
 });

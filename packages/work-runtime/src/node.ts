@@ -56,11 +56,14 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 	try {
 		configureCustomProviders(options.models, catalog.listCustomProviders().providers);
 	} catch (error) {
-		catalog.close();
+		await catalog.close();
 		throw error;
 	}
 	const runtime = new WorkRuntime({
 		storeId: catalog.storeId,
+		refreshConversationSearch: (input, signal) => catalog.refreshConversationSearch(input, signal),
+		searchConversations: (input, signal) => catalog.searchConversations(input, signal),
+		getHistoryAroundMatch: (input, signal) => catalog.getHistoryAroundMatch(input, signal),
 		getConversationPresentation: (input) => catalog.getConversationPresentation(input),
 		listPinnedConversations: (input) => catalog.listPinnedConversations(input),
 		setConversationPinned: (input) => catalog.setConversationPinned(input),
@@ -114,7 +117,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		close: async () => {
 			if (unsafe) throw new AppError("WORKSPACE_BUSY");
 			configureCustomProviders(options.models, []);
-			catalog.close();
+			await catalog.close();
 		},
 		openWorkspace: async (workspaceId, name, openOptions) => {
 			// An unclosed writer pins this owner until process exit; never accumulate more writers.
@@ -196,12 +199,14 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 					input: Params<"archiveConversation">,
 				) => {
 					const operation = archiveTransition.then(async () => {
+						catalog.invalidateConversationSearch(input);
 						if (method === "restoreConversation")
 							catalog.recordConversationArchive(await port.getConversation(input));
 						let result: Conversation;
 						try {
 							result = await port[method](input);
 						} catch (error) {
+							catalog.invalidateConversationSearch(input);
 							// PI may have committed before an interrupted reply. Inspect, never replay.
 							if (method === "archiveConversation") {
 								try {
@@ -217,7 +222,9 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 							}
 							throw error;
 						}
+						catalog.invalidateConversationSearch(input);
 						if (method === "archiveConversation") await catalog.finishConversationArchive(result);
+						catalog.recordSearchConversation(result);
 						return result;
 					});
 					archiveTransition = operation.catch(() => undefined);
@@ -232,9 +239,24 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 					authorizeRetainedToolPack: (input) => port.authorizeRetainedToolPack(input),
 					workspace: port.workspace,
 					canEvict: () => port.canEvict(),
-					createConversation: (input) => port.createConversation(input),
+					createConversation: async (input) => {
+						const result = await port.createConversation(input);
+						catalog.recordSearchConversation(result);
+						return result;
+					},
 					getConversation: (input) => port.getConversation(input),
-					renameConversation: (input) => port.renameConversation(input),
+					renameConversation: async (input) => {
+						catalog.invalidateConversationSearch(input);
+						try {
+							const result = await port.renameConversation(input);
+							catalog.invalidateConversationSearch(input);
+							catalog.recordSearchConversation(result);
+							return result;
+						} catch (error) {
+							catalog.invalidateConversationSearch(input);
+							throw error;
+						}
+					},
 					archiveConversation: (input) => changeArchive("archiveConversation", input),
 					restoreConversation: (input) => changeArchive("restoreConversation", input),
 					getConversationCommandResult: (input) => port.getConversationCommandResult(input),

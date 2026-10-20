@@ -1,11 +1,13 @@
-import { LIMITS, type Message, type Scope } from "@hipi/work-runtime/contracts";
+import { LIMITS, type Message, type Scope, type SearchHistoryWindow } from "@hipi/work-runtime/contracts";
 import { useCallback, useEffect } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { ClipboardCopy } from "./clipboard-copy.tsx";
+import { conversationSearchLabels } from "./conversation-search-labels.ts";
 import { readMessagePage } from "./history-reads.ts";
 import { MessageMarkdown } from "./message-markdown.tsx";
+import { SearchHighlight } from "./search-highlight.tsx";
 import { useBoundedRead } from "./use-bounded-read.ts";
 import { UserMessageContent } from "./user-message-content.tsx";
 
@@ -16,6 +18,7 @@ export function MessageContent({
 	onOffsetChange,
 	streaming,
 	streamId,
+	searchAnchor,
 }: {
 	message: Message;
 	scope: Scope;
@@ -24,9 +27,25 @@ export function MessageContent({
 	/** Undefined for committed content; false for a paused live preview. */
 	streaming?: boolean;
 	streamId?: string;
+	searchAnchor?: SearchHistoryWindow;
 }) {
-	const { t } = usePreferences();
+	const { t, locale } = usePreferences();
 	const opened = offset !== undefined;
+	if (searchAnchor?.target.messageId === message.id) {
+		const { target, matchStart, matchEnd } = searchAnchor;
+		return (
+			<div className="original-text search-match-original">
+				<p className="small-copy">{conversationSearchLabels(locale).match}</p>
+				<p className="small-copy">
+					{t("history.units")} {target.offset}–{target.offset + target.text.length} / {target.textLength}
+				</p>
+				<pre className="search-match-text">
+					<SearchHighlight text={target.text} offset={target.offset} start={matchStart} end={matchEnd} />
+				</pre>
+				<ClipboardCopy text={target.text} label={t("history.copyPage")} variant="outline" />
+			</div>
+		);
+	}
 	return (
 		<>
 			{message.truncated ? (

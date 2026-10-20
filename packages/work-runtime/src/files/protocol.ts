@@ -125,9 +125,20 @@ export function parseFileRoots(raw: unknown, workspaceId: string): FileRoot[] {
 	});
 }
 export function parseProjectFolder(raw: unknown, workspaceId: string): ProjectFolder {
-	const value = object(raw, ["workspaceId", "status", "bindingId", "revision", "displayName", "root"]);
+	const value = object(raw, ["workspaceId", "status", "bindingId", "revision", "displayName", "displayPath", "root"]);
 	fileIdentifier(workspaceId);
 	if (value.workspaceId !== workspaceId) invalid();
+	const displayPath = value.displayPath;
+	if (
+		displayPath !== undefined &&
+		(value.status !== "available" ||
+			typeof displayPath !== "string" ||
+			!displayPath ||
+			displayPath.length > 4096 ||
+			/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(displayPath) ||
+			!/^(?:\/|[a-zA-Z]:[\\/]|\\\\[^\\]+\\[^\\]+(?:\\|$)|~(?:[\\/]|$))/u.test(displayPath))
+	)
+		invalid();
 	if (value.status === "unbound") {
 		if (value.bindingId !== null || value.revision !== 0 || value.displayName !== null || value.root !== null)
 			invalid();
@@ -148,7 +159,7 @@ export function parseProjectFolder(raw: unknown, workspaceId: string): ProjectFo
 	if (value.status === "available") {
 		const root = parseFileRoots([value.root], workspaceId)[0];
 		if (!root || root.writable || (root.displayName ?? null) !== displayName) invalid();
-		return { ...base, status: "available", root };
+		return { ...base, status: "available", ...(displayPath === undefined ? {} : { displayPath }), root };
 	}
 	if (!["unavailable", "moved", "revoked"].includes(String(value.status)) || value.root !== null) invalid();
 	if (value.status !== "unavailable" && value.status !== "moved" && value.status !== "revoked") return invalid();

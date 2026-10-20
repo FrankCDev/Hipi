@@ -8,9 +8,15 @@ import { ConversationPreview } from "../src/features/workbench/conversation-prev
 
 // Inspect card content without replacing the independently tested hover/focus lifecycle.
 vi.mock("../src/features/workbench/sidebar-preview-row.tsx", () => ({
-	SidebarPreviewRow: ({ children, preview }: { children: ReactNode; preview: () => ReactNode }) => (
+	SidebarPreviewRow: ({
+		children,
+		preview,
+	}: {
+		children: ReactNode | ((state: { hovered: boolean }) => ReactNode);
+		preview: () => ReactNode;
+	}) => (
 		<section>
-			{children}
+			{typeof children === "function" ? children({ hovered: false }) : children}
 			<aside>{preview()}</aside>
 		</section>
 	),
@@ -42,7 +48,8 @@ test("conversation navigation stays text-only while its preview retains the full
 	const html = renderPreview();
 	const row = html.match(/<button[^>]*class="conversation-link"[^>]*>([\s\S]*?)<\/button>/)?.[1];
 	assert.ok(row);
-	assert.match(row, /class="conversation-title"[^>]*>A recognizable conversation title<\/span>/);
+	assert.match(row, /class="conversation-title sidebar-title"/);
+	assert.match(row, /class="sidebar-title-content">A recognizable conversation title<\/span>/);
 	assert.doesNotMatch(row, /<svg|<time|创建于/);
 	assert.match(html, /class="preview-workspace"[^>]*>[\s\S]*?<span>Example project<\/span>/);
 	assert.match(html, /data-slot="popover-title"[^>]*>A recognizable conversation title<\/h2>/);

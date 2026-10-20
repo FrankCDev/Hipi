@@ -46,6 +46,15 @@ async function fixture() {
 		};
 	} finally {
 		await runtime.close();
+		// Keep schema7 compatibility evidence independent from newer derived search tables.
+		const database = new DatabaseSync(join(source, "catalog.sqlite"));
+		try {
+			database.exec(
+				"DROP TABLE search_chunks; DROP TABLE search_sources; DROP TABLE search_state; UPDATE identity SET version=7",
+			);
+		} finally {
+			database.close();
+		}
 	}
 }
 
@@ -110,7 +119,7 @@ test("schema6 migrates atomically to empty presentation state without changing s
 		} finally {
 			await runtime.close();
 		}
-		assert.equal(inspectCatalog(f.catalogPath).catalogSchema, 7);
+		assert.equal(inspectCatalog(f.catalogPath).catalogSchema, 8);
 	} finally {
 		await rm(f.parent, { recursive: true, force: true });
 	}

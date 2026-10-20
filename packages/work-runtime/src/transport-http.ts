@@ -30,7 +30,7 @@ import { type FileRequestHandler, parseFileRequest, parseFileResponse } from "./
 import { type PreviewRequestHandler, parsePreviewRequest, parsePreviewResponse } from "./previews/protocol.ts";
 
 export interface TransportRuntime {
-	execute(raw: unknown): Promise<Response>;
+	execute(raw: unknown, readSignal?: AbortSignal): Promise<Response>;
 	observe(
 		scope: Scope,
 		listener: (frame: Frame) => void | Promise<void>,
@@ -213,7 +213,7 @@ export async function serveLoopback(
 			}
 			if (req.url === "/call") {
 				const request = parseRequest(input);
-				const result = parseResult(request.method, await runtime.execute(request));
+				const result = parseResult(request.method, await runtime.execute(request, controller.signal));
 				if (!controller.signal.aborted) reply(res, 200, { result });
 				return;
 			}

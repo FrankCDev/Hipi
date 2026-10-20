@@ -1,13 +1,14 @@
 import {
 	AppError,
 	type Conversation,
+	type ConversationSearchHit,
 	type ModelReference,
 	PROTOCOL_VERSION,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings, SquarePen, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Settings, SquarePen } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import type { ProjectFolderSelection } from "../../app/file-client.ts";
 import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, matchesBinding } from "../../app/keybindings.ts";
@@ -16,7 +17,6 @@ import { BrandMark } from "../../components/brand-mark.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "../../components/ui/input-group.tsx";
 import { fileLabels } from "../files/file-labels.ts";
 import { FileWorkspaceSession } from "../files/file-workspace-session.ts";
 import { SettingsDialog } from "../settings/index.ts";
@@ -27,11 +27,14 @@ import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
 import { CatalogSession } from "./catalog-session.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
+import type { SearchHistoryAnchor } from "./conversation-history-controller.ts";
 import { ConversationPane } from "./conversation-pane.tsx";
+import { ConversationSearch } from "./conversation-search.tsx";
 import { CreateDialog } from "./create-dialog.tsx";
 import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
 import { FILE_PANEL, FilePanelController, panelLayout } from "./file-panel-controller.ts";
 import { filePanelLabels } from "./file-panel-labels.ts";
+import { prepareSearchNavigation } from "./history-reads.ts";
 import type { StagedProjectConsent } from "./initial-context.ts";
 import { ModelSettings } from "./model-settings.tsx";
 import { PinRecovery, presentationKey } from "./pin-conversation.tsx";
@@ -72,13 +75,16 @@ export function Workbench({
 		if (session?.protected) setLeave(() => action);
 		else action();
 	};
-	const searchInputId = useId();
-	const searchInput = useRef<HTMLInputElement>(null);
 	const searchTrigger = useRef<HTMLButtonElement>(null);
 	const [searchOpen, setSearchOpen] = useState(false);
-	useEffect(() => {
-		if (searchOpen) searchInput.current?.focus();
-	}, [searchOpen]);
+	const searchReturn = useRef<HTMLElement | null>(null);
+	const searchActivated = useRef(false);
+	const [searchAnchor, setSearchAnchor] = useState<SearchHistoryAnchor>();
+	const openSearch = useCallback((opener: HTMLElement | null) => {
+		searchReturn.current = opener;
+		searchActivated.current = false;
+		setSearchOpen(true);
+	}, []);
 	const local = useLocalState();
 	const cache = useQueryClient();
 	const catalog = useMemo(() => new CatalogSession(client, local, fileAuthority), [client, local, fileAuthority]);
@@ -181,7 +187,12 @@ export function Workbench({
 		if (!navigationOpen) return;
 		navigationClose.current?.focus();
 		const close = (event: KeyboardEvent) => {
-			if (event.key === "Escape" && !event.defaultPrevented) {
+			if (
+				event.key === "Escape" &&
+				!event.defaultPrevented &&
+				!event.isComposing &&
+				!document.querySelector('[role="dialog"]')
+			) {
 				setNavigationOpen(false);
 				navigationToggle.current?.focus();
 			}
@@ -197,12 +208,6 @@ export function Workbench({
 			navigationToggle.current?.focus();
 		};
 	}, [navigationOpen]);
-	const [search, setSearch] = useState("");
-	const closeSearch = () => {
-		setSearch("");
-		setSearchOpen(false);
-		searchTrigger.current?.focus();
-	};
 	const [preparedDrafts, setPreparedDrafts] = useState<Record<string, string>>({});
 	const [recoveredDrafts, setRecoveredDrafts] = useState<Record<string, string>>({});
 	const preparedKey = (workspaceId: string) => (workspaceId ? `task-draft.${workspaceId}` : "chat-draft.global");
@@ -267,7 +272,10 @@ export function Workbench({
 				navigationRevision.current === origin &&
 				currentScope.current.workspaceId === scope.workspaceId &&
 				currentScope.current.conversationId === scope.conversationId;
-			if (matchesBinding(event, keybindings.reopenClosedFile)) {
+			if (matchesBinding(event, keybindings.searchConversations)) {
+				event.preventDefault();
+				openSearch(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+			} else if (matchesBinding(event, keybindings.reopenClosedFile)) {
 				if (!session?.canReopen(scope.workspaceId)) return;
 				event.preventDefault();
 				setReopenFailure(null);
@@ -331,6 +339,7 @@ export function Workbench({
 		folderProject,
 		leave,
 		keybindings,
+		openSearch,
 	]);
 	const selectWorkspace = (id: string) => {
 		navigationRevision.current++;
@@ -341,12 +350,13 @@ export function Workbench({
 		setDetailsOpen(false);
 		setSelectedConversation("");
 		setNavigationOpen(false);
-		setSearch("");
+		setSearchAnchor(undefined);
 		local.write("workspace", id);
 		local.write("conversation", "");
 	};
 	const selectConversation = (item: Conversation, onSelected?: () => void) => {
 		const select = () => {
+			setSearchAnchor(undefined);
 			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
 			navigationRevision.current++;
 			session?.setWorkspace(item.workspaceId);
@@ -365,6 +375,7 @@ export function Workbench({
 	const openNewConversation = (requestedWorkspaceId: string) => {
 		const workspaceId = requestedWorkspaceId === catalog.defaultWorkspaceId() ? "" : requestedWorkspaceId;
 		const open = () => {
+			setSearchAnchor(undefined);
 			navigationRevision.current++;
 			session?.setWorkspace(workspaceId);
 			currentScope.current = { workspaceId, conversationId: "" };
@@ -378,6 +389,22 @@ export function Workbench({
 			local.write("conversation", "");
 		};
 		open();
+	};
+	const activateSearch = async (hit: ConversationSearchHit, signal: AbortSignal) => {
+		const origin = navigationRevision.current;
+		const result = await prepareSearchNavigation(client, hit, signal);
+		if (
+			signal.aborted ||
+			!connectionLease.active ||
+			currentConnection.current !== connectionLease ||
+			navigationRevision.current !== origin
+		)
+			return false;
+		selectConversation(result.conversation);
+		setSearchAnchor(result.anchor);
+		panel.restoreSplit();
+		searchActivated.current = true;
+		return true;
 	};
 	const applyCatalogResult = (origin?: number) => {
 		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
@@ -534,11 +561,7 @@ export function Workbench({
 						aria-label={t("nav.search")}
 						title={t("nav.search")}
 						aria-expanded={searchOpen}
-						aria-controls={`${searchInputId}-panel`}
-						onClick={() => {
-							if (searchOpen) closeSearch();
-							else setSearchOpen(true);
-						}}
+						onClick={(event) => openSearch(event.currentTarget)}
 					>
 						<Icon name="search" size={17} />
 					</Button>
@@ -583,59 +606,12 @@ export function Workbench({
 							{t("nav.newConversation")}
 						</Button>
 					</div>
-					<div className="sidebar-search-panel" id={`${searchInputId}-panel`} hidden={!searchOpen}>
-						<label className="sr-only" htmlFor={searchInputId}>
-							{t("nav.search")}
-						</label>
-						<InputGroup className="nav-search">
-							<InputGroupInput
-								ref={searchInput}
-								id={searchInputId}
-								type="search"
-								placeholder={t("nav.search")}
-								aria-describedby={`${searchInputId}-scope`}
-								value={search}
-								onChange={(event) => setSearch(event.target.value)}
-								onKeyDown={(event) => {
-									if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-										event.preventDefault();
-										event.stopPropagation();
-										closeSearch();
-									}
-								}}
-							/>
-							<InputGroupAddon>
-								<Icon name="search" size={16} />
-							</InputGroupAddon>
-							<InputGroupAddon align="inline-end">
-								<Button
-									variant="ghost"
-									size="icon-sm"
-									className="sidebar-search-clear"
-									aria-label={t(search ? "nav.clearSearch" : "nav.closeSearch")}
-									onClick={() => {
-										if (!search) closeSearch();
-										else {
-											setSearch("");
-											searchInput.current?.focus();
-										}
-									}}
-								>
-									<X size={14} aria-hidden="true" />
-								</Button>
-							</InputGroupAddon>
-						</InputGroup>
-						<p className="search-scope" id={`${searchInputId}-scope`}>
-							{cl.searchScope}
-						</p>
-					</div>
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
 						<PinnedConversations
 							catalog={catalog}
 							presentation={presentation}
 							selectedWorkspace={selectedWorkspace}
 							selectedConversation={selectedConversation}
-							search={search}
 							onSelect={selectConversation}
 						/>
 						<div className="nav-section-heading">
@@ -689,7 +665,6 @@ export function Workbench({
 							guard={(action) => action()}
 							selectedWorkspace={selectedWorkspace}
 							selectedConversation={selectedConversation}
-							search={search}
 							isExpanded={isExpanded}
 							onToggle={(id) => setProjectExpanded(id, !isExpanded(id))}
 							onOpenProject={selectWorkspace}
@@ -841,6 +816,8 @@ export function Workbench({
 							<ConversationPane
 								key={`${selected.workspaceId}.${selected.conversationId}`}
 								conversation={selected}
+								searchAnchor={searchAnchor}
+								onExitSearchAnchor={() => setSearchAnchor(undefined)}
 								draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
 								onOpenModelSettings={(returnFocus) => {
 									settingsReturn.current = returnFocus;
@@ -922,6 +899,22 @@ export function Workbench({
 					}}
 				/>
 			)}
+			<ConversationSearch
+				open={searchOpen}
+				onOpenChange={setSearchOpen}
+				onActivate={activateSearch}
+				onRestoreFocus={() => {
+					if (searchActivated.current) {
+						document.querySelector<HTMLElement>(".message-scroll")?.focus({ preventScroll: true });
+						return;
+					}
+					const target = searchReturn.current;
+					if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
+					else if (searchTrigger.current?.getClientRects().length) searchTrigger.current.focus({ preventScroll: true });
+					else navigationToggle.current?.focus({ preventScroll: true });
+				}}
+			/>
+
 			<SettingsDialog
 				open={settingsOpen}
 				initialCategory={settingsCategory}

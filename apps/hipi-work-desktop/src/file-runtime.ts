@@ -15,7 +15,7 @@ export async function createFileRuntime(
 	options: { workerUrl?: URL } = {},
 ) {
 	const { authority, handler, storeId } = await createRuntimeFileHost(runtime, generation);
-	const projects = createRuntimeProjectFolders(runtime, authority, generation);
+	const projects = createRuntimeProjectFolders(runtime, authority, generation, { includeDisplayPath: true });
 	const previewHost = createRuntimePreviewHost({ authority, principalId: generation, storeId, ...options });
 	const previews = createPreviewRuntime(previewHost.handler, generation, post);
 	async function check(expectedStoreId: string, workspaceId: string) {

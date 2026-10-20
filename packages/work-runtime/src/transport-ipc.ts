@@ -96,7 +96,7 @@ export function serveNodeIpc(runtime: TransportRuntime, peer: NodeJS.Process = p
 			active.set(id, controller);
 			if (message.kind === "call") {
 				const request = parseRequest(message.request);
-				const result = parseResult(request.method, await runtime.execute(request));
+				const result = parseResult(request.method, await runtime.execute(request, controller.signal));
 				if (!controller.signal.aborted) send({ id, kind: "result", result });
 			} else if (message.kind === "observe") {
 				await runtime.execute({

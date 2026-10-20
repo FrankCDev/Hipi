@@ -7,11 +7,34 @@ import {
 	createSettingsHarness,
 	settingsChoice,
 	settingsModalGeometry,
+	themeLabelTarget,
 } from "./gui-settings-route.mjs";
 
 const routeSelector = ".settings-modal";
 const languageSelector = `${routeSelector} [data-setting="language"] [role="combobox"]`;
 const themeSelector = `${routeSelector} input[name="appearance-theme"]`;
+const themeLabelSelector = `${routeSelector} label.settings-theme-option`;
+
+test("theme pointer target is the exact associated visible card, never an obscured radio or unrelated label", () => {
+	const label = {};
+	const radio = { type: "radio", disabled: false, closest: () => label };
+	let labels = [label];
+	let radios = [radio];
+	const document = { querySelectorAll: (selector) => (selector.includes("label.") ? labels : radios) };
+	assert.equal(themeLabelTarget(document, "dark"), `${themeLabelSelector}[data-mode="dark"]`);
+	for (const value of ["Dark", "", "auto"]) assert.equal(themeLabelTarget(document, value), null);
+	labels = [label, label];
+	assert.equal(themeLabelTarget(document, "dark"), null);
+	labels = [label];
+	radios = [radio, radio];
+	assert.equal(themeLabelTarget(document, "dark"), null);
+	radios = [radio];
+	radio.disabled = true;
+	assert.equal(themeLabelTarget(document, "dark"), null);
+	radio.disabled = false;
+	radio.closest = () => ({});
+	assert.equal(themeLabelTarget(document, "dark"), null);
+});
 
 function geometryFixture() {
 	const rectangles = {
@@ -231,6 +254,7 @@ function renderer({
 	}));
 	const route = {
 		...nodes.route,
+		getAnimations: () => [],
 		querySelector: (selector) => document.querySelector(selector),
 		querySelectorAll: (selector) =>
 			selector === 'input[name="appearance-theme"]'
@@ -285,6 +309,15 @@ function renderer({
 		return geometryNodes[selector] ?? null;
 	};
 	document.querySelectorAll = (selector) => {
+		if (selector.includes('[data-slot="popover-content"]')) return open ? [route] : [];
+		if (selector.startsWith(themeLabelSelector) || selector.startsWith(`${themeSelector}[value=`)) {
+			const mode = selector.match(/(?:data-mode|value)="([^"]+)"/)[1];
+			const radio = radios.find((item) => item.value === mode);
+			if (!radio.label) radio.label = {};
+			radio.type = "radio";
+			radio.closest = () => radio.label;
+			return selector.startsWith(themeLabelSelector) ? [radio.label] : [radio];
+		}
 		if (selector === '[role="dialog"]') return [...(open ? [route] : []), ...(importing ? [{}] : [])];
 		if (selector === routeSelector) return open ? [route] : [];
 		const node = document.querySelector(selector);
@@ -304,6 +337,8 @@ function renderer({
 		innerHeight: 800,
 		matchMedia: () => ({ matches: false }),
 		requestAnimationFrame: (callback) => callback(),
+		setTimeout,
+		clearTimeout,
 		getComputedStyle: () => ({
 			visibility: hideOwner && open ? "hidden" : "visible",
 			opacity: "1",
@@ -358,8 +393,8 @@ function renderer({
 				if (persist) stored = { ...preferences };
 				selecting = false;
 				document.activeElement = language;
-			} else if (selector.startsWith(themeSelector)) {
-				preferences.mode = selector.match(/value="([^"]+)"/)[1];
+			} else if (selector.startsWith(themeLabelSelector)) {
+				preferences.mode = selector.match(/data-mode="([^"]+)"/)[1];
 				if (persist) stored = { ...preferences };
 			} else if (selector.startsWith(".settings-search-result[")) {
 				category = "appearance";
@@ -443,6 +478,40 @@ test("modal capture retains the actual cyclic DOM node without returning it thro
 	assert.equal(fixture.context.window.__hipiGuiSettingsSurface, surface);
 });
 
+test("Settings geometry waits for finite entrance completion and consecutive stable rectangles", async () => {
+	const fixture = renderer();
+	await fixture.harness.open();
+	const route = fixture.document.querySelector(routeSelector);
+	let ended = false;
+	let measurements = 0;
+	const original = route.getBoundingClientRect();
+	const animation = {
+		playState: "running",
+		effect: { getComputedTiming: () => ({ endTime: 180 }) },
+		get finished() {
+			ended = true;
+			animation.playState = "finished";
+			return Promise.resolve();
+		},
+	};
+	route.getAnimations = () => [animation];
+	route.getBoundingClientRect = () => {
+		assert.equal(ended, true, "Do not measure the transient entrance transform");
+		measurements++;
+		return measurements === 1 ? { ...original, y: original.y + 4 } : original;
+	};
+	await fixture.harness.geometry();
+	assert.equal(measurements, 3, "A changed rectangle needs two subsequent identical observations");
+});
+
+test("stable incorrect Settings geometry still fails with bounded numeric viewport and rectangle evidence", async () => {
+	const fixture = renderer();
+	await fixture.harness.open();
+	const route = fixture.document.querySelector(routeSelector);
+	route.getBoundingClientRect = () => ({ x: 50, y: 40, width: 950, height: 720 });
+	await assert.rejects(fixture.harness.geometry(), /centered bounded modal.*viewport\/rect=\[1000,800,50,40,950,720\]/);
+});
+
 test("sidebar-only Settings opens through narrow/collapsed navigation then restores it after exact modal focus return", async () => {
 	for (const options of [{ narrow: true }, { collapsed: true }]) {
 		const fixture = renderer(options);
@@ -468,7 +537,11 @@ test("canonical language and radio mutations require immediate persistence and a
 	await fixture.harness.preferences("zh-CN", "dark");
 	assert.equal(fixture.preferences.locale, "zh-CN");
 	assert.equal(fixture.preferences.mode, "dark");
-	assert.ok(fixture.events.some((event) => event.selector === `${themeSelector}[value="dark"]`));
+	assert.ok(fixture.events.some((event) => event.selector === `${themeLabelSelector}[data-mode="dark"]`));
+	assert.equal(
+		fixture.events.some((event) => event.selector?.startsWith(themeSelector)),
+		false,
+	);
 	assert.ok(fixture.events.some((event) => event.selector === '[role="option"]' && event.text === "简体中文"));
 	const unsaved = renderer({ persist: false });
 	await unsaved.harness.open();

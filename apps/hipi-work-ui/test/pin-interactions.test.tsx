@@ -15,7 +15,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { CatalogSession } from "../src/features/workbench/catalog-session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
-import { PinConversationItem, PinRecovery } from "../src/features/workbench/pin-conversation.tsx";
+import {
+	PinConversationButton,
+	PinConversationItem,
+	PinRecovery,
+} from "../src/features/workbench/pin-conversation.tsx";
 import { PinnedConversations } from "../src/features/workbench/pinned-conversations.tsx";
 import { PresentationSession } from "../src/features/workbench/presentation-session.ts";
 
@@ -126,6 +130,45 @@ test("closed menus perform no metadata read; loading, refresh and archive states
 	session.dispose();
 });
 
+test("the direct hover action uses the same exact mutation owner as its menu", async () => {
+	const session = new PresentationSession(client, new LocalState());
+	const button = () => PinConversationButton({ conversation, session, open: true });
+	assert.equal(button()?.props["aria-label"], "Pin conversation");
+	button()?.props.onClick?.();
+	await vi.waitFor(() => assert.equal(session.getSnapshot().busy, false));
+	assert.equal(button()?.props["aria-label"], "Unpin conversation");
+	assert.equal(current?.pinned, true);
+	assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "setConversationPinned").length, 1);
+	assert.equal(vi.mocked(client.observe).mock.calls.length, 0);
+	session.dispose();
+});
+
+test("a stale direct pin callback cannot replace an unknown original request", async () => {
+	const calls: Method[] = [];
+	const session = new PresentationSession(
+		{
+			call: async <M extends Method>(method: M) => {
+				calls.push(method);
+				if (method === "getPresentationCommandResult") return parseResult(method, null);
+				throw new Error("Unknown outcome");
+			},
+			observe: client.observe,
+		},
+		new LocalState(),
+	);
+	const button = PinConversationButton({ conversation, session, open: true });
+	button?.props.onClick?.();
+	await vi.waitFor(() => assert.equal(session.getSnapshot().busy, false));
+	const request = session.getSnapshot().pending;
+	assert.ok(request);
+	assert.equal(PinConversationButton({ conversation, session, open: true })?.props.disabled, true);
+	button?.props.onClick?.();
+	await Promise.resolve();
+	assert.deepEqual(session.getSnapshot().pending, request);
+	assert.deepEqual(calls, ["setConversationPinned", "getPresentationCommandResult"]);
+	session.dispose();
+});
+
 test.each(["en", "zh-CN"])("pinned rows retain the same canonical selection and shared actions in %s", (language) => {
 	locale = language;
 	const cache = new QueryClient();
@@ -142,7 +185,6 @@ test.each(["en", "zh-CN"])("pinned rows retain the same canonical selection and 
 				presentation={presentation}
 				selectedWorkspace="project"
 				selectedConversation="chat"
-				search=""
 				onSelect={() => {}}
 			/>
 		</QueryClientProvider>,

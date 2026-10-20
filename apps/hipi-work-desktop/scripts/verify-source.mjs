@@ -31,6 +31,9 @@ nodeTests.push("apps/hipi-work-desktop/test/connection-lifetime.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/conversation-failure.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/observation-session.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/initial-context-runtime.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/sidebar-preview-metadata.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/anchored-history-controller.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/conversation-search-integration.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
@@ -39,6 +42,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-settings-route.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-disclosure.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-project-binding.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-pin.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-search.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-hover.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/smoke-packaged-gui.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-profile-evidence.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-native-log.test.mjs");
@@ -63,6 +68,10 @@ nodeTests.push("packages/work-runtime/test/project-folder-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folders.test.ts");
 nodeTests.push("packages/work-runtime/test/conversation-presentation.test.ts");
 nodeTests.push("packages/work-runtime/test/presentation-backup.test.ts");
+nodeTests.push("packages/work-runtime/test/conversation-search.test.ts");
+nodeTests.push("packages/work-runtime/test/search-projection.test.ts");
+nodeTests.push("packages/work-runtime/test/search-backup.test.ts");
+nodeTests.push("packages/work-runtime/test/search-fork.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/project-folders.test.ts");
 nodeTests.push("packages/work-runtime/test/recovery-archive.test.ts");
 nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
@@ -81,6 +90,7 @@ const uiTests = [
 	"activity-approval-presentation",
 	"activity-transcript",
 	"conversation-selection-interaction",
+	"conversation-search-interaction",
 	"file-canvas-presentation",
 	"work-experience-presentation",
 	"prepared-task-entry",
@@ -112,6 +122,9 @@ const uiTests = [
 	"conversation-capabilities",
 	"conversation-capabilities-interaction",
 	"conversation-preview-card",
+	"project-preview-card",
+	"sidebar-title",
+	"sidebar-title-lifecycle",
 	"tool-packs-panel-lifecycle",
 	"archived-conversation",
 	"conversation-model-refresh",
@@ -141,6 +154,8 @@ uiTests.push("apps/hipi-work-ui/test/project-folder-change.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/presentation-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/sidebar-title-motion.test.ts");
+uiTests.push("apps/hipi-work-ui/test/conversation-search-controller.test.ts");
 uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/initial-context-send.test.ts");

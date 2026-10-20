@@ -71,7 +71,7 @@ UI 遇到未知响应先精确只读核对，不生成新请求覆盖原意图�
 
 当前 transport protocol 为 5，工具包 formatVersion 为 1，两者含义不同。root catalog schema 3 在 runtime 可用前持久建立单向屏障，使仅接受 schema 1/2 的旧程序拒绝打开新数据，避免旧模型出站路径忽略工具包历史依赖。
 
-即使只打开目录也会升级。不能手工降低版本或只替换旧二进制回滚。当前手工回滚原则要求停机并恢复升级前完整一致的 root 与全部 workspace 备份到原路径；这不是已实现的备份恢复产品入口，也不预先规定后续新目录只读档案恢复方案。详细顺序和仍未完成的备份恢复门禁见[长期容量与会话归档](CAPACITY-AND-ARCHIVAL.md#工具包授权的单向版本屏障schema-3)。
+schema 3 是首次引入该屏障的版本，当前正常 catalog 为 schema 8，仍保留此安全要求。即使只打开目录也会升级。不能手工降低版本或只替换旧二进制回滚。手工回滚原则要求停机并持有升级前完整一致的 root 与全部 workspace 备份；当前[离线维护入口](STORE-MAINTENANCE.md)支持 schema 3、5、6、7、8 源库，但 restore 只创建新的 schema 4 非执行历史档案，不能用作可执行回滚。详细边界和未完成门禁见[长期容量与会话归档](CAPACITY-AND-ARCHIVAL.md#工具包授权的单向版本屏障schema-3)。
 
 ## 8. 验证范围
 

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { exerciseConversationPin } from "./gui-conversation-pin.mjs";
+import { exerciseConversationSearch } from "./gui-conversation-search.mjs";
 import { renderedFonts } from "./gui-fonts.mjs";
 import { exerciseProjectDisclosure } from "./gui-project-disclosure.mjs";
 import { createSettingsHarness } from "./gui-settings-route.mjs";
+import { exerciseSidebarHover } from "./gui-sidebar-hover.mjs";
 import { exerciseToolPacks } from "./gui-tool-packs.mjs";
 import { exerciseWorkExperience, nativeEditorKey } from "./gui-work-experience.mjs";
 
@@ -939,6 +941,8 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		false,
 		scope,
 	);
+	const conversationSearch = await exerciseConversationSearch(cdp, directory, scope);
+	const sidebarHover = await exerciseSidebarHover(cdp, directory, scope, fixture.conversation);
 	const conversationPin = await exerciseConversationPin(cdp, directory, scope, fixture.conversation, false);
 	return {
 		...observed,
@@ -946,6 +950,8 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		initialChat,
 		projectDisclosure,
 		conversationPin,
+		sidebarHover,
+		conversationSearch,
 		fonts,
 		detailsGeometry,
 		activities,

@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import { settleFloatingAnimations } from "./gui-flow.mjs";
 
 const routeSelector = ".settings-modal";
 const languageSelector = `${routeSelector} [data-setting="language"] [role="combobox"]`;
-const themeSelector = `${routeSelector} input[name="appearance-theme"]`;
 const storageKey = "hipi-work.preferences.v1";
 const categories = ["general", "appearance", "models", "runtime"];
+
+/** The opaque preview overlays its transparent radio; click only its actual associated label. */
+export function themeLabelTarget(document, value) {
+	if (!["system", "light", "dark"].includes(value)) return null;
+	const selector = `.settings-modal label.settings-theme-option[data-mode="${value}"]`;
+	const labels = [...document.querySelectorAll(selector)];
+	const radios = [...document.querySelectorAll(`.settings-modal input[name="appearance-theme"][value="${value}"]`)];
+	if (labels.length !== 1 || radios.length !== 1) return null;
+	const [radio] = radios;
+	if (radio.disabled || radio.type !== "radio" || radio.closest("label") !== labels[0]) return null;
+	return selector;
+}
 
 /** Renderer observations only. The native harness owns every input and navigation action. */
 export function settingsModalGeometry(document, viewport) {
@@ -277,7 +289,9 @@ export function createSettingsHarness(cdp, helpers) {
 		const before = await choice(field);
 		if (before.mode === value) return;
 		if (field === "theme") {
-			await click(cdp, `${themeSelector}[value="${value}"]`);
+			const target = await read(`(${themeLabelTarget.toString()})(document, ${JSON.stringify(value)})`);
+			assert.ok(target, "Theme action requires one enabled radio inside its exact associated label");
+			await click(cdp, target);
 		} else {
 			await click(cdp, languageSelector);
 			await click(cdp, '[role="option"]', value === "en" ? "English" : "简体中文");
@@ -310,8 +324,24 @@ export function createSettingsHarness(cdp, helpers) {
 		await close(".sidebar-settings-trigger");
 	};
 	const geometry = async () => {
-		const state = await read(`(${settingsModalGeometry.toString()})(document, {width:innerWidth,height:innerHeight})`);
-		assertSettingsModalGeometry(state);
+		await read(`(${settleFloatingAnimations.toString()})(document)`);
+		let previous;
+		const state = await until(async () => {
+			await read("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))");
+			const last = await read(`(${settingsModalGeometry.toString()})(document, {width:innerWidth,height:innerHeight})`);
+			const bounds = JSON.stringify(last.regions);
+			const stable = bounds === previous;
+			previous = bounds;
+			return stable ? last : false;
+		}, "Settings finite entrance and consecutive measured bounds settle");
+		try {
+			assertSettingsModalGeometry(state);
+		} catch (error) {
+			const rect = state.regions.route;
+			const values = [state.width, state.height, rect?.x, rect?.y, rect?.width, rect?.height];
+			error.message += `; viewport/rect=${JSON.stringify(values.map((value) => (Number.isFinite(value) ? value : null)))}`;
+			throw error;
+		}
 		return state;
 	};
 	const replaceText = async (selector, value) => {

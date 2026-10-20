@@ -3,6 +3,7 @@ import {
 	type AppClient,
 	type Method,
 	parseResult,
+	type SearchHistoryWindow,
 	type Snapshot,
 	type ToolActivityPage,
 } from "@hipi/work-runtime/contracts";
@@ -11,10 +12,11 @@ import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import type { ActivityState } from "../src/features/tool-activities/activity-session.ts";
 import { ActivityTranscriptProvider } from "../src/features/tool-activities/activity-transcript.tsx";
+import { ConversationHistory } from "../src/features/workbench/conversation-history.tsx";
 import { ConversationMessages } from "../src/features/workbench/conversation-messages.tsx";
 import { ConversationReadingPositions } from "../src/features/workbench/conversation-reading-position.ts";
 
-type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
+type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void; setup?: React.EffectCallback };
 type Hooks = { cells: Cell[]; cursor: number; commits: (() => void)[]; changed: boolean };
 const adapter = vi.hoisted(() => ({ current: undefined as Hooks | undefined }));
 
@@ -45,7 +47,12 @@ vi.mock("react", async () => {
 			hooks.commits.push(() => {
 				previous?.cleanup?.();
 				const cleanup = create();
-				hooks.cells[index] = { value: undefined, deps, cleanup: typeof cleanup === "function" ? cleanup : undefined };
+				hooks.cells[index] = {
+					value: undefined,
+					deps,
+					setup: create,
+					cleanup: typeof cleanup === "function" ? cleanup : undefined,
+				};
 			});
 	}
 	return {
@@ -125,6 +132,9 @@ class ElementPort extends EventPort {
 	}
 	contains(node: unknown) {
 		return node === this;
+	}
+	querySelector() {
+		return searchMark;
 	}
 }
 type VirtualOptions = {
@@ -210,6 +220,7 @@ let documentEvents = new EventPort();
 let windowEvents = new EventPort();
 let virtualizer = createVirtualizer();
 let selected = false;
+const searchMark = { scrollIntoView: vi.fn() };
 let nextFrame = 0;
 const frames = new Map<number, FrameRequestCallback>();
 const observers = new Set<{ disconnect: () => void }>();
@@ -256,15 +267,35 @@ function host(render: () => React.ReactNode, attach: (node: React.ReactNode) => 
 				cell.cleanup = undefined;
 			}
 		},
+		replayEffects() {
+			for (const cell of hooks.cells) {
+				cell.cleanup?.();
+				cell.cleanup = undefined;
+			}
+			for (const cell of hooks.cells) {
+				const cleanup = cell.setup?.();
+				cell.cleanup = typeof cleanup === "function" ? cleanup : undefined;
+			}
+		},
 	};
 }
-function conversation(options: { key?: string; snapshot?: Snapshot } = {}) {
+function conversation(options: { key?: string; snapshot?: Snapshot; searchAnchor?: SearchHistoryWindow } = {}) {
 	const positions = new ConversationReadingPositions();
 	if (options.key) positions.save(scope, { key: options.key, pixel: -25.5, following: false }, []);
 	let snapshot = options.snapshot ?? latest;
 	const onNearTop = vi.fn();
+	const onJumpLatest = vi.fn();
 	const owner = host(
-		() => ConversationMessages({ snapshot, error: false, scope, readingPositions: positions, onNearTop }),
+		() =>
+			ConversationMessages({
+				snapshot,
+				error: false,
+				scope,
+				readingPositions: positions,
+				onNearTop,
+				searchAnchor: options.searchAnchor,
+				onJumpLatest: options.searchAnchor ? onJumpLatest : undefined,
+			}),
 		(node) => {
 			const section = elements(node, "section")[0];
 			assert.ok(section?.props.ref && typeof section.props.ref === "object");
@@ -275,6 +306,7 @@ function conversation(options: { key?: string; snapshot?: Snapshot } = {}) {
 		...owner,
 		positions,
 		onNearTop,
+		onJumpLatest,
 		update(next: Snapshot) {
 			snapshot = next;
 			return owner.drive();
@@ -515,4 +547,98 @@ test("disposing activity polling while selection is held prevents a read after r
 	await vi.advanceTimersByTimeAsync(6000);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 	assert.equal(vi.getTimerCount(), 0);
+});
+
+test("search reading scrolls to the exact matching row and chunk, never follows the displayed window's end", () => {
+	const anchor: SearchHistoryWindow = {
+		...scope,
+		messages: latest.messages,
+		target: { ...scope, messageId: "b", text: "Second", offset: 0, nextOffset: null, textLength: 6 },
+		matchStart: 0,
+		matchEnd: 6,
+		olderCursor: "opaque-older",
+		newerCursor: "opaque-newer",
+	};
+	const owner = conversation({ key: "message:a", searchAnchor: anchor });
+	owner.drive();
+	assert.deepEqual(virtualizer.scrollToIndex.mock.calls, [[1, { align: "center" }]]);
+	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
+	frame();
+	frame();
+	assert.deepEqual(searchMark.scrollIntoView.mock.calls, [[{ block: "center" }]]);
+	root.scrollTop = 800;
+	const wheel = new Event("wheel");
+	Object.assign(wheel, { deltaY: 20, deltaX: 0 });
+	root.dispatchEvent(wheel);
+	owner.scroll();
+	owner.drive();
+	assert.equal(virtualizer.options.followOnAppend, false);
+	assert.equal(virtualizer.options.scrollEndThreshold, -1);
+	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
+	owner.dispose();
+	assert.equal(
+		owner.positions.read(scope)?.key,
+		"message:a",
+		"Search anchors never overwrite normal reading positions",
+	);
+});
+
+test("selection during search settling cancels the scheduled exact-match scroll", () => {
+	const owner = conversation({
+		searchAnchor: {
+			...scope,
+			messages: latest.messages,
+			target: { ...scope, messageId: "b", text: "Second", offset: 0, nextOffset: null, textLength: 6 },
+			matchStart: 0,
+			matchEnd: 6,
+			olderCursor: null,
+			newerCursor: null,
+		},
+	});
+	owner.drive();
+	select(true);
+	owner.drive();
+	frame();
+	frame();
+	assert.equal(searchMark.scrollIntoView.mock.calls.length, 0);
+	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
+});
+
+test("StrictMode effect replay retains the hydrated anchor and repositions its actual matching chunk", () => {
+	const searchAnchor: SearchHistoryWindow = {
+		...scope,
+		messages: latest.messages,
+		target: { ...scope, messageId: "b", text: "Second", offset: 0, nextOffset: null, textLength: 6 },
+		matchStart: 0,
+		matchEnd: 6,
+		olderCursor: "opaque-older",
+		newerCursor: "opaque-newer",
+	};
+	const owner = conversation({ searchAnchor });
+	owner.drive();
+	owner.replayEffects();
+	owner.drive();
+	frame();
+	frame();
+	assert.equal(searchMark.scrollIntoView.mock.calls.length, 1, "Replay restores cancelled exact-match positioning");
+	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
+	const outer = ConversationHistory({
+		scope,
+		snapshot: latest,
+		error: false,
+		searchAnchor: { window: searchAnchor, locator: "opaque" },
+	});
+	assert.equal(typeof outer.type, "function");
+	const scoped = host(() =>
+		Reflect.apply(outer.type as (...args: unknown[]) => React.ReactNode, undefined, [outer.props]),
+	);
+	const first = scoped.drive();
+	assert.ok(isValidElement<React.ComponentProps<typeof ConversationMessages>>(first));
+	assert.equal(first.props.searchAnchor, searchAnchor);
+	scoped.replayEffects();
+	const replayed = scoped.drive();
+	assert.ok(isValidElement<React.ComponentProps<typeof ConversationMessages>>(replayed));
+	assert.equal(replayed.props.searchAnchor, searchAnchor, "A replacement controller re-applies the same prop anchor");
+	assert.deepEqual(replayed.props.snapshot?.messages, searchAnchor.messages);
+	assert.equal(replayed.props.snapshot?.historyCursor, null);
 });

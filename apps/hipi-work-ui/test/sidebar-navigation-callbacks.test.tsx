@@ -409,7 +409,7 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 	const content = element(ui.renderActions(), DropdownMenuContent);
 	assert.equal(content.props.side, "right");
 	assert.equal(content.props.align, "start");
-	assert.equal(content.props.sideOffset, 16);
+	assert.equal(content.props.sideOffset, 14);
 	assert.equal(content.props.alignOffset, -4);
 	assert.equal(content.props.collisionPadding, 12);
 	assert.equal(content.props.avoidCollisions, undefined, "Radix collision handling keeps its enabled default");
@@ -466,6 +466,120 @@ test("touch menu exposes the same read-only preview with no duplicate View detai
 	assert.equal(ui.returned.mock.calls.length, 1);
 	vi.advanceTimersByTime(400);
 	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+});
+
+test("keyboard Tab enters an interactive card and returns through its exact source and next row control", () => {
+	vi.stubGlobal("HTMLElement", Object);
+	const ui = rowAndActions();
+	const row = element(ui.renderRow(), "div");
+	const card = element(ui.renderRow(), PopoverContent);
+	const source = {
+		isConnected: true,
+		matches: () => true,
+		closest: () => null,
+		getClientRects: () => [{}],
+		focus: vi.fn(),
+	};
+	const next = { ...source, focus: vi.fn() };
+	const control = { ...source, focus: vi.fn() };
+	Object.assign(row.props.ref, { current: { contains: (node: unknown) => node === source || node === next } });
+	Object.assign(card.props.ref, {
+		current: { querySelectorAll: () => [control], contains: (node: unknown) => node === control },
+	});
+	vi.stubGlobal("document", {
+		activeElement: source,
+		body: {},
+		querySelectorAll: () => [source, next, control],
+	});
+	ui.focus();
+	let view = ui.renderRow();
+	const tab = {
+		key: "Tab",
+		shiftKey: false,
+		nativeEvent: { isComposing: false },
+		target: source,
+		currentTarget: { contains: () => true },
+		preventDefault: vi.fn(),
+	};
+	for (const modifier of ["altKey", "ctrlKey", "metaKey"] as const)
+		Reflect.apply(element(view, "div").props.onKeyDown, undefined, [{ ...tab, [modifier]: true }]);
+	assert.equal(control.focus.mock.calls.length, 0);
+	assert.equal(tab.preventDefault.mock.calls.length, 0, "OS and app Tab chords retain their native behavior");
+	Reflect.apply(element(view, "div").props.onKeyDown, undefined, [tab]);
+	assert.equal(tab.preventDefault.mock.calls.length, 1);
+	assert.equal(control.focus.mock.calls.length, 1);
+	view = ui.renderRow();
+	const back = { ...tab, shiftKey: true, target: control, preventDefault: vi.fn() };
+	Reflect.apply(element(view, PopoverContent).props.onKeyDown, undefined, [back]);
+	assert.equal(back.preventDefault.mock.calls.length, 1);
+	assert.equal(source.focus.mock.calls.length, 1);
+	assert.equal(
+		element(ui.renderRow(), Popover).props.open,
+		true,
+		"Reverse Tab returns to the source without dismissing its card",
+	);
+	ui.focus();
+	view = ui.renderRow();
+	Reflect.apply(element(view, "div").props.onKeyDown, undefined, [tab]);
+	view = ui.renderRow();
+	Reflect.apply(element(view, PopoverContent).props.onKeyDown, undefined, [{ ...tab, target: control }]);
+	assert.equal(next.focus.mock.calls.length, 1);
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+});
+
+test("reverse pointer travel uses the row corridor and stopping in the gap retains a bounded close deadline", () => {
+	class Target {
+		nodes: unknown[] = [];
+		contains(node: unknown) {
+			return this.nodes.includes(node);
+		}
+		closest() {
+			return null;
+		}
+		getBoundingClientRect() {
+			return { left: 0, right: 275, top: 80, bottom: 116 };
+		}
+	}
+	vi.stubGlobal("Node", Target);
+	vi.stubGlobal("Element", Target);
+	const events = new Map<string, (event: unknown) => void>();
+	const ui = rowAndActions();
+	const row = element(ui.renderRow(), "div");
+	const card = element(ui.renderRow(), PopoverContent);
+	const source = new Target();
+	const rowNode = new Target();
+	rowNode.nodes = [source];
+	const cardNode = new Target();
+	cardNode.getBoundingClientRect = () => ({ left: 277, right: 597, top: 80, bottom: 220 });
+	Object.assign(row.props.ref, { current: rowNode });
+	Object.assign(card.props.ref, { current: cardNode });
+	vi.stubGlobal("document", {
+		activeElement: null,
+		body: {},
+		addEventListener: (name: string, handler: (event: unknown) => void) => events.set(name, handler),
+		removeEventListener: (name: string) => events.delete(name),
+	});
+	Reflect.apply(row.props.onPointerEnter, undefined, [
+		{ pointerType: "mouse", target: source, currentTarget: rowNode },
+	]);
+	vi.advanceTimersByTime(200);
+	let view = ui.renderRow();
+	assert.equal(element(view, Popover).props.open, true);
+	Reflect.apply(element(view, PopoverContent).props.onPointerLeave, undefined, [{ clientX: 277, clientY: 200 }]);
+	view = ui.renderRow();
+	assert.ok(events.get("pointermove"));
+	events.get("pointermove")?.({ pointerType: "mouse", target: new Target(), clientX: 276, clientY: 155 });
+	vi.advanceTimersByTime(99);
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	events.get("pointermove")?.({ pointerType: "mouse", target: new Target(), clientX: 276, clientY: 150 });
+	vi.advanceTimersByTime(99);
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	vi.advanceTimersByTime(1);
+	assert.equal(
+		element(ui.renderRow(), Popover).props.open,
+		false,
+		"A stationary pointer in the gap cannot leave a permanent card",
+	);
 });
 
 for (const method of ["archiveConversation", "restoreConversation"] as const) {
@@ -600,6 +714,59 @@ test("a cancelled dirty-file guard does not send or persist the archive", () => 
 	assert.equal(call.mock.calls.length, 0);
 	assert.equal(local.read("command.catalog"), null);
 	assert.equal(session.getSnapshot().busy, false);
+	session.dispose();
+});
+
+test("direct Archive follows the same immutable guard and unknown-request owner as the menu", async () => {
+	const local = new LocalState();
+	const calls: { method: Method; params: unknown }[] = [];
+	const source = { ...conversation };
+	const session = new CatalogSession(
+		{
+			call: async (method, params) => {
+				calls.push({ method, params });
+				if (method === "getConversationCommandResult") return parseResult(method, null);
+				throw new Error("Lost response");
+			},
+			observe: vi.fn(),
+		},
+		local,
+	);
+	let continueAction: (() => void) | undefined;
+	const render = () =>
+		drive("direct-archive", () =>
+			ConversationActions({
+				conversation: source,
+				session,
+				inlineActions: true,
+				active: true,
+				guard: (action) => {
+					continueAction = action;
+				},
+			}),
+		);
+	const direct = elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation");
+	assert.ok(direct?.props.onClick);
+	Reflect.apply(direct.props.onClick, undefined, []);
+	assert.equal(calls.length, 0);
+	source.revision = 8;
+	const settled = catalogSettled(session);
+	continueAction?.();
+	await settled;
+	assert.equal(session.getSnapshot().pending?.method, "archiveConversation");
+	assert.equal((calls[0]?.params as { expectedRevision: number }).expectedRevision, 1);
+	assert.equal(
+		elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation")?.props.disabled,
+		true,
+	);
+	Reflect.apply(direct.props.onClick, undefined, []);
+	continueAction?.();
+	await Promise.resolve();
+	assert.deepEqual(
+		calls.map(({ method }) => method),
+		["archiveConversation", "getConversationCommandResult"],
+	);
+	assert.equal(element(render(), Dialog).props.open, false);
 	session.dispose();
 });
 

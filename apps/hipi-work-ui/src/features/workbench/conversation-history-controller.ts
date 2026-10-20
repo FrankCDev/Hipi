@@ -4,6 +4,7 @@ import {
 	LIMITS,
 	type Message,
 	type Scope,
+	type SearchHistoryWindow,
 	type Snapshot,
 } from "@hipi/work-runtime/contracts";
 
@@ -16,7 +17,9 @@ export type ConversationHistoryState = {
 	reconciling: boolean;
 	capacity: boolean;
 	blocked: "capacity" | "scan-limit" | null;
+	anchor?: SearchHistoryAnchor;
 };
+export type SearchHistoryAnchor = { locator: string; window: SearchHistoryWindow };
 type Bridge = { snapshot: Snapshot; messages: Message[]; cursor: string | null; seen: Set<string> };
 
 /** One mounted scope owns previews, its original older fence, and at most one cancellable read.
@@ -40,15 +43,21 @@ export class ConversationHistoryController {
 	private failed = false;
 	private capacity = false;
 	private disposed = false;
+	private anchor: SearchHistoryAnchor | undefined;
+	private anchorDirection: "older" | "newer" | undefined;
+	private readonly anchorSeen = { older: new Set<string>(), newer: new Set<string>() };
+	private readonly readAnchor?: (locator: string, cursor: string, signal: AbortSignal) => Promise<SearchHistoryWindow>;
 
 	constructor(
 		scope: Scope,
 		read: (cursor: string, signal: AbortSignal) => Promise<HistoryPage>,
 		publish: (state: ConversationHistoryState) => void,
+		readAnchor?: (locator: string, cursor: string, signal: AbortSignal) => Promise<SearchHistoryWindow>,
 	) {
 		this.scope = { ...scope };
 		this.read = read;
 		this.publish = publish;
+		this.readAnchor = readAnchor;
 	}
 
 	get state(): ConversationHistoryState {
@@ -59,6 +68,7 @@ export class ConversationHistoryController {
 			reconciling: this.bridge !== undefined || this.queued !== undefined,
 			capacity: this.capacity,
 			blocked: this.capacity ? "capacity" : this.scanLimited ? "scan-limit" : null,
+			anchor: this.anchor,
 		};
 	}
 
@@ -66,6 +76,9 @@ export class ConversationHistoryController {
 		if (this.disposed) return;
 		this.validateScope(snapshot);
 		this.latest = snapshot;
+		// A search window is intentionally disconnected from the live tail.
+		// Observation remains available for Jump to latest, never as a gap to drain.
+		if (this.anchor) return;
 		if (this.capacity) return;
 		if (!this.fits(this.snapshot?.messages ?? [], this.bridge?.messages ?? [], snapshot.messages)) {
 			this.capacity = true;
@@ -90,6 +103,10 @@ export class ConversationHistoryController {
 		this.scanLimited = false;
 		this.scanPages = 0;
 		this.emit();
+		if (this.anchor && this.anchorDirection) {
+			this.loadAnchored(this.anchorDirection);
+			return;
+		}
 		// An explicit retry also retries an older page after the user has scrolled away.
 		this.pump(true);
 	}
@@ -108,7 +125,69 @@ export class ConversationHistoryController {
 		this.failed = false;
 		this.capacity = false;
 		this.nearTop = false;
+		this.anchor = undefined;
+		this.anchorDirection = undefined;
+		this.anchorSeen.older.clear();
+		this.anchorSeen.newer.clear();
 		this.emit();
+	}
+
+	openAnchor(anchor: SearchHistoryAnchor) {
+		if (this.disposed) return;
+		const { window } = anchor;
+		this.validateScope(window);
+		this.validateScope(window.target);
+		const target = window.messages.find((message) => message.id === window.target.messageId);
+		if (
+			!target ||
+			target.textLength !== window.target.textLength ||
+			window.matchStart < window.target.offset ||
+			window.matchEnd <= window.matchStart ||
+			window.matchEnd > window.target.offset + window.target.text.length ||
+			!this.fits(window.messages)
+		)
+			throw new AppError("INVALID_REQUEST");
+		this.request?.abort();
+		this.request = undefined;
+		this.anchor = anchor;
+		this.anchorDirection = undefined;
+		this.anchorSeen.older.clear();
+		this.anchorSeen.newer.clear();
+		this.snapshot = {
+			...this.scope,
+			messages: unique(window.messages),
+			historyCursor: null,
+			partial: "",
+			partialLength: 0,
+			partialTruncated: false,
+			running: false,
+		};
+		this.bridge = undefined;
+		this.queued = undefined;
+		this.pages = 0;
+		this.scanPages = 0;
+		this.scanLimited = false;
+		this.failed = false;
+		this.capacity = false;
+		this.nearTop = false;
+		this.emit();
+	}
+
+	loadAnchored(direction: "older" | "newer") {
+		const anchor = this.anchor;
+		const cursor = anchor?.window[direction === "older" ? "olderCursor" : "newerCursor"];
+		if (this.disposed || !anchor || !cursor || !this.readAnchor || this.request || this.capacity) return;
+		if (this.pages >= HISTORY_CAPACITY.pages) {
+			this.capacity = true;
+			this.emit();
+			return;
+		}
+		const request = new AbortController();
+		this.request = request;
+		this.anchorDirection = direction;
+		this.failed = false;
+		this.emit();
+		void this.loadAnchor(anchor, cursor, direction, request);
 	}
 
 	dispose() {
@@ -120,6 +199,9 @@ export class ConversationHistoryController {
 		this.bridge = undefined;
 		this.queued = undefined;
 		this.olderSeen.clear();
+		this.anchor = undefined;
+		this.anchorSeen.older.clear();
+		this.anchorSeen.newer.clear();
 	}
 
 	private validateScope(value: Scope) {
@@ -171,7 +253,7 @@ export class ConversationHistoryController {
 	}
 
 	private pump(force = false) {
-		if (this.disposed || this.request || this.failed || this.capacity || this.scanLimited) return;
+		if (this.disposed || this.anchor || this.request || this.failed || this.capacity || this.scanLimited) return;
 		const bridge = this.bridge;
 		const cursor = bridge?.cursor ?? (bridge ? null : this.snapshot?.historyCursor);
 		if (!cursor) {
@@ -196,6 +278,51 @@ export class ConversationHistoryController {
 		this.request = request;
 		this.emit();
 		void this.load(cursor, bridge, request);
+	}
+
+	private async loadAnchor(
+		anchor: SearchHistoryAnchor,
+		cursor: string,
+		direction: "older" | "newer",
+		request: AbortController,
+	) {
+		try {
+			const page = await this.readAnchor?.(anchor.locator, cursor, request.signal);
+			if (!page || this.disposed || this.anchor !== anchor || this.request !== request) return;
+			this.validateScope(page);
+			this.validateScope(page.target);
+			if (
+				page.target.messageId !== anchor.window.target.messageId ||
+				page.target.textLength !== anchor.window.target.textLength ||
+				page.matchStart !== anchor.window.matchStart ||
+				page.matchEnd !== anchor.window.matchEnd
+			)
+				throw new AppError("INVALID_REQUEST");
+			const field = direction === "older" ? "olderCursor" : "newerCursor";
+			const next = page[field];
+			if (next && (next === cursor || this.anchorSeen[direction].has(next))) throw new AppError("INVALID_REQUEST");
+			const held = this.snapshot;
+			if (!held) return;
+			const originals = new Set(held.messages.map((message) => message.id));
+			const added = page.messages.filter((message) => !originals.has(message.id));
+			const messages = unique(direction === "older" ? [...added, ...held.messages] : [...held.messages, ...added]);
+			if (!this.fits(messages)) {
+				this.capacity = true;
+				return;
+			}
+			this.anchorSeen[direction].add(cursor);
+			this.anchor = { ...anchor, window: { ...anchor.window, [field]: next } };
+			this.snapshot = { ...held, messages };
+			this.pages++;
+			this.anchorDirection = undefined;
+		} catch {
+			if (!this.disposed && this.request === request) this.failed = true;
+		} finally {
+			if (!this.disposed && this.request === request) {
+				this.request = undefined;
+				this.emit();
+			}
+		}
 	}
 
 	private async load(cursor: string, bridge: Bridge | undefined, request: AbortController) {

@@ -125,10 +125,19 @@ nav .workspace-tree {
 	height: 36px;
 }
 
+.workspace-tree .conversation-hover-actions {
+	display: flex;
+	align-items: center;
+	flex: 0 0 auto;
+	gap: 0;
+	height: 36px;
+}
+
 .workspace-tree .project-actions-trigger,
 .workspace-tree .project-new-conversation,
 .workspace-tree .recent-actions-trigger,
-.workspace-tree .conversation-actions-trigger {
+.workspace-tree .conversation-actions-trigger,
+.workspace-tree .conversation-quick-action {
 	flex: 0 0 28px;
 	width: 28px;
 	height: 28px;
@@ -148,7 +157,8 @@ nav .workspace-tree {
 }
 
 .workspace-tree .sidebar-row-actions > button:hover,
-.workspace-tree .conversation-actions-trigger:hover {
+.workspace-tree .conversation-actions-trigger:hover,
+.workspace-tree .conversation-quick-action:hover {
 	color: var(--text);
 	background: color-mix(in srgb, var(--text) 5%, transparent);
 }
@@ -201,10 +211,10 @@ nav .workspace-tree {
 }
 
 [data-slot="popover-content"].conversation-preview-card {
-	width: min(320px, calc(100vw - 24px));
+	width: min(320px, calc(100vw - 16px));
 	border: 0.5px solid var(--line);
 	border-radius: 12px;
-	padding: 10px;
+	padding: 6px 8px;
 	box-shadow: 0 8px 24px var(--shadow);
 }
 
@@ -262,6 +272,52 @@ nav .workspace-tree {
 	gap: 8px;
 }
 
+.project-preview-content {
+	display: grid;
+	gap: 6px;
+	padding-block: 2px;
+}
+
+[data-slot="popover-content"].conversation-preview-card:has(.project-preview-content) {
+	width: min(21rem, calc(100vw - 16px));
+	min-width: min(18rem, calc(100vw - 16px));
+	padding: 8px;
+}
+
+.project-preview-meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	min-width: 0;
+	color: var(--muted);
+	font-size: calc(var(--font-ui-size) - 1px);
+	line-height: 1.5;
+}
+
+.project-preview-meta svg {
+	flex-shrink: 0;
+}
+
+.project-preview-path-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.project-preview-content .project-preview-path {
+	padding-top: 8px;
+	margin-top: 2px;
+	border-top: 1px solid var(--line);
+}
+
+.project-preview-content .project-preview-edit {
+	justify-content: flex-start;
+	width: 100%;
+	padding-inline: 6px;
+	font-size: calc(var(--font-ui-size) - 1px);
+}
+
 [data-slot="dropdown-menu-content"].conversation-action-menu,
 [data-slot="dropdown-menu-content"].project-action-menu {
 	width: min(320px, calc(100vw - 24px));
@@ -274,12 +330,14 @@ nav .workspace-tree {
 
 @media (hover: hover) and (pointer: fine) {
 	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .conversation-hover-actions,
 	.workspace-tree .recent-actions-trigger,
 	.workspace-tree .conversation-actions-trigger {
 		opacity: 0;
 	}
 
-	.workspace-tree .sidebar-row-actions {
+	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .conversation-hover-actions {
 		width: 0;
 		overflow: hidden;
 	}
@@ -292,7 +350,10 @@ nav .workspace-tree {
 
 	.workspace-tree .sidebar-preview-row:hover .sidebar-row-actions,
 	.workspace-tree .sidebar-preview-row:focus-within .sidebar-row-actions,
-	.workspace-tree .sidebar-row-actions:has([data-state="open"]) {
+	.workspace-tree .sidebar-row-actions:has([data-state="open"]),
+	.workspace-tree .sidebar-preview-row:hover .conversation-hover-actions,
+	.workspace-tree .sidebar-preview-row:focus-within .conversation-hover-actions,
+	.workspace-tree .conversation-hover-actions:has([data-state="open"]) {
 		width: auto;
 		overflow: visible;
 	}
@@ -308,6 +369,9 @@ nav .workspace-tree {
 	.workspace-tree .sidebar-preview-row:hover .sidebar-row-actions,
 	.workspace-tree .sidebar-preview-row:focus-within .sidebar-row-actions,
 	.workspace-tree .sidebar-row-actions:has([data-state="open"]),
+	.workspace-tree .sidebar-preview-row:hover .conversation-hover-actions,
+	.workspace-tree .sidebar-preview-row:focus-within .conversation-hover-actions,
+	.workspace-tree .conversation-hover-actions:has([data-state="open"]),
 	.workspace-tree .recent-conversations-heading:hover .recent-actions-trigger,
 	.workspace-tree .recent-conversations-heading:focus-within .recent-actions-trigger,
 	.workspace-tree .recent-actions-trigger[data-state="open"],
@@ -333,12 +397,14 @@ nav .workspace-tree {
 
 @media (any-pointer: coarse) {
 	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .conversation-hover-actions,
 	.workspace-tree .recent-actions-trigger,
 	.workspace-tree .conversation-actions-trigger {
 		opacity: 1;
 	}
 
-	.workspace-tree .sidebar-row-actions {
+	.workspace-tree .sidebar-row-actions,
+	.workspace-tree .conversation-hover-actions {
 		width: auto;
 		overflow: visible;
 	}

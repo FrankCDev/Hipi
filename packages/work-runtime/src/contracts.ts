@@ -5,6 +5,16 @@ import {
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
+import { SEARCH_LIMITS, type SearchMethods, searchQuery } from "./search/contracts.ts";
+
+export {
+	type ConversationSearchHit,
+	type ConversationSearchPage,
+	SEARCH_LIMITS,
+	type SearchHistoryWindow,
+	type SearchIndexStatus,
+} from "./search/contracts.ts";
+
 import { type ModelFailure, modelFailureCategory } from "./model-failure.ts";
 import {
 	isProviderConfigurationMethod,
@@ -240,7 +250,8 @@ export type ObservationStatus =
 export type Subscription = { dispose(): Promise<void> };
 export type Handshake = { protocolVersion: typeof PROTOCOL_VERSION; storeId: string };
 export type Methods = ToolPackMethods &
-	ProviderConfigurationMethods & {
+	ProviderConfigurationMethods &
+	SearchMethods & {
 		getToolActivities: { params: Scope & { cursor?: string }; result: ToolActivityPage };
 		getToolActivityText: { params: Scope & { activityId: string; cursor?: string }; result: ToolActivityTextPage };
 		handshake: { params: Record<string, never>; result: Handshake };
@@ -423,6 +434,38 @@ export function parseRequest(value: unknown): Request {
 	}
 	let request: Request;
 	switch (r.method) {
+		case "refreshConversationSearch":
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) },
+			};
+			break;
+		case "searchConversations": {
+			let query: string;
+			try {
+				query = searchQuery(p.query);
+			} catch {
+				throw new AppError("INVALID_REQUEST");
+			}
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: { query, ...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }) },
+			};
+			break;
+		}
+		case "getHistoryAroundMatch":
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: {
+					...parseScope(p),
+					locator: string(p.locator, LIMITS.cursor),
+					...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }),
+				},
+			};
+			break;
 		case "handshake":
 		case "listModels":
 			request = { version: PROTOCOL_VERSION, method: r.method, params: {} };
@@ -1180,7 +1223,107 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		}
 	}
 	let result: Response;
-	if (method === "getToolActivities") {
+	if (method === "refreshConversationSearch") {
+		const p = object(value);
+		fields(p, ["generation", "state", "completedAt", "nextCursor"]);
+		if (p.state !== "building" && p.state !== "refreshing" && p.state !== "ready")
+			throw new AppError("INVALID_REQUEST");
+		const completedAt = p.completedAt === null ? null : integer(p.completedAt),
+			nextCursor = cursor(p.nextCursor);
+		if ((p.state === "building") !== (completedAt === null) || (p.state === "ready") !== (nextCursor === null))
+			throw new AppError("INVALID_REQUEST");
+		result = { generation: id(p.generation), state: p.state, completedAt, nextCursor };
+	} else if (method === "searchConversations") {
+		const p = object(value);
+		fields(p, ["items", "index", "nextCursor"]);
+		if (!Array.isArray(p.items) || p.items.length > SEARCH_LIMITS.results) throw new AppError("INVALID_REQUEST");
+		const items = p.items.map((raw) => {
+			const hit = object(raw);
+			fields(hit, [
+				"workspaceId",
+				"conversationId",
+				"title",
+				"workspaceName",
+				"snippet",
+				"snippetOffset",
+				"matchStart",
+				"matchEnd",
+				"kind",
+				...(hit.kind === "message" ? ["messageId", "locator"] : []),
+			]);
+			const snippet = text(hit.snippet, SEARCH_LIMITS.snippet),
+				snippetOffset = integer(hit.snippetOffset),
+				matchStart = integer(hit.matchStart),
+				matchEnd = integer(hit.matchEnd);
+			if (matchStart < snippetOffset || matchEnd <= matchStart || matchEnd > snippetOffset + snippet.length)
+				throw new AppError("INVALID_REQUEST");
+			const common = {
+				...parseScope(hit),
+				title: string(hit.title),
+				workspaceName: string(hit.workspaceName),
+				snippet,
+				snippetOffset,
+				matchStart,
+				matchEnd,
+			};
+			if (hit.kind === "title") return { ...common, kind: "title" as const };
+			if (hit.kind !== "message" || !/^[1-9]\d*_(0|[1-9]\d*)$/.test(string(hit.messageId, 256)))
+				throw new AppError("INVALID_REQUEST");
+			return {
+				...common,
+				kind: "message" as const,
+				messageId: string(hit.messageId, 256),
+				locator: string(hit.locator, LIMITS.cursor),
+			};
+		});
+		if (
+			new Set(
+				items.map((hit) =>
+					JSON.stringify([
+						hit.workspaceId,
+						hit.conversationId,
+						hit.kind,
+						hit.kind === "message" ? hit.messageId : "",
+					]),
+				),
+			).size !== items.length
+		)
+			throw new AppError("INVALID_REQUEST");
+		result = { items, index: parseResult("refreshConversationSearch", p.index), nextCursor: cursor(p.nextCursor) };
+	} else if (method === "getHistoryAroundMatch") {
+		const p = object(value);
+		fields(p, [
+			"workspaceId",
+			"conversationId",
+			"messages",
+			"target",
+			"matchStart",
+			"matchEnd",
+			"olderCursor",
+			"newerCursor",
+		]);
+		const scope = parseScope(p),
+			target = parseMessageTextChunk(p.target),
+			matchStart = integer(p.matchStart),
+			matchEnd = integer(p.matchEnd);
+		if (
+			target.workspaceId !== scope.workspaceId ||
+			target.conversationId !== scope.conversationId ||
+			matchStart < target.offset ||
+			matchEnd <= matchStart ||
+			matchEnd > target.offset + target.text.length
+		)
+			throw new AppError("INVALID_REQUEST");
+		result = {
+			...scope,
+			messages: messages(p.messages),
+			target,
+			matchStart,
+			matchEnd,
+			olderCursor: cursor(p.olderCursor),
+			newerCursor: cursor(p.newerCursor),
+		};
+	} else if (method === "getToolActivities") {
 		const p = object(value);
 		fields(p, ["items", "nextCursor", "coverage", "membershipFence"]);
 		if (

@@ -71,6 +71,18 @@ export interface WorkspacePort {
 	close(): Promise<void>;
 }
 export type RuntimePorts = {
+	refreshConversationSearch(
+		input: Params<"refreshConversationSearch">,
+		signal?: AbortSignal,
+	): Promise<Result<"refreshConversationSearch">>;
+	searchConversations(
+		input: Params<"searchConversations">,
+		signal?: AbortSignal,
+	): Promise<Result<"searchConversations">>;
+	getHistoryAroundMatch(
+		input: Params<"getHistoryAroundMatch">,
+		signal?: AbortSignal,
+	): Promise<Result<"getHistoryAroundMatch">>;
 	getConversationPresentation(
 		input: Params<"getConversationPresentation">,
 	): Promise<Result<"getConversationPresentation">>;
@@ -196,10 +208,10 @@ export class WorkRuntime implements AppClient {
 		void pending.finally(() => this.#active.delete(pending)).catch(() => undefined);
 		return pending;
 	}
-	execute(raw: unknown): Promise<Response> {
-		return this.#track(() => this.#execute(raw));
+	execute(raw: unknown, readSignal?: AbortSignal): Promise<Response> {
+		return this.#track(() => this.#execute(raw, readSignal));
 	}
-	async #execute(raw: unknown): Promise<Response> {
+	async #execute(raw: unknown, readSignal?: AbortSignal): Promise<Response> {
 		const request = parseRequest(raw);
 		if (this.#closed) throw new AppError("CLOSED");
 		if (request.method === "handshake") return { protocolVersion: PROTOCOL_VERSION, storeId: this.#ports.storeId };
@@ -210,6 +222,11 @@ export class WorkRuntime implements AppClient {
 		if (request.method === "setConversationPinned") return this.#ports.setConversationPinned(request.params);
 		if (request.method === "getPresentationCommandResult")
 			return this.#ports.getPresentationCommandResult(request.params);
+		if (request.method === "refreshConversationSearch")
+			return this.#ports.refreshConversationSearch(request.params, readSignal);
+		if (request.method === "searchConversations") return this.#ports.searchConversations(request.params, readSignal);
+		if (request.method === "getHistoryAroundMatch")
+			return this.#ports.getHistoryAroundMatch(request.params, readSignal);
 		if (request.method === "listCustomProviders") return this.#ports.listCustomProviders();
 		if (request.method === "saveCustomProvider") return this.#ports.saveCustomProvider(request.params);
 		if (request.method === "removeCustomProvider") return this.#ports.removeCustomProvider(request.params);
@@ -307,9 +324,10 @@ export class WorkRuntime implements AppClient {
 		if (signal?.aborted) return Promise.reject(signal.reason);
 		// execute validates the discriminated request before calling a port.
 		return cancelWait(
-			this.execute({ version: PROTOCOL_VERSION, expectedStoreId: this.#ports.storeId, method, params }) as Promise<
-				Result<M>
-			>,
+			this.execute(
+				{ version: PROTOCOL_VERSION, expectedStoreId: this.#ports.storeId, method, params },
+				signal,
+			) as Promise<Result<M>>,
 			signal,
 		);
 	}

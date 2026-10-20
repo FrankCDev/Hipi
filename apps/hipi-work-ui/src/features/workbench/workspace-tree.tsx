@@ -1,6 +1,6 @@
 import { AppError, type Conversation, type Workspace } from "@hipi/work-runtime/contracts";
 import { Archive, Ellipsis, MessageCircle, SquarePen } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -15,7 +15,6 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { PopoverHeader, PopoverTitle } from "../../components/ui/popover.tsx";
 import { ConversationActions } from "./catalog-controls.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import { CatalogPagination } from "./catalog-pagination.tsx";
@@ -23,7 +22,9 @@ import type { CatalogSession } from "./catalog-session.ts";
 import { ConversationPreview } from "./conversation-preview.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import { projectFolderLabels } from "./project-folder-labels.ts";
+import { ProjectPreviewCard } from "./project-preview-card.tsx";
 import { type PreviewActions, SidebarPreviewRow } from "./sidebar-preview-row.tsx";
+import { SidebarTitle } from "./sidebar-title.tsx";
 import { useCatalogPages } from "./use-catalog-pages.ts";
 import "./sidebar.css";
 
@@ -35,7 +36,6 @@ type TreeProps = {
 	defaultWorkspaceId?: string | null;
 	selectedWorkspace: string;
 	selectedConversation: string;
-	search: string;
 	isExpanded: (id: string) => boolean;
 	onToggle: (id: string) => void;
 	onOpenProject: (id: string) => void;
@@ -77,6 +77,15 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 	const recent = workspace.workspaceId === props.defaultWorkspaceId;
 	const expanded = recent || props.isExpanded(workspace.workspaceId);
 	const region = useRef<HTMLElement>(null);
+	const focusedRow = useRef<HTMLElement | null>(null);
+	useLayoutEffect(() => {
+		const previous = focusedRow.current;
+		if (!previous || previous.isConnected || document.activeElement !== document.body) return;
+		focusedRow.current = null;
+		// A successful archive/restore can remove the row after a delayed catalog refresh.
+		// Restore from the actual DOM commit, never an estimated number of animation frames.
+		region.current?.focus({ preventScroll: true });
+	});
 	const [filter, setFilter] = useState<"active" | "archived">("active");
 	const cl = catalogLabels(locale);
 	const conversations = useCatalogPages({
@@ -90,9 +99,6 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 			),
 		enabled: expanded,
 	});
-	const visible = conversations.items.filter((item) =>
-		item.title.toLocaleLowerCase(locale).includes(props.search.trim().toLocaleLowerCase(locale)),
-	);
 	const containsCurrent = props.selectedWorkspace === workspace.workspaceId && !!props.selectedConversation;
 	const current = props.selectedWorkspace === workspace.workspaceId && !props.selectedConversation;
 	return (
@@ -113,18 +119,22 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 					selected={current}
 					containsCurrent={containsCurrent}
 					titleId={headingId}
-					preview={() => (
-						<>
-							<PopoverHeader>
-								<PopoverTitle className="project-preview-title">
-									<Icon name="folder" size={16} />
-									{workspace.name}
-								</PopoverTitle>
-							</PopoverHeader>
-						</>
+					menuPreview={<ProjectPreviewCard workspace={workspace} mode="menu" />}
+					preview={(preview) => (
+						<ProjectPreviewCard
+							workspace={workspace}
+							onManageFolder={
+								props.onManageProjectFolder
+									? () => {
+											preview.close();
+											props.onManageProjectFolder?.(workspace, preview.returnFocus);
+										}
+									: undefined
+							}
+						/>
 					)}
 					renderActions={(controls) => (
-						<div className="sidebar-row-actions">
+						<div className="sidebar-row-actions" data-preview-immediate="">
 							<ProjectConversationMenu
 								name={workspace.name}
 								filter={filter}
@@ -152,40 +162,42 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						</div>
 					)}
 				>
-					<button
-						type="button"
-						className="project-toggle"
-						aria-expanded={expanded}
-						aria-controls={regionId}
-						aria-labelledby={`${disclosureId} ${headingId}`}
-						title={expanded ? cl.collapseProject : cl.expandProject}
-						onClick={() => props.onToggle(workspace.workspaceId)}
-					>
-						<span id={disclosureId} className="sr-only">
-							{expanded ? cl.collapseProject : cl.expandProject}
-						</span>
-						<span className="project-chevron" data-expanded={expanded}>
-							<Icon name="chevron" size={12} />
-						</span>
-					</button>
-					<button
-						type="button"
-						className="project-open"
-						aria-current={current ? "page" : undefined}
-						aria-labelledby={`${openId} ${headingId}`}
-						title={cl.openProject}
-						onClick={() => props.onOpenProject(workspace.workspaceId)}
-					>
-						<span id={openId} className="sr-only">
-							{cl.openProject}
-						</span>
-						<span className="project-icon">
-							<Icon name="folder" size={16} />
-						</span>
-						<span id={headingId} className="project-name">
-							{workspace.name}
-						</span>
-					</button>
+					{({ hovered }) => (
+						<>
+							<button
+								type="button"
+								className="project-toggle"
+								aria-expanded={expanded}
+								aria-controls={regionId}
+								aria-labelledby={`${disclosureId} ${headingId}`}
+								title={expanded ? cl.collapseProject : cl.expandProject}
+								onClick={() => props.onToggle(workspace.workspaceId)}
+							>
+								<span id={disclosureId} className="sr-only">
+									{expanded ? cl.collapseProject : cl.expandProject}
+								</span>
+								<span className="project-chevron" data-expanded={expanded}>
+									<Icon name="chevron" size={12} />
+								</span>
+							</button>
+							<button
+								type="button"
+								className="project-open"
+								aria-current={current ? "page" : undefined}
+								aria-labelledby={`${openId} ${headingId}`}
+								title={cl.openProject}
+								onClick={() => props.onOpenProject(workspace.workspaceId)}
+							>
+								<span id={openId} className="sr-only">
+									{cl.openProject}
+								</span>
+								<span className="project-icon">
+									<Icon name="folder" size={16} />
+								</span>
+								<SidebarTitle id={headingId} className="project-name" text={workspace.name} hovered={hovered} />
+							</button>
+						</>
+					)}
 				</SidebarPreviewRow>
 			)}
 			<section
@@ -196,6 +208,10 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				className="project-conversations"
 				tabIndex={-1}
 				aria-busy={expanded && conversations.isFetching}
+				onFocusCapture={(event) => {
+					if (event.currentTarget.contains(event.target) && event.target.closest(".conversation-preview-row"))
+						focusedRow.current = event.target;
+				}}
 			>
 				{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
 				{expanded && conversations.isPending && <output className="nav-feedback">{t("common.loading")}</output>}
@@ -228,7 +244,7 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 				)}
 				{expanded && (
 					<ul className="conversation-list">
-						{visible.map((conversation) => (
+						{conversations.items.map((conversation) => (
 							<li key={conversation.conversationId} className="conversation-nav-item">
 								<ConversationPreview
 									conversation={conversation}
@@ -252,11 +268,9 @@ function WorkspaceBranch({ workspace, ...props }: TreeProps & { workspace: Works
 						))}
 					</ul>
 				)}
-				{expanded && conversations.isSuccess && visible.length === 0 && (
+				{expanded && conversations.isSuccess && conversations.items.length === 0 && (
 					<div className="nav-feedback nav-empty-state">
-						<p>
-							{props.search.trim() ? t("nav.noResults") : filter === "archived" ? cl.emptyArchived : t("nav.empty")}
-						</p>
+						<p>{filter === "archived" ? cl.emptyArchived : t("nav.empty")}</p>
 					</div>
 				)}
 				{expanded && <CatalogPagination pages={conversations} listRef={region} />}

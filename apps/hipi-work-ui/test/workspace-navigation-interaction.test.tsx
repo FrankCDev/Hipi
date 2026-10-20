@@ -3,10 +3,12 @@ import {
 	type AgentContext,
 	type AppClient,
 	type Conversation,
+	type ConversationSearchHit,
 	type Method,
 	PROTOCOL_VERSION,
 	parseRequest,
 	parseResult,
+	type SearchHistoryWindow,
 	type Submit,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
@@ -21,13 +23,13 @@ import type { FileAuthority } from "../src/app/file-client.ts";
 import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS } from "../src/app/keybindings.ts";
 import { Button } from "../src/components/ui/button.tsx";
 import { Dialog } from "../src/components/ui/dialog.tsx";
-import { InputGroupInput } from "../src/components/ui/input-group.tsx";
 import { FileWorkspaceSession } from "../src/features/files/file-workspace-session.ts";
 import { SettingsDialog } from "../src/features/settings/index.ts";
 import { CatalogSession } from "../src/features/workbench/catalog-session.ts";
 import { type CatalogCommand, saveCommand } from "../src/features/workbench/command-recovery.ts";
 import { ConnectionActions } from "../src/features/workbench/connection-actions.tsx";
 import { ConversationPane } from "../src/features/workbench/conversation-pane.tsx";
+import { ConversationSearch } from "../src/features/workbench/conversation-search.tsx";
 import { CreateDialog } from "../src/features/workbench/create-dialog.tsx";
 import { FilePanel } from "../src/features/workbench/file-panel.tsx";
 import { admitInitialSend } from "../src/features/workbench/initial-send.ts";
@@ -72,6 +74,11 @@ vi.mock("react", async () => {
 		useMemo: <T,>(create: () => T, deps: React.DependencyList) => {
 			const { index, previous } = cell();
 			if (!previous || changed(previous.deps, deps)) hooks.cells[index] = { value: create(), deps };
+			return hooks.cells[index]?.value;
+		},
+		useCallback: <T,>(callback: T, deps: React.DependencyList) => {
+			const { index, previous } = cell();
+			if (!previous || changed(previous.deps, deps)) hooks.cells[index] = { value: callback, deps };
 			return hooks.cells[index]?.value;
 		},
 		useRef: <T,>(initial: T) => {
@@ -395,89 +402,35 @@ test("other/current disclosure preserves the selected task, clean file, drafts a
 	assert.throws(() => local.remember(scope, { ...pending, text: "Replacement" }), /immutable/);
 });
 
-test("other/current disclosure preserves the exact nonempty search entered through Workbench's input callback", () => {
+test("shared search opens without filtering navigation or changing draft/file owners, and cancellation restores exact opener", async () => {
 	const initial = drive();
-	const trigger = elements(initial.content, Button).find(
-		(button) => button.props.className === "sidebar-search-trigger",
-	);
-	assert.ok(trigger);
-	press(trigger);
-	const input = element(initial.content, InputGroupInput);
-	const search = "  Current task / 草稿  ";
-	assert.ok(input.props.onChange);
-	Reflect.apply(input.props.onChange, undefined, [{ target: { value: search } }]);
-	assert.equal(drive().tree.search, search);
-	const snapshot = initial.session.snapshot();
-	for (const id of ["other", "other", "current", "current"]) {
-		drive().tree.onToggle(id);
-		const current = drive();
-		assertPreserved(current, initial);
-		assert.equal(current.tree.search, search);
-		assert.equal(element(current.content, InputGroupInput).props.value, search);
-		assert.equal(current.session.snapshot(), snapshot);
-	}
-});
-
-test("header search opens and focuses the bounded filter, clears in place, and Escape returns focus without navigation", () => {
-	const initial = drive();
+	await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
+	initial.editor.edit("Keep this exact file input");
+	const snapshot = initial.editor.snapshot();
 	const navigation = elements(initial.content, Button).find((button) => button.props.className === "navigation-toggle");
 	assert.ok(navigation);
 	press(navigation);
 	const trigger = elements(initial.content, Button).find(
 		(button) => button.props.className === "sidebar-search-trigger",
 	);
-	assert.ok(trigger);
-	assert.equal(trigger.props["aria-expanded"], false);
-	const input = element(initial.content, InputGroupInput);
-	const focused = vi.fn();
-	const returned = vi.fn();
-	assert.ok(input.props.ref && typeof input.props.ref === "object");
-	assert.ok(trigger.props.ref && typeof trigger.props.ref === "object");
-	Object.assign(input.props.ref, { current: { focus: focused } });
-	Object.assign(trigger.props.ref, { current: { focus: returned } });
-	press(trigger);
-	const opened = drive();
-	assert.equal(focused.mock.calls.length, 1);
-	assert.equal(
-		elements(opened.content, "div").find((item) => item.props.className === "sidebar-search-panel")?.props.hidden,
-		false,
-	);
-	assert.equal(input.props.type, "search");
-	assert.ok(input.props.onChange);
-	Reflect.apply(input.props.onChange, undefined, [{ target: { value: "Work / 草稿" } }]);
-	const clear = elements(drive().content, Button).find((button) => button.props.className === "sidebar-search-clear");
-	assert.ok(clear);
-	assert.equal(clear.props["aria-label"], "nav.clearSearch");
-	press(clear);
-	assert.equal(drive().tree.search, "");
-	assert.equal(focused.mock.calls.length, 2);
-	Reflect.apply(input.props.onChange, undefined, [{ target: { value: "Keep until Escape" } }]);
-	const keydown = element(drive().content, InputGroupInput).props.onKeyDown;
-	assert.ok(keydown);
-	const preventDefault = vi.fn();
-	const stopPropagation = vi.fn();
-	Reflect.apply(keydown, undefined, [
-		{ key: "Escape", nativeEvent: { isComposing: true }, preventDefault, stopPropagation },
-	]);
-	assert.equal(drive().tree.search, "Keep until Escape");
-	assert.equal(preventDefault.mock.calls.length, 0);
-	Reflect.apply(keydown, undefined, [
-		{ key: "Escape", nativeEvent: { isComposing: false }, preventDefault, stopPropagation },
-	]);
+	assert.ok(trigger?.props.onClick);
+	const opener = { isConnected: true, getClientRects: () => [{}], focus: vi.fn() };
+	Reflect.apply(trigger.props.onClick, undefined, [{ currentTarget: opener }]);
+	const search = element(drive().content, ConversationSearch);
+	assert.equal(search.props.open, true);
+	assert.equal("search" in drive().tree, false, "Sidebar no longer filters only loaded titles");
+	assertPreserved(drive(), initial);
+	search.props.onOpenChange(false);
+	search.props.onRestoreFocus();
 	const closed = drive();
-	assert.equal(closed.tree.search, "");
-	assert.equal(returned.mock.calls.length, 1);
-	assert.equal(preventDefault.mock.calls.length, 1);
-	assert.equal(stopPropagation.mock.calls.length, 1);
-	assert.equal(
-		elements(closed.content, "div").find((item) => item.props.className === "sidebar-search-panel")?.props.hidden,
-		true,
-	);
+	assert.equal(element(closed.content, ConversationSearch).props.open, false);
+	assert.deepEqual(opener.focus.mock.calls, [[{ preventScroll: true }]]);
 	assert.equal(
 		closed.content.props["data-navigation-open"],
 		true,
-		"Escape dismisses only search, not mobile navigation",
+		"Search cancellation does not close the mobile sidebar",
 	);
+	assert.equal(closed.editor.snapshot(), snapshot);
 	assertPreserved(closed, initial);
 });
 
@@ -1488,4 +1441,122 @@ test("app bindings are configurable, while pin is unbound by default and keeps e
 		["getConversationPresentation", "setConversationPinned", "getConversationPresentation"],
 	);
 	assert.equal(vi.mocked(client.observe).mock.calls.length, 0);
+});
+
+const searchHit: ConversationSearchHit = {
+	workspaceId: "current",
+	conversationId: "task",
+	title: "Current task",
+	workspaceName: "Current project",
+	kind: "message",
+	messageId: "1_0",
+	locator: "opaque",
+	snippet: "needle",
+	snippetOffset: 9000,
+	matchStart: 9000,
+	matchEnd: 9006,
+};
+const searchWindow: SearchHistoryWindow = {
+	workspaceId: "current",
+	conversationId: "task",
+	messages: [{ id: "1_0", role: "user", text: "preview", textLength: 10000, truncated: true }],
+	target: {
+		workspaceId: "current",
+		conversationId: "task",
+		messageId: "1_0",
+		text: "needle",
+		offset: 9000,
+		nextOffset: 9006,
+		textLength: 10000,
+	},
+	matchStart: 9000,
+	matchEnd: 9006,
+	olderCursor: "older",
+	newerCursor: "newer",
+};
+
+test.each(["success", "away", "away-back", "retired", "aborted", "failure"] as const)(
+	"search activation waits for exact hydration and preserves full-width buffers until %s outcome",
+	async (outcome) => {
+		const initial = drive();
+		await initial.session.open({ workspaceId: "current", rootId: "root", path: "work.txt" }, true);
+		initial.editor.edit("Protected search-time buffer");
+		const editor = initial.editor;
+		const editorState = editor.snapshot();
+		const panel = initial.file.controller;
+		panel.setOpen(true);
+		panel.beginResize();
+		panel.resizeFromSplitter(950, measurement.width, false);
+		panel.finishResize();
+		const hydration = Promise.withResolvers<SearchHistoryWindow>();
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+			if (method === "getConversation") return parseResult(method, conversation);
+			assert.equal(method, "getHistoryAroundMatch");
+			assert.deepEqual(params, { workspaceId: "current", conversationId: "task", locator: "opaque" });
+			return parseResult(method, await hydration.promise);
+		});
+		const request = new AbortController();
+		const activation = element(drive().content, ConversationSearch).props.onActivate(searchHit, request.signal);
+		assert.equal(panel.snapshot().fullWidth, true);
+		assert.equal(drive().pane?.props.searchAnchor, undefined);
+		assert.equal(editor.snapshot(), editorState);
+		if (outcome === "retired") for (const cell of hooks.cells) cell?.cleanup?.();
+		else if (outcome === "aborted") request.abort();
+		else if (outcome === "away" || outcome === "away-back") {
+			drive().tree.onOpenProject("other");
+			if (outcome === "away-back") drive().tree.onSelect(conversation);
+		}
+		if (outcome === "failure") hydration.reject(new Error("Cannot hydrate stale result"));
+		else hydration.resolve(searchWindow);
+		if (outcome === "failure") await assert.rejects(activation);
+		else assert.equal(await activation, outcome === "success");
+		assert.equal(panel.snapshot().fullWidth, outcome !== "success");
+		assert.equal(panel.snapshot().open, true);
+		if (outcome !== "retired") assert.equal(editor.snapshot(), editorState);
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.deepEqual(local.pending(scope), pending);
+		assert.equal(vi.mocked(client.observe).mock.calls.length, 0);
+		if (outcome === "retired") return;
+		const current = drive();
+		assert.equal(current.pane?.props.searchAnchor?.locator, outcome === "success" ? "opaque" : undefined);
+		assert.equal(current.tree.selectedWorkspace, outcome === "away" ? "other" : "current");
+		if (outcome === "success") {
+			assert.equal(
+				current.pane?.key,
+				initial.pane?.key,
+				"Activating a result in the same conversation preserves the composer owner",
+			);
+			const frame = elements(current.content, "div").find((node) => node.props.className === "work-conversation-frame");
+			assert.equal(frame?.props.inert, false, "The result is visible even when the IDE was full width");
+			current.pane?.props.onExitSearchAnchor?.();
+			assert.equal(drive().pane?.props.searchAnchor, undefined);
+		}
+	},
+);
+
+test("search uses one configurable unbound desktop command and returns focus to the actual keyboard opener", () => {
+	class FocusTarget {
+		isConnected = true;
+		getClientRects() {
+			return [{}];
+		}
+		focus = vi.fn();
+	}
+	const opener = new FocusTarget();
+	vi.stubGlobal("HTMLElement", FocusTarget);
+	vi.stubGlobal("navigator", { platform: "Linux" });
+	vi.stubGlobal("document", { activeElement: opener, querySelector: () => null });
+	assert.equal(DEFAULT_APP_KEYBINDINGS.searchConversations, "");
+	drive();
+	assert.equal(appKey({ key: "k", shiftKey: false }).defaultPrevented, false);
+	const bindings = { ...DEFAULT_APP_KEYBINDINGS, searchConversations: "Mod-Alt-f" };
+	drive(bindings);
+	assert.equal(appKey({ key: "f", shiftKey: false, altKey: true, isComposing: true }).defaultPrevented, false);
+	assert.equal(appKey({ key: "f", shiftKey: false, altKey: true }).defaultPrevented, true);
+	const search = element(drive(bindings).content, ConversationSearch);
+	assert.equal(search.props.open, true);
+	search.props.onOpenChange(false);
+	search.props.onRestoreFocus();
+	assert.deepEqual(opener.focus.mock.calls, [[{ preventScroll: true }]]);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 });

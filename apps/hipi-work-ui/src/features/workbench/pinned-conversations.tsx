@@ -16,14 +16,12 @@ export function PinnedConversations({
 	presentation,
 	selectedWorkspace,
 	selectedConversation,
-	search,
 	onSelect,
 }: {
 	catalog: CatalogSession;
 	presentation: PresentationSession;
 	selectedWorkspace: string;
 	selectedConversation: string;
-	search: string;
 	onSelect: (conversation: Conversation) => void;
 }) {
 	const client = useAppClient();
@@ -37,9 +35,6 @@ export function PinnedConversations({
 		queryPage: (cursor, signal) => client.call("listPinnedConversations", cursor ? { cursor } : {}, signal),
 		itemKey: (item: PinnedConversation) => `${item.conversation.workspaceId}.${item.conversation.conversationId}`,
 	});
-	const visible = pages.items.filter(({ conversation }) =>
-		conversation.title.toLocaleLowerCase(locale).includes(search.trim().toLocaleLowerCase(locale)),
-	);
 	useLayoutEffect(() => {
 		const previous = focused.current;
 		if (!previous || previous.element.isConnected || document.activeElement !== document.body) return;
@@ -55,7 +50,7 @@ export function PinnedConversations({
 			preventScroll: true,
 		});
 	});
-	if (!visible.length && !pages.isError && !pages.isPending) return null;
+	if (!pages.items.length && !pages.isError && !pages.isPending) return null;
 	return (
 		<section
 			ref={region}
@@ -85,7 +80,7 @@ export function PinnedConversations({
 				</div>
 			)}
 			<ul className="workspace-tree conversation-list">
-				{visible.map(({ conversation }) => (
+				{pages.items.map(({ conversation }) => (
 					<li
 						key={`${conversation.workspaceId}.${conversation.conversationId}`}
 						data-pinned-conversation=""
@@ -94,6 +89,7 @@ export function PinnedConversations({
 					>
 						<ConversationPreview
 							conversation={conversation}
+							resolveWorkspace
 							selected={
 								selectedWorkspace === conversation.workspaceId && selectedConversation === conversation.conversationId
 							}

@@ -3,11 +3,11 @@ const en = {
 	projectActions: "Project actions",
 	recent: "Recent",
 	preview: "View details",
+	reloadPreview: "Reload project details",
 	settings: "Workbench settings",
 	expandProject: "Expand project",
 	collapseProject: "Collapse project",
 	openProject: "Open project",
-	searchScopeLabel: "Search scope",
 	first: "First page",
 	next: "Next page",
 	loadMore: "Load more",
@@ -54,18 +54,17 @@ const en = {
 	archivedNote:
 		"This conversation is archived. Restore it before submitting new work. Existing work is not automatically resumed.",
 	currentFailed: "Could not load the selected item. Your selection and drafts are preserved.",
-	searchScope: "Search matches only visible loaded conversations in expanded projects, not the full history.",
 } as const;
 const zh: Record<keyof typeof en, string> = {
 	actions: "会话操作",
 	projectActions: "项目操作",
 	recent: "最近",
 	preview: "查看详情",
+	reloadPreview: "重新加载项目详情",
 	settings: "工作台设置",
 	expandProject: "展开项目",
 	collapseProject: "收起项目",
 	openProject: "打开项目",
-	searchScopeLabel: "搜索范围",
 	first: "第一页",
 	next: "下一页",
 	loadMore: "加载更多",
@@ -107,7 +106,6 @@ const zh: Record<keyof typeof en, string> = {
 	renameNote: "仅更改标题，消息、草稿、执行与权限不变。",
 	archivedNote: "此会话已归档，提交新任务前请先恢复会话。已有任务不会自动恢复执行。",
 	currentFailed: "无法读取所选项目，当前选择与草稿已保留。",
-	searchScope: "仅搜索已展开项目中已加载并显示的会话，不代表全部历史。",
 };
 export function catalogLabels(locale: string) {
 	return locale === "en" ? en : zh;

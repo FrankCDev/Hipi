@@ -1,5 +1,23 @@
 export type PreviewMode = "closed" | "hover" | "pinned";
 
+type Point = { x: number; y: number };
+type Bounds = { left: number; right: number; top: number; bottom: number };
+
+/** The pointer may cross the gap diagonally without abandoning an interactive card. */
+export function inPreviewCorridor(point: Point, origin: Point, target: Bounds) {
+	if (point.x >= target.left && point.x <= target.right && point.y >= target.top && point.y <= target.bottom)
+		return true;
+	const edge = origin.x <= target.left ? target.left : target.right;
+	if (edge === origin.x) return false;
+	const progress = (point.x - origin.x) / (edge - origin.x);
+	if (progress < 0 || progress > 1) return false;
+	const top = origin.y + (target.top - 8 - origin.y) * progress;
+	const bottom = origin.y + (target.bottom + 8 - origin.y) * progress;
+	return point.y >= Math.min(top, bottom) - 2 && point.y <= Math.max(top, bottom) + 2;
+}
+
+let activePreview: ConversationPreviewInteraction | undefined;
+
 /** Owns preview timing and focus return; never subscribes to conversation execution. */
 export class ConversationPreviewInteraction {
 	mode: PreviewMode = "closed";
@@ -17,10 +35,11 @@ export class ConversationPreviewInteraction {
 		this.timer = undefined;
 	}
 
-	enter() {
+	enter(immediate = false) {
 		this.cancelPending();
 		if (this.mode !== "closed" || this.overlays.size > 0) return;
-		this.timer = setTimeout(() => this.setMode("hover"), 350);
+		if (immediate) this.setMode("hover");
+		else this.timer = setTimeout(() => this.setMode("hover"), 200);
 	}
 
 	setOverlayOpen(owner: "menu" | "dialog", open: boolean) {
@@ -33,7 +52,7 @@ export class ConversationPreviewInteraction {
 	leave() {
 		this.cancelPending();
 		if (this.mode !== "hover") return;
-		this.timer = setTimeout(() => this.close(), 200);
+		this.timer = setTimeout(() => this.close(), 100);
 	}
 
 	pin() {
@@ -59,9 +78,17 @@ export class ConversationPreviewInteraction {
 		return restore;
 	}
 
+	release() {
+		this.close("navigate");
+	}
+
 	private setMode(mode: PreviewMode) {
 		this.cancelPending();
 		if (mode === this.mode) return;
+		if (mode !== "closed") {
+			if (activePreview && activePreview !== this) activePreview.close("navigate");
+			activePreview = this;
+		} else if (activePreview === this) activePreview = undefined;
 		this.mode = mode;
 		this.change(mode);
 	}

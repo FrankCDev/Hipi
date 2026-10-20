@@ -11,7 +11,7 @@ import type { PresentationSession } from "./presentation-session.ts";
 
 export const presentationKey = (scope: Scope) => ["conversation-presentation", scope.workspaceId, scope.conversationId];
 
-export function PinConversationItem({
+function usePinAction({
 	conversation,
 	session,
 	open,
@@ -37,41 +37,78 @@ export function PinConversationItem({
 		enabled: open,
 		staleTime: 0,
 	});
-	if (conversation.archivedAt !== null) return null;
-	if (query.isError)
-		return (
-			<DropdownMenuItem
-				disabled={query.isFetching}
-				onSelect={(event) => {
-					event.preventDefault();
-					void query.refetch();
-				}}
-			>
-				{l.reload}
-			</DropdownMenuItem>
-		);
 	const current =
 		query.data?.workspaceId === conversation.workspaceId && query.data.conversationId === conversation.conversationId
 			? query.data
 			: undefined;
+	return {
+		l,
+		current,
+		isError: query.isError,
+		isFetching: query.isFetching,
+		reload: () => void query.refetch(),
+		disabled: disabled || !current || query.isFetching || state.busy || !!state.pending || state.incompatible,
+		toggle: () => {
+			if (!current || disabled || query.isFetching || query.isError || conversation.archivedAt !== null) return;
+			void session.execute({
+				workspaceId: conversation.workspaceId,
+				conversationId: conversation.conversationId,
+				requestId: crypto.randomUUID(),
+				expectedPresentationRevision: current.revision,
+				pinned: !current.pinned,
+			});
+		},
+	};
+}
+
+type PinProps = Parameters<typeof usePinAction>[0];
+
+export function PinConversationItem(props: PinProps) {
+	const { conversation } = props;
+	const action = usePinAction(props);
+	if (conversation.archivedAt !== null) return null;
+	if (action.isError)
+		return (
+			<DropdownMenuItem
+				disabled={action.isFetching}
+				onSelect={(event) => {
+					event.preventDefault();
+					action.reload();
+				}}
+			>
+				{action.l.reload}
+			</DropdownMenuItem>
+		);
 	return (
-		<DropdownMenuItem
-			data-action="pin-conversation"
-			disabled={disabled || !current || query.isFetching || state.busy || !!state.pending || state.incompatible}
-			onSelect={() => {
-				if (!current || disabled || query.isFetching || conversation.archivedAt !== null) return;
-				void session.execute({
-					workspaceId: conversation.workspaceId,
-					conversationId: conversation.conversationId,
-					requestId: crypto.randomUUID(),
-					expectedPresentationRevision: current.revision,
-					pinned: !current.pinned,
-				});
-			}}
-		>
-			{current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
-			{current ? l[current.pinned ? "unpin" : "pin"] : l.loading}
+		<DropdownMenuItem data-action="pin-conversation" disabled={action.disabled} onSelect={action.toggle}>
+			{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+			{action.current ? action.l[action.current.pinned ? "unpin" : "pin"] : action.l.loading}
 		</DropdownMenuItem>
+	);
+}
+
+/** The direct action shares the menu's exact query, CAS and recovery owner. */
+export function PinConversationButton(props: PinProps) {
+	const action = usePinAction(props);
+	if (props.conversation.archivedAt !== null) return null;
+	const label = action.isError
+		? action.l.reload
+		: action.current
+			? action.l[action.current.pinned ? "unpin" : "pin"]
+			: action.l.loading;
+	return (
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			className="conversation-quick-action"
+			data-action="pin-conversation-direct"
+			aria-label={label}
+			title={label}
+			disabled={action.isError ? action.isFetching : action.disabled}
+			onClick={action.isError ? action.reload : action.toggle}
+		>
+			{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+		</Button>
 	);
 }
 

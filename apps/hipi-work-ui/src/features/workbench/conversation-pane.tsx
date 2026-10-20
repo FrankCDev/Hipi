@@ -17,6 +17,7 @@ import { catalogLabels } from "./catalog-labels.ts";
 import { ConversationComposer } from "./conversation-composer.tsx";
 import { conversationFailureTrackerFor } from "./conversation-failure.ts";
 import { ConversationHistory } from "./conversation-history.tsx";
+import type { SearchHistoryAnchor } from "./conversation-history-controller.ts";
 import { ConversationModelControls } from "./conversation-model.tsx";
 import { ConversationReceipt } from "./conversation-receipt.tsx";
 import { useConversation } from "./use-conversation.ts";
@@ -28,6 +29,8 @@ export function ConversationPane({
 	onDetailsClose,
 	onOpenArtifact,
 	onOpenModelSettings,
+	searchAnchor,
+	onExitSearchAnchor,
 }: {
 	conversation: Conversation;
 	draftRecoveryRevision?: string;
@@ -35,6 +38,8 @@ export function ConversationPane({
 	onDetailsClose: () => void;
 	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
 	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
+	searchAnchor?: SearchHistoryAnchor;
+	onExitSearchAnchor?: () => void;
 }) {
 	const { t, locale } = usePreferences();
 	const failureTracker = conversationFailureTrackerFor(useAppClient());
@@ -127,6 +132,8 @@ export function ConversationPane({
 					footerRef={footer}
 					failure={failure}
 					onOpenModelSettings={onOpenModelSettings}
+					searchAnchor={searchAnchor}
+					onExitSearchAnchor={onExitSearchAnchor}
 				/>
 				<div className="conversation-footer" ref={footer}>
 					<ConversationComposer

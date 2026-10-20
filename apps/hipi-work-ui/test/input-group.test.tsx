@@ -140,6 +140,13 @@ vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => ({ call: vi.fn() }),
 	useLocalState: () => ({ read: () => null, hasUnsavedWork: () => false }),
 }));
+// The closed workbench has no file preview. Avoid loading the browser-only PDF
+// engine in Node, but fail if this fixture unexpectedly tries to render one.
+vi.mock("../src/features/files/pdf-preview.tsx", () => ({
+	PdfPreview: () => {
+		throw new Error("The closed workbench must not render a PDF preview");
+	},
+}));
 
 function unmountWorkspace() {
 	for (const effect of hooks.effects.values()) effect.cleanup?.();
@@ -151,7 +158,7 @@ afterEach(() => {
 	hooks.active = false;
 });
 
-test("header search keeps a hidden, labeled input group with truthful scope until it is opened", () => {
+test("header search exposes a named closed dialog trigger without a loaded-title filter", () => {
 	const cache = new QueryClient();
 	cache.setQueryData(["workspaces"], []);
 	const html = renderToStaticMarkup(
@@ -162,25 +169,18 @@ test("header search keeps a hidden, labeled input group with truthful scope unti
 		</QueryClientProvider>,
 	);
 	cache.clear();
-	const label = html.match(/<label class="sr-only" for="([^"]+)">搜索聊天<\/label>/);
-	assert.ok(label);
-	assert.ok(html.includes(`class="sidebar-search-panel" id="${label[1]}-panel" hidden=""`));
-	assert.match(html, /aria-label="搜索聊天"[^>]*aria-expanded="false"/);
-	const group = html.match(/<div data-slot="input-group"[\s\S]*?<\/div><\/div>/)?.[0];
-	assert.ok(group);
-	assert.ok(group.includes(`id="${label[1]}"`));
-	assert.ok(group.includes(`aria-describedby="${label[1]}-scope"`));
-	assert.match(group, /<input\b[^>]*data-slot="input-group-control"/);
-	assert.match(group, /data-slot="input-group-addon"[^>]*data-align="inline-start"[\s\S]*<svg aria-hidden="true"/);
-	const input = group.match(/<input\b[^>]*>/)?.[0];
-	assert.ok(input);
-	assert.match(input, /focus-visible:outline-none/);
-	assert.doesNotMatch(input, /focus-visible:ring-|focus-visible:border-ring/);
-	const closeButton = group.match(/<button\b[^>]*aria-label="关闭搜索"[^>]*>/)?.[0];
-	assert.ok(closeButton);
-	assert.match(closeButton, /focus-visible:outline-2/);
-	assert.match(html, /class="search-scope"[^>]*>仅搜索已展开项目中已加载并显示的会话，不代表全部历史。<\/p>/);
-	assert.doesNotMatch(html, /aria-label="搜索范围"/);
+	const triggers = html.match(/<button\b[^>]*class="[^"]*\bsidebar-search-trigger\b[^"]*"[^>]*>[\s\S]*?<\/button>/g);
+	assert.ok(triggers);
+	assert.equal(triggers.length, 1);
+	const trigger = triggers[0];
+	assert.match(trigger, /aria-label="搜索聊天"/);
+	assert.match(trigger, /title="搜索聊天"/);
+	assert.match(trigger, /aria-expanded="false"/);
+	assert.match(trigger, /data-size="icon-sm"/);
+	assert.match(trigger, /focus-visible:outline-2/);
+	assert.match(trigger, /<svg aria-hidden="true"/);
+	assert.doesNotMatch(html, /role="dialog"|role="combobox"|conversation-search-input/);
+	assert.doesNotMatch(html, /sidebar-search-panel|class="search-scope"|仅搜索已展开项目中已加载并显示的会话/);
 });
 
 test("compact project creation retains one named button with the official size and dialog trigger", () => {
@@ -359,6 +359,12 @@ test("Tailwind emits group focus, addon spacing and disabled colors without lega
 			</InputGroupAddon>
 		</InputGroup>,
 	);
+	assert.match(html, /<input\b[^>]*data-slot="input-group-control"/);
+	assert.match(html, /data-slot="input-group-addon"[^>]*data-align="inline-start"[\s\S]*<svg aria-hidden="true"/);
+	const input = html.match(/<input\b[^>]*>/)?.[0];
+	assert.ok(input);
+	assert.match(input, /focus-visible:outline-none/);
+	assert.doesNotMatch(input, /focus-visible:ring-|focus-visible:border-ring/);
 	const candidates = Array.from(html.matchAll(/class="([^"]*)"/g)).flatMap((match) =>
 		match[1]
 			.replaceAll("&gt;", ">")

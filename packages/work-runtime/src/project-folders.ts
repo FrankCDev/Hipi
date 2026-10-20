@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, sep } from "node:path";
 import { type FileRoot, FileServiceError, type ProjectFolder, type ProjectFolderSelection } from "./files/contracts.ts";
 import { rootDisplayName } from "./files/display-name.ts";
 import { fileIdentifier, parseProjectFolder } from "./files/protocol.ts";
@@ -60,7 +61,12 @@ export function parseProjectFolderRecord(value: ProjectFolderRecord): ProjectFol
 }
 
 /** Node-only host capability. Persistent bindings never contain roots, consent, or write approvals. */
-export function createRuntimeProjectFolders(runtime: object, authority: TrustedFileAuthority, principalId: string) {
+export function createRuntimeProjectFolders(
+	runtime: object,
+	authority: TrustedFileAuthority,
+	principalId: string,
+	options: { includeDisplayPath?: boolean } = {},
+) {
 	const registered = runtimeCatalogs.get(runtime);
 	if (!registered) return undefined;
 	const catalog = registered;
@@ -80,6 +86,28 @@ export function createRuntimeProjectFolders(runtime: object, authority: TrustedF
 	let closed = false;
 	const drained = Promise.withResolvers<void>();
 	const service = authority.forPrincipal(principalId);
+	const includeDisplayPath = options.includeDisplayPath === true;
+	let home: string | undefined;
+	if (includeDisplayPath) {
+		try {
+			home = homedir();
+		} catch {
+			// Home is only a display abbreviation; an unavailable home must not block file access.
+		}
+	}
+	function displayPath(canonicalPath: string): { displayPath?: string } {
+		// Only the host UI opts in. Omit unsafe labels without altering the verified binding or its access.
+		if (!includeDisplayPath || canonicalPath.length > 4096 || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(canonicalPath))
+			return {};
+		const prefix = home && isAbsolute(home) ? (home.endsWith(sep) ? home : `${home}${sep}`) : undefined;
+		const label =
+			home === canonicalPath
+				? "~"
+				: prefix && canonicalPath.startsWith(prefix)
+					? `~${sep}${canonicalPath.slice(prefix.length)}`
+					: canonicalPath;
+		return { displayPath: label.length <= 4096 ? label : canonicalPath };
+	}
 	function revoke(workspaceId: string): void {
 		const current = roots.get(workspaceId);
 		if (current) authority.revokeRoot(current.root.rootId);
@@ -171,6 +199,7 @@ export function createRuntimeProjectFolders(runtime: object, authority: TrustedF
 				bindingId: record.bindingId,
 				revision: record.revision,
 				displayName: record.displayName,
+				...displayPath(record.canonicalPath),
 				status: "available",
 				root: current.root,
 			},
@@ -220,6 +249,7 @@ export function createRuntimeProjectFolders(runtime: object, authority: TrustedF
 					bindingId: record.bindingId,
 					revision: record.revision,
 					displayName: record.displayName,
+					...(record.revoked ? {} : displayPath(record.canonicalPath)),
 					status: "available",
 					root,
 				},

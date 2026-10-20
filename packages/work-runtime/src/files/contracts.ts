@@ -20,6 +20,8 @@ export type ProjectFolder =
 			bindingId: string;
 			revision: number;
 			displayName: string | null;
+			/** Optional trusted-host label for this verified binding; never a file target or Agent context. */
+			displayPath?: string;
 			root: FileRoot;
 	  }
 	| {

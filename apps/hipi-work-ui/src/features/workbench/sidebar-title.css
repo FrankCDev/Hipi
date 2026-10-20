@@ -1,0 +1,89 @@
+/* The extra start gutter fades moving text without dimming its resting start. */
+.sidebar-title.sidebar-title {
+	--sidebar-title-start-fade: calc(4em / 7);
+	--sidebar-title-end-fade: calc(8em / 7);
+	--sidebar-title-mask-direction: to right;
+	display: block;
+	width: 100%;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	overflow: visible;
+	text-overflow: clip;
+	white-space: nowrap;
+}
+
+.sidebar-title[data-direction="rtl"] {
+	--sidebar-title-mask-direction: to left;
+}
+
+.sidebar-title-clip {
+	display: flex;
+	box-sizing: border-box;
+	width: calc(100% + var(--sidebar-title-start-fade));
+	margin-inline-start: calc(-1 * var(--sidebar-title-start-fade));
+	padding-inline-start: var(--sidebar-title-start-fade);
+	overflow: hidden;
+}
+
+.sidebar-title-content {
+	display: block;
+	flex: 0 0 auto;
+	width: max-content;
+}
+
+.sidebar-title[data-overflowing="true"] .sidebar-title-clip {
+	mask-image: linear-gradient(
+		var(--sidebar-title-mask-direction),
+		transparent,
+		#000 var(--sidebar-title-start-fade),
+		#000 calc(100% - var(--sidebar-title-end-fade)),
+		transparent
+	);
+	mask-size: 100% 100%;
+	mask-repeat: no-repeat;
+}
+
+.sidebar-title[data-direction="rtl"] .sidebar-title-clip {
+	mask-position: right top;
+}
+
+.sidebar-title[data-overflowing="true"][data-hovered="true"] .sidebar-title-content {
+	animation: sidebar-title-travel var(--sidebar-title-duration) cubic-bezier(0.49, 0.6, 0.7, 1)
+		var(--sidebar-title-delay) both;
+}
+
+.sidebar-title[data-overflowing="true"][data-hovered="true"] .sidebar-title-clip {
+	animation: sidebar-title-reveal-end var(--sidebar-title-total-duration) linear both;
+}
+
+@keyframes sidebar-title-travel {
+	from {
+		transform: translateX(0);
+	}
+	to {
+		transform: translateX(var(--sidebar-title-offset));
+	}
+}
+
+@keyframes sidebar-title-reveal-end {
+	0%,
+	75% {
+		mask-size: 100% 100%;
+	}
+	to {
+		mask-size: calc(100% + var(--sidebar-title-end-fade)) 100%;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .sidebar-title .sidebar-title-content,
+	:root:not([data-reduced-motion="off"]) .sidebar-title .sidebar-title-clip {
+		animation: none;
+	}
+}
+
+:root[data-reduced-motion="on"] .sidebar-title .sidebar-title-content,
+:root[data-reduced-motion="on"] .sidebar-title .sidebar-title-clip {
+	animation: none;
+}

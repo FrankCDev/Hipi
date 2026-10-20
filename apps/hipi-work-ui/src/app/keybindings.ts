@@ -30,5 +30,7 @@ export function matchesBinding(
 export const DEFAULT_APP_KEYBINDINGS = {
 	reopenClosedFile: "Mod-Shift-t",
 	pinConversation: "",
+	// Desktop reference assigns Mod-K to its broader command menu, not this search-only command.
+	searchConversations: "",
 } as const;
 export type AppKeybindings = { [K in keyof typeof DEFAULT_APP_KEYBINDINGS]: string };

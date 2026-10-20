@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { PROTOCOL_VERSION } from "../src/contracts.ts";
 import { createRuntimeFileHost } from "../src/files/host.ts";
-import { parseProjectFolder } from "../src/files/protocol.ts";
+import { parseFileRoots, parseProjectFolder, parseProjectFolderSelection } from "../src/files/protocol.ts";
 import { createRuntimeProjectFolders } from "../src/node.ts";
 import { openTestRuntime } from "../src/testing.ts";
 
-async function fixture() {
+async function fixture(options: { includeDisplayPath?: boolean } = {}) {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-project-folder-"));
 	const folder = join(directory, "project");
 	await mkdir(folder);
@@ -19,7 +19,7 @@ async function fixture() {
 	await runtime.call("createWorkspace", { workspaceId: "one", name: "One" });
 	await runtime.call("createWorkspace", { workspaceId: "two", name: "Two" });
 	const files = await createRuntimeFileHost(runtime, "first");
-	const projects = createRuntimeProjectFolders(runtime, files.authority, "first");
+	const projects = createRuntimeProjectFolders(runtime, files.authority, "first", options);
 	assert.ok(projects);
 	return {
 		directory,
@@ -52,6 +52,7 @@ test("project association persists but roots, write permissions, and Agent conse
 		assert.ok(first.root);
 		assert.equal(first.root.writable, false);
 		assert.equal(first.displayName, "project");
+		assert.equal("displayPath" in first, false);
 		assert.equal(JSON.stringify(first).includes(app.directory), false);
 		const target = { workspaceId: "one", rootId: first.root.rootId, path: "note.txt" };
 		const content = await app.service.readText(target);
@@ -73,6 +74,7 @@ test("project association persists but roots, write permissions, and Agent conse
 			assert.ok(restored.root);
 			assert.equal(restored.bindingId, first.bindingId);
 			assert.equal(restored.revision, first.revision);
+			assert.equal("displayPath" in restored, false);
 			assert.notEqual(restored.root.rootId, first.root.rootId);
 			assert.equal(restored.root.writable, false);
 			assert.equal((await projects.get("one")).root?.rootId, restored.root.rootId);
@@ -268,7 +270,7 @@ test("native prepared selections expire, are bounded, and cannot attach after th
 	}
 });
 
-test("AppClient has no absolute-path project command and public DTO rejects leaked paths or writable project roots", async () => {
+test("AppClient has no absolute-path project command and public DTO rejects authority paths or writable project roots", async () => {
 	const app = await fixture();
 	try {
 		await assert.rejects(
@@ -291,6 +293,155 @@ test("AppClient has no absolute-path project command and public DTO rejects leak
 	}
 });
 
+test("project display paths are bounded host-only labels, not root or selection metadata", () => {
+	const root = { workspaceId: "one", rootId: "root", writable: false, displayName: "Project" };
+	const folder = {
+		workspaceId: "one",
+		status: "available",
+		bindingId: "binding",
+		revision: 1,
+		displayName: "Project",
+		root,
+	};
+	for (const displayPath of [
+		"/",
+		"/home/user/中文 Project",
+		"~",
+		"~/Projects/Project",
+		"~\\Projects\\Project",
+		"C:\\Users\\user\\Project",
+		"C:/Users/user/Project",
+		"\\\\server\\share\\Project",
+		`/${"a".repeat(4095)}`,
+	]) {
+		const parsed = parseProjectFolder({ ...folder, displayPath }, "one");
+		assert.equal(parsed.status, "available");
+		if (parsed.status === "available") assert.equal(parsed.displayPath, displayPath);
+	}
+	for (const displayPath of [
+		"",
+		null,
+		1,
+		"relative/Project",
+		"file:///private/Project",
+		"C:relative",
+		"~another/Project",
+		"\\\\server",
+		`/${"a".repeat(4096)}`,
+		"/private/\u0000Project",
+		"/private/\nProject",
+		"/private/\u007fProject",
+		"/private/\u202eProject",
+		"/private/\ud800Project",
+		"/private/\u2028Project",
+		"/private/\u2029Project",
+	])
+		assert.throws(() => parseProjectFolder({ ...folder, displayPath }, "one"), { code: "INVALID_PATH" });
+	for (const status of ["unavailable", "moved", "revoked"])
+		assert.throws(() => parseProjectFolder({ ...folder, status, root: null, displayPath: "/private" }, "one"));
+	assert.throws(() =>
+		parseProjectFolder(
+			{
+				workspaceId: "one",
+				status: "unbound",
+				bindingId: null,
+				revision: 0,
+				displayName: null,
+				root: null,
+				displayPath: "/",
+			},
+			"one",
+		),
+	);
+	assert.throws(() => parseProjectFolder({ ...folder, displayPath: "/private" }, "two"));
+	assert.throws(() => parseFileRoots([{ ...root, displayPath: "/private" }], "one"));
+	assert.throws(() =>
+		parseProjectFolderSelection({ selectionId: "selection", displayName: "Project", displayPath: "/" }),
+	);
+});
+
+test("opt-in paths follow verified bindings and disappear when their identity is no longer available", async () => {
+	const app = await fixture({ includeDisplayPath: true });
+	try {
+		const unbound = await app.projects.get("one");
+		assert.equal("displayPath" in unbound, false);
+		const selected = await app.projects.prepare(app.folder);
+		assert.equal("displayPath" in selected, false);
+		const bound = await app.projects.attach("one", selected.selectionId);
+		assert.equal(bound.status, "available");
+		if (bound.status !== "available") assert.fail("Expected an available binding");
+		assert.equal(bound.displayPath, await realpath(app.folder));
+		assert.equal("displayPath" in bound.root, false);
+		assert.equal(JSON.stringify(await app.service.listRoots("one")).includes(app.directory), false);
+		const otherFolder = join(app.directory, "replacement");
+		await mkdir(otherFolder);
+		const replacement = await app.projects.bind("one", otherFolder, bound.bindingId);
+		assert.equal(replacement.status, "available");
+		if (replacement.status !== "available") assert.fail("Expected an available replacement");
+		assert.notEqual(replacement.bindingId, bound.bindingId);
+		assert.equal(replacement.revision, bound.revision + 1);
+		assert.equal(replacement.displayPath, await realpath(otherFolder));
+		await assert.rejects(app.projects.bind("one", app.folder, bound.bindingId), { code: "VERSION_CONFLICT" });
+		assert.deepEqual(await app.projects.get("one"), replacement);
+		await rename(otherFolder, join(app.directory, "moved"));
+		const unavailable = await app.projects.get("one");
+		assert.equal(unavailable.status, "unavailable");
+		assert.equal(unavailable.bindingId, replacement.bindingId);
+		assert.equal("displayPath" in unavailable, false);
+		await mkdir(otherFolder);
+		const moved = await app.projects.get("one");
+		assert.equal(moved.status, "moved");
+		assert.equal("displayPath" in moved, false);
+		const revoked = await app.projects.unbind("one", replacement.bindingId);
+		assert.equal(revoked.status, "revoked");
+		assert.equal("displayPath" in revoked, false);
+	} finally {
+		await app.close();
+	}
+});
+
+test("host display paths abbreviate only the exact current home boundary and omit unsafe ancestor labels", async () => {
+	const app = await fixture();
+	const variable = process.platform === "win32" ? "USERPROFILE" : "HOME";
+	const previousHome = process.env[variable];
+	let projects: ReturnType<typeof createRuntimeProjectFolders>;
+	try {
+		await app.projects.close();
+		process.env[variable] = await realpath(app.directory);
+		projects = createRuntimeProjectFolders(app.runtime, app.files.authority, "first", { includeDisplayPath: true });
+		assert.ok(projects);
+		const bound = await projects.bind("one", app.folder, null);
+		assert.equal(bound.status, "available");
+		if (bound.status !== "available") assert.fail("Expected an available binding");
+		assert.equal(bound.displayPath, `~${sep}project`);
+		const home = await projects.bind("two", app.directory, null);
+		assert.equal(home.status, "available");
+		if (home.status !== "available") assert.fail("Expected an available home binding");
+		assert.equal(home.displayPath, "~");
+		await projects.close();
+		process.env[variable] = (await realpath(app.directory)).slice(0, -1);
+		projects = createRuntimeProjectFolders(app.runtime, app.files.authority, "first", { includeDisplayPath: true });
+		assert.ok(projects);
+		const exact = await projects.get("one");
+		assert.equal(exact.status, "available");
+		if (exact.status !== "available") assert.fail("Expected an available binding");
+		assert.equal(exact.displayPath, await realpath(app.folder));
+		if (process.platform !== "win32") {
+			const unsafe = join(app.directory, "hidden\nancestor", "safe-basename");
+			await mkdir(unsafe, { recursive: true });
+			const hidden = await projects.bind("one", unsafe, bound.bindingId);
+			assert.equal(hidden.status, "available");
+			assert.equal(hidden.displayName, "safe-basename");
+			assert.equal("displayPath" in hidden, false);
+		}
+	} finally {
+		if (previousHome === undefined) delete process.env[variable];
+		else process.env[variable] = previousHome;
+		await projects?.close();
+		await app.close();
+	}
+});
+
 test("a missing project directory is not silently rebuilt as an empty binding catalog", async () => {
 	const app = await fixture();
 	try {
@@ -307,7 +458,7 @@ test("a missing project directory is not silently rebuilt as an empty binding ca
 		await assert.rejects(openTestRuntime(join(app.directory, "store")), { code: "STORE_MISMATCH" });
 		const inspected = new DatabaseSync(join(app.directory, "store", "catalog.sqlite"), { readOnly: true });
 		try {
-			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 7);
+			assert.equal(inspected.prepare("SELECT version FROM identity").get()?.version, 8);
 			assert.equal(inspected.prepare("SELECT 1 FROM sqlite_schema WHERE name='project_folders'").get(), undefined);
 		} finally {
 			inspected.close();
