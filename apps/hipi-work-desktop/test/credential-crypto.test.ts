@@ -9,6 +9,7 @@ import { CredentialStore } from "../src/credential-store.ts";
 import { InvocationGate } from "../src/invocation-gate.ts";
 
 // Contract fixture only: native Keychain availability and ciphertext compatibility require macOS acceptance.
+// Simulate the crypto adapter separately from filesystem integration, which uses the real host platform.
 function nativeStorage(): Parameters<typeof createCredentialCrypto>[0] {
 	const key = randomBytes(32);
 	function encrypt(value: string) {
@@ -130,7 +131,7 @@ test("async store reads legacy ciphertext without rewriting and preserves corrup
 	try {
 		const path = join(directory, "providers.enc");
 		const native = nativeStorage();
-		const store = new CredentialStore(path, createCredentialCrypto(native, "darwin"), "darwin");
+		const store = new CredentialStore(path, createCredentialCrypto(native, "darwin"));
 		assert.equal(await store.status("openai"), "missing");
 		assert.deepEqual(await readdir(directory), [], "status probe never creates a credential file");
 		const legacy = native.encryptString(JSON.stringify({ version: 1, openai: "synthetic-old" }));
@@ -151,7 +152,7 @@ test("async store reads legacy ciphertext without rewriting and preserves corrup
 			providers: { openai: "synthetic-new", [custom]: "synthetic-custom" },
 		});
 		assert.equal(migrated.includes(Buffer.from("synthetic-")), false);
-		const reopened = new CredentialStore(path, createCredentialCrypto(native, "darwin"), "darwin");
+		const reopened = new CredentialStore(path, createCredentialCrypto(native, "darwin"));
 		assert.equal(await reopened.get("openai"), "synthetic-new");
 		assert.equal(await reopened.get(custom), "synthetic-custom");
 		assert.deepEqual(await readFile(path), migrated, "reopening v2 must not rewrite ciphertext");
@@ -188,7 +189,7 @@ test("caller timeout retains async store queue and mutation admission until nati
 			}
 			return encrypt(value);
 		};
-		const store = new CredentialStore(path, createCredentialCrypto(native, "darwin"), "darwin");
+		const store = new CredentialStore(path, createCredentialCrypto(native, "darwin"));
 		const gate = new InvocationGate();
 		const mutation = store.set("openai", "synthetic-secret");
 		const caller = gate.run(() => mutation, 5);

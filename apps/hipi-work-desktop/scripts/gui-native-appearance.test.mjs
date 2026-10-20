@@ -80,7 +80,7 @@ function renderer({
 		html: root,
 		body: node("body"),
 		"#root": node("app"),
-		".settings-route[data-settings-page]": node("route"),
+		".settings-modal": node("route"),
 		".settings-page-sidebar": node("settingsSidebar"),
 		".settings-page-main": node("settingsMain"),
 		".sidebar": node("sidebar"),
@@ -119,17 +119,15 @@ function renderer({
 	};
 	const getComputedStyle = (element) => ({
 		backgroundColor:
-			enabled() && ["root", "body", "app", "route"].includes(element.name)
+			enabled() && ["root", "body", "app"].includes(element.name)
 				? "rgba(0, 0, 0, 0)"
-				: enabled() && ["sidebar", "settingsSidebar"].includes(element.name)
+				: enabled() && ["sidebar"].includes(element.name)
 					? "color(srgb 1 1 1 / 0.95)"
-					: !enabled() && element.name === "settingsMain"
-						? "rgba(0, 0, 0, 0)"
-						: "rgb(255, 255, 255)",
+					: "rgb(255, 255, 255)",
 		fontFamily: preferences.localFontFaces.ui
 			? `"Hipi local ${preferences.localFontFaces.ui.postscriptName}", system-ui`
 			: "system-ui",
-		visibility: enabled() && routeOpen && ["sidebar", "main"].includes(element.name) ? "hidden" : "visible",
+		visibility: "visible",
 		opacity: "1",
 		getPropertyValue: (property) =>
 			property === "--font-ui"
@@ -228,11 +226,11 @@ function renderer({
 		},
 	};
 	const route = {
-		back: async (opener) => {
+		close: async (opener) => {
 			assert.equal(opener, ".sidebar-settings-trigger");
 			assert.equal(menu, undefined);
 			routeOpen = false;
-			events.push("back-exact-opener");
+			events.push("close-exact-opener");
 		},
 		open: async (opener, category) => {
 			assert.equal(opener, ".sidebar-settings-trigger");
@@ -257,13 +255,13 @@ function renderer({
 	};
 }
 
-test("native appearance uses the picker, returned family/style, route persistence, backdrop and complete UI restoration", async () => {
+test("native appearance uses the picker, returned family/style, modal persistence, backdrop and complete UI restoration", async () => {
 	const fixture = renderer();
 	const evidence = await fixture.run();
 	assert.deepEqual(JSON.parse(JSON.stringify(evidence.font.selected)), bold);
 	assert.equal(evidence.font.changedStyle, true);
 	assert.equal(evidence.font.familyCount, 2);
-	assert.equal(evidence.font.routeReopenPersisted, true);
+	assert.equal(evidence.font.modalReopenPersisted, true);
 	assert.equal(evidence.originalPreferencesRestored, true);
 	assert.deepEqual(fixture.preferences, fixture.original);
 	assert.deepEqual(
@@ -271,7 +269,7 @@ test("native appearance uses the picker, returned family/style, route persistenc
 		[true, false],
 	);
 	assert.equal(fixture.events.filter((event) => event === "ui-native-enumeration").length, 1);
-	assert.ok(fixture.events.filter((event) => event === "back-exact-opener").length >= 4);
+	assert.ok(fixture.events.filter((event) => event === "close-exact-opener").length >= 4);
 	assert.ok(fixture.screenshots.includes("appearance-font-styles"));
 	assert.ok(fixture.screenshots.includes("appearance-backdrop-on-workbench"));
 	assert.ok(evidence.limits.some((limit) => limit.includes("not proof of OS compositor")));
@@ -347,14 +345,19 @@ test("native confirmation alone cannot pass opaque, hidden-owner, unsupported or
 	const on = evidence.backdrop.states[0];
 	const copy = () => JSON.parse(JSON.stringify(on.settings));
 	assert.doesNotThrow(() => assertNativeBackdrop(on.settings, on.status, true));
-	for (const name of ["root", "body", "app", "route", "settingsSidebar"]) {
+	for (const name of ["root", "body", "app"]) {
 		const state = copy();
 		state.surfaces[name].background = "rgb(255, 255, 255)";
 		assert.throws(() => assertNativeBackdrop(state, on.status, true));
 	}
+	for (const name of ["route", "settingsSidebar", "settingsMain"]) {
+		const state = copy();
+		state.surfaces[name].background = "rgba(0, 0, 0, 0)";
+		assert.throws(() => assertNativeBackdrop(state, on.status, true), /must stay opaque/);
+	}
 	const owner = copy();
-	owner.surfaces.main.visibility = "visible";
-	assert.throws(() => assertNativeBackdrop(owner, on.status, true), /paint behind Settings/);
+	owner.surfaces.main.visibility = "hidden";
+	assert.throws(() => assertNativeBackdrop(owner, on.status, true), /remain visible behind Settings/);
 	assert.throws(
 		() => assertNativeBackdrop(copy(), { ...on.status, backdropEnabled: false }, true),
 		/Host must confirm/,

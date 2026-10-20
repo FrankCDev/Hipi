@@ -11,6 +11,7 @@ import { createWorkspaceModels, type ModelDispatchAuthorization } from "../src/a
 import {
 	type CustomProviderConfiguration,
 	type CustomProviderProtocol,
+	type ModelFailureCategory,
 	PROTOCOL_VERSION,
 	parseRequest,
 	parseResult,
@@ -87,7 +88,7 @@ function reply(res: ServerResponse, protocol: CustomProviderProtocol) {
 }
 async function fixtureServer(protocol: CustomProviderProtocol) {
 	const requests: { url: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }[] = [];
-	let failure = false;
+	let failure: number | undefined;
 	const server = createServer(async (request, response) => {
 		const bytes: Buffer[] = [];
 		for await (const chunk of request) bytes.push(Buffer.from(chunk));
@@ -96,8 +97,10 @@ async function fixtureServer(protocol: CustomProviderProtocol) {
 			headers: request.headers,
 			body: JSON.parse(Buffer.concat(bytes).toString()),
 		});
-		if (failure) {
-			response.writeHead(401, { "Content-Type": "application/json" });
+		if (failure === 0) {
+			response.destroy();
+		} else if (failure !== undefined) {
+			response.writeHead(failure, { "Content-Type": "application/json" });
 			response.end(
 				JSON.stringify({
 					error: {
@@ -115,8 +118,8 @@ async function fixtureServer(protocol: CustomProviderProtocol) {
 	return {
 		url: `http://127.0.0.1:${address.port}/gateway${protocol === "openai-completions" ? "/v1" : ""}`,
 		requests,
-		fail: () => {
-			failure = true;
+		fail: (status = 401) => {
+			failure = status;
 		},
 		close: () => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
 	};
@@ -140,7 +143,7 @@ async function terminal(runtime: Awaited<ReturnType<typeof openRuntime>>, reques
 		if (receipt?.execution === "done" || receipt?.execution === "unanswered") return receipt;
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
-	throw new Error("Fixture did not finish");
+	throw new Error(`Fixture did not finish: ${requestId}`);
 }
 
 test("configuration contracts reject secret fields, ambiguous endpoints, duplicates and unbounded models", () => {
@@ -240,6 +243,115 @@ test("provider configuration uses the same validated application contract over H
 });
 
 for (const protocol of ["openai-completions", "anthropic-messages"] as const) {
+	test(`${protocol}: safe failure evidence survives HTTP, persistence and child IPC without retries`, async () => {
+		const server = await fixtureServer(protocol);
+		const directory = await mkdtemp(join(tmpdir(), "hipi-provider-failure-evidence-"));
+		const secret = "synthetic-failure-evidence-key";
+		let missingSecret = false;
+		const credentials: CredentialPort = {
+			status: async () => "configured",
+			get: async () => (missingSecret ? undefined : secret),
+		};
+		const runtime = await openRuntime(directory, { models: createProductionModels(credentials), credentials });
+		const origin = "http://127.0.0.1:5173";
+		const http = await serveLoopback(runtime, { origin });
+		let httpClosed = false;
+		const client = createHttpClient({ ...http, origin });
+		const receipts = [];
+		try {
+			await client.call("createWorkspace", { workspaceId: "work", name: "Failures" });
+			const profile = await client.call("saveCustomProvider", {
+				requestId: "save",
+				...settings(protocol, server.url),
+			});
+			const matrix: [number, ModelFailureCategory][] = [
+				[401, "model_auth_failed"],
+				[403, "model_auth_failed"],
+				[429, "model_rate_limited"],
+				[400, "model_request_rejected"],
+				[404, "model_unavailable"],
+				[503, "model_service_unavailable"],
+				[0, "model_network_failed"],
+				[200, "model_request_failed"],
+			];
+			for (const [index, [status, category]] of matrix.entries()) {
+				server.fail(status);
+				const conversation = await client.call("createConversation", {
+					workspaceId: "work",
+					requestId: `conversation-${index}`,
+					title: "Synthetic failure",
+					model: { provider: profile.provider, modelId: "test/model" },
+				});
+				const requestId = `failure-${index}`;
+				await client.call("submit", {
+					workspaceId: "work",
+					conversationId: conversation.conversationId,
+					requestId,
+					text: "Synthetic input",
+				});
+				await terminal(runtime, requestId);
+				const receipt = await client.call("getReceipt", { workspaceId: "work", requestId });
+				assert.equal(receipt?.execution, "unanswered");
+				assert.equal(receipt.reason, "model_error");
+				assert.deepEqual(receipt.modelFailure, { category, dispatch: "attempted" });
+				assert.equal(server.requests.length, index + 1, "failure does not retry or replay");
+				assert.equal(JSON.stringify(receipt).includes(secret), false);
+				assert.equal(JSON.stringify(receipt).includes("private-diagnostic"), false);
+				receipts.push(receipt);
+			}
+			missingSecret = true;
+			const local = await client.call("createConversation", {
+				workspaceId: "work",
+				requestId: "local-conversation",
+				title: "Local credential failure",
+				model: { provider: profile.provider, modelId: "test/model" },
+			});
+			await client.call("submit", {
+				workspaceId: "work",
+				conversationId: local.conversationId,
+				requestId: "local-failure",
+				text: "Not sent",
+			});
+			const localReceipt = await terminal(runtime, "local-failure");
+			assert.deepEqual(localReceipt.modelFailure, { category: "credential_required", dispatch: "not_sent" });
+			assert.equal(server.requests.length, matrix.length);
+			receipts.push(localReceipt);
+			await http.close();
+			httpClosed = true;
+			await runtime.close();
+			const child = fork(new URL("./helpers/custom-provider-runtime.ts", import.meta.url), [directory], {
+				stdio: ["ignore", "ignore", "pipe", "ipc"],
+			});
+			const ipc = createNodeIpcClient(child);
+			try {
+				for (const receipt of receipts)
+					assert.deepEqual(
+						await ipc.call("getReceipt", { workspaceId: "work", requestId: receipt.requestId }),
+						receipt,
+					);
+				assert.equal(server.requests.length, matrix.length, "restart and receipt reads cannot resend");
+			} finally {
+				ipc.close();
+				if (child.exitCode === null && child.signalCode === null) {
+					const exited = once(child, "exit");
+					child.disconnect();
+					await exited;
+				}
+			}
+			for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+				if (!entry.isFile()) continue;
+				const contents = await readFile(join(entry.parentPath, entry.name));
+				assert.equal(contents.includes(Buffer.from(secret)), false);
+				assert.equal(contents.includes(Buffer.from("private-diagnostic")), false);
+			}
+		} finally {
+			if (!httpClosed) await http.close();
+			await runtime.close();
+			await server.close();
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test(
 		`${protocol}: local SDK request, scoped key, runtime conversation and restart use only saved configuration`,
 		{ timeout: 20000 },
@@ -269,7 +381,7 @@ for (const protocol of ["openai-completions", "anthropic-messages"] as const) {
 				const model = models.getModel(profile.provider, "test/model");
 				assert.ok(model);
 				const missing = await models.completeSimple(model, input, { apiKey: "caller-must-not-override" });
-				assert.equal(missing.errorMessage, "credential_required");
+				assert.equal(missing.errorMessage, "hipi_model_failure:credential_required:not_sent");
 				assert.equal(server.requests.length, 0);
 				credentials.keys.set(profile.provider, `synthetic-${protocol}-key`);
 				const other = await runtime.call("saveCustomProvider", { ...save, requestId: "other", name: "Other" });
@@ -334,7 +446,10 @@ for (const protocol of ["openai-completions", "anthropic-messages"] as const) {
 					runtime.call("submit", { ...scope, requestId: "old-recipient", text: "Must not send history" }),
 					{ code: "MODEL_UNAVAILABLE" },
 				);
-				assert.equal((await models.completeSimple(model, input)).errorMessage, "model_unavailable");
+				assert.equal(
+					(await models.completeSimple(model, input)).errorMessage,
+					"hipi_model_failure:model_unavailable:not_sent",
+				);
 				assert.equal(server.requests.length, 1);
 				await runtime.call("removeCustomProvider", { provider: changed.provider, requestId: "remove" });
 				await runtime.call("saveCustomProvider", save);
@@ -391,7 +506,7 @@ test("configured provider removal during credential resolution blocks final disp
 		await entered.promise;
 		configureCustomProviders(models, []);
 		release.resolve();
-		assert.equal((await pending).errorMessage, "model_unavailable");
+		assert.equal((await pending).errorMessage, "hipi_model_failure:model_unavailable:not_sent");
 		assert.equal(server.requests.length, 0);
 		configureCustomProviders(models, [value]);
 		server.fail();
@@ -428,9 +543,15 @@ test("metadata edits keep active models alive; custom deferred requests fail bef
 	assert.ok(model);
 	try {
 		const handle = { provider: profile.provider, api: model.api, modelId: model.id, id: "unsupported" };
-		assert.equal((await models.streamDeferred(model, handle).result()).errorMessage, "model_unavailable");
+		assert.equal(
+			(await models.streamDeferred(model, handle).result()).errorMessage,
+			"hipi_model_failure:model_unavailable:not_sent",
+		);
 		await assert.rejects(models.cancelDeferred(model, handle), /model_cancel_failed/);
-		assert.equal((await models.completeSimple(model, input, { deferred: true })).errorMessage, "model_unavailable");
+		assert.equal(
+			(await models.completeSimple(model, input, { deferred: true })).errorMessage,
+			"hipi_model_failure:model_unavailable:not_sent",
+		);
 		assert.equal(reads, 0);
 		const provider = models.getProvider(profile.provider);
 		const pending = models.completeSimple(model, input);
@@ -447,7 +568,10 @@ test("metadata edits keep active models alive; custom deferred requests fail bef
 			code: "INVALID_REQUEST",
 		});
 		configureCustomProviders(models, [{ ...profile, models: [{ id: "added", name: "Added" }] }]);
-		assert.equal((await models.completeSimple(model, input)).errorMessage, "model_unavailable");
+		assert.equal(
+			(await models.completeSimple(model, input)).errorMessage,
+			"hipi_model_failure:model_unavailable:not_sent",
+		);
 		assert.equal(server.requests.length, 1);
 	} finally {
 		release.resolve();
@@ -547,7 +671,7 @@ test("recipient identity and exact URL are rechecked after the context authoriza
 		await entered.promise;
 		configureCustomProviders(source, [{ ...value, provider: "custom_replacement", baseUrl: `${server.url}/other` }]);
 		release.resolve();
-		assert.equal((await pending).errorMessage, "model_context_blocked");
+		assert.equal((await pending).errorMessage, "hipi_model_failure:model_context_blocked:not_sent");
 		assert.equal(server.requests.length, 0);
 		configureCustomProviders(source, [value]);
 		assert.equal(
@@ -556,7 +680,7 @@ test("recipient identity and exact URL are rechecked after the context authoriza
 					sessionId: "authorized-conversation",
 				})
 			).errorMessage,
-			"model_context_blocked",
+			"hipi_model_failure:model_context_blocked:not_sent",
 		);
 		assert.equal(server.requests.length, 0);
 	} finally {

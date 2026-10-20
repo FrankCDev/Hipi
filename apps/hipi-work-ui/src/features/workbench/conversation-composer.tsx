@@ -93,7 +93,7 @@ export function ConversationComposer({
 						{t("work.draft")}
 					</label>
 					<Textarea
-						className="composer-input border-0 bg-transparent shadow-none focus-visible:ring-0"
+						className="composer-input border-0 bg-transparent shadow-none focus-visible:outline-none"
 						ref={textarea}
 						rows={COMPOSER_ROWS.min}
 						id={inputId}

@@ -20,17 +20,5 @@ summary,
 		transparent
 	);
 }
-/* Keep the work owner mounted/inert but do not paint it underneath the settings navigation. */
-:root[data-native-backdrop="on"] .work-shell[data-settings-open="true"] > .sidebar,
-:root[data-native-backdrop="on"] .work-shell[data-settings-open="true"] > .main-shell {
-	visibility: hidden;
-}
-:root[data-native-backdrop="on"] .settings-route[data-settings-page] {
-	background: transparent;
-}
-:root[data-native-backdrop="on"] .settings-page-sidebar {
-	background: color-mix(in srgb, var(--sidebar) var(--native-settings-sidebar-tint, 100%), transparent);
-}
-:root[data-native-backdrop="on"] .settings-page-main {
-	background: var(--surface);
-}
+/* Settings is an opaque modal. The retained app remains visible beneath its overlay;
+   only the actual window sidebar opts into native material compositing. */

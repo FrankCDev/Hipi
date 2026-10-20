@@ -18,8 +18,10 @@ import { Input } from "../src/components/ui/input.tsx";
 import { Select, SelectContent, SelectItem } from "../src/components/ui/select.tsx";
 import { Textarea } from "../src/components/ui/textarea.tsx";
 import { SettingsForm } from "../src/features/settings/appearance-settings.tsx";
+import { ModelSettingsContent } from "../src/features/settings/model-settings-content.tsx";
 import { SettingsDialog } from "../src/features/settings/settings-dialog.tsx";
 import { searchSettings, settingsSearchEntries } from "../src/features/settings/settings-search.ts";
+import { SettingsSurface } from "../src/features/settings/settings-surface.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({
@@ -56,6 +58,7 @@ vi.mock("react", async () => {
 			return current.value;
 		},
 		useId: () => `setting-${hooks.cursor++}`,
+		useCallback: <T,>(callback: T) => callback,
 		useEffect: (effect: React.EffectCallback, deps: React.DependencyList) => {
 			const { index, previous } = cell();
 			if (
@@ -197,6 +200,8 @@ test("search indexes only localized supported settings and runtime identities", 
 	assert.equal(searchSettings(entries, "  ＴＨＥＭＥ  ")[0]?.id, "theme");
 	assert.ok(searchSettings(entries, "appearance code").some((entry) => entry.id === "codeFont"));
 	assert.equal(searchSettings(entries, "runtime-model-1")[0]?.label, "Runtime model one");
+	assert.equal(searchSettings(entries, "runtime-model-1")[0]?.target, "custom-providers");
+	assert.match(searchSettings(entries, "runtime-model-1")[0]?.description ?? "", /OpenAI/);
 	assert.equal(searchSettings(entries, "English")[0]?.value, "English");
 	assert.equal(searchSettings(entries, " ").length, 0);
 	for (const query of ["subscription", "password", "nonexistent-setting", "JSON"])
@@ -344,7 +349,7 @@ test("copy does not report success before clipboard write completes and reports 
 	);
 });
 
-test("category navigation and Back never add a dirty guard or cancel committed preferences", () => {
+test("category navigation and closing never add a dirty guard or cancel committed preferences", () => {
 	click(driveDialog(), (node) => node.type === Button && node.props["data-category"] === "models");
 	let tree = driveDialog();
 	assert.equal(
@@ -352,10 +357,12 @@ test("category navigation and Back never add a dirty guard or cancel committed p
 		"page",
 	);
 	assert.equal(hooks.catalogEnabled, true);
-	click(tree, (node) => node.type === Button && node.props.className === "settings-back");
+	(find(tree, (node) => node.type === SettingsSurface).props.onOpenChange as (open: boolean) => void)(false);
 	assert.deepEqual(closed.mock.calls, [[false]]);
 	assert.equal(theme.cancel.mock.calls.length, 0);
 	driveDialog(false);
+	assert.equal(restored.mock.calls.length, 0, "Focus is restored by modal teardown, not before the app is interactive");
+	(find(tree, (node) => node.type === SettingsSurface).props.onRestoreFocus as () => void)();
 	assert.equal(restored.mock.calls.length, 1);
 	tree = driveDialog();
 	assert.equal(
@@ -385,7 +392,7 @@ test("search replaces the category list and chooses an exact destination with no
 	assert.equal(find(tree, (node) => node.type === Input).props.value, "credentials");
 	click(
 		tree,
-		(node) => node.props.className === "settings-search-result" && node.props["data-setting"] === "credentials",
+		(node) => node.props.className === "settings-search-result" && node.props["data-setting"] === "custom-providers",
 	);
 	tree = driveDialog();
 	assert.equal(find(tree, (node) => node.type === Input).props.value, "");
@@ -393,8 +400,54 @@ test("search replaces the category list and chooses an exact destination with no
 		find(tree, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
 		"page",
 	);
-	assert.equal(find(tree, (node) => node.type === SettingsForm).props.selectedSetting, "credentials");
+	assert.equal(find(tree, (node) => node.type === SettingsForm).props.selectedSetting, "custom-providers");
 	assert.equal(closed.mock.calls.length, 0);
+});
+
+test("an inline model mutation blocks stale close and category callbacks until its owner settles", () => {
+	const tree = driveDialog(true, "models");
+	const changed = find(tree, (node) => node.type === ModelSettingsContent).props.onBusy as (busy: boolean) => void;
+	changed(true);
+	(find(tree, (node) => node.type === SettingsSurface).props.onOpenChange as (open: boolean) => void)(false);
+	click(tree, (node) => node.type === Button && node.props["data-category"] === "appearance");
+	assert.equal(closed.mock.calls.length, 0);
+	let current = driveDialog();
+	assert.equal(find(current, (node) => node.type === SettingsSurface).props.busy, true);
+	assert.equal(
+		find(current, (node) => node.type === Button && node.props["data-category"] === "models").props["aria-current"],
+		"page",
+	);
+	assert.equal(find(current, (node) => node.type === Input).props.disabled, true);
+	changed(false);
+	current = driveDialog();
+	click(current, (node) => node.type === Button && node.props["data-category"] === "appearance");
+	assert.equal(
+		find(driveDialog(), (node) => node.type === Button && node.props["data-category"] === "appearance").props[
+			"aria-current"
+		],
+		"page",
+	);
+});
+
+test("modal capture clears a populated search before Escape can dismiss settings", () => {
+	input(driveDialog(), "font");
+	let tree = driveDialog();
+	const preventDefault = vi.fn();
+	(
+		find(tree, (node) => node.type === SettingsSurface).props.onEscapeKeyDown as (
+			event: Record<string, unknown>,
+		) => void
+	)({ preventDefault });
+	assert.equal(preventDefault.mock.calls.length, 1);
+	assert.equal(closed.mock.calls.length, 0);
+	tree = driveDialog();
+	assert.equal(find(tree, (node) => node.type === Input).props.value, "");
+	(
+		find(tree, (node) => node.type === SettingsSurface).props.onEscapeKeyDown as (
+			event: Record<string, unknown>,
+		) => void
+	)({ preventDefault });
+	assert.equal(preventDefault.mock.calls.length, 1, "An empty search leaves dismissal to the actual Radix layer");
 });
 
 test("Escape clears search without leaving the page and does not swallow IME composition", () => {

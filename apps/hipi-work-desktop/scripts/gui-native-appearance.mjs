@@ -14,7 +14,7 @@ export function nativeAppearanceSnapshot(document, getComputedStyle) {
 			["root", "html"],
 			["body", "body"],
 			["app", "#root"],
-			["route", ".settings-route[data-settings-page]"],
+			["route", ".settings-modal"],
 			["settingsSidebar", ".settings-page-sidebar"],
 			["settingsMain", ".settings-page-main"],
 			["sidebar", ".sidebar"],
@@ -85,25 +85,19 @@ export function assertNativeBackdrop(snapshot, status, requested) {
 		if (status.reducedTransparency) assert.ok(snapshot.toggle.description, "Explain the disabled OS preference");
 	}
 	if (enabled) {
-		for (const name of ["root", "body", "app", "route"])
+		for (const name of ["root", "body", "app"])
 			assert.equal(backgroundAlpha(snapshot.surfaces[name]?.background ?? ""), 0, `${name} blocks native material`);
-		assert.equal(backgroundAlpha(snapshot.surfaces.settingsMain?.background ?? ""), 1, "Settings content stays opaque");
-		const tint = Number.parseFloat(snapshot.settingsTint) / 100;
-		assert.ok(tint > 0 && tint <= 1, "Settings tint must be a bounded contrast-preserving percentage");
-		assert.ok(
-			Math.abs(backgroundAlpha(snapshot.surfaces.settingsSidebar?.background ?? "") - tint) <= 0.01,
-			"Settings sidebar must paint the confirmed contrast-aware tint",
+	}
+	// The floating dialog is deliberately opaque even while the underlying window uses native material.
+	for (const name of ["route", "settingsSidebar", "settingsMain"])
+		assert.equal(
+			backgroundAlpha(snapshot.surfaces[name]?.background ?? ""),
+			1,
+			`${name} modal surface must stay opaque`,
 		);
-		for (const name of ["sidebar", "main"])
-			assert.equal(snapshot.surfaces[name]?.visibility, "hidden", "Retained owner must not paint behind Settings");
-	} else {
-		// Settings main is transparent in ordinary mode, over the opaque full-route surface.
-		for (const name of ["route", "settingsSidebar"])
-			assert.equal(
-				backgroundAlpha(snapshot.surfaces[name]?.background ?? ""),
-				1,
-				`${name} must retain opaque fallback`,
-			);
+	for (const name of ["sidebar", "main"]) {
+		assert.equal(snapshot.surfaces[name]?.visibility, "visible", "Retained app must remain visible behind Settings");
+		assert.ok(Number(snapshot.surfaces[name]?.opacity) > 0, "Retained app must not be transparent behind Settings");
 	}
 }
 
@@ -165,7 +159,7 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 	assert.equal(
 		await read(`(() => {
 			const owner = document.querySelector('.conversation-panel');
-			if (!owner || !document.querySelector('.settings-route[data-settings-page]')) return false;
+			if (!owner || !document.querySelector('.settings-modal')) return false;
 			window.__hipiGuiAppearanceOwner = { node: owner, draft: owner.querySelector('.composer textarea')?.value,
 				keys: [...owner.querySelectorAll('[data-message-id]')].map(e => e.dataset.messageId) };
 			return true;
@@ -243,7 +237,7 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 			);
 		}, "selected local face registers and applies, rather than silently falling back");
 		const applied = await captureState("font-applied");
-		await route.back(opener);
+		await route.close(opener);
 		await continuity();
 		await captureState("font-workbench");
 		await route.open(opener, "appearance");
@@ -252,7 +246,7 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 		await click(cdp, familySelector);
 		await until(
 			async () => (await snapshot()).catalog.state === "ready",
-			"native catalog remains available after route reopen",
+			"native catalog remains available after modal reopen",
 		);
 		assert.ok((await options()).includes(family), "Reopened picker must retain its returned family");
 		await pressKey(cdp, "Escape");
@@ -267,14 +261,14 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 			status = await waitBackdrop(requested);
 			const state = await captureState(`backdrop-${status.backdropEnabled ? "on" : "off"}`);
 			assertNativeBackdrop(state, status, requested);
-			await route.back(opener);
+			await route.close(opener);
 			await continuity();
 			const workbench = await captureState(`backdrop-${status.backdropEnabled ? "on" : "off"}-workbench`);
 			for (const name of ["sidebar", "main"])
 				assert.equal(
 					workbench.surfaces[name]?.visibility,
 					"visible",
-					"Back must restore the retained workbench painting",
+					"Close must restore the retained workbench painting",
 				);
 			const tint = status.backdropEnabled ? Number.parseFloat(workbench.sidebarTint) / 100 : 1;
 			assert.ok(
@@ -282,7 +276,7 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 				"Workbench sidebar must paint its confirmed tint or opaque fallback",
 			);
 			await route.open(opener, "appearance");
-			assert.equal((await saved()).translucentSidebar, requested, "Backdrop preference survives route reopen");
+			assert.equal((await saved()).translucentSidebar, requested, "Backdrop preference survives modal reopen");
 			backdrop.states.push({ requested, status, settings: state, workbench });
 		}
 		result = {
@@ -293,11 +287,11 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 				styleCount: styles.length,
 				changedStyle: style !== firstFace.style,
 				applied,
-				routeReopenPersisted: true,
+				modalReopenPersisted: true,
 			},
 			backdrop,
 			screenshots,
-			exactBackFocusAndConversationContinuity: true,
+			exactCloseFocusAndConversationContinuity: true,
 			limits: [
 				"Host confirmation and computed renderer transparency are not proof of OS compositor painting.",
 				"Settled screenshots require visual review; native backdrop quality is not asserted.",
@@ -310,8 +304,7 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 	} finally {
 		try {
 			if (await read("!!document.querySelector('[role=\"option\"]')")) await pressKey(cdp, "Escape");
-			if (!(await read("!!document.querySelector('.settings-route[data-settings-page]')")))
-				await route.open(opener, "appearance");
+			if (!(await read("!!document.querySelector('.settings-modal')"))) await route.open(opener, "appearance");
 			if ((await saved()).localFontFaces?.ui) await choose(familySelector, originalLabel);
 			if ((await saved()).translucentSidebar !== original.translucentSidebar) await click(cdp, switchSelector);
 			await until(
@@ -321,10 +314,10 @@ export async function inspectNativeAppearance(cdp, helpers, route, directory, pr
 			const restoredStatus = await waitBackdrop(original.translucentSidebar);
 			await settled();
 			assertNativeBackdrop(await snapshot(), restoredStatus, original.translucentSidebar);
-			await route.back(opener);
+			await route.close(opener);
 			await continuity();
 			await route.open(opener, "appearance");
-			assert.deepEqual(await saved(), original, "Restored appearance must survive route reopen");
+			assert.deepEqual(await saved(), original, "Restored appearance must survive modal reopen");
 			await read("delete window.__hipiGuiAppearanceOwner");
 		} catch (restoreError) {
 			failure = failure

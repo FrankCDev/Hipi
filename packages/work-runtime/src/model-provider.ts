@@ -18,6 +18,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { AppError, type CredentialState, type CustomProviderConfiguration, type Result } from "./contracts.ts";
+import { type ModelFailure, type ModelFailureCategory, modelFailureDetail } from "./model-failure.ts";
 import { parseCustomProviderConfiguration } from "./provider-configuration.ts";
 
 type RegisteredConfiguration = {
@@ -135,17 +136,7 @@ export interface CredentialPort {
 	get(provider: string): Promise<string | undefined>;
 }
 
-type FailureCategory =
-	| "model_request_failed"
-	| "model_auth_failed"
-	| "model_rate_limited"
-	| "model_network_failed"
-	| "model_unavailable"
-	| "credential_required"
-	| "credential_locked"
-	| "credential_unavailable";
-
-function failureCategory(message: AssistantMessage): FailureCategory {
+function failureCategory(message: AssistantMessage): ModelFailureCategory {
 	for (const diagnostic of message.diagnostics ?? []) {
 		const code = diagnostic.error?.code;
 		if (code === 401 || code === 403 || code === "invalid_api_key" || code === "authentication_error")
@@ -189,13 +180,18 @@ async function awaitCredential<T>(operation: Promise<T>, signal?: AbortSignal): 
 function sanitizedStream(
 	model: Model<Api>,
 	credentials: CredentialPort,
-	start: (key: string) => AssistantMessageEventStream,
+	start: (
+		key: string,
+		evidence: { dispatch: ModelFailure["dispatch"]; category?: ModelFailureCategory },
+	) => AssistantMessageEventStream,
 	signal?: AbortSignal,
 	isAvailable: () => boolean = () => true,
+	initialDispatch: ModelFailure["dispatch"] = "not_sent",
 ): AssistantMessageEventStream {
 	const output = createAssistantMessageEventStream();
 	const timestamp = Date.now();
-	const fail = (aborted: boolean, category: FailureCategory = "model_request_failed") => {
+	const evidence: { dispatch: ModelFailure["dispatch"]; category?: ModelFailureCategory } = { dispatch: "not_sent" };
+	const fail = (aborted: boolean, category: ModelFailureCategory = "model_request_failed") => {
 		// Reconstruct rather than redact: providers may attach secrets anywhere in an error message.
 		const error: AssistantMessage = {
 			role: "assistant",
@@ -212,7 +208,9 @@ function sanitizedStream(
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: aborted ? "aborted" : "error",
-			errorMessage: aborted ? "model_request_aborted" : category,
+			errorMessage: aborted
+				? "model_request_aborted"
+				: modelFailureDetail(evidence.category ?? category, evidence.dispatch),
 			timestamp,
 		};
 		output.push({ type: "error", reason: aborted ? "aborted" : "error", error });
@@ -251,7 +249,8 @@ function sanitizedStream(
 				return;
 			}
 			resolvingCredentials = false;
-			const source = start(key);
+			evidence.dispatch = initialDispatch;
+			const source = start(key, evidence);
 			for await (const event of source) {
 				if (event.type === "error") {
 					fail(event.reason === "aborted" || signal?.aborted === true, failureCategory(event.error));
@@ -322,9 +321,14 @@ export function createProductionModels(
 	});
 	models.setProvider(providerFactory());
 	configuredCollections.set(models, { models, providers: new Map() });
-	const customOptions = (model: Model<Api>, fetch: FetchFunction | undefined, signal: AbortSignal | undefined) => {
+	const transportOptions = (
+		model: Model<Api>,
+		fetch: FetchFunction | undefined,
+		signal: AbortSignal | undefined,
+		evidence: { dispatch: ModelFailure["dispatch"]; category?: ModelFailureCategory },
+	) => {
 		const entry = configuredCollections.get(models)?.providers.get(model.provider);
-		if (!model.provider.startsWith("custom_")) return { fetch, signal };
+		const custom = model.provider.startsWith("custom_");
 		const available = () => {
 			const current = models.getModel(model.provider, model.id);
 			return Boolean(
@@ -337,20 +341,54 @@ export function createProductionModels(
 					!model.headers,
 			);
 		};
-		const controllerSignal = entry?.controllers.get(model.id)?.signal ?? AbortSignal.abort();
-		const combined = signal ? AbortSignal.any([signal, controllerSignal]) : controllerSignal;
+		const controllerSignal = custom ? (entry?.controllers.get(model.id)?.signal ?? AbortSignal.abort()) : undefined;
+		const combined =
+			signal && controllerSignal ? AbortSignal.any([signal, controllerSignal]) : (signal ?? controllerSignal);
 		return {
 			signal: combined,
-			fetch: ((input, init) => {
-				if (!available()) throw new Error("model_unavailable");
-				const url = new URL(input instanceof Request ? input.url : input.toString());
-				const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-				if (url.href !== customModelRequestUrl(model) || method.toUpperCase() !== "POST")
+			fetch: (async (input, init) => {
+				if (custom && !available()) {
+					evidence.category = "model_unavailable";
 					throw new Error("model_unavailable");
-				const signals = [combined];
+				}
+				if (custom) {
+					const url = new URL(input instanceof Request ? input.url : input.toString());
+					const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+					if (url.href !== customModelRequestUrl(model) || method.toUpperCase() !== "POST") {
+						evidence.category = "model_unavailable";
+						throw new Error("model_unavailable");
+					}
+				}
+				const signals: AbortSignal[] = combined ? [combined] : [];
 				if (init?.signal) signals.push(init.signal);
 				if (input instanceof Request) signals.push(input.signal);
-				return (fetch ?? globalThis.fetch)(input, { ...init, redirect: "error", signal: AbortSignal.any(signals) });
+				evidence.dispatch = "attempted";
+				let response: Response;
+				try {
+					response = await (fetch ?? globalThis.fetch)(input, {
+						...init,
+						redirect: "error",
+						signal: AbortSignal.any(signals),
+					});
+				} catch {
+					evidence.category = "model_network_failed";
+					throw new Error("model_network_failed");
+				}
+				if (!response.ok) {
+					evidence.category =
+						response.status === 401 || response.status === 403
+							? "model_auth_failed"
+							: response.status === 429
+								? "model_rate_limited"
+								: response.status === 404
+									? "model_unavailable"
+									: response.status >= 500
+										? "model_service_unavailable"
+										: response.status >= 400
+											? "model_request_rejected"
+											: "model_request_failed";
+				}
+				return response;
 			}) satisfies FetchFunction,
 		};
 	};
@@ -371,10 +409,11 @@ export function createProductionModels(
 		sanitizedStream(
 			model,
 			credentials,
-			(key) =>
+			(key, evidence) =>
 				stream<Api>(model, context, {
 					...options,
-					...customOptions(model, options?.fetch, options?.signal),
+					...transportOptions(model, options?.fetch, options?.signal, evidence),
+					transport: "sse",
 					apiKey: key,
 					env: undefined,
 					maxRetries: 0,
@@ -389,10 +428,11 @@ export function createProductionModels(
 		sanitizedStream(
 			model,
 			credentials,
-			(key) =>
+			(key, evidence) =>
 				streamSimple(model, context, {
 					...options,
-					...customOptions(model, options?.fetch, options?.signal),
+					...transportOptions(model, options?.fetch, options?.signal, evidence),
+					transport: "sse",
 					apiKey: key,
 					env: undefined,
 					maxRetries: 0,
@@ -415,6 +455,7 @@ export function createProductionModels(
 				}),
 			options?.signal,
 			() => !model.provider.startsWith("custom_"),
+			"unknown",
 		);
 	models.cancelDeferred = async (model, handle, options) => {
 		try {

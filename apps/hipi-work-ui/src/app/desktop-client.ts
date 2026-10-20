@@ -106,7 +106,6 @@ export function createDesktopClient(bridge: DesktopBridge): AppClient {
 			const close = (status: ObservationStatus) => {
 				if (closed) return;
 				closed = true;
-				clearTimeout(timer);
 				clearTimeout(startTimer);
 				if (!ready) rejectReady(new AppError(status.state === "closed" ? (status.code ?? "CLOSED") : "CLOSED"));
 				signal?.removeEventListener("abort", abort);
@@ -119,7 +118,8 @@ export function createDesktopClient(bridge: DesktopBridge): AppClient {
 				}
 			};
 			const abort = () => close({ state: "closed", reason: "disposed" });
-			const timer = setTimeout(() => close({ state: "closed", reason: "expired" }), 65000);
+			// Established desktop subscriptions belong to the host lifecycle, not a wall-clock lease.
+			// The host bounds each frame acknowledgement; only initial snapshot readiness is timed here.
 			const startTimer = setTimeout(() => close({ state: "closed", reason: "disconnected", code: "CLOSED" }), 10000);
 			signal?.addEventListener("abort", abort, { once: true });
 			try {

@@ -110,7 +110,7 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 	const [settingsCategory, setSettingsCategory] = useState<"general" | "appearance" | "models" | "runtime">("general");
 	const [composerFocusRevision, setComposerFocusRevision] = useState(0);
 	const settingsTrigger = useRef<HTMLButtonElement>(null);
-	const settingsReturn = useRef<HTMLButtonElement | null>(null);
+	const settingsReturn = useRef<HTMLElement | null>(null);
 	const detailsTrigger = useRef<HTMLButtonElement>(null);
 	const detailsReturn = useRef<HTMLButtonElement | null>(null);
 	const initialSubmissionNavigation = useRef("");
@@ -626,6 +626,11 @@ export function Workbench({ disconnect }: { disconnect: () => void }) {
 							<ConversationPane
 								key={`${selected.workspaceId}.${selected.conversationId}`}
 								conversation={selected}
+								onOpenModelSettings={(returnFocus) => {
+									settingsReturn.current = returnFocus;
+									setSettingsCategory("models");
+									setSettingsOpen(true);
+								}}
 								onOpenArtifact={
 									session ? artifactNavigation(selected, () => currentScope.current, session, panel) : undefined
 								}

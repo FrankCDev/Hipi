@@ -117,7 +117,10 @@ test("missing/unknown session and deferred mode fail closed without network; cat
 	const model = models.getModels()[0];
 	assert.ok(model);
 	for (const options of [undefined, { sessionId: "unknown" }, { sessionId: "a", deferred: true }]) {
-		assert.equal((await models.completeSimple(model, context, options)).errorMessage, "model_context_blocked");
+		assert.equal(
+			(await models.completeSimple(model, context, options)).errorMessage,
+			"hipi_model_failure:model_context_blocked:not_sent",
+		);
 	}
 	await assert.rejects(
 		models.fetchDeferred(model, { provider: "openai", api: model.api, modelId: model.id, id: "not-a-session" }),
@@ -153,7 +156,7 @@ test("revocation during credentials wait blocks A at final dispatch while worksp
 	await entered.promise;
 	auth.revoke("a");
 	ready.resolve();
-	assert.equal((await pending).errorMessage, "model_context_blocked");
+	assert.equal((await pending).errorMessage, "hipi_model_failure:model_context_blocked:not_sent");
 	assert.equal(requests, 0);
 	assert.equal((await b.completeSimple(model, context, { sessionId: "b" })).stopReason, "stop");
 	assert.equal(requests, 1);
@@ -170,7 +173,7 @@ test("replacing the underlying provider after facade construction is rejected", 
 	source.setProvider(openaiProvider());
 	assert.equal(
 		(await models.completeSimple(model, context, { sessionId: "a" })).errorMessage,
-		"model_context_blocked",
+		"hipi_model_failure:model_context_blocked:not_sent",
 	);
 });
 
@@ -210,7 +213,7 @@ test("non-official URL is rejected before fake fetch", async () => {
 	assert.equal(
 		(await models.completeSimple({ ...model, baseUrl: "https://untrusted.invalid/v1" }, context, { sessionId: "a" }))
 			.errorMessage,
-		"model_context_blocked",
+		"hipi_model_failure:model_context_blocked:not_sent",
 	);
 });
 
@@ -336,7 +339,7 @@ test("provider replacement during authentication cannot dispatch the previously 
 	await entered.promise;
 	source.setProvider(openaiProvider());
 	ready.resolve();
-	assert.equal((await pending).errorMessage, "model_context_blocked");
+	assert.equal((await pending).errorMessage, "hipi_model_failure:model_context_blocked:not_sent");
 	assert.equal(requests, 0);
 });
 

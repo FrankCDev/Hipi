@@ -11,7 +11,7 @@ import { afterEach, test, vi } from "vitest";
 import type * as Preferences from "../src/app/preferences.tsx";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
 import { Button } from "../src/components/ui/button.tsx";
-import { Dialog } from "../src/components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogDescription } from "../src/components/ui/dialog.tsx";
 import { Icon } from "../src/components/ui/icon.tsx";
 import { Input } from "../src/components/ui/input.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../src/components/ui/input-group.tsx";
@@ -133,8 +133,8 @@ test("header search keeps a hidden, labeled input group with truthful scope unti
 	assert.match(group, /data-slot="input-group-addon"[^>]*data-align="inline-start"[\s\S]*<svg aria-hidden="true"/);
 	const input = group.match(/<input\b[^>]*>/)?.[0];
 	assert.ok(input);
-	assert.match(input, /focus-visible:ring-0/);
-	assert.doesNotMatch(input, /focus-visible:ring-\[3px\](?: |")/);
+	assert.match(input, /focus-visible:outline-none/);
+	assert.doesNotMatch(input, /focus-visible:ring-|focus-visible:border-ring/);
 	const closeButton = group.match(/<button\b[^>]*aria-label="关闭搜索"[^>]*>/)?.[0];
 	assert.ok(closeButton);
 	assert.match(closeButton, /focus-visible:outline-2/);
@@ -205,6 +205,10 @@ test("project creation submits its trimmed name once and cannot close while pend
 	invoke(create, "onClick");
 	invoke(create, "onClick");
 	invoke(find(Dialog), "onOpenChange", false);
+	// Simulate React Query's pending render not committing yet. The synchronous owner still blocks dismissal.
+	hooks.pending = false;
+	invoke(find(Dialog), "onOpenChange", false);
+	hooks.pending = true;
 	assert.deepEqual(onCreate.mock.calls, [["Named project"]]);
 	assert.deepEqual(onOpenChange.mock.calls, [[true]]);
 	assert.equal(find(Input).props.disabled, true);
@@ -262,6 +266,30 @@ test("project name Enter respects IME confirmation and implicit form submission 
 	await hooks.completion;
 });
 
+test("project form has one accessible name input and cancellation preserves it without creating", () => {
+	const onCreate = vi.fn(async (_name: string) => {});
+	const { find, invoke, onOpenChange } = workspaceHarness(onCreate);
+	const input = find(Input);
+	assert.equal(input.props.placeholder, "nav.projectName");
+	const label = find("label");
+	assert.equal(label.props.className, "sr-only");
+	assert.equal(label.props.htmlFor, input.props.id);
+	assert.equal(find(DialogDescription).props.className, "sr-only");
+	assert.equal(find(DialogContent).props.className, "project-create-dialog");
+	assert.equal(find(Button, "task-create-confirm").props.disabled, true);
+	invoke(find(Dialog), "onOpenChange", true);
+	invoke(find(Input), "onChange", { target: { value: "Retained project" } });
+	invoke(find(Dialog), "onOpenChange", false);
+	invoke(find(Dialog), "onOpenChange", true);
+	assert.equal(find(Input).props.value, "Retained project");
+	assert.equal(onCreate.mock.calls.length, 0);
+	assert.deepEqual(onOpenChange.mock.calls, [[true], [false], [true]]);
+	const preventDefault = vi.fn();
+	invoke(find(DialogContent), "onEscapeKeyDown", { isComposing: true, preventDefault });
+	invoke(find(DialogContent), "onEscapeKeyDown", { keyCode: 229, preventDefault });
+	assert.equal(preventDefault.mock.calls.length, 2);
+});
+
 test("Tailwind emits group focus, addon spacing and disabled colors without legacy search overrides", async () => {
 	const html = renderToStaticMarkup(
 		<InputGroup className="nav-search">
@@ -287,14 +315,16 @@ test("Tailwind emits group focus, addon spacing and disabled colors without lega
 	const css = compiler.build(candidates);
 	assert.match(
 		css,
-		/:has\(:is\(\[data-slot=input-group-control\]:focus-visible\)\)\s*\{[^{}]*--tw-ring-color: var\(--focus\)/,
+		/:has\(:is\(\[data-slot=input-group-control\]:focus-visible\)\)\s*\{[^{}]*outline-color: var\(--focus\)/,
 	);
 	assert.match(
 		css,
 		/:has\( > \[data-align=inline-start\]\) > input\s*\{\s*padding-left: calc\(var\(--spacing\) \* 2\)/,
 	);
 	assert.match(css, /\.pl-3[\s\S]*?padding-left: calc\(var\(--spacing\) \* 3\)/);
-	assert.match(css, /:focus-visible\s*\{[^{}]*calc\(0px \+ var\(--tw-ring-offset-width\)\)/);
+	assert.match(css, /:focus-visible\s*\{[^{}]*outline-style: none/);
+	assert.match(css, /:has\(:is\(\[data-slot=input-group-control\]:focus-visible\)\)\s*\{[^{}]*outline-width: 2px/);
+	assert.match(css, /:has\(:is\(\[data-slot=input-group-control\]:focus-visible\)\)\s*\{[^{}]*outline-offset: 2px/);
 	assert.match(css, /:disabled::placeholder\s*\{\s*color: var\(--disabled-text\)/);
 	assert.match(
 		css,

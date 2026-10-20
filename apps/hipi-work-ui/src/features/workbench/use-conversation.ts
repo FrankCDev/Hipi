@@ -81,6 +81,14 @@ export function useConversation(conversation: Conversation) {
 				? 1500
 				: false,
 	});
+	useEffect(() => {
+		if (!connected || !requestId) return;
+		// Reconcile the original request after verified recovery; never resubmit unknown work.
+		void cache.invalidateQueries(
+			{ queryKey: ["receipt", conversation.workspaceId, requestId], exact: true },
+			{ cancelRefetch: false },
+		);
+	}, [cache, conversation.workspaceId, requestId, connected]);
 	const mutation = useMutation({
 		mutationFn: async (input: Submit) => {
 			setErrorCode(null);
@@ -188,7 +196,6 @@ export function useConversation(conversation: Conversation) {
 		},
 		reconnect: () => {
 			observation.reconnect();
-			if (requestId) void receipt.refetch();
 		},
 	};
 }

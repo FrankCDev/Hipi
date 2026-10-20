@@ -26,7 +26,7 @@ test("production provider restores locale from versioned storage for existing UI
 	);
 	assert.match(html, /lang="en">Cancel/);
 	assert.match(html, /Appearance and language/);
-	assert.doesNotMatch(html, /aria-haspopup="dialog"/);
+	assert.match(html, /aria-haspopup="dialog" aria-expanded="false"/);
 	assert.match(html, /role="combobox"/);
 	assert.match(html, /Copy theme/);
 	assert.match(html, /Import theme/);

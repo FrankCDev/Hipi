@@ -3,23 +3,24 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
 	assertSettingsDestination,
-	assertSettingsRouteGeometry,
+	assertSettingsModalGeometry,
 	createSettingsHarness,
 	settingsChoice,
-	settingsRouteGeometry,
+	settingsModalGeometry,
 } from "./gui-settings-route.mjs";
 
-const routeSelector = ".settings-route[data-settings-page]";
+const routeSelector = ".settings-modal";
 const languageSelector = `${routeSelector} [data-setting="language"] [role="combobox"]`;
 const themeSelector = `${routeSelector} input[name="appearance-theme"]`;
 
 function geometryFixture() {
 	const rectangles = {
-		route: { x: 0, y: 0, width: 1000, height: 800 },
-		back: { x: 20, y: 15, width: 100, height: 32 },
-		title: { x: 300, y: 70, width: 300, height: 40 },
-		body: { x: 275, y: 46, width: 725, height: 754 },
-		search: { x: 20, y: 120, width: 220, height: 32 },
+		route: { x: 50, y: 40, width: 900, height: 720 },
+		close: { x: 900, y: 55, width: 32, height: 32 },
+		dialogTitle: { x: 70, y: 55, width: 180, height: 27 },
+		title: { x: 310, y: 100, width: 300, height: 40 },
+		body: { x: 300, y: 90, width: 650, height: 650 },
+		search: { x: 70, y: 120, width: 220, height: 32 },
 	};
 	const nodes = Object.fromEntries(
 		Object.entries(rectangles).map(([name, rect]) => [
@@ -28,7 +29,14 @@ function geometryFixture() {
 				getBoundingClientRect: () => rect,
 				getClientRects: () => [rect],
 				contains: () => true,
-				getAttribute: () => null,
+				getAttribute: (attribute) =>
+					name === "route"
+						? attribute === "role"
+							? "dialog"
+							: attribute === "data-slot"
+								? "dialog-content"
+								: null
+						: null,
 				scrollWidth: rect.width,
 				clientWidth: rect.width,
 				clientHeight: rect.height,
@@ -39,53 +47,56 @@ function geometryFixture() {
 	);
 	const bySelector = {
 		[routeSelector]: nodes.route,
-		[`${routeSelector} .settings-back`]: nodes.back,
+		[`${routeSelector} [data-slot="dialog-close"]`]: nodes.close,
+		[`${routeSelector} [data-slot="dialog-title"]`]: nodes.dialogTitle,
 		[`${routeSelector} .settings-page-heading`]: nodes.title,
 		[`${routeSelector} .settings-page-content`]: nodes.body,
 		[`${routeSelector} .settings-search-input`]: nodes.search,
 	};
 	const document = {
 		documentElement: { scrollWidth: 1000 },
-		querySelectorAll: (selector) => (bySelector[selector] ? [bySelector[selector]] : []),
+		querySelectorAll: (selector) =>
+			selector === '[data-slot="dialog-overlay"]' ? [{}] : bySelector[selector] ? [bySelector[selector]] : [],
 		querySelector: (selector) => bySelector[selector] ?? null,
 		elementFromPoint: () => ({}),
 	};
 	return { document, nodes, rectangles };
 }
 
-test("route geometry observes Back, heading, search and scroll body without modal semantics", () => {
+test("modal geometry requires centered bounded surface, Close, heading, search and dim overlay", () => {
 	const { document, nodes } = geometryFixture();
-	const state = settingsRouteGeometry(document, { width: 1000, height: 800 });
-	assert.doesNotThrow(() => assertSettingsRouteGeometry(state));
+	const state = settingsModalGeometry(document, { width: 1000, height: 800 });
+	assert.doesNotThrow(() => assertSettingsModalGeometry(state));
 	assert.equal(state.scrollHeight, 1200);
-	nodes.route.getAttribute = () => "dialog";
-	assert.throws(() => assertSettingsRouteGeometry(settingsRouteGeometry(document, state)), /route, not a modal/);
+	nodes.route.getAttribute = () => null;
+	assert.throws(() => assertSettingsModalGeometry(settingsModalGeometry(document, state)), /modal dialog semantics/);
 });
 
-test("route geometry rejects covered, offscreen, ambiguous, modal and horizontally overflowing layouts", () => {
+test("modal geometry rejects covered, offscreen, ambiguous, modal and horizontally overflowing layouts", () => {
 	const fixture = geometryFixture();
-	const valid = settingsRouteGeometry(fixture.document, { width: 1000, height: 800 });
+	const valid = settingsModalGeometry(fixture.document, { width: 1000, height: 800 });
 	for (const [field, value] of Object.entries({
-		modal: true,
+		modal: false,
+		overlay: false,
 		legacyControls: true,
 		scrollWidth: 1200,
 		bodyScrollWidth: 1000,
 	})) {
-		assert.throws(() => assertSettingsRouteGeometry({ ...valid, [field]: value }));
+		assert.throws(() => assertSettingsModalGeometry({ ...valid, [field]: value }));
 	}
-	for (const name of ["route", "back", "title", "body", "search"]) {
+	for (const name of ["route", "close", "dialogTitle", "title", "body", "search"]) {
 		for (const change of [{ hit: false }, { visible: false }, { y: -50 }, { width: 0 }, { disabled: true }]) {
 			assert.throws(() =>
-				assertSettingsRouteGeometry({
+				assertSettingsModalGeometry({
 					...valid,
 					regions: { ...valid.regions, [name]: { ...valid.regions[name], ...change } },
 				}),
 			);
 		}
-		assert.throws(() => assertSettingsRouteGeometry({ ...valid, regions: { ...valid.regions, [name]: null } }));
+		assert.throws(() => assertSettingsModalGeometry({ ...valid, regions: { ...valid.regions, [name]: null } }));
 	}
 	assert.throws(() =>
-		assertSettingsRouteGeometry({
+		assertSettingsModalGeometry({
 			...valid,
 			regions: { ...valid.regions, route: { ...valid.regions.route, width: 700 } },
 		}),
@@ -119,7 +130,7 @@ test("canonical choices require exact radio values and the General language cont
 	assert.equal(settingsChoice(document, "language"), null);
 });
 
-test("search destination assertions reject hidden advanced content, lost focus, query and route regressions", () => {
+test("search destination assertions reject hidden advanced content, lost focus, query and parent-modal regressions", () => {
 	const valid = {
 		open: true,
 		category: "appearance",
@@ -128,7 +139,7 @@ test("search destination assertions reject hidden advanced content, lost focus, 
 		focused: true,
 		visible: true,
 		detailsOpen: true,
-		modal: false,
+		dialogs: 1,
 	};
 	assert.doesNotThrow(() => assertSettingsDestination(valid, "appearance"));
 	for (const [field, value] of Object.entries({
@@ -139,7 +150,7 @@ test("search destination assertions reject hidden advanced content, lost focus, 
 		focused: false,
 		visible: false,
 		detailsOpen: false,
-		modal: true,
+		dialogs: 2,
 	})) {
 		assert.throws(() => assertSettingsDestination({ ...valid, [field]: value }, "appearance"));
 	}
@@ -153,6 +164,10 @@ function renderer({
 	restoreExact = true,
 	initialSearchFocus = true,
 	importChanges = false,
+	narrow = false,
+	collapsed = false,
+	hideOwner = false,
+	replaceOwner = false,
 } = {}) {
 	const events = [];
 	const screenshots = [];
@@ -165,6 +180,16 @@ function renderer({
 	let advancedOpen = false;
 	const window = {};
 	const { document, nodes } = geometryFixture();
+	const sidebar = { isConnected: true, inert: false };
+	const main = { isConnected: true, inert: false };
+	const shell = {
+		dataset: {
+			navigationMode: narrow ? "narrow" : "desktop",
+			navigationOpen: "false",
+			navigationCollapsed: String(collapsed),
+		},
+	};
+	const navigationToggle = {};
 	const opener = { isConnected: true, disabled: false, getClientRects: () => [{}] };
 	const search = { value: "", getClientRects: () => [{}] };
 	const heading = {};
@@ -218,7 +243,8 @@ function renderer({
 	};
 	advanced.parentElement = route;
 	const geometryNodes = {
-		[`${routeSelector} .settings-back`]: nodes.back,
+		[`${routeSelector} [data-slot="dialog-close"]`]: nodes.close,
+		[`${routeSelector} [data-slot="dialog-title"]`]: nodes.dialogTitle,
 		[`${routeSelector} .settings-page-heading`]: nodes.title,
 		[`${routeSelector} .settings-page-content`]: nodes.body,
 		[`${routeSelector} .settings-search-input`]: nodes.search,
@@ -233,8 +259,13 @@ function renderer({
 		},
 	};
 	document.querySelector = (selector) => {
+		if (selector === ".sidebar") return sidebar;
+		if (selector === ".main-shell") return replaceOwner && open ? { ...main } : main;
+		if (selector === ".work-shell") return shell;
+		if (selector === ".navigation-toggle") return navigationToggle;
+		if (selector === '[data-slot="dialog-overlay"]') return open ? {} : null;
 		if (selector === routeSelector) return open ? route : null;
-		if (selector === ".workbench-settings-trigger" || selector === ".sidebar-settings-trigger") return opener;
+		if (selector === ".sidebar-settings-trigger" || selector === ".sidebar-settings-trigger") return opener;
 		if (selector === ".settings-search-input") return open ? search : null;
 		if (selector === ".settings-page-heading") return heading;
 		if (selector === ".settings-page-content") return nodes.body;
@@ -252,6 +283,7 @@ function renderer({
 		return geometryNodes[selector] ?? null;
 	};
 	document.querySelectorAll = (selector) => {
+		if (selector === '[role="dialog"]') return [...(open ? [route] : []), ...(importing ? [{}] : [])];
 		if (selector === routeSelector) return open ? [route] : [];
 		const node = document.querySelector(selector);
 		return node ? [node] : [];
@@ -271,6 +303,8 @@ function renderer({
 		matchMedia: () => ({ matches: false }),
 		requestAnimationFrame: (callback) => callback(),
 		getComputedStyle: () => ({
+			visibility: hideOwner && open ? "hidden" : "visible",
+			opacity: "1",
 			getPropertyValue: (property) => `${preferences[property === "--font-ui-size" ? "uiFontSize" : "codeFontSize"]}px`,
 		}),
 		localStorage: { getItem: () => JSON.stringify(stored) },
@@ -287,13 +321,25 @@ function renderer({
 		click: async (_cdp, selector, text) => {
 			events.push({ kind: "click", selector, text });
 			commit();
-			if (selector.endsWith("settings-trigger")) {
+			if (selector === ".navigation-toggle") {
+				shell.dataset.navigationOpen = narrow ? "true" : "false";
+				shell.dataset.navigationCollapsed = "false";
+				sidebar.inert = false;
+				main.inert = narrow;
+			} else if (selector === ".sidebar-collapse") {
+				shell.dataset.navigationCollapsed = "true";
+				sidebar.inert = true;
+				document.activeElement = navigationToggle;
+			} else if (selector.endsWith("settings-trigger")) {
 				open = true;
+				sidebar.inert = main.inert = true;
 				advancedOpen = false;
 				for (const [field, control] of Object.entries(controls)) control.value = String(preferences[field]);
 				document.activeElement = initialSearchFocus ? search : heading;
-			} else if (selector === ".settings-back") {
+			} else if (selector === '.settings-modal [data-slot="dialog-close"]') {
 				open = false;
+				sidebar.inert = false;
+				main.inert = shell.dataset.navigationOpen === "true";
 				document.activeElement = restoreExact ? opener : { ...opener };
 			} else if (selector.startsWith(".settings-page-nav")) {
 				category = selector.match(/data-category="([^"]+)"/)[1];
@@ -339,7 +385,17 @@ function renderer({
 			assert.equal(key, "Escape");
 			events.push({ kind: "escape" });
 			if (selecting) selecting = false;
-			else if (document.activeElement === search) search.value = "";
+			else if (document.activeElement === search && search.value) search.value = "";
+			else if (!open && shell.dataset.navigationOpen === "true") {
+				shell.dataset.navigationOpen = "false";
+				sidebar.inert = true;
+				main.inert = false;
+				document.activeElement = navigationToggle;
+			} else {
+				open = false;
+				sidebar.inert = main.inert = false;
+				document.activeElement = restoreExact ? opener : { ...opener };
+			}
 		},
 		capture: async (_cdp, _directory, name) => {
 			screenshots.push(name);
@@ -356,19 +412,39 @@ function renderer({
 	return { harness: createSettingsHarness(cdp, helpers), events, screenshots, preferences, context, document };
 }
 
-test("open and Back require initial search focus and exact opener identity, not a replacement matching its selector", async () => {
+test("open and Close require initial search focus and exact opener identity, not a replacement matching its selector", async () => {
 	const valid = renderer();
 	await valid.harness.open();
-	await valid.harness.back(".workbench-settings-trigger");
-	assert.equal(valid.events.at(-1).selector, ".settings-back");
+	await valid.harness.close(".sidebar-settings-trigger");
+	assert.equal(valid.events.at(-1).selector, '.settings-modal [data-slot="dialog-close"]');
 	const replacement = renderer({ restoreExact: false });
 	await replacement.harness.open();
-	await assert.rejects(replacement.harness.back(), /exact opener/);
+	await assert.rejects(replacement.harness.close(), /exact opener/);
 	const wrongFocus = renderer({ initialSearchFocus: false });
 	await assert.rejects(wrongFocus.harness.open(), /initial search focus/);
 	const wrongTrigger = renderer();
 	await wrongTrigger.harness.open();
-	await assert.rejects(wrongTrigger.harness.back(".sidebar-settings-trigger"), /recorded original opener/);
+	await assert.rejects(wrongTrigger.harness.close(".different-settings-trigger"), /recorded original opener/);
+});
+
+test("sidebar-only Settings opens through narrow/collapsed navigation then restores it after exact modal focus return", async () => {
+	for (const options of [{ narrow: true }, { collapsed: true }]) {
+		const fixture = renderer(options);
+		await fixture.harness.open();
+		await fixture.harness.close();
+		assert.equal(fixture.events[0].selector, ".navigation-toggle");
+		assert.equal(fixture.document.activeElement, fixture.document.querySelector(".navigation-toggle"));
+		assert.equal(fixture.document.querySelector(".work-shell").dataset.navigationOpen, "false");
+		assert.equal(
+			fixture.document.querySelector(".work-shell").dataset.navigationCollapsed,
+			String(!!options.collapsed),
+		);
+	}
+});
+
+test("opening Settings rejects hidden or remounted retained application owners", async () => {
+	for (const options of [{ hideOwner: true }, { replaceOwner: true }])
+		await assert.rejects(renderer(options).harness.open(), /retain visible application owners/);
 });
 
 test("canonical language and radio mutations require immediate persistence and apply through native helpers", async () => {

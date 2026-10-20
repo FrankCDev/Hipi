@@ -10,6 +10,8 @@ import type { ConversationController } from "./use-conversation.ts";
 export function ReceiptRecovery({ controller }: { controller: ConversationController }) {
 	const { t, locale } = usePreferences();
 	const { requestId, receipt, mutation, pending, observation } = controller;
+	// Model failures belong to the request-keyed transcript status, not the composer.
+	if (requestId && receipt.data?.execution === "unanswered" && receipt.data.reason === "model_error") return null;
 	if (requestId && receipt.data?.execution === "unanswered")
 		return (
 			<section className="composer-recovery">

@@ -19,6 +19,31 @@ const initial: Snapshot = {
 	messages: [{ id: "user", role: "user", text: "Question", textLength: 8, truncated: false }],
 };
 
+test("terminal request failure announces once, cancels token cadence and does not later announce completion", (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const seen: string[] = [];
+	const owner = new ResponseAnnouncer((text) => seen.push(text), labels);
+	owner.update({ ...initial, partial: "partial" }, false);
+	owner.fail("request-one", "Request did not complete.");
+	const count = seen.length;
+	owner.fail("request-one", "Request did not complete.");
+	context.mock.timers.tick(RESPONSE_ANNOUNCEMENT_MS * 2);
+	owner.update(
+		{
+			...initial,
+			running: false,
+			messages: [...initial.messages, { id: "late", role: "assistant", text: "late", textLength: 4, truncated: false }],
+		},
+		false,
+	);
+	assert.equal(seen.length, count);
+	owner.update(initial, false);
+	assert.equal(seen.at(-1), "Started");
+	owner.fail("request-two", "Another request did not complete.");
+	assert.equal(seen.at(-1), "Another request did not complete.");
+	owner.dispose();
+});
+
 test("response announcements start once, publish bounded deltas every5s and finish only on a new committed assistant", (context) => {
 	context.mock.timers.enable({ apis: ["setTimeout"] });
 	const seen: string[] = [];

@@ -14,12 +14,27 @@ export class ResponseAnnouncer {
 	private announced = 0;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private disposed = false;
+	private lastFailureKey: string | undefined;
 	private readonly publish: (text: string) => void;
 	private labels: ResponseAnnouncementLabels;
 
 	constructor(publish: (text: string) => void, labels: ResponseAnnouncementLabels) {
 		this.publish = publish;
 		this.labels = labels;
+	}
+
+	/** Terminal receipt status is announced once, outside the virtual row lifecycle. */
+	fail(key: string, text: string) {
+		if (this.disposed) return;
+		clearTimeout(this.timer);
+		this.timer = undefined;
+		this.active = false;
+		this.baselineAssistantIds.clear();
+		this.source = "";
+		this.announced = 0;
+		if (this.lastFailureKey === key) return;
+		this.lastFailureKey = key;
+		this.publish(text);
 	}
 
 	update(snapshot: Snapshot | undefined, error: boolean, labels = this.labels) {

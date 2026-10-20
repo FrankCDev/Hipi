@@ -5,10 +5,35 @@ import { click, waitForOverlayClosed } from "./gui-flow.mjs";
 import {
 	assertDisclosureContinuity,
 	currentProject,
+	projectCreationRecovered,
 	projectCreationTrigger,
 	projectSelector,
 	projectViewportReady,
 } from "./gui-project-disclosure.mjs";
+
+test("project cancellation requires the exact opener and retained app owners without hidden workspace creation", () => {
+	const trigger = { isConnected: true },
+		conversation = {},
+		composer = { value: "" };
+	let count = 1;
+	const document = {
+		activeElement: trigger,
+		querySelector: (selector) => (selector === ".conversation-panel" ? conversation : composer),
+		querySelectorAll: () => Array.from({ length: count }, () => ({})),
+	};
+	const before = { trigger, conversation, composer, count: 1 };
+	assert.equal(projectCreationRecovered(document, before), true);
+	for (const field of ["trigger", "conversation", "composer"])
+		assert.equal(projectCreationRecovered(document, { ...before, [field]: { ...before[field] } }), false);
+	count = 2;
+	assert.equal(projectCreationRecovered(document, before), false);
+	count = 1;
+	composer.value = "unexpected";
+	assert.equal(projectCreationRecovered(document, before), false);
+	composer.value = "";
+	trigger.isConnected = false;
+	assert.equal(projectCreationRecovered(document, before), false);
+});
 
 test("named project creation targets New project and restores that exact trigger after its dialog", async () => {
 	const trigger = {

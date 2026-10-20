@@ -341,12 +341,13 @@ test("local font registration is bounded, cleaned up, and late loads cannot outl
 	assert.equal(added.length, 1);
 	assert.equal(removed.length, 1);
 });
-test("native sidebar paint leaves content opaque, avoids double painting, and preserves default/custom contrast", () => {
+test("native sidebar paint preserves app visibility beneath opaque settings and default/custom contrast", () => {
 	const css = readFileSync(new URL("../src/app/theme/native-appearance.css", import.meta.url), "utf8");
 	assert.match(css, /:root\[data-native-backdrop="on"\] body,[\s\S]*?#root\s*\{\s*background: transparent/);
-	assert.match(css, /\.settings-route\[data-settings-page\]\s*\{\s*background: transparent/);
-	assert.match(css, /\.settings-page-main\s*\{\s*background: var\(--surface\)/);
-	assert.match(css, /\.work-shell\[data-settings-open="true"\] > \.sidebar,[\s\S]*?visibility: hidden/);
+	assert.doesNotMatch(css, /settings-route|settings-page-sidebar|data-settings-open|visibility:\s*hidden/);
+	const settings = readFileSync(new URL("../src/features/settings/settings-page.css", import.meta.url), "utf8");
+	assert.match(settings, /\.settings-modal\[data-slot="dialog-content"\]\s*\{[^}]*background: var\(--surface\)/);
+	assert.match(settings, /\.settings-page-sidebar\s*\{[^}]*background: var\(--sidebar\)/);
 	assert.doesNotMatch(css, /display:\s*none|opacity:\s*0/);
 	assert.match(css, /var\(--native-sidebar-tint, 100%\)/);
 	const theme = readFileSync(new URL("../src/theme.css", import.meta.url), "utf8");

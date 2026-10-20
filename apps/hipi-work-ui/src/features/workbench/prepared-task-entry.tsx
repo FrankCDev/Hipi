@@ -85,7 +85,7 @@ export function PreparedTaskEntry({
 					<Textarea
 						id={inputId}
 						ref={input}
-						className="composer-input prepared-task-input border-0 bg-transparent shadow-none focus-visible:ring-0"
+						className="composer-input prepared-task-input border-0 bg-transparent shadow-none focus-visible:outline-none"
 						rows={COMPOSER_ROWS.min}
 						value={draft}
 						maxLength={LIMITS.text}

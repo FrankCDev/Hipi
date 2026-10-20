@@ -1,9 +1,16 @@
-.settings-route {
-	position: fixed;
-	inset: 0;
-	z-index: 30;
+.settings-modal[data-slot="dialog-content"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	width: min(1000px, calc(100vw - 48px));
+	max-width: none;
+	height: min(720px, calc(100dvh - 48px));
+	max-height: calc(100dvh - 48px);
 	min-width: 0;
 	min-height: 0;
+	padding: 0;
+	overflow: hidden;
+	border-radius: 20px;
 	background: var(--surface);
 	color: var(--text);
 	font-family: var(--font-ui);
@@ -11,11 +18,24 @@
 	font-weight: 430;
 	line-height: 1.5;
 }
+.settings-modal-header {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	min-height: 56px;
+	padding: 14px 60px 14px 20px;
+	border-bottom: 0.5px solid var(--line);
+}
+.settings-modal-header [data-slot="dialog-title"] {
+	font-size: 18px;
+	font-weight: 500;
+	line-height: 1.5;
+}
 .settings-page-layout {
 	display: grid;
-	grid-template-columns: 275px minmax(0, 1fr);
+	grid-template-columns: 200px minmax(0, 1fr);
+	flex: 1;
 	width: 100%;
-	height: 100%;
 	min-height: 0;
 	min-width: 0;
 }
@@ -23,30 +43,12 @@
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	padding: 10px 12px 20px;
+	padding: 16px 12px;
 	min-width: 0;
 	min-height: 0;
 	border-right: 0.5px solid var(--line);
 	background: var(--sidebar);
 	overflow-y: auto;
-}
-.settings-back {
-	justify-content: flex-start;
-	width: fit-content;
-	gap: 8px;
-	min-height: 32px;
-	padding: 5px 8px;
-	border-radius: 10px;
-	font-size: inherit;
-	font-weight: 430;
-	color: var(--muted);
-}
-.settings-page-brand {
-	padding: 12px 8px 8px;
-	font-size: 18px;
-	font-weight: 500;
-	line-height: 1.5;
-	letter-spacing: -0.01em;
 }
 .settings-search {
 	position: relative;
@@ -86,7 +88,7 @@
 	justify-content: flex-start;
 	gap: 8px;
 	width: 100%;
-	min-height: 31px;
+	min-height: 36px;
 	height: auto;
 	padding: 5px 8px;
 	border-radius: 9999px;
@@ -107,13 +109,10 @@
 	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
-}
-.settings-page-toolbar {
-	flex-shrink: 0;
-	height: 46px;
+	background: var(--surface);
 }
 .settings-page-content {
-	padding: 20px;
+	padding: 24px;
 	flex: 1;
 	min-height: 0;
 	min-width: 0;
@@ -123,17 +122,17 @@
 }
 .settings-page-content-inner {
 	width: 100%;
-	max-width: 768px;
+	max-width: 744px;
 	margin-inline: auto;
 	padding: 0;
 }
 .settings-page-header {
-	margin-bottom: 32px;
+	margin-bottom: 20px;
 }
 .settings-page-heading,
-.settings-standalone h1 {
-	font-size: 24px;
-	font-weight: 400;
+.settings-standalone h2 {
+	font-size: 20px;
+	font-weight: 500;
 	line-height: 1.33;
 	letter-spacing: -0.015em;
 }
@@ -141,7 +140,7 @@
 	outline: none;
 }
 .settings-section,
-.settings-form {
+.settings-modal .settings-form {
 	display: grid;
 	gap: 0;
 	min-width: 0;
@@ -205,9 +204,9 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 24px;
+	gap: 16px;
 	min-width: 0;
-	padding: 16px 0;
+	padding: 12px 0;
 	border-bottom: 0.5px solid var(--line);
 }
 .settings-control-group {
@@ -451,7 +450,7 @@
 }
 .settings-advanced-wrap {
 	position: relative;
-	margin-top: 40px;
+	margin-top: 24px;
 }
 .settings-advanced-reset {
 	position: absolute;
@@ -562,18 +561,14 @@
 	gap: 8px;
 }
 .settings-standalone {
-	display: flex;
-	flex-direction: column;
+	width: 100%;
 }
-.settings-standalone > .settings-back {
-	margin: 12px;
-}
-.settings-standalone h1 {
-	margin-bottom: 24px;
+.settings-standalone .settings-page-heading {
+	margin-bottom: 16px;
 }
 @media (max-width: 760px) {
 	.settings-page-layout {
-		grid-template-columns: 220px minmax(0, 1fr);
+		grid-template-columns: 180px minmax(0, 1fr);
 	}
 	.settings-page-content {
 		padding-inline: 20px;
@@ -596,7 +591,13 @@
 		text-align: left;
 	}
 }
-@media (max-width: 520px) {
+@media (max-width: 600px) {
+	.settings-modal[data-slot="dialog-content"] {
+		width: calc(100vw - 24px);
+		height: calc(100dvh - 24px);
+		max-height: calc(100dvh - 24px);
+		border-radius: 16px;
+	}
 	.settings-page-layout {
 		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: auto minmax(0, 1fr);
@@ -604,16 +605,15 @@
 	.settings-page-sidebar {
 		border-right: 0;
 		border-bottom: 0.5px solid var(--line);
-		max-height: 42dvh;
-	}
-	.settings-page-brand {
-		display: none;
+		padding: 12px;
+		max-height: min(260px, 38dvh);
 	}
 	.settings-page-nav {
 		display: flex;
 	}
 	.settings-page-nav > button {
 		flex: 1;
+		min-width: 0;
 		justify-content: center;
 		font-size: 12px;
 	}
@@ -621,6 +621,6 @@
 		display: none;
 	}
 	.settings-page-content {
-		padding-inline: 20px;
+		padding: 20px 16px;
 	}
 }

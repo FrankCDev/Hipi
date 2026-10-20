@@ -255,7 +255,7 @@ test("initial chat uses native draft input, Shift+Enter and IME without creating
 		".new-conversation-trigger": next,
 		".new-chat-model-trigger": model,
 		".new-chat-manage-models": manage,
-		".settings-back": back,
+		'.settings-modal [data-slot="dialog-close"]': back,
 	};
 	const document = {
 		activeElement: goal,
@@ -265,7 +265,7 @@ test("initial chat uses native draft input, Shift+Enter and IME without creating
 					querySelector: (selector) =>
 						selector.startsWith(".composer-submit") ? { type: "submit", disabled: false } : goal,
 				};
-			if (selector === ".settings-route") return settings ? {} : null;
+			if (selector === ".settings-modal") return settings ? {} : null;
 			if (selector === ".settings-page-nav [aria-current=page]")
 				return settings ? { dataset: { category: "models" } } : null;
 			return nodes[selector] ?? null;
@@ -481,7 +481,14 @@ test("modal bounds rejects an offscreen or covered Close without sending input",
 		const dialog = {
 			dataset: { placement: reason === "center" ? "center" : "right", scrollBody: "true" },
 			getBoundingClientRect: () => rect,
-			querySelectorAll: () => [close],
+			querySelectorAll: (selector) => {
+				assert.equal(
+					selector,
+					':scope > button[data-slot="dialog-close"]',
+					"Measure the shared top-level Close, not a nested Cancel action",
+				);
+				return [close];
+			},
 			querySelector: (selector) => {
 				return selector === '[data-slot="dialog-title"]' ? title : body;
 			},

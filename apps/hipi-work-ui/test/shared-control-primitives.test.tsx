@@ -213,8 +213,9 @@ test("text fields preserve native composition/change/invalid contracts with the 
 		assert.equal(field.props.onCompositionEnd, composition);
 		assert.equal(field.props.disabled, true);
 		assert.equal(field.props["aria-invalid"], true);
-		assert.match(field.props.className, /focus-visible:ring-2/);
-		assert.doesNotMatch(field.props.className, /ring-\[3px\]/);
+		assert.match(field.props.className, /focus-visible:outline-2/);
+		assert.match(field.props.className, /focus-visible:outline-offset-2/);
+		assert.doesNotMatch(field.props.className, /focus-visible:border-ring|focus-visible:ring-/);
 	}
 });
 
@@ -232,6 +233,7 @@ test("shared control CSS emits scoped focus, state, sizing, theme and reduced-mo
 	const candidates = (["default", "ghost", "destructive"] as const).flatMap((variant) =>
 		buttonVariants({ variant }).split(" "),
 	);
+	for (const control of [Input, Textarea]) candidates.push(...control({}).props.className.split(" "));
 	const css = `${compiler.build(candidates)}\n${controlsCompiler.build([])}`;
 	assert.match(css, /:focus-visible\s*\{[^{}]*outline-width: 2px/);
 	assert.match(css, /:focus-visible\s*\{\s*outline-offset: calc\(1px \* -1\)/);

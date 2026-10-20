@@ -13,6 +13,7 @@ const customA = "custom_5e00d2f1-1301-4b56-bd5e-d32eff18d67a";
 const customB = "custom_9fef7182-ecf4-46ad-81f5-a71cbba81541";
 
 // Synthetic local crypto proves adapter boundaries, not OS keychain behavior.
+// Filesystem integration uses the real host platform; only backend-policy tests override it.
 function syntheticStorage(backend = "gnome_libsecret") {
 	const key = randomBytes(32);
 	return {
@@ -36,7 +37,7 @@ test("encrypted store serializes set/remove/read and never persists a plaintext 
 	try {
 		const path = join(dir, "providers.enc");
 		const crypto = syntheticStorage();
-		const store = new CredentialStore(path, crypto, "linux");
+		const store = new CredentialStore(path, crypto);
 		assert.equal(await store.status("openai"), "missing");
 		await Promise.all([
 			store.set("openai", "synthetic-secret-one"),
@@ -46,7 +47,7 @@ test("encrypted store serializes set/remove/read and never persists a plaintext 
 		assert.equal(await store.get("openai"), "synthetic-secret-two");
 		assert.equal(await store.status("openai"), "configured");
 		assert.equal((await readFile(path)).includes(Buffer.from("synthetic-secret")), false);
-		const reopened = new CredentialStore(path, crypto, "linux");
+		const reopened = new CredentialStore(path, crypto);
 		assert.equal(await reopened.get("openai"), "synthetic-secret-two");
 		await reopened.remove("openai");
 		assert.equal(await reopened.status("openai"), "missing");
@@ -62,7 +63,7 @@ test("legacy encrypted credentials migrate only on write and preserve each custo
 		const crypto = syntheticStorage();
 		const legacy = crypto.encryptString(JSON.stringify({ version: 1, openai: "synthetic-legacy-secret" }));
 		await writeFile(path, legacy);
-		const store = new CredentialStore(path, crypto, "linux");
+		const store = new CredentialStore(path, crypto);
 		assert.equal(await store.get("openai"), "synthetic-legacy-secret");
 		assert.equal(await store.status(customA), "missing");
 		assert.deepEqual(await readFile(path), legacy, "reading must not migrate or replace the existing file");
@@ -81,7 +82,7 @@ test("legacy encrypted credentials migrate only on write and preserve each custo
 				[customB]: "synthetic-profile-b",
 			},
 		});
-		const reopened = new CredentialStore(path, crypto, "linux");
+		const reopened = new CredentialStore(path, crypto);
 		assert.equal(await reopened.get("openai"), "synthetic-legacy-secret");
 		assert.equal(await reopened.get(customA), "synthetic-profile-a-updated");
 		assert.equal(await reopened.get(customB), "synthetic-profile-b");
@@ -103,9 +104,9 @@ test("legacy removal migrates an empty map without reviving deleted credentials"
 		const path = join(dir, "providers.enc");
 		const crypto = syntheticStorage();
 		await writeFile(path, crypto.encryptString('{"version":1,"openai":"synthetic-old"}'));
-		await new CredentialStore(path, crypto, "linux").remove("openai");
+		await new CredentialStore(path, crypto).remove("openai");
 		assert.deepEqual(JSON.parse(crypto.decryptString(await readFile(path))), { version: 2, providers: {} });
-		assert.equal(await new CredentialStore(path, crypto, "linux").status("openai"), "missing");
+		assert.equal(await new CredentialStore(path, crypto).status("openai"), "missing");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -137,7 +138,7 @@ test("status diagnostics report only fixed boundaries and cannot change credenti
 		const path = join(dir, "providers.enc");
 		const storage = syntheticStorage();
 		const stages: CredentialStatusStage[] = [];
-		const store = new CredentialStore(path, storage, "linux", rename, (stage) => {
+		const store = new CredentialStore(path, storage, process.platform, rename, (stage) => {
 			stages.push(stage);
 			throw new Error("synthetic-observer-failure");
 		});
@@ -198,7 +199,7 @@ test("corrupt, oversized, and undecryptable files stay intact on set and remove"
 			),
 		]) {
 			await writeFile(path, bytes);
-			const store = new CredentialStore(path, crypto, "linux");
+			const store = new CredentialStore(path, crypto);
 			assert.equal(await store.status("openai"), "locked");
 			await assert.rejects(store.set("openai", "synthetic-secret"));
 			await assert.rejects(store.remove("openai"));
@@ -217,12 +218,12 @@ test("failed atomic replacement preserves original and cleans temporary files", 
 	try {
 		const path = join(dir, "providers.enc");
 		const crypto = syntheticStorage();
-		const store = new CredentialStore(path, crypto, "linux");
+		const store = new CredentialStore(path, crypto);
 		await store.set("openai", "synthetic-old");
 		await store.set(customA, "synthetic-profile-a");
 		await store.set(customB, "synthetic-profile-b");
 		const bytes = await readFile(path);
-		const broken = new CredentialStore(path, crypto, "linux", async () => {
+		const broken = new CredentialStore(path, crypto, process.platform, async () => {
 			throw new Error("synthetic-secret-sensitive-path");
 		});
 		await assert.rejects(broken.set("openai", "synthetic-new"), (error: Error) => !error.message.includes("synthetic"));
@@ -244,26 +245,22 @@ test("failed migration and encryption preserve legacy credentials without exposi
 		const crypto = syntheticStorage();
 		const legacy = crypto.encryptString('{"version":1,"openai":"synthetic-legacy"}');
 		await writeFile(path, legacy);
-		const failedMigration = new CredentialStore(path, crypto, "linux", async () => {
+		const failedMigration = new CredentialStore(path, crypto, process.platform, async () => {
 			throw new Error("synthetic-private-path");
 		});
 		await assert.rejects(failedMigration.set(customA, "synthetic-new"), { code: "INTERNAL", message: "INTERNAL" });
 		assert.deepEqual(await readFile(path), legacy);
-		const failedEncryption = new CredentialStore(
-			path,
-			{
-				...crypto,
-				encryptString() {
-					throw new Error("synthetic-secret-must-not-escape");
-				},
+		const failedEncryption = new CredentialStore(path, {
+			...crypto,
+			encryptString() {
+				throw new Error("synthetic-secret-must-not-escape");
 			},
-			"linux",
-		);
+		});
 		await assert.rejects(failedEncryption.set(customA, "synthetic-new"), { code: "INTERNAL", message: "INTERNAL" });
 		await assert.rejects(failedEncryption.remove("openai"), { code: "INTERNAL", message: "INTERNAL" });
 		assert.deepEqual(await readFile(path), legacy);
 		assert.deepEqual(await readdir(dir), ["providers.enc"]);
-		assert.equal(await new CredentialStore(path, crypto, "linux").get("openai"), "synthetic-legacy");
+		assert.equal(await new CredentialStore(path, crypto).get("openai"), "synthetic-legacy");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -273,7 +270,7 @@ test("credential count and encrypted size limits preserve the current complete m
 	try {
 		const crypto = syntheticStorage();
 		const countPath = join(dir, "count.enc");
-		const countStore = new CredentialStore(countPath, crypto, "linux");
+		const countStore = new CredentialStore(countPath, crypto);
 		for (let index = 0; index < MAX_CREDENTIAL_PROVIDERS; index++)
 			await countStore.set(`custom_${index}`, "synthetic-key");
 		const full = await readFile(countPath);
@@ -286,7 +283,7 @@ test("credential count and encrypted size limits preserve the current complete m
 		assert.equal(await countStore.get(customA), "synthetic-new-after-remove");
 
 		const sizePath = join(dir, "size.enc");
-		const sizeStore = new CredentialStore(sizePath, crypto, "linux");
+		const sizeStore = new CredentialStore(sizePath, crypto);
 		for (let index = 0; index < 7; index++) await sizeStore.set(`custom_${index}`, "x".repeat(4096));
 		const beforeOverflow = await readFile(sizePath);
 		await assert.rejects(sizeStore.set(customB, "y".repeat(4096)), { code: "CAPACITY_EXCEEDED" });

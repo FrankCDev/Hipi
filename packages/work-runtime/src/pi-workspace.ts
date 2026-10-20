@@ -58,6 +58,7 @@ import { cancelWait, type WorkspacePort } from "./core.ts";
 import { ToolPackLifecycle } from "./extensions/lifecycle.ts";
 import type { TrustedAgentFileService } from "./files/service.ts";
 import { readHistory, readMessageText, textEnd, textOf, visibleEntry } from "./history.ts";
+import { readModelFailureDetail } from "./model-failure.ts";
 import type { CredentialPort } from "./model-provider.ts";
 import { StreamIdentity } from "./stream-identity.ts";
 
@@ -799,6 +800,10 @@ export class PiWorkspace implements WorkspacePort {
 				result.reason = record.reason.slice(0, end);
 				result.reasonLength = record.reason.length;
 				result.reasonTruncated = end < record.reason.length;
+				if (record.reason === "model_error") {
+					const failure = readModelFailureDetail(record.detail);
+					if (failure) result.modelFailure = failure;
+				}
 			}
 			if (record.status === "done" && record.type === "input") {
 				const conversation = await this.#conversation(receipt);

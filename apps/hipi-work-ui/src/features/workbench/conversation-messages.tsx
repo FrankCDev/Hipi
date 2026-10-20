@@ -18,6 +18,7 @@ import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
 import { InlineMessageActivities } from "../tool-activities/activity-transcript.tsx";
 import { ClipboardCopy } from "./clipboard-copy.tsx";
+import type { ConversationFailure } from "./conversation-failure.ts";
 import { ConversationReadingPositions } from "./conversation-reading-position.ts";
 import {
 	CONVERSATION_END_THRESHOLD,
@@ -34,6 +35,7 @@ import {
 	type TranscriptRow,
 	transcriptEstimate,
 } from "./conversation-transcript.ts";
+import { ConversationTurnFailure } from "./conversation-turn-failure.tsx";
 import { MessageMeasurementPolicy } from "./message-measurement-policy.ts";
 import { MessageProjection, prefersReducedMotion, selectionIntersects } from "./message-projection.ts";
 import { MessageContent } from "./message-text-reader.tsx";
@@ -41,15 +43,18 @@ import { ResponseAnnouncement } from "./response-announcement.tsx";
 import { virtualMessageRange } from "./virtual-message-range.ts";
 
 export const HISTORY_LOAD_THRESHOLD = CONVERSATION_HISTORY_THRESHOLD;
+type DisplaySnapshot = Snapshot & { requestFailure?: ConversationFailure };
 
 export function ConversationMessages({
-	snapshot: incoming,
+	snapshot: sourceSnapshot,
 	error,
 	onNearTop,
 	historyStatus,
 	scope,
 	footerRef,
 	readingPositions,
+	failure,
+	onOpenModelSettings,
 }: {
 	snapshot: Snapshot | undefined;
 	error: boolean;
@@ -58,8 +63,14 @@ export function ConversationMessages({
 	scope?: Scope;
 	footerRef?: RefObject<HTMLElement | null>;
 	readingPositions?: ConversationReadingPositions;
+	failure?: ConversationFailure;
+	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
 }) {
 	const { t } = usePreferences();
+	const incoming: DisplaySnapshot | undefined = useMemo(
+		() => sourceSnapshot && { ...sourceSnapshot, requestFailure: failure },
+		[sourceSnapshot, failure],
+	);
 	const messages = useRef<HTMLElement>(null);
 	const [measurementPolicy] = useState(
 		() => new MessageMeasurementPolicy(() => selectionIntersects(messages.current, document.getSelection())),
@@ -74,7 +85,7 @@ export function ConversationMessages({
 	const restorationFrames = useRef<number[]>([]);
 	const scrollIntent = useRef<ConversationScrollIntent | null>(null);
 	const interruptReading = useRef<(direction: number) => void>(() => {});
-	const projection = useRef<MessageProjection<Snapshot | undefined> | null>(null);
+	const projection = useRef<MessageProjection<DisplaySnapshot | undefined> | null>(null);
 	const [nearEnd, setNearEnd] = useState(true);
 	const [followIntent, setFollowIntent] = useState(savedPosition?.following ?? true);
 	const [footerHeight, setFooterHeight] = useState(0);
@@ -88,7 +99,7 @@ export function ConversationMessages({
 	const published = useRef(incoming);
 	const followFinal = useRef(false);
 	const previousRows = useRef<readonly TranscriptRow[]>([]);
-	const rows = useMemo(() => projectTranscript(snapshot, previousRows.current), [snapshot]);
+	const rows = useMemo(() => projectTranscript(snapshot, previousRows.current, snapshot?.requestFailure), [snapshot]);
 	useLayoutEffect(() => {
 		previousRows.current = rows;
 	}, [rows]);
@@ -262,7 +273,7 @@ export function ConversationMessages({
 		};
 	}, [footerRef, virtualizer]);
 	useLayoutEffect(() => {
-		const controller = new MessageProjection<Snapshot | undefined>(
+		const controller = new MessageProjection<DisplaySnapshot | undefined>(
 			undefined,
 			(value) => {
 				// A final can change the stream row without increasing row count,
@@ -459,20 +470,24 @@ export function ConversationMessages({
 									className="virtual-message-row"
 									style={{ transform: `translateY(${item.start}px)` }}
 								>
-									<TranscriptMessage
-										row={row}
-										scope={snapshot}
-										stream={row.message ? undefined : snapshot}
-										offset={originalOffsets.get(row.key)}
-										onOffsetChange={setOriginalOffsets}
-									/>
+									{row.kind === "request-failure" ? (
+										<ConversationTurnFailure failure={row.failure} onOpenModelSettings={onOpenModelSettings} />
+									) : (
+										<TranscriptMessage
+											row={row}
+											scope={snapshot}
+											stream={row.message ? undefined : snapshot}
+											offset={originalOffsets.get(row.key)}
+											onOffsetChange={setOriginalOffsets}
+										/>
+									)}
 								</div>
 							);
 						})}
 				</div>
 			</section>
 			{historyStatus}
-			<ResponseAnnouncement snapshot={snapshot} error={error} />
+			<ResponseAnnouncement snapshot={snapshot} error={error} failure={snapshot?.requestFailure} />
 			{displayPaused && <output className="message-pending small-copy">{t("markdown.pending")}</output>}
 			{!nearEnd && (
 				<Button
@@ -500,7 +515,7 @@ const TranscriptMessage = memo(
 		offset,
 		onOffsetChange,
 	}: {
-		row: TranscriptRow;
+		row: Exclude<TranscriptRow, { kind: "request-failure" }>;
 		scope: Scope;
 		stream?: Snapshot;
 		offset: number | undefined;

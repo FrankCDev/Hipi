@@ -9,6 +9,7 @@ import {
 	type Models,
 } from "@earendil-works/pi-ai";
 import { type PackageDescriptor, packageDescriptors } from "../extensions/lifecycle-descriptors.ts";
+import { modelFailureDetail } from "../model-failure.ts";
 import { customModelRequestUrl, registeredCustomProvider } from "../model-provider.ts";
 
 /** Host-only port. Implementations share their conversation lock with revocation. */
@@ -28,7 +29,7 @@ export interface ModelDispatchAuthorization {
 	): Promise<{ response: Promise<Response>; release: () => void }>;
 }
 
-function failure(model: Model<Api>, aborted: boolean): AssistantMessage {
+function failure(model: Model<Api>, aborted: boolean, dispatched: boolean): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
@@ -44,7 +45,9 @@ function failure(model: Model<Api>, aborted: boolean): AssistantMessage {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: aborted ? "aborted" : "error",
-		errorMessage: aborted ? "model_request_aborted" : "model_context_blocked",
+		errorMessage: aborted
+			? "model_request_aborted"
+			: modelFailureDetail("model_context_blocked", dispatched ? "attempted" : "not_sent"),
 		timestamp: Date.now(),
 	};
 }
@@ -74,6 +77,7 @@ export function createWorkspaceModels(
 		const releases = new Set<() => void>();
 		let ended = false;
 		let denied = false;
+		let dispatched = false;
 		const requestModel = structuredClone(model);
 		// Built-ins stay pinned to the workspace's original provider. Runtime-owned custom
 		// recipients may be added later, but each dispatch pins their exact committed instance.
@@ -106,7 +110,7 @@ export function createWorkspaceModels(
 		};
 		const fail = (aborted: boolean) => {
 			if (ended) return;
-			const error = failure(requestModel, aborted);
+			const error = failure(requestModel, aborted, dispatched);
 			output.push({ type: "error", reason: aborted ? "aborted" : "error", error });
 			output.end(error);
 			cleanup();
@@ -146,7 +150,16 @@ export function createWorkspaceModels(
 						const signals = [controller.signal];
 						if (init?.signal) signals.push(init.signal);
 						if (input instanceof Request) signals.push(input.signal);
-						return fetchImplementation(input, { ...init, redirect: "error", signal: AbortSignal.any(signals) });
+						dispatched = true;
+						try {
+							return fetchImplementation(input, {
+								...init,
+								redirect: "error",
+								signal: AbortSignal.any(signals),
+							});
+						} catch {
+							return Promise.reject(new Error("model_network_failed"));
+						}
 					},
 					descriptors,
 				);

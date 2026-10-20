@@ -1,7 +1,6 @@
 import { type AppearanceClient, AppearanceError, type AppearanceStatus } from "@hipi/work-runtime/appearance";
-import { ArrowLeft, Check, Copy, Download, LoaderCircle, Upload } from "lucide-react";
+import { Check, Copy, Download, LoaderCircle, Upload } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useAppearance } from "../../app/appearance-provider.tsx";
 import { codeThemeChoices } from "../../app/theme/code-theme-catalog.ts";
 import {
@@ -23,65 +22,48 @@ import { Textarea } from "../../components/ui/textarea.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { type FontCatalogQuery, type FontCatalogState, nativeFontCatalog } from "./font-catalog-query.ts";
 import { settingsLabels } from "./labels.ts";
+import { settingsPageLabels } from "./settings-page-labels.ts";
+import { SettingsSurface } from "./settings-surface.tsx";
 import "./settings-page.css";
 
-/** Connection screens have no AppClient; this page exposes only device appearance. */
+/** Connection screens have no AppClient; the same modal exposes only device appearance. */
 export function AppearanceSettings() {
 	const theme = useThemeSettings();
 	const t = settingsLabels(theme.config.locale);
 	const [open, setOpen] = useState(false);
 	const trigger = useRef<HTMLButtonElement>(null);
-	const back = useRef<HTMLButtonElement>(null);
-	useEffect(() => {
-		if (!open) return;
-		// The connection owner remains mounted; the page portal is outside its inert subtree.
-		const connection = trigger.current?.closest("main");
-		const priorInert = connection?.inert ?? false;
-		const priorHidden = connection?.getAttribute("aria-hidden");
-		if (connection) {
-			connection.inert = true;
-			connection.setAttribute("aria-hidden", "true");
-		}
-		back.current?.focus();
-		return () => {
-			if (connection) {
-				connection.inert = priorInert;
-				if (priorHidden === null || priorHidden === undefined) connection.removeAttribute("aria-hidden");
-				else connection.setAttribute("aria-hidden", priorHidden);
-			}
-			trigger.current?.focus();
-		};
-	}, [open]);
+	const heading = useRef<HTMLHeadingElement>(null);
 	return (
 		<>
-			<Button ref={trigger} variant="ghost" size="sm" onClick={() => setOpen(true)}>
+			<Button
+				ref={trigger}
+				variant="ghost"
+				size="sm"
+				aria-haspopup="dialog"
+				aria-expanded={open}
+				onClick={() => setOpen(true)}
+			>
 				{t("settings.title")}
 			</Button>
-			{open &&
-				createPortal(
-					<section className="settings-route settings-standalone" aria-label={t("settings.title")}>
-						<Button
-							ref={back}
-							className="settings-back"
-							variant="ghost"
-							onClick={() => {
-								setOpen(false);
-							}}
-						>
-							<ArrowLeft size={18} aria-hidden="true" />
-							{t("settings.back")}
-						</Button>
-						<div className="settings-page-content">
-							<div className="settings-page-content-inner">
-								<h1>{t("settings.general")}</h1>
-								<GeneralSettings />
-								<h2 className="settings-standalone-appearance">{t("settings.appearance")}</h2>
-								<SettingsForm />
-							</div>
-						</div>
-					</section>,
-					document.body,
-				)}
+			<SettingsSurface
+				open={open}
+				onOpenChange={setOpen}
+				title={t("settings.title")}
+				closeLabel={settingsPageLabels(theme.config.locale)["settingsPage.close"]}
+				initialFocus={heading}
+				onRestoreFocus={() => trigger.current?.focus()}
+			>
+				<section className="settings-page-content settings-standalone">
+					<div className="settings-page-content-inner">
+						<h2 ref={heading} tabIndex={-1} className="settings-page-heading">
+							{t("settings.general")}
+						</h2>
+						<GeneralSettings />
+						<h2 className="settings-standalone-appearance">{t("settings.appearance")}</h2>
+						<SettingsForm />
+					</div>
+				</section>
+			</SettingsSurface>
 		</>
 	);
 }

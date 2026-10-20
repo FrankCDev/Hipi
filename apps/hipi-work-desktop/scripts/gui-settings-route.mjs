@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 
-const routeSelector = ".settings-route[data-settings-page]";
+const routeSelector = ".settings-modal";
 const languageSelector = `${routeSelector} [data-setting="language"] [role="combobox"]`;
 const themeSelector = `${routeSelector} input[name="appearance-theme"]`;
 const storageKey = "hipi-work.preferences.v1";
 const categories = ["general", "appearance", "models", "runtime"];
 
 /** Renderer observations only. The native harness owns every input and navigation action. */
-export function settingsRouteGeometry(document, viewport) {
+export function settingsModalGeometry(document, viewport) {
 	const selectors = {
-		route: ".settings-route[data-settings-page]",
-		back: ".settings-route[data-settings-page] .settings-back",
-		title: ".settings-route[data-settings-page] .settings-page-heading",
-		body: ".settings-route[data-settings-page] .settings-page-content",
-		search: ".settings-route[data-settings-page] .settings-search-input",
+		route: ".settings-modal",
+		close: '.settings-modal [data-slot="dialog-close"]',
+		dialogTitle: '.settings-modal [data-slot="dialog-title"]',
+		title: ".settings-modal .settings-page-heading",
+		body: ".settings-modal .settings-page-content",
+		search: ".settings-modal .settings-search-input",
 	};
 	const regions = Object.fromEntries(
 		Object.entries(selectors).map(([name, selector]) => {
@@ -40,7 +41,8 @@ export function settingsRouteGeometry(document, viewport) {
 	return {
 		...viewport,
 		regions,
-		modal: route?.getAttribute("role") === "dialog" || !!document.querySelector('[data-slot="dialog-overlay"]'),
+		modal: route?.getAttribute("role") === "dialog" && route?.getAttribute("data-slot") === "dialog-content",
+		overlay: document.querySelectorAll('[data-slot="dialog-overlay"]').length === 1,
 		legacyControls: !!document.querySelector(".settings-savebar, .settings-unsaved-dialog"),
 		scrollWidth: document.documentElement.scrollWidth,
 		bodyScrollWidth: body?.scrollWidth,
@@ -51,9 +53,10 @@ export function settingsRouteGeometry(document, viewport) {
 	};
 }
 
-export function assertSettingsRouteGeometry(state) {
+export function assertSettingsModalGeometry(state) {
 	assert.ok(state && state.width > 0 && state.height > 0, "Settings needs a visible viewport");
-	assert.equal(state.modal, false, "Settings must be a route, not a modal overlay");
+	assert.equal(state.modal, true, "Settings must expose modal dialog semantics");
+	assert.equal(state.overlay, true, "Settings needs one dimming overlay");
 	assert.equal(state.legacyControls, false, "Settings must persist without Save or a dirty-navigation guard");
 	assert.ok(state.scrollWidth <= state.width + 1, "Settings overflows the viewport horizontally");
 	assert.ok(state.bodyScrollWidth <= state.bodyClientWidth + 1, "Settings content overflows horizontally");
@@ -70,18 +73,30 @@ export function assertSettingsRouteGeometry(state) {
 		assert.equal(rect.hit, true, `Settings ${name} is covered`);
 	}
 	const { route, body, title } = state.regions;
+	for (const [name, rect] of Object.entries(state.regions)) {
+		if (name === "route") continue;
+		assert.ok(
+			rect.x >= route.x - 1 &&
+				rect.y >= route.y - 1 &&
+				rect.x + rect.width <= route.x + route.width + 1 &&
+				rect.y + rect.height <= route.y + route.height + 1,
+			`Settings ${name} escapes its modal surface`,
+		);
+	}
 	assert.ok(
-		Math.abs(route.x) <= 1 &&
-			Math.abs(route.y) <= 1 &&
-			Math.abs(route.width - state.width) <= 1 &&
-			Math.abs(route.height - state.height) <= 1,
-		"Settings route must occupy the workbench viewport",
+		Math.abs(route.x * 2 + route.width - state.width) <= 2 &&
+			Math.abs(route.y * 2 + route.height - state.height) <= 2 &&
+			route.x >= (state.width <= 600 ? 12 : 24) - 1 &&
+			route.y >= (state.width <= 600 ? 12 : 24) - 1 &&
+			route.width <= 1001 &&
+			route.height <= (state.width <= 600 ? state.height - 23 : 721),
+		"Settings must be a centered bounded modal, not a full-screen page",
 	);
 	assert.ok(title.y >= body.y - 1 && title.y + title.height <= body.y + body.height + 1);
 }
 
 export function settingsChoice(document, field) {
-	const routes = [...document.querySelectorAll(".settings-route[data-settings-page]")];
+	const routes = [...document.querySelectorAll(".settings-modal")];
 	if (routes.length !== 1) return null;
 	const route = routes[0];
 	if (field === "theme") {
@@ -96,7 +111,7 @@ export function settingsChoice(document, field) {
 			return null;
 		return {
 			mode: selected[0].value,
-			selector: `.settings-route[data-settings-page] input[name="appearance-theme"][value="${selected[0].value}"]`,
+			selector: `.settings-modal input[name="appearance-theme"][value="${selected[0].value}"]`,
 		};
 	}
 	if (field !== "language") return null;
@@ -111,19 +126,19 @@ export function settingsChoice(document, field) {
 	return {
 		mode: locale,
 		locale,
-		selector: '.settings-route[data-settings-page] [data-setting="language"] [role="combobox"]',
+		selector: '.settings-modal [data-setting="language"] [role="combobox"]',
 	};
 }
 
 export function assertSettingsDestination(state, category) {
-	assert.equal(state.open, true, "Search must leave the Settings route open");
+	assert.equal(state.open, true, "Search must leave the Settings modal open");
 	assert.equal(state.category, category, "Search navigated to the wrong category");
 	assert.equal(state.query, "", "Selecting a search destination must clear its query");
 	assert.equal(state.count, 1, "Search destination must resolve one actual setting");
 	assert.equal(state.focused, true, "Search must focus the destination or its control");
 	assert.equal(state.visible, true, "Search destination must be visible");
 	assert.equal(state.detailsOpen, true, "Search must expand the destination's advanced section");
-	assert.equal(state.modal, false, "Search navigation must not open a guard or modal");
+	assert.equal(state.dialogs, 1, "Search must retain only the Settings dialog, without opening another modal");
 }
 
 export function createSettingsHarness(cdp, helpers) {
@@ -141,14 +156,34 @@ export function createSettingsHarness(cdp, helpers) {
 			"Settings category and heading focus",
 		);
 	};
-	const open = async (trigger = ".workbench-settings-trigger", category = "appearance") => {
+	const open = async (trigger = ".sidebar-settings-trigger", category = "appearance") => {
 		assert.ok(categories.includes(category), "Unknown Settings category");
+		const navigation = await read(`(() => {
+			const shell = document.querySelector('.work-shell');
+			return { narrow: shell?.dataset.navigationMode === 'narrow',
+				open: shell?.dataset.navigationOpen === 'true', collapsed: shell?.dataset.navigationCollapsed === 'true' };
+		})()`);
+		const reveal =
+			trigger === ".sidebar-settings-trigger" && (navigation.narrow ? !navigation.open : navigation.collapsed);
+		if (reveal) {
+			await click(cdp, ".navigation-toggle");
+			await until(
+				() =>
+					read(
+						"!document.querySelector('.sidebar').inert && document.querySelector('.sidebar-settings-trigger').getClientRects().length > 0",
+					),
+				"Settings sidebar opener revealed through native navigation",
+			);
+		}
 		assert.equal(
 			await read(`(() => {
 				if (document.querySelector(${JSON.stringify(routeSelector)})) return false;
 				const nodes = [...document.querySelectorAll(${JSON.stringify(trigger)})].filter(e => !e.disabled && e.getClientRects().length);
 				if (nodes.length !== 1) return false;
-				window.__hipiGuiSettingsOpener = { node: nodes[0], selector: ${JSON.stringify(trigger)} };
+				const sidebar = document.querySelector('.sidebar'), main = document.querySelector('.main-shell');
+				if (!sidebar || !main) return false;
+				window.__hipiGuiSettingsOpener = { node: nodes[0], selector: ${JSON.stringify(trigger)}, sidebar, main,
+					mainInert: main.inert, navigation: ${JSON.stringify(navigation)}, reveal: ${reveal} };
 				return true;
 			})()`),
 			true,
@@ -158,31 +193,71 @@ export function createSettingsHarness(cdp, helpers) {
 		await until(
 			() =>
 				read(
-					`!!document.querySelector(${JSON.stringify(routeSelector)}) && document.activeElement === document.querySelector('.settings-search-input') && !document.querySelector('[role="dialog"]')`,
+					`document.querySelector(${JSON.stringify(routeSelector)})?.getAttribute('role') === 'dialog' && document.activeElement === document.querySelector('.settings-search-input') && document.querySelectorAll('[role="dialog"]').length === 1`,
 				),
-			"Settings route and initial search focus",
+			"Settings modal and initial search focus",
 		);
+		await read("window.__hipiGuiSettingsSurface = document.querySelector('.settings-modal')");
+		await retained(true);
 		await navigate(category);
 	};
-	const back = async (trigger) => {
+	const retained = async (inert) => {
+		assert.equal(
+			await read(`(() => {
+			const before = window.__hipiGuiSettingsOpener;
+			return ['sidebar','main'].every(name => {
+				const node = before[name], current = document.querySelector(name === 'sidebar' ? '.sidebar' : '.main-shell');
+				return node === current && node.isConnected && node.inert === ${inert} &&
+					getComputedStyle(node).visibility === 'visible' && Number(getComputedStyle(node).opacity) > 0;
+			});
+		})()`),
+			true,
+			"Settings must retain visible application owners with the correct inert state",
+		);
+	};
+	const closed = async () => {
+		await until(
+			() =>
+				read(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(
+				!document.querySelector(${JSON.stringify(routeSelector)}) &&
+				!document.querySelector('[role="dialog"],[role="menu"],[role="option"]') &&
+				window.__hipiGuiSettingsOpener.node.isConnected &&
+				document.activeElement === window.__hipiGuiSettingsOpener.node
+			))))`),
+			"Settings Close restores the exact opener",
+		);
+		// A narrow closed drawer may independently remain inert; main must be restored.
+		assert.equal(
+			await read(
+				"window.__hipiGuiSettingsOpener.main === document.querySelector('.main-shell') && document.querySelector('.main-shell').inert === window.__hipiGuiSettingsOpener.mainInert",
+			),
+			true,
+		);
+		const navigation = await read(
+			"({reveal:window.__hipiGuiSettingsOpener.reveal,...window.__hipiGuiSettingsOpener.navigation})",
+		);
+		if (navigation.reveal) {
+			if (navigation.narrow) await pressKey(cdp, "Escape");
+			else await click(cdp, ".sidebar-collapse");
+			await until(
+				() =>
+					read(
+						`document.querySelector('.work-shell').dataset.${navigation.narrow ? "navigationOpen" : "navigationCollapsed"} === '${navigation.narrow ? "false" : "true"}' && document.activeElement === document.querySelector('.navigation-toggle')`,
+					),
+				"Settings restores the navigation state it opened",
+			);
+		}
+	};
+	const close = async (trigger) => {
 		assert.equal(
 			await read(
 				`!!window.__hipiGuiSettingsOpener?.node?.isConnected && (${JSON.stringify(trigger ?? null)} === null || window.__hipiGuiSettingsOpener.selector === ${JSON.stringify(trigger ?? null)})`,
 			),
 			true,
-			"Settings Back must use the recorded original opener",
+			"Settings Close must use the recorded original opener",
 		);
-		await click(cdp, ".settings-back");
-		await until(
-			() =>
-				read(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(
-					!document.querySelector(${JSON.stringify(routeSelector)}) &&
-					!document.querySelector('[role="dialog"],[role="menu"],[role="option"]') &&
-					window.__hipiGuiSettingsOpener.node.isConnected &&
-					document.activeElement === window.__hipiGuiSettingsOpener.node
-				))))`),
-			"Settings Back restores the exact opener",
-		);
+		await click(cdp, '.settings-modal [data-slot="dialog-close"]');
+		await closed();
 	};
 	const choice = async (field = "theme") => {
 		assert.ok(["theme", "language"].includes(field), "Unknown appearance field");
@@ -228,14 +303,14 @@ export function createSettingsHarness(cdp, helpers) {
 			);
 	};
 	const preferences = async (locale, mode) => {
-		await open(".workbench-settings-trigger", "general");
+		await open(".sidebar-settings-trigger", "general");
 		await setChoice("language", locale);
 		await setChoice("theme", mode);
-		await back(".workbench-settings-trigger");
+		await close(".sidebar-settings-trigger");
 	};
 	const geometry = async () => {
-		const state = await read(`(${settingsRouteGeometry.toString()})(document, {width:innerWidth,height:innerHeight})`);
-		assertSettingsRouteGeometry(state);
+		const state = await read(`(${settingsModalGeometry.toString()})(document, {width:innerWidth,height:innerHeight})`);
+		assertSettingsModalGeometry(state);
 		return state;
 	};
 	const replaceText = async (selector, value) => {
@@ -260,7 +335,7 @@ export function createSettingsHarness(cdp, helpers) {
 					return { open: !!route, category: route?.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category,
 						query: route?.querySelector('.settings-search-input')?.value, count: nodes.length,
 						focused: !!node?.contains(document.activeElement), visible: !!node?.getClientRects().length,
-						detailsOpen, modal: !!document.querySelector('[role="dialog"]') };
+						detailsOpen, dialogs: document.querySelectorAll('[role="dialog"]').length };
 				})()`);
 			return destination.open &&
 				destination.category === category &&
@@ -269,7 +344,7 @@ export function createSettingsHarness(cdp, helpers) {
 				destination.focused &&
 				destination.visible &&
 				destination.detailsOpen &&
-				!destination.modal
+				destination.dialogs === 1
 				? destination
 				: null;
 		}, "Settings search destination");
@@ -316,16 +391,23 @@ export function createSettingsHarness(cdp, helpers) {
 				),
 			"nested language Escape restores its combobox",
 		);
+		assert.equal(
+			await read(
+				"window.__hipiGuiSettingsSurface === document.querySelector('.settings-modal') && document.querySelectorAll('[role=\"dialog\"]').length === 1",
+			),
+			true,
+			"Language Escape must retain its exact parent Settings dialog",
+		);
 		await setChoice("language", original.locale === "en" ? "zh-CN" : "en");
-		await back(opener);
+		await close(opener);
 		await open(opener, "general");
-		assert.notEqual((await choice("language")).locale, original.locale, "Language must survive route reopen");
+		assert.notEqual((await choice("language")).locale, original.locale, "Language must survive modal reopen");
 		await setChoice("language", original.locale);
 		const changedMode = original.mode === "dark" ? "light" : "dark";
 		await setChoice("theme", changedMode);
-		await back(opener);
+		await close(opener);
 		await open(opener);
-		assert.equal((await choice()).mode, changedMode, "Theme must survive route reopen");
+		assert.equal((await choice()).mode, changedMode, "Theme must survive modal reopen");
 		await setChoice("theme", original.mode);
 		await top();
 		const appearanceGeometry = await geometry();
@@ -346,11 +428,8 @@ export function createSettingsHarness(cdp, helpers) {
 			"Search Escape clears its query without closing Settings",
 		);
 		await pressKey(cdp, "Escape");
-		assert.equal(
-			await read(`!!document.querySelector(${JSON.stringify(routeSelector)})`),
-			true,
-			"Empty-search Escape must not dismiss the Settings route",
-		);
+		await closed();
+		await open(opener);
 		const destination = await search(fontQuery, "uiFontSize", "appearance");
 		const initial = await saved();
 		const fontSizes = {};
@@ -377,13 +456,13 @@ export function createSettingsHarness(cdp, helpers) {
 		}
 		await capture(cdp, directory, `${prefix}-advanced`);
 		screenshots.advanced = `${prefix}-advanced.png`;
-		await back(opener);
+		await close(opener);
 		await open(opener);
 		await search(fontQuery, "uiFontSize", "appearance");
 		for (const [field, { before, next }] of Object.entries(fontSizes)) {
 			const selector = `.settings-page-content [data-setting="${field}"] input`;
 			assert.equal(await read(`document.querySelector(${JSON.stringify(selector)}).value`), String(next));
-			assert.equal((await saved())[field], next, "Committed font size must survive route reopen");
+			assert.equal((await saved())[field], next, "Committed font size must survive modal reopen");
 			await replaceText(selector, String(before));
 			await nativeEditorKey(cdp, "Enter");
 			await until(async () => (await saved())[field] === before, "restore original font size");
@@ -402,7 +481,7 @@ export function createSettingsHarness(cdp, helpers) {
 		await until(
 			() =>
 				read(
-					`!document.querySelector('.settings-import-dialog') && document.activeElement === document.querySelector('.settings-page-content button[data-setting="transfer"]')`,
+					`!document.querySelector('.settings-import-dialog') && window.__hipiGuiSettingsSurface === document.querySelector('.settings-modal') && document.querySelectorAll('[role="dialog"]').length === 1 && document.activeElement === document.querySelector('.settings-page-content button[data-setting="transfer"]')`,
 				),
 			"cancel-only import restores its exact trigger",
 		);
@@ -418,15 +497,16 @@ export function createSettingsHarness(cdp, helpers) {
 			screenshots,
 			initialSearchFocus: true,
 			categoryHeadingFocus: true,
-			exactBackFocus: true,
+			exactCloseFocus: true,
 			languageSelectEscapeFocus: true,
 			immediateLanguagePersistence: true,
 			immediateThemePersistence: true,
 			fontBlurAndEnterPersistence: true,
-			fontRouteReopenPersistence: true,
+			fontModalReopenPersistence: true,
 			searchEscapeClearsOnly: true,
+			emptySearchEscapeCloses: true,
 			importCancelledWithoutChanges: true,
 		};
 	};
-	return { open, back, choice, setChoice, preferences, geometry, search, inspect };
+	return { open, close, choice, setChoice, preferences, geometry, search, inspect };
 }

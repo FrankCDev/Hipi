@@ -12,7 +12,6 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useAppClient, useCredentialClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { DialogBody, DialogDescription } from "../../components/ui/dialog.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { providerLabels } from "./provider-labels.ts";
@@ -32,9 +31,13 @@ type Outcome =
 export function CustomProviderEditor({
 	initial,
 	onBusy,
+	onSaved,
+	onDone,
 }: {
 	initial?: CustomProviderConfiguration;
 	onBusy: (busy: boolean) => void;
+	onSaved?: (provider: CustomProviderConfiguration) => void;
+	onDone?: (state: "configured" | "missing") => void;
 }) {
 	const client = useAppClient();
 	const credentials = useCredentialClient();
@@ -91,6 +94,7 @@ export function CustomProviderEditor({
 		const key = secret;
 		setSecret("");
 		let saved: CustomProviderConfiguration | undefined;
+		let confirmed: "configured" | "missing" | undefined;
 		let removingOldKey = false;
 		let oldKeyRemoved = false;
 		try {
@@ -141,11 +145,13 @@ export function CustomProviderEditor({
 			if (active.current) {
 				setBaseline(saved);
 				setBaseUrl(saved.baseUrl);
+				onSaved?.(saved);
 			}
 			if (key && credentials) await credentials.request({ operation: "set", provider: saved.provider, secret: key });
 			const state = credentials
 				? await credentials.request({ operation: "status", provider: saved.provider })
 				: "unavailable";
+			if (state === "configured" || state === "missing") confirmed = state;
 			if (active.current)
 				setOutcome(state === "configured" ? "saved" : state === "missing" ? "savedMissingKey" : "keyUnconfirmed");
 		} catch (error) {
@@ -167,6 +173,7 @@ export function CustomProviderEditor({
 			if (active.current) {
 				setBusy(false);
 				onBusy(false);
+				if (confirmed) onDone?.(confirmed);
 			}
 		}
 	};
@@ -181,8 +188,7 @@ export function CustomProviderEditor({
 		]);
 	};
 	return (
-		<DialogBody>
-			<DialogDescription>{l["provider.noNetwork"]}</DialogDescription>
+		<div className="provider-editor-body">
 			<form
 				className="custom-provider-form"
 				onSubmit={(event) => {
@@ -191,45 +197,47 @@ export function CustomProviderEditor({
 				}}
 			>
 				<fieldset disabled={busy} className="custom-provider-fields">
-					<label className="field" htmlFor={`${prefix}-preset`}>
-						{l["provider.preset"]}
-						<Select
-							value={presetKnown ? preset : "custom"}
-							onValueChange={(value) => {
-								setPreset(value);
-								setFilter("");
-								const selected = providerPresets.find((item) => item.id === value);
-								if (selected) {
-									setName(selected.name);
-									setProtocol(selected.protocol);
-									setBaseUrl(selected.baseUrl);
-									setModels([{ rowId: crypto.randomUUID(), id: "", name: "" }]);
-								}
-							}}
-						>
-							<SelectTrigger id={`${prefix}-preset`} className="custom-provider-select">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent position="popper">
-								<SelectItem value="custom">{l["provider.custom"]}</SelectItem>
-								{providerPresets.map((item) => (
-									<SelectItem value={item.id} key={item.id}>
-										{item.name}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</label>
-					<label className="field" htmlFor={`${prefix}-name`}>
-						{l["provider.name"]}
-						<Input
-							id={`${prefix}-name`}
-							value={name}
-							onChange={(event) => setName(event.target.value)}
-							maxLength={128}
-							required
-						/>
-					</label>
+					<div className="provider-field-pair">
+						<label className="field" htmlFor={`${prefix}-preset`}>
+							{l["provider.preset"]}
+							<Select
+								value={presetKnown ? preset : "custom"}
+								onValueChange={(value) => {
+									setPreset(value);
+									setFilter("");
+									const selected = providerPresets.find((item) => item.id === value);
+									if (selected) {
+										setName(selected.name);
+										setProtocol(selected.protocol);
+										setBaseUrl(selected.baseUrl);
+										setModels([{ rowId: crypto.randomUUID(), id: "", name: "" }]);
+									}
+								}}
+							>
+								<SelectTrigger id={`${prefix}-preset`} className="custom-provider-select">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent position="popper">
+									<SelectItem value="custom">{l["provider.custom"]}</SelectItem>
+									{providerPresets.map((item) => (
+										<SelectItem value={item.id} key={item.id}>
+											{item.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</label>
+						<label className="field" htmlFor={`${prefix}-name`}>
+							{l["provider.name"]}
+							<Input
+								id={`${prefix}-name`}
+								value={name}
+								onChange={(event) => setName(event.target.value)}
+								maxLength={128}
+								required
+							/>
+						</label>
+					</div>
 					<label className="field" htmlFor={`${prefix}-protocol`}>
 						{l["provider.protocol"]}
 						<Select
@@ -284,7 +292,7 @@ export function CustomProviderEditor({
 					</label>
 					<p className="custom-provider-hint">
 						{credentials
-							? t(credentials.storage === "memory" ? "model.memoryNote" : "model.secretNote")
+							? l[credentials.storage === "memory" ? "provider.memoryStorage" : "provider.systemStorage"]
 							: l["provider.noCredentials"]}
 					</p>
 					{presetKnown && (
@@ -328,7 +336,6 @@ export function CustomProviderEditor({
 					)}
 					<div className="custom-provider-models">
 						<h3>{l["provider.models"]}</h3>
-						<p className="custom-provider-hint">{l["provider.manual"]}</p>
 						{models.map((model) => (
 							<div className="custom-provider-model-row" key={model.rowId}>
 								<label className="field" htmlFor={`${prefix}-${model.rowId}-id`}>
@@ -394,10 +401,13 @@ export function CustomProviderEditor({
 						{l[`provider.${outcome}`]}
 					</p>
 				)}
-				<Button type="submit" disabled={busy}>
-					{l[busy ? "provider.saving" : "provider.save"]}
-				</Button>
+				<div className="provider-save-row">
+					<p className="custom-provider-hint">{l["provider.noNetwork"]}</p>
+					<Button type="submit" disabled={busy}>
+						{l[busy ? "provider.saving" : "provider.save"]}
+					</Button>
+				</div>
 			</form>
-		</DialogBody>
+		</div>
 	);
 }

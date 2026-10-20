@@ -2,10 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	assertWorkExperienceGeometry,
+	deterministicCredentialEvidence,
 	layoutCases,
 	nativeEditorKey,
 	workExperienceGeometry,
 } from "./gui-work-experience.mjs";
+
+test("faux catalog records native credentials as not run, never as a passed platform credential check", () => {
+	const faux = { dataset: { setting: "provider:faux" }, disabled: true };
+	let rows = [faux];
+	const document = {
+		querySelectorAll: (selector) => {
+			assert.equal(selector, ".settings-modal .provider-service-row");
+			return rows;
+		},
+	};
+	const evidence = deterministicCredentialEvidence(document);
+	assert.equal(evidence.status, "not_applicable_to_deterministic_catalog");
+	assert.match(evidence.nativeCredentialStatus, /^not_run;/);
+	for (const invalid of [
+		[],
+		[faux, faux],
+		[{ ...faux, disabled: false }],
+		[{ ...faux, dataset: { setting: "provider:openai" } }],
+	]) {
+		rows = invalid;
+		assert.equal(deterministicCredentialEvidence(document), null);
+	}
+});
 
 function geometry() {
 	const rect = (x, y, width, height) => ({ x, y, width, height, hit: true, disabled: false });

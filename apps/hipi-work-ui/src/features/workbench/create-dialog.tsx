@@ -15,6 +15,7 @@ import { Icon } from "../../components/ui/icon.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip.tsx";
 import { ComposerKeyboard } from "./composer-keyboard.ts";
+import "./create-dialog.css";
 
 export function CreateDialog({
 	onCreate,
@@ -73,7 +74,7 @@ export function CreateDialog({
 		<Dialog
 			open={open}
 			onOpenChange={(value) => {
-				if (!mutation.isPending) {
+				if (!mutation.isPending && !creating.current) {
 					setOpen(value);
 					onOpenChange?.(value);
 					keyboard.current.reset();
@@ -91,45 +92,54 @@ export function CreateDialog({
 			) : (
 				trigger
 			)}
-			<DialogContent scrollBody closeLabel={t("common.close")} closeDisabled={mutation.isPending}>
-				<DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
-				<DialogDescription className="text-sm text-muted-foreground">{t("nav.workspaceDescription")}</DialogDescription>
-				<DialogBody>
+			<DialogContent
+				className="project-create-dialog"
+				scrollBody
+				closeLabel={t("common.close")}
+				closeDisabled={mutation.isPending}
+				onEscapeKeyDown={(event) => {
+					if (event.isComposing || event.keyCode === 229 || creating.current) event.preventDefault();
+				}}
+			>
+				<DialogTitle>{title}</DialogTitle>
+				<DialogDescription className="sr-only">{t("nav.workspaceDescription")}</DialogDescription>
+				<DialogBody className="project-create-body">
 					<form
 						onSubmit={(event) => {
 							event.preventDefault();
 							// The keyboard handler owns Enter so IME confirmation cannot submit implicitly.
 						}}
-						className="grid gap-4"
+						className="project-create-form"
 					>
-						<label className="field" htmlFor={nameId}>
-							{t("common.name")}
-							<Input
-								className="task-title-input"
-								id={nameId}
-								disabled={mutation.isPending || disabled}
-								autoComplete="off"
-								maxLength={128}
-								value={name}
-								onChange={(event) => setName(event.target.value)}
-								onCompositionStart={() => keyboard.current.compositionStart()}
-								onCompositionEnd={(event) => keyboard.current.compositionEnd(event.timeStamp)}
-								onBlur={() => keyboard.current.reset()}
-								onKeyUp={() => keyboard.current.keyUp()}
-								onKeyDown={(event) => {
-									const action = keyboard.current.keyDown(event.nativeEvent);
-									if (action !== "native") event.preventDefault();
-									if (action === "submit") create();
-								}}
-								required
-							/>
+						<label className="sr-only" htmlFor={nameId}>
+							{t("nav.projectName")}
 						</label>
+						<Input
+							className="task-title-input"
+							id={nameId}
+							disabled={mutation.isPending || disabled}
+							autoComplete="off"
+							placeholder={t("nav.projectName")}
+							maxLength={128}
+							value={name}
+							onChange={(event) => setName(event.target.value)}
+							onCompositionStart={() => keyboard.current.compositionStart()}
+							onCompositionEnd={(event) => keyboard.current.compositionEnd(event.timeStamp)}
+							onBlur={() => keyboard.current.reset()}
+							onKeyUp={() => keyboard.current.keyUp()}
+							onKeyDown={(event) => {
+								const action = keyboard.current.keyDown(event.nativeEvent);
+								if (action !== "native") event.preventDefault();
+								if (action === "submit") create();
+							}}
+							required
+						/>
 						{mutation.isError && (
 							<p role="alert" className="error-text">
 								{t("nav.creationUnknown")}
 							</p>
 						)}
-						<div className="flex justify-end gap-2">
+						<div className="project-create-actions">
 							<DialogClose asChild>
 								<Button type="button" variant="ghost" disabled={mutation.isPending}>
 									{t("common.cancel")}

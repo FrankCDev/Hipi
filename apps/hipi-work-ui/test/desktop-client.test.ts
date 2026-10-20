@@ -212,6 +212,94 @@ test("host closure and callback errors terminate observation exactly once", asyn
 	}
 });
 
+test("healthy desktop observations stay connected through long idle periods and resume delivery", async (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = fixture();
+	const statuses: ObservationStatus[] = [];
+	const seen: number[] = [];
+	const subscription = await f.client.observe(
+		scope,
+		(value) => {
+			seen.push(value.version);
+		},
+		undefined,
+		(status) => statuses.push(status),
+	);
+	try {
+		context.mock.timers.tick(65000);
+		assert.deepEqual(statuses, [{ state: "connected" }]);
+		assert.equal(f.disposed, 0);
+		context.mock.timers.tick(24 * 60 * 60 * 1000);
+		await f.emit({ kind: "frame", frame: frame(1) });
+		assert.deepEqual(seen, [0, 1]);
+		assert.deepEqual(statuses, [{ state: "connected" }]);
+		assert.equal(f.requests.length, 1);
+	} finally {
+		await subscription.dispose();
+	}
+	context.mock.timers.tick(65000);
+	assert.equal(f.disposed, 1);
+	assert.deepEqual(statuses, [{ state: "connected" }, { state: "closed", reason: "disposed" }]);
+});
+
+test("ongoing desktop frames do not expire and genuine host loss still closes once", async (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = fixture();
+	const statuses: ObservationStatus[] = [];
+	const seen: number[] = [];
+	const subscription = await f.client.observe(
+		scope,
+		(value) => {
+			seen.push(value.version);
+		},
+		undefined,
+		(status) => statuses.push(status),
+	);
+	try {
+		for (let version = 1; version <= 20; version++) {
+			context.mock.timers.tick(5000);
+			await f.emit({ kind: "frame", frame: frame(version) });
+		}
+		assert.deepEqual(
+			seen,
+			Array.from({ length: 21 }, (_, version) => version),
+		);
+		assert.deepEqual(statuses, [{ state: "connected" }]);
+		assert.equal(f.disposed, 0);
+		await f.emit({ kind: "status", status: { state: "closed", reason: "disconnected", code: "CLOSED" } });
+		await f.emit({ kind: "frame", frame: frame(21) });
+		assert.equal(seen.length, 21);
+		assert.deepEqual(statuses, [{ state: "connected" }, { state: "closed", reason: "disconnected", code: "CLOSED" }]);
+		assert.equal(f.disposed, 1);
+	} finally {
+		await subscription.dispose();
+	}
+	assert.equal(f.requests.length, 1);
+	assert.equal(f.disposed, 1);
+});
+
+test("request deadlines remain bounded and never replay a command with an unknown outcome", async (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = fixture();
+	await f.client.call("handshake", {});
+	let complete: (value: unknown) => void = () => {};
+	f.setReply(
+		() =>
+			new Promise((resolve) => {
+				complete = resolve;
+			}),
+	);
+	const pending = f.client.call("submit", { ...scope, requestId: "original", text: "original" });
+	const rejected = assert.rejects(pending, { code: "CLOSED" });
+	context.mock.timers.tick(10000);
+	await rejected;
+	complete({ ok: true, result: { ...scope, requestId: "original", receiptId: "receipt", state: "accepted" } });
+	await Promise.resolve();
+	context.mock.timers.tick(65000);
+	assert.equal(f.requests.length, 2);
+	assert.deepEqual(f.requests[1]?.params, { ...scope, requestId: "original", text: "original" });
+});
+
 test("a silent host has bounded startup and does not report connected without a snapshot", async (context) => {
 	context.mock.timers.enable({ apis: ["setTimeout"] });
 	const f = fixture(false);

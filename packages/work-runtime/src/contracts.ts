@@ -5,6 +5,7 @@ import {
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
+import { type ModelFailure, modelFailureCategory } from "./model-failure.ts";
 import {
 	isProviderConfigurationMethod,
 	type ProviderConfigurationMethods,
@@ -18,6 +19,7 @@ export {
 	type ToolActivityPage,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
+export type { ModelFailure, ModelFailureCategory } from "./model-failure.ts";
 export {
 	CUSTOM_PROVIDER_LIMITS,
 	type CustomProviderConfiguration,
@@ -43,7 +45,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -186,6 +188,8 @@ export type ReceiptView = Receipt & {
 	reason?: string;
 	reasonLength?: number;
 	reasonTruncated?: boolean;
+	/** Safe category from the terminal model attempt, not a guarantee about earlier work or charges. */
+	modelFailure?: ModelFailure;
 };
 /** Text lengths and offsets count UTF-16 code units, matching JavaScript string slicing. */
 export type TextPreview = { text: string; textLength: number; truncated: boolean };
@@ -1292,6 +1296,7 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 							"reason",
 							"reasonLength",
 							"reasonTruncated",
+							"modelFailure",
 						]
 					: []),
 			]);
@@ -1334,6 +1339,19 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 				receipt.reason = reason.text;
 				receipt.reasonLength = reason.textLength;
 				receipt.reasonTruncated = reason.truncated;
+			}
+			if (p.modelFailure !== undefined) {
+				const failure = object(p.modelFailure);
+				fields(failure, ["category", "dispatch"]);
+				const category = modelFailureCategory(failure.category);
+				if (
+					receipt.execution !== "unanswered" ||
+					receipt.reason !== "model_error" ||
+					!category ||
+					(failure.dispatch !== "not_sent" && failure.dispatch !== "attempted" && failure.dispatch !== "unknown")
+				)
+					throw new AppError("INVALID_REQUEST");
+				receipt.modelFailure = { category, dispatch: failure.dispatch };
 			}
 			result = receipt;
 		}

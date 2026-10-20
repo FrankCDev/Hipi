@@ -18,7 +18,14 @@ const fixture = vi.hoisted(() => ({
 // Layout contract only: runtime and nested content keep their own behavioral suites.
 vi.mock("../src/features/workbench/use-conversation.ts", () => ({
 	useConversation: () => ({
-		observation: { connection: fixture.connection, snapshot: { running: false } },
+		observation: {
+			connection: fixture.connection,
+			showConnectionNotice: fixture.connection !== "connected",
+			snapshot: { workspaceId: "workspace", conversationId: "conversation", running: false, messages: [] },
+		},
+		requestId: "request",
+		receipt: { data: undefined },
+		mutation: { isPending: false },
 		reconnect: () => {},
 		workspaceId: "workspace",
 		model: {

@@ -5,10 +5,54 @@ import { join } from "node:path";
 import test from "node:test";
 import type { CredentialState, Scope } from "../src/contracts.ts";
 import { PROTOCOL_VERSION, parseRequest, parseResult } from "../src/contracts.ts";
+import { modelFailureDetail, readModelFailureDetail } from "../src/model-failure.ts";
 import { openRuntime } from "../src/node.ts";
 import { deterministicModels } from "../src/testing.ts";
 
 const model = { provider: "faux", modelId: "faux-1" };
+test("model failure receipt evidence accepts only fixed categories and dispatch states, retaining older receipts", () => {
+	const receipt = {
+		workspaceId: "w",
+		conversationId: "c",
+		requestId: "r",
+		receiptId: "receipt",
+		state: "dispatched",
+		execution: "unanswered",
+		reason: "model_error",
+		reasonLength: 11,
+		reasonTruncated: false,
+	};
+	assert.deepEqual(parseResult("getReceipt", receipt), receipt);
+	const modelFailure = { category: "model_auth_failed", dispatch: "attempted" };
+	assert.deepEqual(parseResult("getReceipt", { ...receipt, modelFailure }), { ...receipt, modelFailure });
+	for (const value of [
+		{ ...modelFailure, message: "private-body-or-key" },
+		{ ...modelFailure, category: "private-body-or-key" },
+		{ ...modelFailure, dispatch: "not_billed" },
+	])
+		assert.throws(() => parseResult("getReceipt", { ...receipt, modelFailure: value }), { code: "INVALID_REQUEST" });
+	assert.throws(() => parseResult("getReceipt", { ...receipt, execution: "done", modelFailure }), {
+		code: "INVALID_REQUEST",
+	});
+	assert.throws(() => parseResult("getReceipt", { ...receipt, reason: "aborted", reasonLength: 7, modelFailure }), {
+		code: "INVALID_REQUEST",
+	});
+	assert.deepEqual(readModelFailureDetail("credential_required"), {
+		category: "credential_required",
+		dispatch: "unknown",
+	});
+	assert.deepEqual(readModelFailureDetail(modelFailureDetail("credential_required", "not_sent")), {
+		category: "credential_required",
+		dispatch: "not_sent",
+	});
+	for (const value of [
+		"private-body-or-key",
+		"hipi_model_failure:private-body-or-key:attempted",
+		"hipi_model_failure:model_auth_failed:not_billed",
+		{ category: "model_auth_failed", message: "private" },
+	])
+		assert.equal(readModelFailureDetail(value), undefined);
+});
 async function until(check: () => Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 10000;
 	while (Date.now() < deadline) {

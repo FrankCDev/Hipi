@@ -1,4 +1,5 @@
 import type { Message, Snapshot } from "@hipi/work-runtime/contracts";
+import type { ConversationFailure } from "./conversation-failure.ts";
 
 export const STREAM_ROW_KEY = "partial-output";
 export const TRANSCRIPT_GAP = 12;
@@ -7,12 +8,14 @@ export const TRANSCRIPT_GAP = 12;
 export const TRANSCRIPT_OVERSCAN = 5;
 export type TranscriptRow =
 	| { key: string; kind: "user-message" | "assistant-message"; message: Message }
+	| { key: string; kind: "request-failure"; failure: ConversationFailure; message?: never }
 	| { key: string; kind: "assistant-stream"; message?: never };
 
 /** Retain unchanged row identities without retaining deleted history or text. */
 export function projectTranscript(
 	snapshot: Snapshot | undefined,
 	previous: readonly TranscriptRow[] = [],
+	failure?: ConversationFailure,
 ): TranscriptRow[] {
 	const retained = new Map(previous.map((row) => [row.key, row]));
 	const streamKey = (id: string) => `stream:${JSON.stringify([snapshot?.workspaceId, snapshot?.conversationId, id])}`;
@@ -28,6 +31,16 @@ export function projectTranscript(
 	if (snapshot?.partial || snapshot?.running) {
 		const key = snapshot.partialId ? streamKey(snapshot.partialId) : STREAM_ROW_KEY;
 		rows.push(retained.get(key) ?? { key, kind: "assistant-stream" });
+	}
+	if (failure && snapshot && !snapshot.running && !snapshot.partial) {
+		const existing = retained.get(failure.key);
+		rows.push(
+			existing?.kind === "request-failure" &&
+				existing.failure.modelFailure?.category === failure.modelFailure?.category &&
+				existing.failure.modelFailure?.dispatch === failure.modelFailure?.dispatch
+				? existing
+				: { key: failure.key, kind: "request-failure", failure },
+		);
 	}
 	return rows;
 }

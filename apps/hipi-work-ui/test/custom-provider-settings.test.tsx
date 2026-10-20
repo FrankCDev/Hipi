@@ -14,11 +14,12 @@ import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { createCredentialClient } from "../src/app/credential-client.ts";
 import { Button } from "../src/components/ui/button.tsx";
-import { DialogContent } from "../src/components/ui/dialog.tsx";
+import { Dialog } from "../src/components/ui/dialog.tsx";
 import { Input } from "../src/components/ui/input.tsx";
 import { Select } from "../src/components/ui/select.tsx";
 import { CustomProviderEditor } from "../src/features/settings/custom-provider-editor.tsx";
 import { CustomProviderSettings } from "../src/features/settings/custom-provider-settings.tsx";
+import { LegacyProviderEditor } from "../src/features/settings/legacy-provider-editor.tsx";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 import { PreparedTaskEntry } from "../src/features/workbench/prepared-task-entry.tsx";
 
@@ -184,6 +185,10 @@ function configure() {
 	change("-key", secret);
 }
 beforeEach(() => {
+	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+		callback(0);
+		return 1;
+	});
 	locale = "en";
 	editorCells.length = 0;
 	entryCells.length = 0;
@@ -251,6 +256,7 @@ beforeEach(() => {
 	}).subscribe(() => {});
 });
 afterEach(() => {
+	vi.unstubAllGlobals();
 	unsubscribe();
 	cache.clear();
 	for (const cell of [...editorCells, ...entryCells, ...panelCells]) cell?.cleanup?.();
@@ -286,7 +292,7 @@ test("save isolates secrets, refreshes catalog, and makes first usable custom mo
 	assert.equal(keys.get(providerId), secret);
 	assert.ok(credentialRequests.mock.calls.some(([input]) => JSON.stringify(input).includes(secret)));
 	assert.equal(JSON.stringify(cache.getQueryData(["models"])).includes(secret), false);
-	assert.ok(find(renderEditor(), (node) => String(node.props.children).includes("Saving did not contact")));
+	assert.ok(find(renderEditor(), (node) => String(node.props.children).includes("Service saved.")));
 	const prepared = renderEntry();
 	assert.ok(find(prepared, (node) => node.type === "span" && node.props.children === "trial-model"));
 	assert.equal(sent.mock.calls.length, 0);
@@ -383,10 +389,10 @@ test("close and reopen after a lost save acknowledgement uses authoritative meta
 	const reopened = renderEditor();
 	assert.equal(find(reopened, (node) => node.type === Input && node.props.type === "password").props.value, "");
 	assert.equal(
-		nodes(reopened).some((node) => String(node.props.children).includes("Provider saved.")),
+		nodes(reopened).some((node) => String(node.props.children).includes("Service saved.")),
 		false,
 	);
-	assert.ok(find(renderPanel(), (node) => node.type === "output" && node.props.children === "model.missing"));
+	assert.ok(find(renderPanel(), (node) => node.type === "output" && node.props.children === "Needs API key"));
 });
 
 test("changing a recipient does not copy keys or redirect a retained new-chat selection", async () => {
@@ -443,10 +449,11 @@ test("unconfirmed key removal leaves the discoverable provider unchanged; an exp
 	profiles.set(providerId, profile);
 	keys.set(providerId, secret);
 	keys.set("openai", "OTHER_FAKE_KEY");
-	click(renderPanel(), (node) => node.props.children === "Remove provider");
+	click(renderPanel(), (node) => node.props["data-setting"] === `provider:${providerId}`);
+	click(renderPanel(), (node) => node.props.children === "Remove service");
 	credentialRequests.mockRejectedValueOnce(new Error("locked"));
 	const panel = renderPanel();
-	const confirms = nodes(panel).filter((node) => node.type === Button && node.props.children === "Remove provider");
+	const confirms = nodes(panel).filter((node) => node.type === Button && node.props.children === "Remove service");
 	const confirm = confirms.at(-1);
 	assert.equal(typeof confirm?.props.onClick, "function");
 	Reflect.apply(confirm.props.onClick, undefined, []);
@@ -460,7 +467,7 @@ test("unconfirmed key removal leaves the discoverable provider unchanged; an exp
 	assert.equal(profiles.has(providerId), true);
 	assert.equal(runtimeCall.mock.calls.filter(([method]) => method === "removeCustomProvider").length, 0);
 	const retry = nodes(renderPanel())
-		.filter((node) => node.type === Button && node.props.children === "Remove provider")
+		.filter((node) => node.type === Button && node.props.children === "Remove service")
 		.at(-1);
 	assert.equal(typeof retry?.props.onClick, "function");
 	Reflect.apply(retry.props.onClick, undefined, []);
@@ -590,9 +597,10 @@ test("key removal succeeds but failed profile removal is visibly partial and can
 		if (method === "removeCustomProvider") throw new AppError("CLOSED");
 		return implementation(method, input);
 	});
-	click(renderPanel(), (node) => node.props.children === "Remove provider");
+	click(renderPanel(), (node) => node.props["data-setting"] === `provider:${providerId}`);
+	click(renderPanel(), (node) => node.props.children === "Remove service");
 	const confirm = nodes(renderPanel())
-		.filter((node) => node.type === Button && node.props.children === "Remove provider")
+		.filter((node) => node.type === Button && node.props.children === "Remove service")
 		.at(-1);
 	assert.equal(typeof confirm?.props.onClick, "function");
 	Reflect.apply(confirm.props.onClick, undefined, []);
@@ -624,7 +632,7 @@ test("Chinese editor explains protocols, secret retention and no-request-on-save
 	assert.doesNotMatch(text, /服务商 ID|custom_fixture/);
 });
 
-test.each(["connected", "deleted", "rotated"] as const)("dialog close restores focus after a %s opener", (state) => {
+test.each(["connected", "deleted", "rotated"] as const)("inline Back restores focus after a %s opener", (state) => {
 	profiles.set(providerId, {
 		provider: providerId,
 		vendorId: "custom",
@@ -638,15 +646,11 @@ test.each(["connected", "deleted", "rotated"] as const)("dialog close restores f
 	let panel = renderPanel();
 	const add = find(
 		panel,
-		(node) =>
-			node.type === Button && Array.isArray(node.props.children) && node.props.children.includes("Add provider"),
+		(node) => node.type === Button && Array.isArray(node.props.children) && node.props.children.includes("Add service"),
 	);
 	assert.ok(add.props.ref && typeof add.props.ref === "object");
 	Reflect.set(add.props.ref, "current", fallback);
-	const action = find(
-		panel,
-		(node) => node.type === Button && node.props.children === (state === "deleted" ? "Remove provider" : "Edit"),
-	);
+	const action = find(panel, (node) => node.type === Button && node.props["data-setting"] === `provider:${providerId}`);
 	assert.equal(typeof action.props.onClick, "function");
 	Reflect.apply(action.props.onClick, undefined, [{ currentTarget: opener }]);
 	if (state !== "connected") {
@@ -654,10 +658,49 @@ test.each(["connected", "deleted", "rotated"] as const)("dialog close restores f
 		profiles.delete(providerId);
 	}
 	panel = renderPanel();
-	const contents = nodes(panel).filter((node) => node.type === DialogContent);
-	const content = state === "deleted" ? contents[1] : contents[0];
-	assert.equal(typeof content?.props.onCloseAutoFocus, "function");
-	Reflect.apply(content.props.onCloseAutoFocus, undefined, [{ preventDefault() {} }]);
+	click(panel, (node) => node.props["data-provider-back"] === true);
 	assert.equal(opener.focus.mock.calls.length, state === "connected" ? 1 : 0);
 	assert.equal(fallback.focus.mock.calls.length, state === "connected" ? 0 : 1);
+});
+
+test("one compact service list includes legacy OpenAI and opens editors inline without duplicated management", () => {
+	const panel = renderPanel();
+	assert.equal(nodes(panel).filter((node) => node.type === Dialog).length, 0);
+	assert.equal(nodes(panel).filter((node) => node.type === Input).length, 0);
+	assert.equal(nodes(panel).filter((node) => node.props["data-setting"] === "provider:openai").length, 1);
+	assert.equal(nodes(panel).filter((node) => node.props.children === "Refresh").length, 0);
+	const text = nodes(panel)
+		.flatMap((node) => node.props.children)
+		.filter((value) => typeof value === "string")
+		.join(" ");
+	assert.doesNotMatch(text, /gpt-4|Credential storage|Available models|custom_fixture/);
+	click(panel, (node) => node.props["data-setting"] === "provider:openai");
+	assert.ok(find(renderPanel(), (node) => node.type === LegacyProviderEditor));
+	assert.ok(find(renderPanel(), (node) => node.props["data-provider-editor"] === "openai"));
+	click(renderPanel(), (node) => node.props["data-provider-back"] === true);
+	assert.equal(
+		nodes(renderPanel()).some((node) => node.type === LegacyProviderEditor),
+		false,
+	);
+});
+
+test("inline editor forwards the busy fence and a confirmed save returns directly to the services list", () => {
+	click(renderPanel(), (node) => Array.isArray(node.props.children) && node.props.children.includes("Add service"));
+	const panel = renderPanel();
+	const editor = find(panel, (node) => node.type === CustomProviderEditor);
+	assert.equal(typeof editor.props.onBusy, "function");
+	Reflect.apply(editor.props.onBusy, undefined, [true]);
+	const back = find(renderPanel(), (node) => node.props["data-provider-back"] === true);
+	assert.equal(back.props.disabled, true);
+	assert.equal(typeof back.props.onClick, "function");
+	Reflect.apply(back.props.onClick, undefined, []);
+	assert.ok(find(renderPanel(), (node) => node.type === CustomProviderEditor));
+	Reflect.apply(editor.props.onBusy, undefined, [false]);
+	assert.equal(typeof editor.props.onDone, "function");
+	Reflect.apply(editor.props.onDone, undefined, ["configured"]);
+	assert.equal(
+		nodes(renderPanel()).some((node) => node.type === CustomProviderEditor),
+		false,
+	);
+	assert.ok(find(renderPanel(), (node) => String(node.props.children).includes("Service saved.")));
 });

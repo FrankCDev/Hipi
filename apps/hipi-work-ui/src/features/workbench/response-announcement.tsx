@@ -1,10 +1,19 @@
 import type { Snapshot } from "@hipi/work-runtime/contracts";
 import { useEffect, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
+import { type ConversationFailure, conversationFailureCopy } from "./conversation-failure.ts";
 import { ResponseAnnouncer } from "./response-announcement.ts";
 
-export function ResponseAnnouncement({ snapshot, error = false }: { snapshot: Snapshot | undefined; error?: boolean }) {
-	const { t } = usePreferences();
+export function ResponseAnnouncement({
+	snapshot,
+	error = false,
+	failure,
+}: {
+	snapshot: Snapshot | undefined;
+	error?: boolean;
+	failure?: ConversationFailure;
+}) {
+	const { t, locale } = usePreferences();
 	const [text, setText] = useState("");
 	const owner = useRef<ResponseAnnouncer | null>(null);
 	const started = t("work.responseStarted");
@@ -20,8 +29,12 @@ export function ResponseAnnouncement({ snapshot, error = false }: { snapshot: Sn
 		};
 	}, []);
 	useEffect(() => {
-		owner.current?.update(snapshot, error, { started, complete, interrupted });
-	}, [snapshot, error, started, complete, interrupted]);
+		owner.current?.update(snapshot, error || !!failure, { started, complete, interrupted });
+		if (failure) {
+			const copy = conversationFailureCopy(failure, locale);
+			owner.current?.fail(failure.key, `${copy.message} ${copy.detail}`);
+		}
+	}, [snapshot, error, started, complete, interrupted, failure, locale]);
 	return (
 		<output className="sr-only" aria-live="polite" aria-atomic="true">
 			{text}

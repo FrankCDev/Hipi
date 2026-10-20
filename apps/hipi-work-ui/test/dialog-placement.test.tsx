@@ -65,11 +65,11 @@ test("all long management panels opt in without moving descriptions or forms out
 		assert.match(source, /<\/DialogBody>\s*<\/DialogContent>/);
 		assert.doesNotMatch(source.match(/<DialogContent[^>]*>/)?.[0] ?? "", /overflow-y-auto/);
 	}
-	// Appearance is now a route, not the removed long-form modal. Its only
-	// subordinate dialog is the bounded share-string import.
+	// Connection-screen appearance uses the same bounded settings surface;
+	// the share-string import remains a separate subordinate dialog.
 	const appearance = readFileSync(new URL("../src/features/settings/appearance-settings.tsx", import.meta.url), "utf8");
-	assert.match(appearance, /className="settings-route settings-standalone"/);
-	assert.match(appearance, /className="settings-page-content"/);
+	assert.match(appearance, /<SettingsSurface/);
+	assert.match(appearance, /className="settings-page-content settings-standalone"/);
 	assert.match(appearance, /className="settings-import-dialog"/);
 	assert.match(appearance, /maxLength=\{24000\}/);
 	const packs = readFileSync(new URL("../src/features/tool-packs/tool-packs-dialog.tsx", import.meta.url), "utf8");

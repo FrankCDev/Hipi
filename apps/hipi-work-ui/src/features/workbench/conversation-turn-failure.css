@@ -1,0 +1,28 @@
+@layer components {
+	.conversation-turn-failure {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		padding: 12px 0;
+		color: var(--muted-foreground);
+		font-size: 13px;
+		line-height: 1.5;
+	}
+
+	.conversation-turn-failure > svg {
+		flex-shrink: 0;
+		margin-top: 2px;
+	}
+
+	.conversation-turn-failure p {
+		margin: 0;
+	}
+
+	.conversation-turn-failure .conversation-turn-failure-detail {
+		margin-top: 4px;
+	}
+
+	.conversation-turn-failure button {
+		margin-top: 6px;
+	}
+}

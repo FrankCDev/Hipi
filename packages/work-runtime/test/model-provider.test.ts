@@ -10,6 +10,7 @@ import {
 	type Provider,
 } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { readModelFailureDetail } from "../src/model-failure.ts";
 import { type CredentialPort, createProductionModels } from "../src/model-provider.ts";
 import { openRuntime } from "../src/node.ts";
 
@@ -121,7 +122,7 @@ for (const status of ["missing", "locked", "unavailable"] as const) {
 				},
 			);
 			assert.equal(
-				result.errorMessage,
+				readModelFailureDetail(result.errorMessage)?.category,
 				status === "missing"
 					? "credential_required"
 					: status === "locked"
@@ -129,6 +130,7 @@ for (const status of ["missing", "locked", "unavailable"] as const) {
 						: "credential_unavailable",
 			);
 			assert.equal(transport.requests(), 0);
+			assert.equal(readModelFailureDetail(result.errorMessage)?.dispatch, "not_sent");
 			assert.equal(JSON.stringify(result).includes(sentinel), false);
 		} finally {
 			if (previous === undefined) delete process.env.OPENAI_API_KEY;
@@ -180,7 +182,7 @@ for (const failure of ["status", "get", "auth", "throw", "event", "result"] as c
 			const result = await stream.result();
 			assert.equal(result.stopReason, "error");
 			assert.equal(
-				result.errorMessage,
+				readModelFailureDetail(result.errorMessage)?.category,
 				failure === "status" || failure === "get" ? "credential_unavailable" : "model_request_failed",
 			);
 			assert.deepEqual(result.content, []);
@@ -302,7 +304,8 @@ for (const [code, category] of [
 			api: model.api,
 			id: "fake-response",
 		});
-		assert.equal(result.errorMessage, category);
+		assert.equal(readModelFailureDetail(result.errorMessage)?.category, category);
+		assert.equal(readModelFailureDetail(result.errorMessage)?.dispatch, "unknown");
 		assert.equal(JSON.stringify(result).includes(sentinel), false);
 	});
 }

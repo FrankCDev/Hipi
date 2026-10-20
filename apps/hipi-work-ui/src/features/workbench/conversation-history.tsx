@@ -3,6 +3,7 @@ import { type RefObject, useCallback, useLayoutEffect, useRef, useState } from "
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import type { ConversationFailure } from "./conversation-failure.ts";
 import { ConversationHistoryController, type ConversationHistoryState } from "./conversation-history-controller.ts";
 import { ConversationMessages } from "./conversation-messages.tsx";
 import { readingPositionsFor } from "./conversation-reading-position.ts";
@@ -13,6 +14,8 @@ type Props = {
 	snapshot: Snapshot | undefined;
 	error: boolean;
 	footerRef?: RefObject<HTMLElement | null>;
+	failure?: ConversationFailure;
+	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
 };
 
 export function ConversationHistory(props: Props) {
@@ -26,7 +29,7 @@ export function ConversationHistory(props: Props) {
 	);
 }
 
-function ScopedHistory({ scope, snapshot, error, footerRef }: Props) {
+function ScopedHistory({ scope, snapshot, error, footerRef, failure, onOpenModelSettings }: Props) {
 	const client = useAppClient();
 	const positions = readingPositionsFor(client);
 	const { t } = usePreferences();
@@ -63,6 +66,8 @@ function ScopedHistory({ scope, snapshot, error, footerRef }: Props) {
 			key={displayGeneration}
 			scope={scope}
 			footerRef={footerRef}
+			failure={failure}
+			onOpenModelSettings={onOpenModelSettings}
 			readingPositions={positions}
 			snapshot={state.snapshot}
 			error={error}

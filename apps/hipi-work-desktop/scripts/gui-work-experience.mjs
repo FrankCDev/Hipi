@@ -5,6 +5,15 @@ export const layoutCases = [1440, 1280, 1024, 640].flatMap((width) =>
 	["en", "zh-CN"].flatMap((locale) => ["light", "dark"].map((theme) => ({ width, height: 900, locale, theme }))),
 );
 
+export function deterministicCredentialEvidence(document) {
+	const rows = [...document.querySelectorAll(".settings-modal .provider-service-row")];
+	if (rows.length !== 1 || rows[0].dataset.setting !== "provider:faux" || !rows[0].disabled) return null;
+	return {
+		status: "not_applicable_to_deterministic_catalog",
+		nativeCredentialStatus:
+			"not_run; isolated production-mode journey is not supported by the deterministic smoke launch boundary",
+	};
+}
 /** Read rendered geometry only; do not install UI state or replace runtime responses. */
 export function workExperienceGeometry(document, viewport) {
 	const selectors = {
@@ -133,7 +142,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		settingsHarness,
 		hover,
 	} = helpers;
-	const settings = ".workbench-settings-trigger";
+	const settings = ".sidebar-settings-trigger";
 	const route = settingsHarness(cdp);
 	const files = 'header button[aria-label="Show files"]';
 	const readDraft = () => evaluate(cdp, "document.querySelector('.composer textarea').value");
@@ -146,7 +155,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 	assert.equal(await evaluate(cdp, "document.querySelector('.work-shell').dataset.navigationCollapsed"), "false");
 	await openAppearance(cdp);
 	const originalMode = (await appearanceChoice(cdp)).mode;
-	await route.back(settings);
+	await route.close(settings);
 	const samples = [];
 	let failure;
 	let result;
@@ -204,7 +213,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			() =>
 				evaluate(
 					cdp,
-					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'models' && document.querySelector('.settings-section:not([hidden])')?.textContent.includes('faux-1')`,
+					`document.querySelector('.settings-page-nav [aria-current="page"]')?.dataset.category === 'models' && document.querySelector('.settings-section:not([hidden]) [data-setting="provider:faux"]')?.disabled === true && document.querySelector('[data-setting="provider:faux"] output')?.dataset.state === 'configured'`,
 				),
 			"actual model catalog in selected category",
 		);
@@ -224,7 +233,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		);
 		await route.geometry();
 		await capture(cdp, directory, `work-experience-${reopened ? "reopened-" : ""}settings-runtime`);
-		await route.back(".sidebar-settings-trigger");
+		await route.close(".sidebar-settings-trigger");
 		assert.equal(await readDraft(), retainedDraft, "Settings must retain the task draft");
 		assert.equal(
 			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
@@ -299,7 +308,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 					directory,
 					`work-experience-${reopened ? "reopened-" : ""}settings-${item.width}-${item.locale}-${item.theme}`,
 				);
-				await route.back(settings);
+				await route.close(settings);
 			}
 			const geometry = await evaluate(
 				cdp,
@@ -458,45 +467,23 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			"narrow navigation Escape focus",
 		);
 		await assertNoAlerts(cdp);
-		// Keep the platform credential read mandatory, but independent core visual evidence comes first.
+		// The deterministic catalog has no mutable official-provider row. Do not manufacture
+		// one or reinterpret a faux configured status as a native credential-storage check.
 		phase = "settings";
 		await resize(1440);
 		await openAppearance(cdp);
 		await click(cdp, '.settings-page-nav button[data-category="models"]');
-		assert.equal(
-			await evaluate(
-				cdp,
-				`(() => { const matches=[...document.querySelectorAll('.settings-section:not([hidden]) button')].filter(e => e.textContent.trim() === 'Model settings'); window.__hipiGuiCredentialTrigger = matches.length === 1 ? matches[0] : null; return !!window.__hipiGuiCredentialTrigger; })()`,
-			),
-			true,
+		const credentialJourney = await until(
+			() => evaluate(cdp, `(${deterministicCredentialEvidence.toString()})(document)`),
+			"actual deterministic catalog has one read-only faux service and no official credential editor",
 		);
-		phase = "credential_open";
-		await click(cdp, ".settings-section:not([hidden]) button", "Model settings");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!!document.querySelector('.model-settings-dialog') && !document.querySelector('.model-settings-dialog button[data-slot="dialog-close"]').disabled`,
-				),
-			"credential status read completed",
-		);
-		phase = "credential_close";
-		await pressKey(cdp, "Escape");
-		await until(
-			() =>
-				evaluate(
-					cdp,
-					`!document.querySelector('.model-settings-dialog') && !!document.querySelector('.settings-route') && window.__hipiGuiCredentialTrigger?.isConnected && document.activeElement === window.__hipiGuiCredentialTrigger`,
-				),
-			"nested credentials restores exact trigger",
-		);
-		await route.back(settings);
-		assert.equal(await readDraft(), draft, "Nested credentials must retain the task draft");
+		await route.close(settings);
+		assert.equal(await readDraft(), draft, "Provider list must retain the task draft");
 		assert.deepEqual(await readKeys(), originalKeys);
 		assert.equal(
 			await evaluate(cdp, `window.__hipiGuiRetainedConversation === document.querySelector('.conversation-panel')`),
 			true,
-			"Nested credentials must retain the conversation DOM identity",
+			"Provider list must retain the conversation DOM identity",
 		);
 		await assertNoAlerts(cdp);
 		result = {
@@ -507,7 +494,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			nativeAppearance,
 			directCapabilitiesScopedAndFocusRestored: true,
 			settingsKeyboardNavigation: true,
-			nestedCredentialsEscapeFocus: true,
+			credentialJourney,
 			settingsRetainedDraftAndConversation: true,
 			sidebarHoverAndKeyboardActions: true,
 			narrowNavigationEscapeFocus: true,
@@ -546,7 +533,7 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			) {
 				await pressKey(cdp, "Escape");
 			}
-			if (await evaluate(cdp, `!!document.querySelector('.settings-route')`)) await route.back();
+			if (await evaluate(cdp, `!!document.querySelector('.settings-modal')`)) await route.close();
 			await resize(1440);
 			if (await evaluate(cdp, `document.querySelector('.work-shell').dataset.navigationCollapsed==='true'`))
 				await click(cdp, ".navigation-toggle");
@@ -568,9 +555,9 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 			assert.equal(await readDraft(), "", "Acceptance draft must be removed before restart");
 			await openAppearance(cdp);
 			await setAppearanceChoice(cdp, "theme", originalMode);
-			await route.back(settings);
+			await route.close(settings);
 			await cdp.request("Emulation.clearDeviceMetricsOverride");
-			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation; delete window.__hipiGuiCredentialTrigger");
+			await evaluate(cdp, "delete window.__hipiGuiRetainedConversation");
 			assert.deepEqual(await readKeys(), originalKeys);
 		} catch (restoreError) {
 			if (restoreError instanceof Error) restoreError.workExperiencePhase = "restoration";

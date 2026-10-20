@@ -3,17 +3,20 @@ import { readFileSync } from "node:fs";
 import type { AppClient, ModelCatalog } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type * as Radix from "radix-ui";
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, test, vi } from "vitest";
 import type { CredentialClient } from "../src/app/credential-client.ts";
 import { PreferencesProvider } from "../src/app/preferences.tsx";
 import { defaultConfig } from "../src/app/theme/config.ts";
 import { themeStorageKey } from "../src/app/theme/store.ts";
+import type { DialogContent } from "../src/components/ui/dialog.tsx";
 import { SettingsDialog, type SettingsDialogProps } from "../src/features/settings/settings-dialog.tsx";
+import { SettingsSurface } from "../src/features/settings/settings-surface.tsx";
 
-// Bypass browser-only portal and scroll locking. Keep the real modal composition and controls;
-// focus trapping, scroll locking and nested-dialog focus restoration remain browser acceptance gates.
+// Render portal contents for SSR inspection, omitting the browser-only dimmer/scroll-lock.
+// Keep the real modal content and controls. Overlay paint, focus trapping, scroll locking and
+// nested-dialog focus restoration remain native browser acceptance gates.
 vi.mock("radix-ui", async (original) => {
 	const actual = await original<typeof Radix>();
 	return {
@@ -21,7 +24,7 @@ vi.mock("radix-ui", async (original) => {
 		Dialog: {
 			...actual.Dialog,
 			Portal: ({ children }: { children: ReactNode }) => children,
-			Overlay: (props: ComponentProps<"div">) => <div {...props} />,
+			Overlay: () => null,
 		},
 	};
 });
@@ -57,6 +60,7 @@ function render({
 		},
 	});
 	const cache = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+	cache.setQueryData(["custom-providers"], { providers: [] });
 	if (catalog) cache.setQueryData(["models"], catalog);
 	try {
 		return renderToStaticMarkup(
@@ -77,11 +81,14 @@ function render({
 	}
 }
 
-test("settings is an accessible page with Back, fixed categories and one inline appearance form", () => {
+test("settings is one bounded named modal with fixed categories, close and inline preferences", () => {
 	const html = render();
-	assert.doesNotMatch(html, /role="dialog"|unified-settings-dialog|data-slot="dialog-close"/);
-	assert.match(html, /class="settings-route" data-settings-page/);
-	assert.match(html, /Back to app/);
+	assert.equal((html.match(/role="dialog"/g) ?? []).length, 1);
+	assert.match(html, /data-settings-surface="true"/);
+	assert.match(html, /data-slot="dialog-title"[^>]*>Settings<\/h2>/);
+	assert.match(html, /data-slot="dialog-close"/);
+	assert.match(html, /Close settings/);
+	assert.doesNotMatch(html, /settings-route|Back to app/);
 	assert.match(html, /<nav class="settings-page-nav" aria-label="Settings categories">/);
 	for (const category of ["general", "appearance", "models", "runtime"]) {
 		assert.match(html, new RegExp(`<button[^>]*data-category="${category}"`));
@@ -119,7 +126,7 @@ test("appearance exposes supported immediate controls without staged editing or 
 	assert.doesNotMatch(html, /Auto.install|autostart|Subscription|Translucent sidebar|Font smoothing/);
 });
 
-test("model section displays only returned providers/models and does not claim verified service or a global model setting", () => {
+test("model section has one service list with real status and no separate credential/catalog dump", () => {
 	const html = render({
 		catalog: {
 			providers: [
@@ -133,16 +140,19 @@ test("model section displays only returned providers/models and does not claim v
 		},
 	});
 	assert.match(html, /data-state="missing"/);
-	assert.match(html, /Credentials configured \(service not verified\)/);
-	assert.match(html, /actual-runtime-model/);
-	assert.match(html, /validation-only/);
-	assert.match(html, /Existing conversations keep their fixed model/);
-	assert.match(html, /Credential management unavailable/);
+	assert.match(html, /Key saved · unverified/);
+	assert.match(html, /data-setting="provider:openai"/);
+	assert.match(html, /Model services/);
+	assert.match(html, /Add service/);
+	assert.doesNotMatch(
+		html,
+		/actual-runtime-model|validation-only|Credential storage|Available models|Credential action/,
+	);
 	assert.doesNotMatch(html, /Default model|<option|type="password"|Runtime responded to the last check/);
 	assert.match(html, /Not checked yet/);
 });
 
-test("credential storage messaging distinguishes memory, system and unavailable without reading or caching secrets", () => {
+test("the settings shell never reads credentials or exposes a redundant credential-management entry", () => {
 	for (const storage of ["memory", "system"] as const) {
 		credentials = {
 			storage,
@@ -151,9 +161,7 @@ test("credential storage messaging distinguishes memory, system and unavailable 
 			},
 		};
 		const html = render();
-		assert.ok(html.includes(storage === "memory" ? "Runtime memory only" : "System-protected storage"));
-		assert.match(html, /Saved keys are never displayed or included in appearance exports/);
-		assert.equal((html.match(/>Credential action<\/button>/g) ?? []).length, 1);
+		assert.doesNotMatch(html, /Credential action|type="password"|Only official OpenAI|仅支持官方 OpenAI/);
 	}
 });
 
@@ -182,13 +190,62 @@ test("Chinese labels and rejected appearance recovery remain available", () => {
 	assert.match(invalid, /导出被拒绝的原始数据/);
 });
 
-test("settings page owns content scrolling and uses measured desktop form dimensions", () => {
+test("settings modal bounds both axes and preserves independent scrolling and responsive controls", () => {
 	const css = readFileSync(new URL("../src/features/settings/settings-page.css", import.meta.url), "utf8");
-	assert.match(css, /\.settings-route\s*\{[^}]*position: fixed;/);
+	assert.match(
+		css,
+		/\.settings-modal\[data-slot="dialog-content"\]\s*\{[^}]*width: min\(1000px, calc\(100vw - 48px\)\)/,
+	);
+	assert.match(css, /height: min\(720px, calc\(100dvh - 48px\)\)/);
+	assert.match(css, /\.settings-page-sidebar\s*\{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
 	assert.match(css, /\.settings-page-content\s*\{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
 	assert.match(css, /\.settings-section\[hidden\]\s*\{\s*display: none;/);
+	assert.match(css, /\.settings-modal \.settings-form\s*\{[^}]*gap: 0;/);
 	assert.match(css, /\.settings-theme-options\s*\{[^}]*width: 272px;[^}]*gap: 16px;/);
 	assert.match(css, /\.settings-size-input\s*\{[^}]*width: 64px;/);
-	assert.match(css, /@media \(max-width: 520px\)/);
-	assert.doesNotMatch(css, /unified-settings-dialog|settings-savebar|settings-unsaved-dialog/);
+	assert.match(css, /@media \(max-width: 600px\)/);
+	assert.doesNotMatch(css, /settings-route|settings-page-toolbar|settings-savebar|settings-unsaved-dialog/);
+});
+
+test("shared settings surface preserves exact opener focus and blocks dismissal during protected mutations or IME", () => {
+	const changed = vi.fn();
+	const restored = vi.fn();
+	const focused = vi.fn();
+	const escaped = vi.fn();
+	const renderSurface = (busy = false) =>
+		SettingsSurface({
+			open: true,
+			onOpenChange: changed,
+			onRestoreFocus: restored,
+			initialFocus: { current: { focus: focused } as unknown as HTMLElement },
+			title: "Settings",
+			closeLabel: "Close settings",
+			onEscapeKeyDown: escaped,
+			busy,
+			children: "Content",
+		});
+	const root = renderSurface();
+	const panel = root.props.children;
+	assert.ok(isValidElement<ComponentProps<typeof DialogContent>>(panel));
+	const preventDefault = vi.fn();
+	panel.props.onOpenAutoFocus?.({ preventDefault } as unknown as Event);
+	assert.equal(focused.mock.calls.length, 1);
+	panel.props.onCloseAutoFocus?.({ preventDefault } as unknown as Event);
+	assert.equal(restored.mock.calls.length, 1);
+	assert.equal(preventDefault.mock.calls.length, 2);
+	panel.props.onEscapeKeyDown?.({ isComposing: true, preventDefault } as unknown as KeyboardEvent);
+	panel.props.onEscapeKeyDown?.({ keyCode: 229, preventDefault } as unknown as KeyboardEvent);
+	assert.equal(escaped.mock.calls.length, 0);
+	panel.props.onEscapeKeyDown?.({ preventDefault } as unknown as KeyboardEvent);
+	assert.equal(escaped.mock.calls.length, 1);
+	const busy = renderSurface(true);
+	busy.props.onOpenChange?.(false);
+	assert.equal(changed.mock.calls.length, 0);
+	const busyPanel = busy.props.children;
+	assert.ok(isValidElement<ComponentProps<typeof DialogContent>>(busyPanel));
+	assert.equal(busyPanel.props.closeDisabled, true);
+	busyPanel.props.onEscapeKeyDown?.({ preventDefault } as unknown as KeyboardEvent);
+	assert.equal(escaped.mock.calls.length, 1);
+	root.props.onOpenChange?.(false);
+	assert.deepEqual(changed.mock.calls, [[false]]);
 });

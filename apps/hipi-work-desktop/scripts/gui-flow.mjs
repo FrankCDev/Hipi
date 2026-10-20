@@ -34,6 +34,7 @@ const diagnosticLabels = [
 	"Rename conversation",
 	"View details",
 	"Workbench settings",
+	"工作台设置",
 	"Appearance and language",
 	"Save",
 	"Cancel",
@@ -50,7 +51,7 @@ export function diagnosticTarget(selector, text) {
 	if (diagnosticLabels.includes(label)) return label;
 	if (label?.startsWith("Conversation actions: ")) return "Conversation actions";
 	if (selector === ".capabilities-trigger") return "Conversation capabilities";
-	if ([".sidebar-settings-trigger", ".workbench-settings-trigger"].includes(selector)) return "Workbench settings";
+	if (selector === ".sidebar-settings-trigger") return "Workbench settings";
 	return "unrecognized target";
 }
 export async function evaluate(cdp, expression) {
@@ -248,16 +249,16 @@ export async function inspectInitialChat(cdp) {
 	await until(
 		() =>
 			evaluate(cdp, "document.querySelector('.settings-page-nav [aria-current=page]')?.dataset.category === 'models'"),
-		"home model management route",
+		"home model management modal",
 	);
-	await click(cdp, ".settings-back");
+	await click(cdp, '.settings-modal [data-slot="dialog-close"]');
 	await until(
 		() =>
 			evaluate(
 				cdp,
-				"!document.querySelector('.settings-route') && document.activeElement === document.querySelector('.new-chat-model-trigger')",
+				"!document.querySelector('.settings-modal') && document.activeElement === document.querySelector('.new-chat-model-trigger')",
 			),
-		"home model route returns exact opener",
+		"home model modal returns exact opener",
 	);
 	assertInitialChatUnsubmitted(await read(), fixture.prompt);
 	return {
@@ -292,7 +293,7 @@ export async function waitForOverlayClosed(cdp, selector, text, milliseconds = 3
 export function settingsHarness(cdp) {
 	return createSettingsHarness(cdp, { evaluate, click, until, nativeEditorKey, capture, pressKey });
 }
-export async function openAppearance(cdp, trigger = ".workbench-settings-trigger") {
+export async function openAppearance(cdp, trigger = ".sidebar-settings-trigger") {
 	await settingsHarness(cdp).open(trigger, "appearance");
 }
 export async function setAppearanceChoice(cdp, field, value) {
@@ -303,9 +304,9 @@ export async function setWorkbenchPreferences(cdp, locale, mode) {
 }
 export async function selectEnglish(cdp) {
 	const route = settingsHarness(cdp);
-	await route.open(".workbench-settings-trigger", "general");
+	await route.open(".sidebar-settings-trigger", "general");
 	await route.setChoice("language", "en");
-	await route.back(".workbench-settings-trigger");
+	await route.close(".sidebar-settings-trigger");
 }
 export async function assertNoAlerts(cdp) {
 	const alerts = await evaluate(
@@ -329,12 +330,12 @@ async function inspectTheme(cdp, directory, reopened) {
 	const geometry = await route.geometry();
 	await capture(cdp, directory, reopened ? "settings-appearance-reopened" : "settings-appearance");
 	await route.setChoice("theme", "dark");
-	await route.back(".sidebar-settings-trigger");
+	await route.close(".sidebar-settings-trigger");
 	await capture(cdp, directory, reopened ? "dark-reopened" : "dark-completed");
-	await route.open(".workbench-settings-trigger", "appearance");
-	assert.equal((await route.choice()).mode, "dark", "Immediate theme choice must survive route return");
+	await route.open(".sidebar-settings-trigger", "appearance");
+	assert.equal((await route.choice()).mode, "dark", "Immediate theme choice must survive modal return");
 	await route.setChoice("theme", original);
-	await route.back(".workbench-settings-trigger");
+	await route.close(".sidebar-settings-trigger");
 	const expected = resolvedTheme(original, await evaluate(cdp, "matchMedia('(prefers-color-scheme: dark)').matches"));
 	await until(
 		() => evaluate(cdp, `document.documentElement.dataset.theme === ${JSON.stringify(expected)}`),
@@ -346,8 +347,8 @@ async function inspectTheme(cdp, directory, reopened) {
 		restoredResolved: expected,
 		darkCaptured: true,
 		immediateThemePersisted: true,
-		sidebarBackFocus: true,
-		toolbarBackFocus: true,
+		sidebarCloseFocus: true,
+		secondCloseFocus: true,
 		geometry,
 	};
 }
@@ -361,7 +362,7 @@ export async function modalBounds(cdp, selector, milliseconds = 30000, placement
 		if (location.href !== 'hipi-work://app/index.html') throw Error('Unexpected page');
 		const dialog = document.querySelector(${JSON.stringify(selector)});
 		if (!dialog) return null;
-		const closes = [...dialog.querySelectorAll('button[data-slot="dialog-close"]')];
+		const closes = [...dialog.querySelectorAll(':scope > button[data-slot="dialog-close"]')];
 		const body = dialog.querySelector(${JSON.stringify('[data-slot="dialog-body"]')});
 		const title = dialog.querySelector(${JSON.stringify('[data-slot="dialog-title"]')});
 		if (closes.length !== 1 || !body || !title) return null;
@@ -792,7 +793,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 		);
 		const projectDisclosure = await exerciseProjectDisclosure(
 			cdp,
-			{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts },
+			{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts, inspectModal },
 			directory,
 			fixture,
 			true,
@@ -928,7 +929,7 @@ export async function exercise(cdp, directory, reopened = false, fontObservation
 	);
 	const projectDisclosure = await exerciseProjectDisclosure(
 		cdp,
-		{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts },
+		{ evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts, inspectModal },
 		directory,
 		fixture,
 		false,

@@ -11,6 +11,7 @@ export type SettingsSearchEntry = {
 	category: SettingsCategory;
 	label: string;
 	destination: string;
+	target?: string;
 	description: string;
 	value?: string;
 	terms?: string;
@@ -32,7 +33,16 @@ export function settingsSearchEntries(
 			label: provider["provider.title"],
 			destination: l["settingsPage.models"],
 			description: provider["provider.empty"],
-			terms: "OpenAI Anthropic DeepSeek OpenRouter API base URL",
+			terms: [
+				"OpenAI Anthropic DeepSeek OpenRouter API base URL",
+				l["settingsPage.providers"],
+				l["settingsPage.credentials"],
+				l["settingsPage.catalog"],
+				provider["provider.key"],
+				provider["provider.protocol"],
+				provider["provider.url"],
+				provider["provider.models"],
+			].join(" "),
 		},
 		...(
 			[
@@ -90,14 +100,6 @@ export function settingsSearchEntries(
 				description: t("settings.visual"),
 			})),
 		),
-		...(["providers", "credentials", "catalog"] as const).map((id) => ({
-			id,
-			category: "models" as const,
-			label: l[`settingsPage.${id}`],
-			destination: l["settingsPage.models"],
-			description: id === "providers" ? l["settingsPage.providerNote"] : l[`settingsPage.${id}Note`],
-			terms: id === "credentials" ? "OpenAI API key" : undefined,
-		})),
 		...(["connection", "workData", "localData", "appearanceData", "currentScope"] as const).map((id) => ({
 			id,
 			category: "runtime" as const,
@@ -124,8 +126,8 @@ export function settingsSearchEntries(
 			category: "models",
 			label: provider.name,
 			destination: l["settingsPage.models"],
+			target: "custom-providers",
 			description: l["settingsPage.providers"],
-			value: provider.provider,
 		});
 	}
 	for (const model of catalog?.models ?? []) {
@@ -134,7 +136,8 @@ export function settingsSearchEntries(
 			category: "models",
 			label: model.name,
 			destination: l["settingsPage.models"],
-			description: `${model.provider} · ${model.modelId}`,
+			target: "custom-providers",
+			description: `${catalog?.providers.find((entry) => entry.provider === model.provider)?.name ?? provider["provider.custom"]} · ${model.modelId}`,
 		});
 	}
 	return entries;

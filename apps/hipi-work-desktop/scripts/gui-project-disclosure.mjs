@@ -3,6 +3,17 @@ import { nativeEditorKey } from "./gui-work-experience.mjs";
 
 export const projectCreationTrigger = '.nav-section-heading button[aria-label="New project"]';
 
+export function projectCreationRecovered(document, before) {
+	return (
+		document.activeElement === before.trigger &&
+		before.trigger.isConnected &&
+		before.conversation === document.querySelector(".conversation-panel") &&
+		before.composer === document.querySelector(".composer textarea") &&
+		document.querySelector(".composer textarea")?.value === "" &&
+		document.querySelectorAll(".workspace-branch").length === before.count
+	);
+}
+
 export function projectViewportReady(document, width) {
 	const shell = document.querySelector(".work-shell");
 	const sidebar = document.querySelector(".sidebar");
@@ -52,7 +63,7 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		/^[A-Za-z0-9_-]{1,128}$/,
 		"Actual receipt workspace identity required",
 	);
-	const { evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts } = helpers;
+	const { evaluate, click, until, capture, pressKey, waitForOverlayClosed, assertNoAlerts, inspectModal } = helpers;
 	const second = "GUI disclosure empty project";
 	const creator = projectCreationTrigger;
 	const locate = (name) =>
@@ -93,12 +104,52 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 		await resize(1440);
 		if (!reopened) {
 			assert.equal(await evaluate(cdp, `(${projectSelector.toString()})(document, ${JSON.stringify(second)})`), null);
+			await evaluate(
+				cdp,
+				`window.__hipiProjectCreate = {
+				trigger: document.querySelector(${JSON.stringify(creator)}),
+				conversation: document.querySelector('.conversation-panel'),
+				composer: document.querySelector('.composer textarea'),
+				count: document.querySelectorAll('.workspace-branch').length
+			}`,
+			);
 			await click(cdp, creator);
+			await until(
+				() =>
+					evaluate(
+						cdp,
+						`document.activeElement === document.querySelector('[role="dialog"] .task-title-input') &&
+				document.querySelector('[role="dialog"] .task-title-input')?.value === '' &&
+				document.querySelector('[role="dialog"] .task-create-confirm')?.disabled === true`,
+					),
+				"new project starts focused and cannot create an empty name",
+			);
+			await inspectModal(cdp, '[role="dialog"]', "center");
+			await capture(cdp, directory, "project-create-empty");
 			await click(cdp, '[role="dialog"] input');
 			await cdp.request("Input.insertText", { text: second });
+			await pressKey(cdp, "Escape");
+			await waitForOverlayClosed(cdp, creator);
+			assert.equal(
+				await evaluate(cdp, `(${projectCreationRecovered.toString()})(document,window.__hipiProjectCreate)`),
+				true,
+				"Cancelled project must preserve exact opener, app owners, empty draft and workspace count",
+			);
+			assert.deepEqual((await read()).keys, originalKeys, "Cancelled project must not replay the conversation");
+			await click(cdp, creator);
+			await until(
+				() =>
+					evaluate(
+						cdp,
+						`document.querySelector('[role="dialog"] .task-title-input')?.value === ${JSON.stringify(second)} && document.querySelector('[role="dialog"] .task-create-confirm')?.disabled === false`,
+					),
+				"reopened project preserves its unsubmitted name",
+			);
+			await capture(cdp, directory, "project-create-ready");
 			await click(cdp, '[role="dialog"] .task-create-confirm');
 			await locate(second);
 			await waitForOverlayClosed(cdp, creator);
+			await evaluate(cdp, "delete window.__hipiProjectCreate");
 		}
 		const a = `.workspace-branch[data-workspace-id="${expectedScope.workspaceId}"]`;
 		const b = await locate(second);
@@ -227,7 +278,10 @@ export async function exerciseProjectDisclosure(cdp, helpers, directory, fixture
 				"Project navigation must not replay or mutate the completed task",
 			);
 			await cdp.request("Emulation.clearDeviceMetricsOverride");
-			await evaluate(cdp, "delete window.__hipiDisclosureConversation; delete window.__hipiDisclosureComposer");
+			await evaluate(
+				cdp,
+				"delete window.__hipiDisclosureConversation; delete window.__hipiDisclosureComposer; delete window.__hipiProjectCreate",
+			);
 		} catch (error) {
 			failure = failure ? new AggregateError([failure, error], "Project disclosure and restoration failed") : error;
 		}

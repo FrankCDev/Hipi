@@ -39,9 +39,9 @@ function request(method: string, params: unknown) {
 	return parseRequest({ version: PROTOCOL_VERSION, expectedStoreId: "fixture-store", method, params });
 }
 
-test("protocol 6 requires stable create identity and revision-bound directory mutations", () => {
-	assert.equal(PROTOCOL_VERSION, 6);
-	for (const version of [3, 5, 7])
+test("protocol 7 requires stable create identity and revision-bound directory mutations", () => {
+	assert.equal(PROTOCOL_VERSION, 7);
+	for (const version of [3, 5, 6, 8])
 		assert.throws(() => parseRequest({ version, method: "listWorkspaces", params: {} }), {
 			code: "INVALID_REQUEST",
 		});

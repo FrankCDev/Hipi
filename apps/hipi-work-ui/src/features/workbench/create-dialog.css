@@ -1,0 +1,31 @@
+.project-create-dialog[data-slot="dialog-content"] {
+	gap: 20px;
+}
+.project-create-dialog > [data-slot="dialog-title"] {
+	font-size: 20px;
+	font-weight: 430;
+	line-height: 1.4;
+}
+.project-create-form {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+.project-create-body {
+	margin: -4px;
+	padding: 4px;
+}
+.project-create-form > .task-title-input {
+	height: 40px;
+	border-radius: 10px;
+	font-size: var(--font-ui-size);
+	box-shadow: none;
+}
+.project-create-actions {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding-top: 4px;
+}

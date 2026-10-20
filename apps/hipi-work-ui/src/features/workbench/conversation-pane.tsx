@@ -1,5 +1,6 @@
 import type { Conversation } from "@hipi/work-runtime/contracts";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
+import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
@@ -14,6 +15,7 @@ import {
 } from "../tool-activities/tool-activities.tsx";
 import { catalogLabels } from "./catalog-labels.ts";
 import { ConversationComposer } from "./conversation-composer.tsx";
+import { conversationFailureTrackerFor } from "./conversation-failure.ts";
 import { ConversationHistory } from "./conversation-history.tsx";
 import { ConversationModelControls } from "./conversation-model.tsx";
 import { ConversationReceipt } from "./conversation-receipt.tsx";
@@ -24,15 +26,36 @@ export function ConversationPane({
 	detailsOpen,
 	onDetailsClose,
 	onOpenArtifact,
+	onOpenModelSettings,
 }: {
 	conversation: Conversation;
 	detailsOpen: boolean;
 	onDetailsClose: () => void;
 	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
+	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
 }) {
 	const { t, locale } = usePreferences();
+	const failureTracker = conversationFailureTrackerFor(useAppClient());
 	const controller = useConversation(conversation);
 	const { observation } = controller;
+	const failure = useMemo(
+		() =>
+			failureTracker.observe(
+				conversation,
+				controller.requestId,
+				controller.receipt.data,
+				observation.snapshot,
+				controller.mutation.isPending,
+			),
+		[
+			failureTracker,
+			conversation,
+			controller.requestId,
+			controller.receipt.data,
+			observation.snapshot,
+			controller.mutation.isPending,
+		],
+	);
 	const footer = useRef<HTMLDivElement>(null);
 	const panel = useRef<HTMLElement>(null);
 	return (
@@ -53,7 +76,7 @@ export function ConversationPane({
 			<section ref={panel} className="conversation-panel" aria-label={conversation.title}>
 				<h1 className="sr-only">{conversation.title}</h1>
 				{conversation.archivedAt !== null && <p className="notice">{catalogLabels(locale).archivedNote}</p>}
-				{observation.connection !== "connected" && (
+				{observation.showConnectionNotice && (
 					<div className={`connection-bar ${observation.connection === "stale" ? "connection-warning" : ""}`}>
 						<output className="flex items-center gap-2">
 							<span className="status-dot" />
@@ -100,6 +123,8 @@ export function ConversationPane({
 					snapshot={observation.snapshot}
 					error={observation.error}
 					footerRef={footer}
+					failure={failure}
+					onOpenModelSettings={onOpenModelSettings}
 				/>
 				<div className="conversation-footer" ref={footer}>
 					<ConversationComposer

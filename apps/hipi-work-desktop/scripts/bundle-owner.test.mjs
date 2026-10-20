@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -29,7 +29,7 @@ test("nested module-scope manifests resolve to the exact locked distribution, no
 		await put(`${path}/libesm/diff/array.js`, "export {};");
 		const owner = await resolveBundleOwner(root, `${path}/libesm/diff/array.js`, { packages: { [path]: locked } });
 		assert.equal(owner.key, path);
-		assert.equal(owner.location, join(root, path));
+		assert.equal(owner.location, await realpath(join(root, path)));
 		assert.deepEqual(owner.info, info);
 		assert.equal(owner.locked, locked);
 	});

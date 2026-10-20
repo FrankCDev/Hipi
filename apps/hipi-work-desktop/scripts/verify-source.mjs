@@ -27,6 +27,9 @@ nodeTests.push("apps/hipi-work-desktop/scripts/release-download.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/credential-diagnostics.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/credential-crypto.test.ts");
+nodeTests.push("apps/hipi-work-desktop/test/connection-lifetime.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/conversation-failure.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/observation-session.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
@@ -89,6 +92,9 @@ const uiTests = [
 	"settings-dialog",
 	"settings-workflow",
 	"custom-provider-settings",
+	"legacy-provider-editor",
+	"conversation-turn-failure",
+	"observation-recovery-ui",
 	"conversation-capabilities",
 	"conversation-capabilities-interaction",
 	"conversation-preview-card",
