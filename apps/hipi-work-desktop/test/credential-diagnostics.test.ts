@@ -20,6 +20,7 @@ test("main emits only bounded fixed status markers for an isolated deterministic
 				app: { getPath: () => "/validated-owned-root/profile" },
 				join: (...parts: string[]) => parts.join("/"),
 				safeStorage: {},
+				createCredentialCrypto: (storage: unknown) => storage,
 				CredentialStore: class {
 					constructor(
 						_path: unknown,

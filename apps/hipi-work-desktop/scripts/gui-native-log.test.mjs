@@ -247,7 +247,17 @@ test("cleanup command diagnostics expose only fixed categories and bounded Power
 
 test("package-exit diagnostics preserve only allowlisted phases without exposing helper output", () => {
 	const evidence = {};
-	for (const phase of ["helper-start", "start", "query", "query-return", "present", "absent", "output-invalid"]) {
+	for (const phase of [
+		"helper-start",
+		"start",
+		"import-enter",
+		"import-return",
+		"query",
+		"query-return",
+		"present",
+		"absent",
+		"output-invalid",
+	]) {
 		const error = Object.assign(new Error("command=private"), { packageExitPhase: phase, stdout: "private-output" });
 		recordGuiFailure(evidence, "failure", error, []);
 		assert.equal(evidence.failurePackageExitPhase, phase);

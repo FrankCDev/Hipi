@@ -19,6 +19,7 @@ import {
 	session,
 	utilityProcess,
 } from "electron";
+import { createCredentialCrypto } from "./credential-crypto.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
 import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
 import { diagnosticMessages } from "./diagnostic-messages.ts";
@@ -185,7 +186,7 @@ async function start(mode: "production" | "deterministic") {
 	]);
 	const credentials = new CredentialStore(
 		join(app.getPath("userData"), "credentials", "providers.enc"),
-		safeStorage,
+		createCredentialCrypto(safeStorage),
 		process.platform,
 		undefined,
 		mode === "deterministic" && process.argv.some((argument) => argument.startsWith("--smoke-data-root="))

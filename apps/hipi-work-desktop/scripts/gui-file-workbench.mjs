@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { documentPreviewState, exerciseDocumentPreviews } from "./gui-file-previews.mjs";
@@ -202,7 +204,14 @@ export async function exerciseFileWorkbench({ cdp, directory, reopened, nativeCo
 		"no implicit or restarted file grants",
 	);
 	await click(cdp, ".file-workbench button", "Authorize folder (read and write)");
-	const picker = await chooseOwnedFileFolder(nativeContext);
+	const picker = await chooseOwnedFileFolder(nativeContext, {
+		observe: async (stage, png) => {
+			assert.ok(["before-input", "after-type", "bounded-failure"].includes(stage));
+			const name = `native-picker-${reopened ? "reopened" : "first"}-${stage}.png`;
+			await writeFile(join(directory, name), png, { flag: "wx", mode: 0o600 });
+			record({ nativePickerCapture: stage, image: name, nativeWindowOnly: true, syntheticSessionOnly: true });
+		},
+	});
 	record({ picker, reopened, grantsRequireFreshNativeChoice: true });
 	await openRoot(cdp);
 	await selectFile(cdp, fileFixture.textName);

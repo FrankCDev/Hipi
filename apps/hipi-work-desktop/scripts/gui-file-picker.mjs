@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { basename } from "node:path";
 import { promisify } from "node:util";
+import { maxPickerImageBytes, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { ownedFileDirectory } from "./gui-file-workbench-fixture.mjs";
 
 const execute = promisify(execFile);
@@ -68,9 +69,11 @@ export async function chooseOwnedFileFolder(
 		identity = nativeSessionIdentity,
 		pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 		now = Date.now,
+		observe,
 	} = {},
 ) {
 	assert.equal(process.platform, "linux", "Native file-picker candidate currently supports Linux only");
+	assert.ok(observe === undefined || typeof observe === "function");
 	const directory = await ownedFileDirectory(context.ownedProfileRoot);
 	assert.match(directory, /^[\x20-\x7e]+$/, "Native helper accepts only an ASCII temporary path");
 	const original = await identity(context);
@@ -116,17 +119,36 @@ export async function chooseOwnedFileFolder(
 	};
 	await assertDialog();
 	await command(["windowfocus", "--sync", window]);
-	const input = async (args) => {
+	const assertFocused = async () => {
 		await assertDialog();
 		assert.equal((await command(["getwindowfocus"])).stdout.trim(), window, "Native picker focus not confirmed");
+	};
+	const capture = async (stage) => {
+		if (!observe) return;
+		await assertFocused();
+		assert.deepEqual(await identity(context), original, "Owned native session changed before picker capture");
+		// Exact chooser only: never -root, -screen, ambient DISPLAY, or interactive selection.
+		const { stdout } = await run("xwd", ["-silent", "-nobdrs", "-id", window], {
+			env,
+			timeout: 5000,
+			maxBuffer: maxPickerImageBytes,
+			encoding: "buffer",
+		});
+		await assertFocused();
+		await observe(stage, pickerXwdToPng(stdout));
+	};
+	const input = async (args) => {
+		await assertFocused();
 		// --window uses XSendEvent, which GTK can reject. A fresh xdotool invocation without
 		// a window stack uses XTEST on this verified private display's focused dialog only.
 		// Never recover focus here: any focus/identity change must stop before input.
 		await command(args);
 	};
+	await capture("before-input");
 	await input(["key", "--clearmodifiers", "ctrl+l"]);
 	await input(["key", "--clearmodifiers", "ctrl+a"]);
 	await input(["type", "--clearmodifiers", "--delay", "1", "--", directory]);
+	await capture("after-type");
 	for (let attempt = 0; attempt < 2; attempt++) {
 		await input(["key", "--clearmodifiers", "Return"]);
 		const closedDeadline = now() + 1500;
@@ -135,5 +157,6 @@ export async function chooseOwnedFileFolder(
 			await pause(50);
 		}
 	}
+	await capture("bounded-failure");
 	throw new Error("Native folder picker did not close after bounded confirmation");
 }

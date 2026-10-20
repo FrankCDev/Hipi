@@ -147,7 +147,8 @@ test("CIM exit observation authorizes cleanup only after an actual zero result w
 });
 
 test("Windows exit query requires complete fixed outcomes and preserves query scope, environment and deadline", async () => {
-	const prefix = ["start", "query", "query-return"].map((phase) => `HIPI_PACKAGE_EXIT_PHASE:${phase}\n`).join("");
+	const stages = ["start", "import-enter", "import-return", "query", "query-return"];
+	const prefix = stages.map((phase) => `HIPI_PACKAGE_EXIT_PHASE:${phase}\n`).join("");
 	const absent = `${prefix}HIPI_PACKAGE_EXIT_PHASE:absent\n`;
 	const present = `${prefix}HIPI_PACKAGE_EXIT_PHASE:present\n`;
 	const directory = "C:\\owned-private-package";
@@ -155,6 +156,16 @@ test("Windows exit query requires complete fixed outcomes and preserves query sc
 		assert.equal(command, "powershell.exe");
 		assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
 		assert.ok(!args[3].includes(directory));
+		assert.ok(args[3].includes("$PSModuleAutoLoadingPreference = 'None';"));
+		assert.ok(
+			args[3].includes(
+				"Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1')) -ErrorAction Stop;",
+			),
+		);
+		assert.ok(args[3].indexOf("$PSModuleAutoLoadingPreference") < args[3].indexOf("Import-Module"));
+		assert.ok(args[3].indexOf("Import-Module") < args[3].indexOf("Get-CimInstance"));
+		assert.equal(args[3].match(/Get-CimInstance/g).length, 1, "Bootstrap must not issue an extra query");
+		assert.ok(!/Join-Path|ExecutionPolicy|PSModulePath|USERPROFILE|PassThru/.test(args[3]));
 		assert.match(args[3], /Get-CimInstance Win32_Process -ErrorAction Stop \| Where-Object/);
 		assert.match(
 			args[3],
@@ -166,7 +177,20 @@ test("Windows exit query requires complete fixed outcomes and preserves query sc
 		assert.ok(Object.keys(options.env).every((name) => /^(PATH|SYSTEMROOT|WINDIR|HIPI_SMOKE_PACKAGE)$/i.test(name)));
 		return { stdout: absent, stderr: "" };
 	});
-	for (const stdout of ["", prefix, absent.trimEnd(), `${absent}private-output\n`, "x".repeat(4097), present])
+	for (const stdout of [
+		"",
+		prefix,
+		absent.trimEnd(),
+		`${absent}private-output\n`,
+		"x".repeat(4097),
+		present,
+		...stages.map((phase) => absent.replace(`HIPI_PACKAGE_EXIT_PHASE:${phase}\n`, "")),
+		absent.replace("HIPI_PACKAGE_EXIT_PHASE:import-return", "HIPI_PACKAGE_EXIT_PHASE:import-enter"),
+		absent.replace(
+			"HIPI_PACKAGE_EXIT_PHASE:import-enter\nHIPI_PACKAGE_EXIT_PHASE:import-return",
+			"HIPI_PACKAGE_EXIT_PHASE:import-return\nHIPI_PACKAGE_EXIT_PHASE:import-enter",
+		),
+	])
 		await assert.rejects(
 			queryWindowsPackageExit(directory, 1000, async () => ({ stdout, stderr: "" })),
 			{
@@ -176,7 +200,13 @@ test("Windows exit query requires complete fixed outcomes and preserves query sc
 	await assert.rejects(queryWindowsPackageExit(directory, 1000, async () => ({ stdout: absent, stderr: "private" })));
 	for (const [stdout, phase] of [
 		["", "helper-start"],
-		["HIPI_PACKAGE_EXIT_PHASE:start\nHIPI_PACKAGE_EXIT_PHASE:query\n", "query"],
+		...stages.map((phase, index) => [
+			stages
+				.slice(0, index + 1)
+				.map((value) => `HIPI_PACKAGE_EXIT_PHASE:${value}\n`)
+				.join(""),
+			phase,
+		]),
 		["private\n", "output-invalid"],
 	]) {
 		const failure = Object.assign(new Error("command=private"), {
@@ -202,7 +232,13 @@ test("Windows exit query requires complete fixed outcomes and preserves query sc
 		}),
 		{ code: 2, packageExitPhase: "present" },
 	);
-	for (const stdout of ["", absent, present.trimEnd(), `${present}private\n`])
+	for (const stdout of [
+		"",
+		absent,
+		present.trimEnd(),
+		`${present}private\n`,
+		...stages.map((phase) => present.replace(`HIPI_PACKAGE_EXIT_PHASE:${phase}\n`, "")),
+	])
 		await assert.rejects(
 			queryWindowsPackageExit(directory, 1000, async () => {
 				throw Object.assign(new Error("private"), { code: 2, stdout, stderr: "" });

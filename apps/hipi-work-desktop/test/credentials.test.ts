@@ -6,22 +6,22 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { credentialRequest } from "../src/credential-protocol.ts";
 import { CredentialRpc, credentialReply } from "../src/credential-rpc.ts";
-import { type CredentialStatusStage, CredentialStore, type SafeStoragePort } from "../src/credential-store.ts";
+import { type CredentialStatusStage, CredentialStore } from "../src/credential-store.ts";
 import { decode, encode } from "../src/protocol.ts";
 
 // Synthetic local crypto proves adapter boundaries, not OS keychain behavior.
-function syntheticStorage(backend = "gnome_libsecret"): SafeStoragePort {
+function syntheticStorage(backend = "gnome_libsecret") {
 	const key = randomBytes(32);
 	return {
 		isEncryptionAvailable: () => true,
 		getSelectedStorageBackend: () => backend,
-		encryptString(value) {
+		encryptString(value: string) {
 			const iv = randomBytes(12);
 			const cipher = createCipheriv("aes-256-gcm", key, iv);
 			const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
 			return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
 		},
-		decryptString(value) {
+		decryptString(value: Buffer) {
 			const decipher = createDecipheriv("aes-256-gcm", key, value.subarray(0, 12));
 			decipher.setAuthTag(value.subarray(12, 28));
 			return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]).toString("utf8");

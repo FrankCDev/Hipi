@@ -6,6 +6,11 @@ import { until } from "./gui-flow.mjs";
 const execute = promisify(execFile);
 const packageExitCommand = [
 	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:start'); [Console]::Out.Flush();",
+	// Resolve only the in-box module, not user/installed modules through implicit discovery.
+	"$PSModuleAutoLoadingPreference = 'None';",
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:import-enter'); [Console]::Out.Flush();",
+	"Import-Module -Name ([IO.Path]::Combine($PSHOME, 'Modules\\CimCmdlets\\CimCmdlets.psd1')) -ErrorAction Stop;",
+	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:import-return'); [Console]::Out.Flush();",
 	"$p = $env:HIPI_SMOKE_PACKAGE;",
 	"[Console]::Out.WriteLine('HIPI_PACKAGE_EXIT_PHASE:query'); [Console]::Out.Flush();",
 	"$found = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($p + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) });",
@@ -19,18 +24,20 @@ function packageExitProgress(stdout) {
 	const lines = stdout.replace(/^\uFEFF/, "").split(/\r?\n/);
 	const remainder = lines.pop();
 	let phase = "helper-start";
+	const stages = ["start", "import-enter", "import-return", "query", "query-return"];
 	for (const [index, line] of lines.entries()) {
-		const expected = ["start", "query", "query-return"][index];
 		const value = line.slice("HIPI_PACKAGE_EXIT_PHASE:".length);
 		if (
 			!line.startsWith("HIPI_PACKAGE_EXIT_PHASE:") ||
-			(index < 3 ? value !== expected : index !== 3 || !["present", "absent"].includes(value))
+			(index < stages.length
+				? value !== stages[index]
+				: index !== stages.length || !["present", "absent"].includes(value))
 		)
 			return { phase: "output-invalid" };
 		phase = value;
 	}
 	// Incomplete progress is diagnostic only, never an absence/presence result.
-	return { phase, ...(remainder === "" && lines.length === 4 ? { outcome: phase } : {}) };
+	return { phase, ...(remainder === "" && lines.length === stages.length + 1 ? { outcome: phase } : {}) };
 }
 
 /** Observe the unchanged package-path filter; never authorize cleanup from missing protocol output. */

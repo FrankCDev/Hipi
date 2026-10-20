@@ -130,11 +130,12 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.gui_smoke.outcome == 'success' }}
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y xdotool
+          sudo apt-get install --no-install-recommends -y xdotool x11-apps
           # Query package metadata without opening an ambient X display. Actual input
           # is permitted only after the scenario creates and verifies its private Xvfb.
-          dpkg-query --show xdotool libxdo3
+          dpkg-query --show xdotool libxdo3 x11-apps
           command -v xdotool
+          command -v xwd
           command -v Xvfb
       - name: Verify real packaged Linux file workbench and native folder picker
         id: file_workbench

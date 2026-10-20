@@ -7,10 +7,10 @@ import { AppError, type CredentialState } from "@hipi/work-runtime/contracts";
 import { credentialProvider, credentialSecret } from "./credential-protocol.ts";
 
 export interface SafeStoragePort {
-	isEncryptionAvailable(): boolean;
+	isEncryptionAvailable(): boolean | Promise<boolean>;
 	getSelectedStorageBackend(): string;
-	encryptString(value: string): Buffer;
-	decryptString(value: Buffer): string;
+	encryptString(value: string): Buffer | Promise<Buffer>;
+	decryptString(value: Buffer): string | Promise<string>;
 }
 const MAX_BYTES = 32768;
 export type CredentialStatusStage =
@@ -49,10 +49,10 @@ export class CredentialStore {
 			// Optional smoke diagnostics must never affect credential operations.
 		}
 	}
-	#available() {
+	async #available() {
 		try {
 			return (
-				this.#storage.isEncryptionAvailable() &&
+				(await this.#storage.isEncryptionAvailable()) &&
 				(this.#platform !== "linux" ||
 					["gnome_libsecret", "kwallet", "kwallet5", "kwallet6"].includes(this.#storage.getSelectedStorageBackend()))
 			);
@@ -83,7 +83,7 @@ export class CredentialStore {
 			const buffer = Buffer.alloc(MAX_BYTES + 1);
 			const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
 			if (bytesRead > MAX_BYTES) throw new AppError("INTERNAL");
-			const value: unknown = JSON.parse(this.#storage.decryptString(buffer.subarray(0, bytesRead)));
+			const value: unknown = JSON.parse(await this.#storage.decryptString(buffer.subarray(0, bytesRead)));
 			if (
 				!value ||
 				typeof value !== "object" ||
@@ -106,7 +106,7 @@ export class CredentialStore {
 		return this.#serial(async () => {
 			try {
 				this.#observe("availability-enter");
-				const available = this.#available();
+				const available = await this.#available();
 				this.#observe("availability-return");
 				if (!available) return "unavailable";
 				this.#observe("file-read-enter");
@@ -125,7 +125,7 @@ export class CredentialStore {
 	get(provider: string): Promise<string | undefined> {
 		credentialProvider(provider);
 		return this.#serial(async () => {
-			if (!this.#available()) throw new AppError("INTERNAL");
+			if (!(await this.#available())) throw new AppError("INTERNAL");
 			return this.#read();
 		});
 	}
@@ -140,12 +140,12 @@ export class CredentialStore {
 	}
 	#write(secret: string | undefined): Promise<void> {
 		return this.#serial(async () => {
-			if (!this.#available()) throw new AppError("INTERNAL");
+			if (!(await this.#available())) throw new AppError("INTERNAL");
 			// A damaged or locked existing file must never be replaced, including by deletion.
 			await this.#read();
 			const temporary = `${this.#path}.${randomUUID()}.tmp`;
 			try {
-				const encrypted = this.#storage.encryptString(JSON.stringify({ version: 1, openai: secret }));
+				const encrypted = await this.#storage.encryptString(JSON.stringify({ version: 1, openai: secret }));
 				if (!encrypted.length || encrypted.length > MAX_BYTES) throw new AppError("INTERNAL");
 				await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
 				const file = await open(temporary, "wx", 0o600);

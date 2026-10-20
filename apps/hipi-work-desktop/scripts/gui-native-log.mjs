@@ -28,6 +28,8 @@ const credentialStatusMarkers = new Set(
 const packageExitPhases = new Set([
 	"helper-start",
 	"start",
+	"import-enter",
+	"import-return",
 	"query",
 	"query-return",
 	"present",

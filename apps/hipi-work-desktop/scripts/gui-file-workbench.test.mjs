@@ -4,11 +4,13 @@ import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { crc32, inflateSync } from "node:zlib";
 import { createFileAuthority } from "@hipi/work-runtime/files/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { createPreviewClient } from "@hipi/work-runtime/previews/protocol";
 import { smokeProfile } from "../src/smoke-profile.ts";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
+import { maxPickerImageBytes, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";
 import { assertPdfPaint, documentPreviewState, pdfPreviewPaint } from "./gui-file-previews.mjs";
 import { fileWorkbenchState, validateFileWorkbenchEvidence } from "./gui-file-workbench.mjs";
@@ -207,7 +209,7 @@ test(
 	},
 );
 
-async function pickerHarness(run, identity = async () => ({ app: "100", xvfb: "200" })) {
+async function pickerHarness(run, identity = async () => ({ app: "100", xvfb: "200" }), options = {}) {
 	const ownedProfileRoot = await profile();
 	await ownedFileDirectory(ownedProfileRoot, { create: true });
 	let clock = 0;
@@ -221,12 +223,208 @@ async function pickerHarness(run, identity = async () => ({ app: "100", xvfb: "2
 					clock += ms;
 				},
 				now: () => clock,
+				...options,
 			},
 		);
 	} finally {
 		await rm(ownedProfileRoot, { recursive: true, force: true });
 	}
 }
+
+function syntheticXwd(order = 0, colors = 0) {
+	const name = Buffer.from("Synthetic chooser\0");
+	const header = 100 + name.length;
+	const bytes = Buffer.alloc(header + colors * 12 + 8);
+	const fields = [
+		header,
+		7,
+		2,
+		24,
+		2,
+		1,
+		0,
+		order,
+		32,
+		order,
+		32,
+		32,
+		8,
+		4,
+		0xff0000,
+		0xff00,
+		0xff,
+		8,
+		256,
+		colors,
+		2,
+		1,
+		0,
+		0,
+		0,
+	];
+	for (const [index, value] of fields.entries()) bytes.writeUInt32BE(value, index * 4);
+	name.copy(bytes, 100);
+	for (const [index, pixel] of [0xff0000, 0x00ff00].entries()) {
+		const offset = header + colors * 12 + index * 4;
+		if (order === 0) bytes.writeUInt32LE(pixel, offset);
+		else bytes.writeUInt32BE(pixel, offset);
+	}
+	return bytes;
+}
+
+test("native chooser diagnostic PNG preserves exact bounded XWD pixels without window metadata", () => {
+	for (const order of [0, 1])
+		for (const colors of [0, 256]) {
+			const png = pickerXwdToPng(syntheticXwd(order, colors));
+			assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+			assert.ok(!png.includes(Buffer.from("Synthetic chooser")));
+			const chunks = [];
+			for (let offset = 8; offset < png.length; ) {
+				const length = png.readUInt32BE(offset);
+				const type = png.toString("ascii", offset + 4, offset + 8);
+				const data = png.subarray(offset + 8, offset + 8 + length);
+				assert.equal(png.readUInt32BE(offset + 8 + length), crc32(png.subarray(offset + 4, offset + 8 + length)));
+				chunks.push(type);
+				if (type === "IHDR") assert.deepEqual([...data], [0, 0, 0, 2, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+				if (type === "IDAT") assert.deepEqual([...inflateSync(data)], [0, 255, 0, 0, 0, 255, 0]);
+				offset += 12 + length;
+			}
+			assert.deepEqual(chunks, ["IHDR", "IDAT", "IEND"]);
+		}
+});
+
+test("native chooser encoder rejects unsupported headers, dimensions, masks and truncated or excess data", () => {
+	for (const [index, value] of [
+		[0, 99],
+		[0, 4097],
+		[1, 8],
+		[2, 1],
+		[3, 32],
+		[4, 0],
+		[4, 1601],
+		[5, 0],
+		[5, 1001],
+		[6, 1],
+		[7, 2],
+		[8, 8],
+		[9, 2],
+		[10, 8],
+		[11, 24],
+		[12, 4],
+		[13, 5],
+		[14, 255],
+		[15, 255],
+		[16, 0xff00],
+		[17, 16],
+		[18, 257],
+		[19, 257],
+		[20, 3],
+		[21, 2],
+	]) {
+		const bytes = syntheticXwd();
+		bytes.writeUInt32BE(value, index * 4);
+		assert.throws(() => pickerXwdToPng(bytes), `Reject unsupported header field ${index}`);
+	}
+	const unterminated = syntheticXwd();
+	unterminated[unterminated.readUInt32BE(0) - 1] = 65;
+	for (const bytes of [
+		unterminated,
+		Buffer.alloc(99),
+		Buffer.alloc(maxPickerImageBytes + 1),
+		syntheticXwd().subarray(0, -1),
+		Buffer.concat([syntheticXwd(), Buffer.of(0)]),
+	])
+		assert.throws(() => pickerXwdToPng(bytes));
+});
+
+test(
+	"native chooser capture uses only the revalidated focused window and retains all three bounded stages",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		const calls = [];
+		const observations = [];
+		let inputs = 0;
+		await assert.rejects(
+			pickerHarness(
+				async (binary, args, options) => {
+					assert.deepEqual(Object.keys(options.env).sort(), ["DISPLAY", "PATH"]);
+					assert.equal(options.env.DISPLAY, ":432");
+					assert.equal(options.shell, undefined);
+					if (binary === "xwd") {
+						assert.deepEqual(args, ["-silent", "-nobdrs", "-id", "900"]);
+						assert.equal(options.maxBuffer, maxPickerImageBytes);
+						assert.equal(options.timeout, 5000);
+						assert.equal(options.encoding, "buffer");
+						assert.deepEqual(calls.slice(-4), ["search", "getwindowpid", "getwindowname", "getwindowfocus"]);
+						return { stdout: syntheticXwd() };
+					}
+					assert.equal(binary, "xdotool");
+					calls.push(args[0]);
+					if (args[0] === "search" || args[0] === "getwindowfocus") return { stdout: "900\n" };
+					if (args[0] === "getwindowpid") return { stdout: "100\n" };
+					if (args[0] === "getwindowname") return { stdout: "Allow Hipi Work to read and edit this folder\n" };
+					if (["key", "type"].includes(args[0])) inputs++;
+					return { stdout: "" };
+				},
+				undefined,
+				{
+					observe: async (stage, png) => {
+						assert.deepEqual(png, pickerXwdToPng(syntheticXwd()));
+						observations.push([stage, inputs]);
+					},
+				},
+			),
+			/Native folder picker did not close after bounded confirmation/,
+		);
+		assert.deepEqual(observations, [
+			["before-input", 0],
+			["after-type", 3],
+			["bounded-failure", 5],
+		]);
+	},
+);
+
+test(
+	"native chooser capture rejects changed PID, title, focus or session without capture or input",
+	{ skip: process.platform !== "linux" },
+	async () => {
+		for (const failure of ["pid", "title", "focus", "session", "changed-after-capture"]) {
+			let captures = 0;
+			let observations = 0;
+			let focusChecked = false;
+			let inputs = 0;
+			await assert.rejects(
+				pickerHarness(
+					async (binary, args) => {
+						if (binary === "xwd") {
+							captures++;
+							return { stdout: syntheticXwd() };
+						}
+						if (["key", "type"].includes(args[0])) inputs++;
+						if (args[0] === "search") return { stdout: "900\n" };
+						if (args[0] === "getwindowpid") return { stdout: failure === "pid" ? "101\n" : "100\n" };
+						if (args[0] === "getwindowname")
+							return { stdout: failure === "title" ? "Unrelated\n" : "Allow Hipi Work to read and edit this folder\n" };
+						if (args[0] === "getwindowfocus") {
+							focusChecked = true;
+							return { stdout: failure === "focus" || captures > 0 ? "901\n" : "900\n" };
+						}
+						return { stdout: "" };
+					},
+					async () => ({ app: failure === "session" && focusChecked ? "101" : "100", xvfb: "200" }),
+					{
+						observe: async () => {
+							observations++;
+						},
+					},
+				),
+			);
+			assert.equal(captures, failure === "changed-after-capture" ? 1 : 0);
+			assert.equal(observations, 0);
+			assert.equal(inputs, 0);
+		}
+	},
+);
 
 test(
 	"native candidate targets only exact owned picker and types only the validated fixture path",
