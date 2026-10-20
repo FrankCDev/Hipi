@@ -9,7 +9,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
-import { ClipboardCopy } from "../workbench/clipboard-copy.tsx";
+import { ClipboardCopy } from "../workbench/conversation/markdown/clipboard-copy.tsx";
 import { CodeDiff, CodeEditor } from "./code-editor.tsx";
 import type { EditorViewMemory } from "./editor-view-memory.ts";
 import { fileLabels } from "./file-labels.ts";

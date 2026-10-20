@@ -1,5 +1,5 @@
 import { FileTree as PierreFileTree } from "@pierre/trees";
-import { ClipboardFeedback, type ClipboardStatus } from "../workbench/clipboard-feedback.ts";
+import { ClipboardFeedback, type ClipboardStatus } from "../workbench/conversation/markdown/clipboard-feedback.ts";
 import type { fileLabels } from "./file-labels.ts";
 import {
 	FILE_TREE_EXPANSION_LIMIT,

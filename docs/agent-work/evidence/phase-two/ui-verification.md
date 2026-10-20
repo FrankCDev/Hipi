@@ -9,10 +9,10 @@ Command, executed after the final source freeze:
 ```sh
 node --conditions=source --test \
   apps/hipi-work-ui/test/connection.test.ts \
-  apps/hipi-work-ui/test/local-persistence.test.ts \
-  apps/hipi-work-ui/test/local-state.test.ts \
-  apps/hipi-work-ui/test/receipt-reconciliation.test.ts \
-  apps/hipi-work-ui/test/reopen-request.test.ts
+  apps/hipi-work-ui/test/workbench/local-persistence.test.ts \
+  apps/hipi-work-ui/test/workbench/local-state.test.ts \
+  apps/hipi-work-ui/test/workbench/receipt-reconciliation.test.ts \
+  apps/hipi-work-ui/test/workbench/reopen-request.test.ts
 ```
 
 Result: **32 passed, 0 failed, 0 skipped**, exit code 0. Complete actual output: [ui-tests.txt](ui-tests.txt).

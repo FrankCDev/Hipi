@@ -105,18 +105,18 @@ From the repository root, run scoped checks and explicit test files under the re
 npm run check --workspace=@hipi/work-ui
 node --conditions=source --test apps/hipi-work-ui/test/connection.test.ts
 node --conditions=source --test apps/hipi-work-ui/test/desktop-client.test.ts
-node --conditions=source --test apps/hipi-work-ui/test/local-persistence.test.ts
-node --conditions=source --test apps/hipi-work-ui/test/local-state.test.ts
-node --conditions=source --test apps/hipi-work-ui/test/receipt-reconciliation.test.ts
-node --conditions=source --test apps/hipi-work-ui/test/reopen-request.test.ts
-node --test apps/hipi-work-ui/test/composer-input.test.ts
-node --test apps/hipi-work-ui/test/conversation-preview-interaction.test.ts
-node --test apps/hipi-work-ui/test/message-projection.test.ts
-node --test apps/hipi-work-ui/test/bounded-read.test.ts
-node --test apps/hipi-work-ui/test/conversation-history-controller.test.ts
-node --test apps/hipi-work-ui/test/conversation-virtualizer.test.ts
-node --conditions=source --test apps/hipi-work-ui/test/history-reads.test.ts
-(cd apps/hipi-work-ui && node ../../node_modules/vitest/dist/cli.js --run test/message-markdown.test.tsx test/conversation-preview.test.tsx)
+node --conditions=source --test apps/hipi-work-ui/test/workbench/local-persistence.test.ts
+node --conditions=source --test apps/hipi-work-ui/test/workbench/local-state.test.ts
+node --conditions=source --test apps/hipi-work-ui/test/workbench/receipt-reconciliation.test.ts
+node --conditions=source --test apps/hipi-work-ui/test/workbench/reopen-request.test.ts
+node --test apps/hipi-work-ui/test/workbench/composer/composer-input.test.ts
+node --test apps/hipi-work-ui/test/workbench/sidebar/conversation-preview-interaction.test.ts
+node --test apps/hipi-work-ui/test/workbench/conversation/message-projection.test.ts
+node --test apps/hipi-work-ui/test/workbench/bounded-read.test.ts
+node --test apps/hipi-work-ui/test/workbench/conversation/conversation-history-controller.test.ts
+node --test apps/hipi-work-ui/test/workbench/conversation/conversation-virtualizer.test.ts
+node --conditions=source --test apps/hipi-work-ui/test/workbench/conversation/history-reads.test.ts
+(cd apps/hipi-work-ui && node ../../node_modules/vitest/dist/cli.js --run test/workbench/conversation/markdown/message-markdown.test.tsx test/workbench/sidebar/conversation-preview.test.tsx)
 node apps/hipi-work-ui/scripts/check-dev.mjs
 ```
 

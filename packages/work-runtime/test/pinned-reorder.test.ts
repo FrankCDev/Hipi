@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -312,7 +312,7 @@ for (const target of ["source", "anchor"] as const) {
 }
 
 test("real runtime lost reorder reply, concurrent duplicates, restart and schema9 backup retain first receipt", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "hipi-reorder-replay-"));
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "hipi-reorder-replay-")));
 	const root = join(directory, "store");
 	let loseReply = false;
 	let runtime = await openTestRuntime(root, {

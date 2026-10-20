@@ -16,7 +16,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AppClientProvider } from "../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../src/app/preferences.tsx";
-import { ConversationHistory } from "../../src/features/workbench/conversation-history.tsx";
+import { ConversationHistory } from "../../src/features/workbench/conversation/history.tsx";
 import "../../src/theme.css";
 import "./fixture.css";
 

@@ -8,8 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { fileLabels } from "../files/file-labels.ts";
-import { projectFolderLabels } from "../workbench/project-folder-labels.ts";
-import { useProjectFolder } from "../workbench/use-project-folder.ts";
+import { projectFolderLabels } from "../workbench/projects/folder-labels.ts";
+import { useProjectFolder } from "../workbench/projects/use-folder.ts";
 import { contextPaths } from "./context-paths.ts";
 import { permissionLabels } from "./labels.ts";
 import type { PermissionSession } from "./permission-session.ts";

@@ -15,7 +15,7 @@ import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { selectionIntersects } from "../workbench/message-projection.ts";
+import { selectionIntersects } from "../workbench/conversation/message-projection.ts";
 import { ActivityCard, type ToolActivityArtifact } from "./activity-card.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { activityLabels, toolLabel } from "./labels.ts";

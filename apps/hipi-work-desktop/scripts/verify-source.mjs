@@ -14,8 +14,22 @@ const groups = [
 		"dev-server-openai core workspace-cache node-cache node-unsafe history history-fork transport previews-service agent-contracts agent-capacity capacity-contracts capacity-archival extension-pack extension-lifecycle extension-checkpoint extension-tools tool-pack-contracts tool-pack-transport-runtime tool-activity-contracts feature-readonly tool-activities tool-activities-runtime document-checkpoints model-provider document-parsers dev-server files-transport files-host-access transport-runtime catalog identity credentials-http previews-http history-contracts files files-snapshot runtime-model files-agent agent-tools model-gate transport-auth stream-identity stream-identity-runtime",
 	],
 	[
+		"apps/hipi-work-ui/test/workbench/conversation",
+		"history-reads conversation-dynamic-layout conversation-virtualizer conversation-history-controller message-projection conversation-measurement-policy execution-outcome conversation-scroll-intent conversation-reading-position conversation-transcript response-announcement",
+	],
+	[
 		"apps/hipi-work-ui/test",
-		"history-reads conversation-dynamic-layout conversation-virtualizer file-client bounded-read composer-input desktop-client conversation-history-controller message-projection local-state receipt-reconciliation preview-client conversation-preview-interaction connection local-persistence conversation-measurement-policy file-editor-session artifact-editor reopen-request preview-session editor-input-limit execution-outcome conversation-scroll-intent conversation-reading-position conversation-transcript clipboard-feedback markdown-segments streaming-text-buffer response-announcement syntax-highlight file-search-replacement css-cascade",
+		"file-client desktop-client preview-client connection file-editor-session artifact-editor preview-session editor-input-limit file-search-replacement css-cascade",
+	],
+	[
+		"apps/hipi-work-ui/test/workbench",
+		"bounded-read local-state receipt-reconciliation local-persistence reopen-request",
+	],
+	["apps/hipi-work-ui/test/workbench/composer", "composer-input"],
+	["apps/hipi-work-ui/test/workbench/sidebar", "conversation-preview-interaction"],
+	[
+		"apps/hipi-work-ui/test/workbench/conversation/markdown",
+		"clipboard-feedback markdown-segments streaming-text-buffer syntax-highlight",
 	],
 ];
 const nodeTests = groups.flatMap(([directory, names]) =>
@@ -31,13 +45,14 @@ nodeTests.push("apps/hipi-work-desktop/test/smoke-profile.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/credential-diagnostics.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/credential-crypto.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/connection-lifetime.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/conversation-failure.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/observation-session.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/initial-context-runtime.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/sidebar-preview-metadata.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/project-folder-cascade.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/anchored-history-controller.test.ts");
-nodeTests.push("apps/hipi-work-ui/test/conversation-search-integration.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/conversation-failure.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/observation-session.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/catalog/initial-context-runtime.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-preview-metadata.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/sidebar/preview-coordinator.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/projects/project-folder-cascade.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/anchored-history-controller.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/search/conversation-search-integration.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/cdp.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-process.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-flow.test.mjs");
@@ -94,25 +109,25 @@ const storageTests = [
 const uiTests = [
 	"activity-approval-presentation",
 	"activity-transcript",
-	"conversation-selection-interaction",
-	"conversation-search-interaction",
-	"file-canvas-presentation",
-	"work-experience-presentation",
-	"prepared-task-entry",
+	"workbench/conversation/conversation-selection-interaction",
+	"workbench/search/conversation-search-interaction",
+	"workbench/files/file-canvas-presentation",
+	"workbench/composer/work-experience-presentation",
+	"workbench/composer/prepared-task-entry",
 	"dialog-placement",
 	"agent-permission-card",
 	"permission-presentation",
 	"retained-context-consent",
-	"file-panel",
-	"file-panel-escape",
+	"workbench/files/file-panel",
+	"workbench/files/file-panel-escape",
 	"file-workbench",
 	"file-search",
 	"file-line-navigation",
 	"file-tab-actions",
-	"markdown-presentation",
-	"markdown-file-interaction",
+	"workbench/conversation/markdown/markdown-presentation",
+	"workbench/conversation/markdown/markdown-file-interaction",
 	"file-workspace-layout",
-	"file-splitter-interaction",
+	"workbench/files/file-splitter-interaction",
 	"file-revocation-interaction",
 	"appearance-settings",
 	"appearance-provider",
@@ -120,34 +135,35 @@ const uiTests = [
 	"settings-workflow",
 	"custom-provider-settings",
 	"legacy-provider-editor",
-	"conversation-turn-failure",
-	"conversation-draft-recovery",
-	"observation-recovery-ui",
-	"project-folder-interaction",
+	"workbench/conversation/conversation-turn-failure",
+	"workbench/conversation/conversation-draft-recovery",
+	"workbench/conversation/observation-recovery-ui",
+	"workbench/projects/project-folder-interaction",
 	"conversation-capabilities",
 	"conversation-capabilities-interaction",
-	"conversation-preview-card",
-	"project-preview-card",
-	"sidebar-title",
-	"sidebar-title-lifecycle",
-	"sidebar-drag-provider",
-	"sidebar-dnd-integration",
+	"workbench/sidebar/conversation-preview-card",
+	"workbench/sidebar/project-preview-card",
+	"workbench/sidebar/sidebar-title",
+	"workbench/sidebar/sidebar-title-lifecycle",
+	"workbench/sidebar/sidebar-drag-provider",
+	"workbench/sidebar/sidebar-dnd-integration",
+	"workbench/sidebar/preview-provider",
 	"tool-packs-panel-lifecycle",
-	"archived-conversation",
-	"conversation-model-refresh",
+	"workbench/conversation/archived-conversation",
+	"workbench/conversation/conversation-model-refresh",
 	"document-preview",
 	"input-group",
 	"shared-control-primitives",
-	"workspace-tree",
-	"pin-interactions",
-	"workspace-navigation-interaction",
-	"catalog-pages",
-	"sidebar-navigation-callbacks",
-	"workspace-tree-callbacks",
-	"message-markdown",
-	"syntax-code",
-	"user-message-content",
-	"conversation-preview",
+	"workbench/sidebar/workspace-tree",
+	"workbench/sidebar/pin-interactions",
+	"workbench/workspace-navigation-interaction",
+	"workbench/catalog/catalog-pages",
+	"workbench/sidebar/sidebar-navigation-callbacks",
+	"workbench/sidebar/workspace-tree-callbacks",
+	"workbench/conversation/markdown/message-markdown",
+	"workbench/conversation/markdown/syntax-code",
+	"workbench/conversation/markdown/user-message-content",
+	"workbench/sidebar/conversation-preview",
 	"tool-activities",
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
@@ -156,23 +172,23 @@ uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-settings.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-application.test.ts");
-uiTests.push("apps/hipi-work-ui/test/model-configuration.test.ts");
-uiTests.push("apps/hipi-work-ui/test/project-folder-change.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/model-configuration.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/projects/project-folder-change.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
-uiTests.push("apps/hipi-work-ui/test/catalog-session.test.ts");
-uiTests.push("apps/hipi-work-ui/test/presentation-session.test.ts");
-uiTests.push("apps/hipi-work-ui/test/sidebar-title-motion.test.ts");
-uiTests.push("apps/hipi-work-ui/test/conversation-search-controller.test.ts");
-uiTests.push("apps/hipi-work-ui/test/sidebar-layout-session.test.ts");
-uiTests.push("apps/hipi-work-ui/test/sidebar-drag-controller.test.ts");
-uiTests.push("apps/hipi-work-ui/test/sidebar-pointer-sensor.test.ts");
-uiTests.push("apps/hipi-work-ui/test/pinned-order-actions.test.ts");
-uiTests.push("apps/hipi-work-ui/test/prepared-task.test.ts");
-uiTests.push("apps/hipi-work-ui/test/initial-send.test.ts");
-uiTests.push("apps/hipi-work-ui/test/initial-context-send.test.ts");
-uiTests.push("apps/hipi-work-ui/test/command-recovery.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/catalog/catalog-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/presentation-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-title-motion.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/search/conversation-search-controller.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-layout-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-drag-controller.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-pointer-sensor.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/pinned-order-actions.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/catalog/prepared-task.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/catalog/initial-send.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/catalog/initial-context-send.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/command-recovery.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-packs.test.ts");
-uiTests.push("apps/hipi-work-ui/test/artifact-navigation.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/files/artifact-navigation.test.ts");
 uiTests.push("apps/hipi-work-ui/test/file-tree-adapter.test.ts");
 uiTests.push("apps/hipi-work-ui/test/file-workspace-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/pierre-editor.test.ts");

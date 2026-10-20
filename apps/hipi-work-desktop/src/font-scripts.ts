@@ -48,6 +48,7 @@ export const WINDOWS_FONT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$stage = 'assembly'
 try {
 Add-Type -AssemblyName PresentationCore
 function U16([byte[]]$b, [int]$p) { return [int]$b[$p] * 256 + [int]$b[$p + 1] }
@@ -83,12 +84,15 @@ $seen = [System.Collections.Generic.HashSet[string]]::new()
 $partial = $false
 $inspected = 0
 $budget = 0
+$stage = 'enumeration'
 :fonts foreach ($typeface in [System.Windows.Media.Fonts]::SystemTypefaces) {
   if (++$inspected -gt 4096) { $partial = $true; break }
   $glyph = $null
+  $stage = 'glyph'
   if (-not $typeface.TryGetGlyphTypeface([ref]$glyph)) { $partial = $true; continue }
   if ($glyph.StyleSimulations -ne [System.Windows.Media.StyleSimulations]::None) { $partial = $true; continue }
   try {
+    $stage = 'local-uri'
     if (-not (IsLocalFontUri $glyph.FontUri)) { $partial = $true; continue }
   } catch [System.UnauthorizedAccessException] { throw }
     catch [System.Security.SecurityException] { throw }
@@ -96,6 +100,7 @@ $budget = 0
   if (-not $seen.Add($glyph.FontUri.LocalPath)) { continue }
   $stream = $null
   try {
+    $stage = 'font-stream'
     $stream = $glyph.GetFontStream()
     if (-not $stream.CanSeek) { $partial = $true; continue }
     $header = ReadBlock $stream 0 12
@@ -140,10 +145,11 @@ $budget = 0
     catch { $partial = $true }
   finally { if ($null -ne $stream) { $stream.Dispose() } }
 }
+$stage = 'serialization'
 @{ tables = @($rows.ToArray()); truncated = $partial } | ConvertTo-Json -Compress -Depth 4
-} catch [System.UnauthorizedAccessException] { [Console]::WriteLine('{"error":"DENIED"}') }
-  catch [System.Security.SecurityException] { [Console]::WriteLine('{"error":"DENIED"}') }
-  catch { [Console]::WriteLine('{"error":"FAILED"}') }
+} catch [System.UnauthorizedAccessException] { [Console]::WriteLine('{"error":"DENIED","stage":"' + $stage + '"}') }
+  catch [System.Security.SecurityException] { [Console]::WriteLine('{"error":"DENIED","stage":"' + $stage + '"}') }
+  catch { [Console]::WriteLine('{"error":"FAILED","stage":"' + $stage + '"}') }
 `;
 
 /** Control separators cannot be part of valid metadata names; parser rejects malformed records. */

@@ -1,6 +1,6 @@
 import type { AppClient, Receipt, Submit } from "@hipi/work-runtime/contracts";
+import { readCatalogRecovery } from "./catalog/prepared-task.ts";
 import type { LocalState } from "./local-state.ts";
-import { readCatalogRecovery } from "./prepared-task.ts";
 
 function assertPrerequisitesReleased(local: LocalState, input: Submit) {
 	const saved = readCatalogRecovery(local.storedValue("command.catalog")?.value ?? null);

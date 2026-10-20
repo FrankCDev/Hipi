@@ -14,6 +14,39 @@ export function deterministicCredentialEvidence(document) {
 			"not_run; isolated production-mode journey is not supported by the deterministic smoke launch boundary",
 	};
 }
+
+/** Bind readable consent to its actual trigger, selected receipt scope and retained conversation owner. */
+export function directContextConsentEvidence(document, expectedScope, contextId, retainedOwner) {
+	const selected = [...document.querySelectorAll('.conversation-link[aria-current="page"]')];
+	const owners = [...document.querySelectorAll(".conversation-panel")];
+	const dialogs = [...document.querySelectorAll(".context-consent-dialog")];
+	if (
+		!expectedScope?.workspaceId ||
+		!expectedScope?.conversationId ||
+		!contextId ||
+		selected.length !== 1 ||
+		selected[0].dataset.workspaceId !== expectedScope.workspaceId ||
+		selected[0].dataset.conversationId !== expectedScope.conversationId ||
+		owners.length !== 1 ||
+		owners[0] !== retainedOwner ||
+		!retainedOwner?.isConnected ||
+		dialogs.length !== 1 ||
+		dialogs[0].id !== contextId
+	)
+		return false;
+	const dialog = dialogs[0];
+	const paragraphs = [...dialog.querySelectorAll("p")].map((node) => node.textContent.trim());
+	const authorize = [...dialog.querySelectorAll("button")].filter(
+		(node) => node.textContent.trim() === "Authorize model context",
+	);
+	return (
+		paragraphs.includes("Only this chat and the selected model") &&
+		paragraphs.includes("Provider / model: faux / faux-1") &&
+		paragraphs.includes("No authorized folders available. Authorize a folder in Project files first.") &&
+		authorize.length === 1 &&
+		authorize[0].disabled === true
+	);
+}
 /** Read rendered geometry only; do not install UI state or replace runtime responses. */
 export function workExperienceGeometry(document, viewport) {
 	const selectors = {
@@ -243,16 +276,17 @@ export async function exerciseWorkExperience(cdp, helpers, directory, { reopened
 		assert.deepEqual(await readKeys(), originalKeys);
 		assert.ok(expectedScope?.workspaceId && expectedScope?.conversationId, "Direct capabilities require receipt scope");
 		await click(cdp, ".composer-add-trigger");
+		const contextId = await evaluate(
+			cdp,
+			`document.querySelector('.composer-add-menu .capability-context-trigger')?.getAttribute('aria-controls')`,
+		);
+		assert.ok(contextId, "Direct Context trigger must identify its exact consent dialog");
 		await click(cdp, ".composer-add-menu .capability-context-trigger");
 		await until(
 			() =>
 				evaluate(
 					cdp,
-					`(() => {
-			const dialog = document.querySelector('.context-consent-dialog');
-			return dialog?.textContent.includes(${JSON.stringify(`${expectedScope.workspaceId} / ${expectedScope.conversationId}`)})
-				&& dialog.textContent.includes('faux-1') && dialog.textContent.includes('No authorized folders available.');
-		})()`,
+					`(${directContextConsentEvidence.toString()})(document,${JSON.stringify(expectedScope)},${JSON.stringify(contextId)},window.__hipiGuiRetainedConversation)`,
 				),
 			"direct Context opens exact scoped consent without an authorized root",
 		);

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
-import { MessageMarkdown } from "../workbench/message-markdown.tsx";
+import { MessageMarkdown } from "../workbench/conversation/markdown/markdown.tsx";
 import type { EditorViewMemory } from "./editor-view-memory.ts";
 import { fileLabels } from "./file-labels.ts";
 import "./markdown-preview.css";

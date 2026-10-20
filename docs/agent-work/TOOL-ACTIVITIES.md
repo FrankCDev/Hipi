@@ -55,7 +55,7 @@
 
 ## 6. 成果入口打开当前文件
 
-[成果导航](../../apps/hipi-work-ui/src/features/workbench/artifact-navigation.ts)使用受控引用：`rootId`、相对路径、操作 ID、状态及可选 `expectedRevision`。契约要求引用的操作 ID、状态与文件影响一致，禁止任意绝对宿主路径和越级路径。引用不等于授权，也不保证文件仍存在。
+[成果导航](../../apps/hipi-work-ui/src/features/workbench/files/artifact-navigation.ts)使用受控引用：`rootId`、相对路径、操作 ID、状态及可选 `expectedRevision`。契约要求引用的操作 ID、状态与文件影响一致，禁止任意绝对宿主路径和越级路径。引用不等于授权，也不保证文件仍存在。
 
 打开步骤：
 
@@ -93,7 +93,7 @@ dirty 输入、保存进行中或写入结果未知都属于受保护状态。�
 | [活动契约](../../packages/work-runtime/test/tool-activity-contracts.test.ts) | 状态维度、额外字段拒绝、读取参数限制、文本预算、成果引用关联与路径约束 |
 | [活动 UI](../../apps/hipi-work-ui/test/tool-activities.test.tsx) | 会话单在途、替换而非累积、迟到响应、15 秒超时、显式重试、输出校验、静态渲染转义与状态文案、中英文 key；不是挂载浏览器轮询与焦点实测 |
 | [成果编辑](../../apps/hipi-work-ui/test/artifact-editor.test.ts) | 当前 root 权限、当前版本与历史来源分离、撤销 / 异域拒绝、复制引用、dirty 保护、取消 / dispose / 重新激活竞争 |
-| [成果导航](../../apps/hipi-work-ui/test/artifact-navigation.test.ts) | 取消离开保留输入，工作区 / 会话切换拒绝旧回调，受控来源传递 |
+| [成果导航](../../apps/hipi-work-ui/test/workbench/files/artifact-navigation.test.ts) | 取消离开保留输入，工作区 / 会话切换拒绝旧回调，受控来源传递 |
 | [编辑会话](../../apps/hipi-work-ui/test/file-editor-session.test.ts) | 冲突与未知写入保护、迟到响应、只读 / 超限保存拒绝、显式采用比较版本且不自动保存 |
 
 仍需在目标桌面环境验证活动弹窗键盘 / 焦点、选中文本、页面隐藏与断线恢复、长内容与主题缩放、dirty 成果跳转及三平台文件权限行为。静态标记、mock 客户端或文档检查不能替代这些验收。

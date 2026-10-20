@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription } from "../src/components/ui/d
 import { Icon } from "../src/components/ui/icon.tsx";
 import { Input } from "../src/components/ui/input.tsx";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../src/components/ui/input-group.tsx";
-import { CreateDialog } from "../src/features/workbench/create-dialog.tsx";
+import { CreateDialog } from "../src/features/workbench/catalog/create-dialog.tsx";
 import { Workbench } from "../src/features/workbench/workbench.tsx";
 
 type WorkspaceMutation = {

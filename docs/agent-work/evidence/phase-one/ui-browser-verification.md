@@ -4,7 +4,7 @@ Date: 2026-10-19. Environment: Linux, Node 24.19.0, npm 11.9.0.
 
 ## Executed checks
 
-- `node --test apps/hipi-work-ui/test/local-state.test.ts`: five pure-state tests passed; full output in [ui-local-state-tests.txt](ui-local-state-tests.txt). These test connection-state isolation, immutable retry payloads, receipt/draft reconciliation and connection-owned confirmed-ID markers across pane remount. They do not prove React interactions, HTTP recovery, or native browser behavior.
+- `node --test apps/hipi-work-ui/test/workbench/local-state.test.ts`: five pure-state tests passed; full output in [ui-local-state-tests.txt](ui-local-state-tests.txt). These test connection-state isolation, immutable retry payloads, receipt/draft reconciliation and connection-owned confirmed-ID markers across pane remount. They do not prove React interactions, HTTP recovery, or native browser behavior.
 - `node apps/hipi-work-ui/scripts/check-dev.mjs`: real loopback Vite HTTP entry plus 14 owned TypeScript/TSX/CSS development transforms passed; full output in [ui-dev-transforms.txt](ui-dev-transforms.txt). This is not a production build or browser execution.
 - UI scoped Biome and strict TypeScript passed and are included in the separately recorded root check.
 

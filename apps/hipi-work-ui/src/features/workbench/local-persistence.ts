@@ -1,5 +1,5 @@
 import { LIMITS, PROTOCOL_VERSION, parseRequest, type Submit } from "@hipi/work-runtime/contracts";
-import { validPanelRatio, validPanelWidth } from "./file-panel-controller.ts";
+import { validPanelRatio, validPanelWidth } from "./files/panel-controller.ts";
 
 export type BrowserStorage = Pick<Storage, "getItem" | "setItem" | "key" | "length">;
 export type SavedValue = {

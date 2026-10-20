@@ -20,8 +20,8 @@ import { Select } from "../src/components/ui/select.tsx";
 import { CustomProviderEditor } from "../src/features/settings/custom-provider-editor.tsx";
 import { CustomProviderSettings } from "../src/features/settings/custom-provider-settings.tsx";
 import { LegacyProviderEditor } from "../src/features/settings/legacy-provider-editor.tsx";
+import { PreparedTaskEntry } from "../src/features/workbench/composer/prepared-entry.tsx";
 import { LocalState } from "../src/features/workbench/local-state.ts";
-import { PreparedTaskEntry } from "../src/features/workbench/prepared-task-entry.tsx";
 
 type Cell = { value: unknown; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({ cells: [] as Cell[], cursor: 0 }));

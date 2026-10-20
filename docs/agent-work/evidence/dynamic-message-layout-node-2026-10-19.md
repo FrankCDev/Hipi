@@ -4,7 +4,7 @@
 
 ## 结果与重要限制
 
-[定向测试](../../../apps/hipi-work-ui/test/conversation-dynamic-layout.test.ts) 12/12 通过，其中一项是**已知不理想行为的 characterization**，不能把全部通过解释为生产验收完成。
+[定向测试](../../../apps/hipi-work-ui/test/workbench/conversation/conversation-dynamic-layout.test.ts) 12/12 通过，其中一项是**已知不理想行为的 characterization**，不能把全部通过解释为生产验收完成。
 
 发现候选发布阻断风险：某行首次实测高度恰等于估计值，后来该行跨越视口顶边并增长时，库仍将其视为首次测量，补偿整个高度增量，可能把正在阅读的内容向下拖动。Node 已分别经 `resizeItem` 和 `measureElement` 入口复现；真实 DOM、实际 ResizeObserver 与应用组件是否触发仍需独立浏览器验证。
 
@@ -49,7 +49,7 @@
 
 ## 测量策略修复的独立复验
 
-随后独立装配 [MessageMeasurementPolicy](../../../apps/hipi-work-ui/src/features/workbench/message-measurement-policy.ts)，通过真实 Virtualizer.measureElement 入口注入测量：
+随后独立装配 [MessageMeasurementPolicy](../../../apps/hipi-work-ui/src/features/workbench/conversation/message-measurement-policy.ts)，通过真实 Virtualizer.measureElement 入口注入测量：
 
 - 首次100、随后500的跨顶边行保持 scrollTop2025 / 相对位置−25。
 - 上方展开与折叠、prepend同时重测、变宽后重测仍保留锚点。

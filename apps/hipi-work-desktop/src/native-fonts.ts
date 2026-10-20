@@ -15,6 +15,30 @@ import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "./font-
 import { openTypeFontNames } from "./opentype-font-names.ts";
 
 export const NATIVE_FONT_LIMITS = { timeoutMs: 10000, outputBytes: 4 * 1024 * 1024 } as const;
+const scriptStages = ["assembly", "enumeration", "glyph", "local-uri", "font-stream", "serialization"] as const;
+type ScriptStage = (typeof scriptStages)[number];
+export type FontDiagnostic =
+	| {
+			phase: "process";
+			outcome: "success" | "cancelled" | "missing" | "denied" | "output-limit" | "timeout" | "nonzero" | "failed";
+			exit: number | null;
+			elapsedMs: number;
+			killed: boolean;
+			cancelled: boolean;
+	  }
+	| { phase: "parser"; outcome: "output-limit" | "json" | "envelope" }
+	| { phase: "script"; outcome: "DENIED" | "FAILED"; stage: ScriptStage | "unknown" };
+type FontDiagnosticSink = (diagnostic: FontDiagnostic) => void;
+const logFontDiagnostic: FontDiagnosticSink = (diagnostic) => {
+	console.warn(JSON.stringify({ event: "native-fonts", ...diagnostic }));
+};
+function reportFontDiagnostic(sink: FontDiagnosticSink, diagnostic: FontDiagnostic): void {
+	try {
+		sink(diagnostic);
+	} catch {
+		// Diagnostics cannot change request outcomes or subprocess admission.
+	}
+}
 export type FontCommand = { file: string; args: readonly string[]; env: Record<string, string>; cwd: string };
 export type FontHostEnvironment = { systemRoot?: string; windir?: string };
 /** Fixed executable allowlist. No PATH search, inherited loader variables, user scripts, or shell. */
@@ -72,9 +96,14 @@ export type FontExecute = (
 	options: ExecFileOptionsWithStringEncoding,
 	callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ) => Pick<ChildProcess, "kill">;
-export function runFontProcess(command: FontCommand, execute: FontExecute = execFile): FontProcess {
+export function runFontProcess(
+	command: FontCommand,
+	execute: FontExecute = execFile,
+	diagnostic: FontDiagnosticSink = logFontDiagnostic,
+): FontProcess {
 	let child: Pick<ChildProcess, "kill"> | undefined;
 	let cancelled = false;
+	const started = performance.now();
 	const result = new Promise<string>((resolve, reject) => {
 		child = execute(
 			command.file,
@@ -90,6 +119,28 @@ export function runFontProcess(command: FontCommand, execute: FontExecute = exec
 				killSignal: "SIGKILL",
 			},
 			(error, stdout) => {
+				reportFontDiagnostic(diagnostic, {
+					phase: "process",
+					outcome: cancelled
+						? "cancelled"
+						: !error
+							? "success"
+							: error.code === "ENOENT" || error.code === "ENOTDIR"
+								? "missing"
+								: error.code === "EACCES" || error.code === "EPERM"
+									? "denied"
+									: error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+										? "output-limit"
+										: error.code === "ETIMEDOUT"
+											? "timeout"
+											: typeof error.code === "number" && error.code !== 0
+												? "nonzero"
+												: "failed",
+					exit: typeof error?.code === "number" && Number.isSafeInteger(error.code) ? error.code : null,
+					elapsedMs: Math.min(86400000, Math.max(0, Math.round(performance.now() - started))),
+					killed: error?.killed === true,
+					cancelled,
+				});
 				if (cancelled) reject(new AppearanceError("CLOSED"));
 				else if (error)
 					reject(
@@ -118,8 +169,16 @@ export function runFontProcess(command: FontCommand, execute: FontExecute = exec
 		},
 	};
 }
-export function parseNativeFonts(platform: string, output: string): InstalledFontCatalog {
-	if (Buffer.byteLength(output, "utf8") > NATIVE_FONT_LIMITS.outputBytes) throw new AppearanceError("FAILED");
+export function parseNativeFonts(
+	platform: string,
+	output: string,
+	diagnostic: FontDiagnosticSink = logFontDiagnostic,
+): InstalledFontCatalog {
+	const fail = (outcome: "output-limit" | "json" | "envelope"): never => {
+		reportFontDiagnostic(diagnostic, { phase: "parser", outcome });
+		throw new AppearanceError("FAILED");
+	};
+	if (Buffer.byteLength(output, "utf8") > NATIVE_FONT_LIMITS.outputBytes) fail("output-limit");
 	if (platform === "linux") {
 		const lines = output.split("\x1e");
 		if (lines.at(-1) === "") lines.pop();
@@ -140,15 +199,25 @@ export function parseNativeFonts(platform: string, output: string): InstalledFon
 	try {
 		raw = JSON.parse(output);
 	} catch {
-		throw new AppearanceError("FAILED");
+		fail("json");
 	}
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new AppearanceError("FAILED");
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("envelope");
 	const value = raw as Record<string, unknown>;
-	if (Object.keys(value).length === 1 && (value.error === "DENIED" || value.error === "FAILED"))
+	if (value.error === "DENIED" || value.error === "FAILED") {
+		const stage = scriptStages.find((stage) => stage === value.stage);
+		if (
+			!(
+				(Object.keys(value).length === 1 && value.stage === undefined) ||
+				(platform === "win32" && Object.keys(value).length === 2 && stage)
+			)
+		)
+			fail("envelope");
+		reportFontDiagnostic(diagnostic, { phase: "script", outcome: value.error, stage: stage ?? "unknown" });
 		throw new AppearanceError(value.error);
+	}
 	const field = platform === "darwin" ? "rows" : "tables";
 	if (Object.keys(value).length !== 2 || typeof value.truncated !== "boolean" || !Array.isArray(value[field]))
-		throw new AppearanceError("FAILED");
+		return fail("envelope");
 	let partial = value.truncated;
 	const rows = value[field] as unknown[];
 	const entries = rows.slice(0, APPEARANCE_LIMITS.faces).map((candidate) => {

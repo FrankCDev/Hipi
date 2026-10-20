@@ -7,6 +7,7 @@ import { decodeFontRequest } from "../src/appearance-protocol.ts";
 import { FontRequests } from "../src/font-requests.ts";
 import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "../src/font-scripts.ts";
 import {
+	type FontDiagnostic,
 	fontCommand,
 	NATIVE_FONT_LIMITS,
 	NativeFontService,
@@ -155,6 +156,93 @@ test("missing executables, denied access, timeout and oversized output have trut
 	}
 	assert.throws(() => parseNativeFonts("linux", " ".repeat(NATIVE_FONT_LIMITS.outputBytes + 1)), code("FAILED"));
 	assert.throws(() => parseNativeFonts("win32", '{"error":"DENIED"}'), code("DENIED"));
+});
+test("process diagnostics classify observed exits without claiming that a killed child timed out", async () => {
+	for (const [native, killed, expected] of [
+		["ENOENT", false, "missing"],
+		["EACCES", false, "denied"],
+		["ERR_CHILD_PROCESS_STDIO_MAXBUFFER", true, "output-limit"],
+		["ETIMEDOUT", true, "timeout"],
+		[1, false, "nonzero"],
+		[null, true, "failed"],
+		["private-code", false, "failed"],
+	] as const) {
+		const records: FontDiagnostic[] = [];
+		const operation = runFontProcess(
+			fontCommand("linux", "/private-home"),
+			(_file, _args, _options, callback) => {
+				queueMicrotask(() =>
+					callback(
+						Object.assign(new Error("private-message"), { code: native, killed, path: "/private-path" }),
+						"private-font-output",
+						"private-stderr",
+					),
+				);
+				return { kill: () => true };
+			},
+			(record) => records.push(record),
+		);
+		await assert.rejects(operation.result, AppearanceError);
+		assert.equal(records.length, 1);
+		const record = records[0];
+		assert.equal(record.phase, "process");
+		if (record.phase !== "process") assert.fail("Expected process diagnostic");
+		assert.equal(record.outcome, expected);
+		assert.equal(record.killed, killed);
+		assert.equal(record.cancelled, false);
+		assert.equal(record.exit, typeof native === "number" ? native : null);
+		assert.ok(Number.isInteger(record.elapsedMs) && record.elapsedMs >= 0 && record.elapsedMs <= 86400000);
+		assert.doesNotMatch(JSON.stringify(records), /private/);
+	}
+});
+test("parser and script diagnostics distinguish bounded failure stages and reject forged fields", () => {
+	for (const [output, expected] of [
+		["private-font-output", { phase: "parser", outcome: "json" }],
+		["[]", { phase: "parser", outcome: "envelope" }],
+		['{"error":"FAILED","stage":"assembly"}', { phase: "script", outcome: "FAILED", stage: "assembly" }],
+		['{"error":"DENIED","stage":"font-stream"}', { phase: "script", outcome: "DENIED", stage: "font-stream" }],
+		['{"error":"FAILED","stage":"/private-path"}', { phase: "parser", outcome: "envelope" }],
+		['{"error":"FAILED","stage":"glyph","secret":"private"}', { phase: "parser", outcome: "envelope" }],
+		['{"error":"FAILED","stage":{"private":"data"}}', { phase: "parser", outcome: "envelope" }],
+	] as const) {
+		const records: FontDiagnostic[] = [];
+		assert.throws(
+			() => parseNativeFonts("win32", output, (record) => records.push(record)),
+			code(output.includes('"DENIED"') ? "DENIED" : "FAILED"),
+		);
+		assert.deepEqual(records, [expected]);
+		assert.doesNotMatch(JSON.stringify(records), /private|secret/);
+	}
+});
+test("diagnostic sink failures cannot change success, failure, cancellation, or request admission", async () => {
+	const brokenSink = () => {
+		throw new Error("private-diagnostic-failure");
+	};
+	assert.deepEqual(parseNativeFonts("linux", linux, brokenSink), parseNativeFonts("linux", linux));
+	assert.throws(() => parseNativeFonts("win32", "invalid", brokenSink), code("FAILED"));
+	for (const cancelled of [false, true]) {
+		let complete: (error: ExecFileException | null, stdout: string, stderr: string) => void = () => {};
+		const service = new NativeFontService("linux", (command) =>
+			runFontProcess(
+				command,
+				(_file, _args, _options, callback) => {
+					complete = callback;
+					return { kill: () => true };
+				},
+				brokenSink,
+			),
+		);
+		const controller = new AbortController();
+		const pending = service.list(controller.signal);
+		if (cancelled) controller.abort();
+		await assert.rejects(service.list(new AbortController().signal), code("BUSY"));
+		complete(null, linux, "");
+		if (cancelled) await assert.rejects(pending, code("CLOSED"));
+		else assert.equal((await pending).families.length, 1);
+		const next = service.list(new AbortController().signal);
+		complete(null, linux, "");
+		assert.equal((await next).families.length, 1);
+	}
 });
 test("fontconfig spacing and macOS metadata keep known and unknown traits distinct without name guessing", () => {
 	const catalog = parseNativeFonts("linux", linux);

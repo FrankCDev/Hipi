@@ -21,36 +21,37 @@ import { fileLabels } from "../files/file-labels.ts";
 import { FileWorkspaceSession } from "../files/file-workspace-session.ts";
 import { SettingsDialog } from "../settings/index.ts";
 import { ToolPacksDialog } from "../tool-packs/index.ts";
-import { artifactNavigation } from "./artifact-navigation.ts";
-import { CatalogRecovery, ConversationActions } from "./catalog-controls.tsx";
-import { catalogLabels } from "./catalog-labels.ts";
-import { CatalogPagination } from "./catalog-pagination.tsx";
-import { CatalogSession } from "./catalog-session.ts";
+import { CatalogRecovery, ConversationActions } from "./catalog/controls.tsx";
+import { CreateDialog } from "./catalog/create-dialog.tsx";
+import type { StagedProjectConsent } from "./catalog/initial-context.ts";
+import { catalogLabels } from "./catalog/labels.ts";
+import { CatalogPagination } from "./catalog/pagination.tsx";
+import { PreparedTaskRecovery } from "./catalog/prepared-task-recovery.tsx";
+import { CatalogSession } from "./catalog/session.ts";
+import { useCatalogPages } from "./catalog/use-pages.ts";
+import { PreparedTaskEntry } from "./composer/prepared-entry.tsx";
 import { ConnectionActions } from "./connection-actions.tsx";
-import type { SearchHistoryAnchor } from "./conversation-history-controller.ts";
-import { ConversationPane } from "./conversation-pane.tsx";
-import { ConversationSearch } from "./conversation-search.tsx";
-import { CreateDialog } from "./create-dialog.tsx";
-import { FilePanel, useWorkAreaWidth } from "./file-panel.tsx";
-import { FILE_PANEL, FilePanelController, panelLayout } from "./file-panel-controller.ts";
-import { filePanelLabels } from "./file-panel-labels.ts";
-import { prepareSearchNavigation } from "./history-reads.ts";
-import type { StagedProjectConsent } from "./initial-context.ts";
+import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
+import { prepareSearchNavigation } from "./conversation/history-reads.ts";
+import { ConversationPane } from "./conversation/pane.tsx";
+import { artifactNavigation } from "./files/artifact-navigation.ts";
+import { FilePanel, useWorkAreaWidth } from "./files/panel.tsx";
+import { FILE_PANEL, FilePanelController, panelLayout } from "./files/panel-controller.ts";
+import { filePanelLabels } from "./files/panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
-import { PinRecovery, presentationKey } from "./pin-conversation.tsx";
-import { pinLabels } from "./pin-labels.ts";
-import { PinnedConversations } from "./pinned-conversations.tsx";
-import { PreparedTaskEntry } from "./prepared-task-entry.tsx";
-import { PreparedTaskRecovery } from "./prepared-task-recovery.tsx";
-import { PresentationSession } from "./presentation-session.ts";
-import { ProjectFolderDialog, ProjectFolderSummary } from "./project-folder.tsx";
-import { SidebarDragProvider, type SidebarOrderAction, SidebarOrderSection } from "./sidebar-drag-provider.tsx";
-import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar-layout-session.ts";
-import { sidebarOrderLabels } from "./sidebar-order-labels.ts";
-import { useCatalogPages } from "./use-catalog-pages.ts";
+import { ProjectFolderDialog, ProjectFolderSummary } from "./projects/folder.tsx";
+import { ConversationSearch } from "./search/search.tsx";
+import { SidebarDragProvider, type SidebarOrderAction, SidebarOrderSection } from "./sidebar/drag-provider.tsx";
+import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar/layout-session.ts";
+import { sidebarOrderLabels } from "./sidebar/order-labels.ts";
+import { PinRecovery, presentationKey } from "./sidebar/pin-conversation.tsx";
+import { pinLabels } from "./sidebar/pin-labels.ts";
+import { PinnedConversations } from "./sidebar/pinned-conversations.tsx";
+import { PresentationSession } from "./sidebar/presentation-session.ts";
+import { SidebarPreviewProvider } from "./sidebar/preview-provider.tsx";
+import { WorkspaceTree } from "./sidebar/workspace-tree.tsx";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
-import { WorkspaceTree } from "./workspace-tree.tsx";
 
 export function Workbench({
 	disconnect,
@@ -731,75 +732,82 @@ export function Workbench({
 							keybindings={keybindings}
 							disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
 						>
-							{layoutState.sections.map((section) =>
-								section === "pinned" ? (
-									<PinnedConversations
-										key={section}
-										catalog={catalog}
-										presentation={presentation}
-										selectedWorkspace={selectedWorkspace}
-										selectedConversation={selectedConversation}
-										onSelect={selectConversation}
-										sectionAction={sectionAction(section)}
-										onVisibleChange={setPinnedVisible}
-									/>
-								) : section === "recent" ? (
-									catalog.defaultWorkspaceId() ? (
+							<SidebarPreviewProvider
+								disabled={
+									settingsOpen || searchOpen || !!folderProject || (narrow ? !navigationOpen : navigationCollapsed)
+								}
+								navigationKey={JSON.stringify([selectedWorkspace, selectedConversation])}
+							>
+								{layoutState.sections.map((section) =>
+									section === "pinned" ? (
+										<PinnedConversations
+											key={section}
+											catalog={catalog}
+											presentation={presentation}
+											selectedWorkspace={selectedWorkspace}
+											selectedConversation={selectedConversation}
+											onSelect={selectConversation}
+											sectionAction={sectionAction(section)}
+											onVisibleChange={setPinnedVisible}
+										/>
+									) : section === "recent" ? (
+										catalog.defaultWorkspaceId() ? (
+											<SidebarOrderSection key={section} action={sectionAction(section)}>
+												<WorkspaceTree {...workspaceTreeProps} section="recent" />
+											</SidebarOrderSection>
+										) : null
+									) : (
 										<SidebarOrderSection key={section} action={sectionAction(section)}>
-											<WorkspaceTree {...workspaceTreeProps} section="recent" />
-										</SidebarOrderSection>
-									) : null
-								) : (
-									<SidebarOrderSection key={section} action={sectionAction(section)}>
-										<div className="nav-section-heading">
-											<span>{t("nav.workspaces")}</span>
-											<CreateDialog
-												disabled={catalogBlocked}
-												kind="workspace"
-												compact
-												onCreate={createWorkspace}
-												chooseFolder={fileAuthority?.prepareProject}
-												forgetFolder={fileAuthority?.forgetProjectSelection}
-											/>
-										</div>
-										{workspaces.isPending && !workspaces.hasData && (
-											<output className="nav-feedback">{t("common.loading")}</output>
-										)}
-										{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
-											<output className="catalog-refresh-status">{t("common.loading")}</output>
-										)}
-										{workspaces.isError && (
-											<div className="nav-feedback" role="alert">
-												<p>
-													{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
-														? t("connection.storeMismatch")
-														: workspaces.staleCursor
-															? cl.staleList
-															: workspaces.isLoadMoreError
-																? cl.loadMoreFailed
-																: workspaces.hasData
-																	? cl.refreshFailed
-																	: t("nav.loadError")}
-												</p>
-												<Button
-													variant="outline"
-													size="sm"
-													disabled={workspaces.isFetching}
-													onClick={() => void workspaces.retry()}
-												>
-													<Icon name="refresh" size={14} />
-													{t("nav.refresh")}
-												</Button>
+											<div className="nav-section-heading">
+												<span>{t("nav.workspaces")}</span>
+												<CreateDialog
+													disabled={catalogBlocked}
+													kind="workspace"
+													compact
+													onCreate={createWorkspace}
+													chooseFolder={fileAuthority?.prepareProject}
+													forgetFolder={fileAuthority?.forgetProjectSelection}
+												/>
 											</div>
-										)}
-										{workspaces.isSuccess && workspaces.items.length === 0 && (
-											<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
-										)}
-										<WorkspaceTree {...workspaceTreeProps} section="projects" />
-										<CatalogPagination pages={workspaces} listRef={navigationList} />
-									</SidebarOrderSection>
-								),
-							)}
+											{workspaces.isPending && !workspaces.hasData && (
+												<output className="nav-feedback">{t("common.loading")}</output>
+											)}
+											{workspaces.hasData && workspaces.isFetching && !workspaces.isLoadingMore && (
+												<output className="catalog-refresh-status">{t("common.loading")}</output>
+											)}
+											{workspaces.isError && (
+												<div className="nav-feedback" role="alert">
+													<p>
+														{workspaces.error instanceof AppError && workspaces.error.code === "STORE_MISMATCH"
+															? t("connection.storeMismatch")
+															: workspaces.staleCursor
+																? cl.staleList
+																: workspaces.isLoadMoreError
+																	? cl.loadMoreFailed
+																	: workspaces.hasData
+																		? cl.refreshFailed
+																		: t("nav.loadError")}
+													</p>
+													<Button
+														variant="outline"
+														size="sm"
+														disabled={workspaces.isFetching}
+														onClick={() => void workspaces.retry()}
+													>
+														<Icon name="refresh" size={14} />
+														{t("nav.refresh")}
+													</Button>
+												</div>
+											)}
+											{workspaces.isSuccess && workspaces.items.length === 0 && (
+												<p className="nav-feedback">{t("nav.noWorkspaces")}</p>
+											)}
+											<WorkspaceTree {...workspaceTreeProps} section="projects" />
+											<CatalogPagination pages={workspaces} listRef={navigationList} />
+										</SidebarOrderSection>
+									),
+								)}
+							</SidebarPreviewProvider>
 						</SidebarDragProvider>
 						<output className="sr-only" aria-live="polite">
 							{orderAnnouncement}

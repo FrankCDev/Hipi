@@ -3,10 +3,82 @@ import test from "node:test";
 import {
 	assertWorkExperienceGeometry,
 	deterministicCredentialEvidence,
+	directContextConsentEvidence,
 	layoutCases,
 	nativeEditorKey,
 	workExperienceGeometry,
 } from "./gui-work-experience.mjs";
+
+test("direct Context binds current receipt scope, retained owner, trigger dialog and exact model without raw visible IDs", () => {
+	const expected = { workspaceId: "work", conversationId: "chat" };
+	const selected = { dataset: { ...expected } };
+	const owner = { isConnected: true };
+	const authorize = { textContent: "Authorize model context", disabled: true };
+	const copy = [
+		"Only this chat and the selected model",
+		"Provider / model: faux / faux-1",
+		"No authorized folders available. Authorize a folder in Project files first.",
+	];
+	let paragraphs = copy;
+	let buttons = [authorize];
+	const dialog = {
+		id: "context-one",
+		querySelectorAll: (selector) => (selector === "p" ? paragraphs.map((textContent) => ({ textContent })) : buttons),
+	};
+	let selections = [selected];
+	let owners = [owner];
+	let dialogs = [dialog];
+	const document = {
+		querySelectorAll: (selector) =>
+			selector === '.conversation-link[aria-current="page"]'
+				? selections
+				: selector === ".conversation-panel"
+					? owners
+					: dialogs,
+	};
+	const observe = () => directContextConsentEvidence(document, expected, "context-one", owner);
+	assert.equal(observe(), true);
+	for (const key of ["workspaceId", "conversationId"]) {
+		selected.dataset[key] = "another";
+		assert.equal(observe(), false, `Current ${key} must still match while consent is open`);
+		selected.dataset[key] = expected[key];
+	}
+	for (const value of [[], [selected, selected]]) {
+		selections = value;
+		assert.equal(observe(), false);
+	}
+	selections = [selected];
+	owners = [{ isConnected: true }];
+	assert.equal(observe(), false, "Replacing the conversation owner must fail even with the same active row");
+	owners = [owner];
+	owner.isConnected = false;
+	assert.equal(observe(), false);
+	owner.isConnected = true;
+	dialog.id = "another-dialog";
+	assert.equal(observe(), false);
+	dialog.id = "context-one";
+	dialogs = [dialog, dialog];
+	assert.equal(observe(), false);
+	dialogs = [dialog];
+	for (let index = 0; index < copy.length; index++) {
+		paragraphs = copy.filter((_, position) => position !== index);
+		assert.equal(observe(), false);
+	}
+	for (const model of ["other / faux-1", "faux / faux-10"]) {
+		paragraphs = [copy[0], `Provider / model: ${model}`, copy[2]];
+		assert.equal(observe(), false);
+	}
+	paragraphs = copy;
+	authorize.disabled = false;
+	assert.equal(observe(), false);
+	authorize.disabled = true;
+	buttons = [authorize, authorize];
+	assert.equal(observe(), false);
+	buttons = [authorize];
+	assert.equal(directContextConsentEvidence(document, expected, "", owner), false);
+	assert.equal(directContextConsentEvidence(document, {}, "context-one", owner), false);
+	assert.equal(observe(), true);
+});
 
 test("faux catalog records native credentials as not run, never as a passed platform credential check", () => {
 	const faux = { dataset: { setting: "provider:faux" }, disabled: true };

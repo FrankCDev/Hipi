@@ -5,7 +5,7 @@ import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import type { ClipboardStatus } from "../workbench/clipboard-feedback.ts";
+import type { ClipboardStatus } from "../workbench/conversation/markdown/clipboard-feedback.ts";
 import { fileLabels } from "./file-labels.ts";
 import { FileTreeAdapter } from "./file-tree-adapter.ts";
 import {
