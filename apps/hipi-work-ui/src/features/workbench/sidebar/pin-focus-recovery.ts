@@ -1,6 +1,7 @@
 import type { Scope } from "@hipi/work-runtime/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 import type { NavigationWindow } from "./navigation-query.ts";
+import type { RecentWindow } from "./window-query.ts";
 
 function usable(element: HTMLElement) {
 	return (
@@ -19,7 +20,9 @@ export function navigationFocusSettled(root: HTMLElement, cache: QueryClient, sc
 	);
 	return cache
 		.getQueryCache()
-		.findAll({ queryKey: ["sidebar-navigation"] })
+		.findAll({
+			predicate: (query) => query.queryKey[0] === "sidebar-navigation" || query.queryKey[0] === "sidebar-window",
+		})
 		.every((query) => {
 			const view = query.queryKey[1];
 			if (!query.isActive() || !view || typeof view !== "object" || !("kind" in view)) return true;
@@ -27,12 +30,16 @@ export function navigationFocusSettled(root: HTMLElement, cache: QueryClient, sc
 				return true;
 			const region = regions.find((region) => region.dataset.sidebarQuery === JSON.stringify(query.queryKey));
 			if (!region) return true;
-			const window = cache.getQueryData<NavigationWindow>(query.queryKey);
+			const window = cache.getQueryData<NavigationWindow | RecentWindow>(query.queryKey);
 			return (
 				query.state.fetchStatus !== "fetching" &&
 				Number(region.dataset.sidebarUpdatedAt) === query.state.dataUpdatedAt &&
 				(query.state.status === "error" ||
-					(!query.state.isInvalidated && window?.pages[0]?.coverage.state === "ready" && !window.rebuilding))
+					(!query.state.isInvalidated &&
+						window?.pages[0]?.coverage.state === "ready" &&
+						!("rebuilding" in window && window.rebuilding) &&
+						!("refreshPaused" in window && window.refreshPaused) &&
+						!("unpublished" in window && window.unpublished)))
 			);
 		});
 }

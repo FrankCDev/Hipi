@@ -100,6 +100,7 @@ test("desktop files and previews share grants; revoke blocks cached handles and 
 		storeId: "store",
 		refreshSidebarProjection: rejectFeatureRead,
 		listSidebarConversations: rejectFeatureRead,
+		listSidebarWindow: rejectFeatureRead,
 		refreshConversationSearch: rejectFeatureRead,
 		searchConversations: rejectFeatureRead,
 		getHistoryAroundMatch: rejectFeatureRead,

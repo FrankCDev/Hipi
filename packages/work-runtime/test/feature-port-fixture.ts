@@ -7,6 +7,7 @@ async function denied(): Promise<never> {
 export const deniedFeatureReads = {
 	refreshSidebarProjection: denied,
 	listSidebarConversations: denied,
+	listSidebarWindow: denied,
 	refreshConversationSearch: denied,
 	searchConversations: denied,
 	getHistoryAroundMatch: denied,

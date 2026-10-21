@@ -8,6 +8,7 @@ import {
 	ActionMenuBoundary,
 	ActionMenuContent,
 	ActionMenuItem,
+	ActionMenuLabel,
 	ActionMenuRadioGroup,
 	ActionMenuRadioItem,
 	type ActionMenuState,
@@ -82,6 +83,9 @@ test("context content uses public collision geometry and the exact same command 
 	primitive.props.onCloseAutoFocus?.(new Event("close", { cancelable: true }));
 	assert.equal(close.mock.calls.length, 1);
 	assert.match(primitive.props.className ?? "", /ui-menu-surface.*ui-context-menu-surface.*conversation-action-menu/);
+	const label = only(ActionMenuLabel({ className: "sidebar-menu-preview", children: "Preview" }), ContextMenu.Label);
+	assert.equal(Reflect.get(label.props, "data-slot"), "context-menu-label");
+	assert.match(label.props.className ?? "", /sidebar-menu-preview/);
 	const select = vi.fn();
 	const item = only(
 		ActionMenuItem({ onSelect: select, disabled: true, variant: "destructive", children: "Action" }),

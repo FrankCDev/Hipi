@@ -1,7 +1,14 @@
-import type { Conversation, ConversationFilter } from "../contracts.ts";
+import type { Conversation, ConversationFilter, Scope } from "../contracts.ts";
 import type { ConversationMembership, ProjectId } from "../projects/contracts.ts";
 
-export const NAVIGATION_LIMITS = { page: 50, candidates: 128, tasks: 32, entries: 32, slots: 256 } as const;
+export const NAVIGATION_LIMITS = {
+	page: 50,
+	candidates: 128,
+	retained: 2,
+	tasks: 32,
+	entries: 32,
+	slots: 256,
+} as const;
 export const ACTIVITY_BASES = [
 	"accepted",
 	"generation_started",
@@ -47,10 +54,32 @@ export type SidebarPage = {
 	coverage: SidebarCoverage;
 	nextCursor: string | null;
 };
+export type SidebarWindowRequest = {
+	view: SidebarView;
+	filter?: ConversationFilter;
+	position: { kind: "head" } | { kind: "continue"; cursor: string } | { kind: "around"; anchor: Scope };
+	/** At most two raw scopes, deduplicated by canonical execution identity. */
+	retainedScopes?: Scope[];
+};
+export type SidebarWindowResult =
+	| {
+			kind: "window";
+			coverage: SidebarCoverage;
+			items: SidebarConversation[];
+			previousCursor: string | null;
+			nextCursor: string | null;
+			retained: {
+				eligible: { row: SidebarConversation; placement: "before" | "inside" | "after" }[];
+				unavailable: { scope: Scope; reason: "missing" | "ineligible" }[];
+			};
+	  }
+	| { kind: "anchor_unavailable"; coverage: SidebarCoverage; anchor: Scope; reason: "missing" | "ineligible" }
+	| { kind: "unpublished"; coverage: SidebarCoverage };
 export type NavigationMethods = {
 	refreshSidebarProjection: { params: { cursor?: string }; result: SidebarCoverage };
 	listSidebarConversations: {
 		params: { view: SidebarView; filter?: ConversationFilter; cursor?: string };
 		result: SidebarPage;
 	};
+	listSidebarWindow: { params: SidebarWindowRequest; result: SidebarWindowResult };
 };

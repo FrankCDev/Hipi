@@ -20,6 +20,7 @@ function catalog() {
 		storeId: "store",
 		refreshSidebarProjection: rejectFeatureRead,
 		listSidebarConversations: rejectFeatureRead,
+		listSidebarWindow: rejectFeatureRead,
 		refreshConversationSearch: rejectFeatureRead,
 		searchConversations: rejectFeatureRead,
 		getHistoryAroundMatch: rejectFeatureRead,

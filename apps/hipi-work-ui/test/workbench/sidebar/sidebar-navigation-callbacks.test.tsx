@@ -27,6 +27,7 @@ import { PresentationSession } from "../../../src/features/workbench/sidebar/pre
 import { SidebarPreviewCoordinator } from "../../../src/features/workbench/sidebar/preview-coordinator.ts";
 import { type PreviewActions, SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
 import * as SidebarSection from "../../../src/features/workbench/sidebar/section.tsx";
+import { WindowInteractionContext } from "../../../src/features/workbench/sidebar/window-interaction.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({
@@ -65,7 +66,8 @@ vi.mock("react", async () => {
 	}
 	return {
 		...actual,
-		useContext: () => hooks.motionContext ?? hooks.dragContext,
+		useContext: (context: React.Context<unknown>) =>
+			context === WindowInteractionContext ? null : (hooks.motionContext ?? hooks.dragContext),
 		useLayoutEffect: effect,
 		useState: <T,>(initial: T | (() => T)) => {
 			const { cells, index, previous } = cell();

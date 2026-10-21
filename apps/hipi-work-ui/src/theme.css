@@ -252,6 +252,8 @@
 	min-width: 0;
 }
 .navigation-list {
+	/* Keep absolute screen-reader announcements inside this scroll owner. */
+	position: relative;
 	flex: 1;
 	min-height: 0;
 	min-width: 0;

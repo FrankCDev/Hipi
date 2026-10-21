@@ -3,6 +3,7 @@ import { type QueryClient, queryOptions, useQuery, useQueryClient } from "@tanst
 import { useEffect, useState } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import type { NavigationWindow } from "./navigation-query.ts";
+import type { RecentWindow } from "./window-query.ts";
 
 export const navigationProbeOptions = (client: AppClient, logical = false) =>
 	queryOptions({
@@ -28,11 +29,11 @@ export function sameNavigationPublication(a: SidebarCoverage, b: SidebarCoverage
 export function reconcileNavigationPublication(cache: QueryClient, coverage: SidebarCoverage, now = Date.now()) {
 	return cache.invalidateQueries(
 		{
-			queryKey: ["sidebar-navigation"],
 			predicate: (query) => {
+				if (query.queryKey[0] !== "sidebar-navigation" && query.queryKey[0] !== "sidebar-window") return false;
 				if (!query.isActive() || query.state.fetchStatus === "fetching") return false;
 				if (query.state.error instanceof AppError && query.state.error.code === "STORE_MISMATCH") return false;
-				const window = cache.getQueryData<NavigationWindow>(query.queryKey);
+				const window = cache.getQueryData<NavigationWindow | RecentWindow>(query.queryKey);
 				const published = window?.pages[0]?.coverage;
 				if (query.state.error && now - query.state.errorUpdatedAt < 10000) return false;
 				return (
@@ -40,7 +41,9 @@ export function reconcileNavigationPublication(cache: QueryClient, coverage: Sid
 					// A first building page has no rows, but publication retains its generation.
 					// Read the published rows before treating that cached page as complete.
 					(published?.state === "building" && coverage.state !== "building") ||
-					(!!window?.rebuilding && coverage.state !== "building") ||
+					(!!window &&
+						(("rebuilding" in window && window.rebuilding) || ("unpublished" in window && window.unpublished)) &&
+						coverage.state !== "building") ||
 					(!!published && !sameNavigationPublication(published, coverage))
 				);
 			},
@@ -62,6 +65,7 @@ export function watchNavigationSignals(cache: QueryClient) {
 			root === "workspaces" ||
 			root === "conversations" ||
 			root === "pinned-conversations" ||
+			root === "sidebar-pins" ||
 			root === "conversation-presentation";
 		const activity =
 			root === "receipt" || root === "conversation-model" || root === "conversation" || root === "workspace";
@@ -72,6 +76,7 @@ export function watchNavigationSignals(cache: QueryClient) {
 		}
 		if (!catalog && !activity) return;
 		void cache.invalidateQueries({ queryKey: ["sidebar-navigation"] }, { cancelRefetch: false });
+		void cache.invalidateQueries({ queryKey: ["sidebar-window"] }, { cancelRefetch: false });
 		void cache.invalidateQueries({ queryKey: ["sidebar-navigation-probe"] }, { cancelRefetch: false });
 	});
 }

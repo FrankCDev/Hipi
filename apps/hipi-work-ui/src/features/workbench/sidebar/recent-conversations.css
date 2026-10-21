@@ -1,0 +1,9 @@
+.recent-window-sentinel {
+	min-height: 1px;
+	list-style: none;
+}
+
+.workspace-tree .recent-virtual-list {
+	display: block;
+	position: relative;
+}

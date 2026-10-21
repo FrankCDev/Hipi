@@ -75,6 +75,7 @@ export async function openRuntime(directory: string, options: RuntimeOptions): P
 		stopProjectWork: () => catalog.stopProjectWork(),
 		refreshSidebarProjection: (input, signal) => catalog.refreshSidebarProjection(input, signal),
 		listSidebarConversations: (input) => catalog.listSidebarConversations(input),
+		listSidebarWindow: (input) => catalog.listSidebarWindow(input),
 		refreshConversationSearch: (input, signal) => catalog.refreshConversationSearch(input, signal),
 		searchConversations: (input, signal) => catalog.searchConversations(input, signal),
 		getHistoryAroundMatch: (input, signal) => catalog.getHistoryAroundMatch(input, signal),

@@ -8,6 +8,10 @@ export function contextMenuState(document, retained) {
 	const all = (selector) => [...document.querySelectorAll(selector)];
 	const menus = all('[role="menu"]');
 	const menu = menus[0];
+	const preview = menu?.querySelector(".sidebar-menu-preview");
+	const sourceRow = retained.source?.closest(".sidebar-preview-row");
+	const rail = sourceRow?.querySelector(".conversation-hover-actions");
+	const previewStyle = preview && document.defaultView.getComputedStyle(preview);
 	const messages = all("[data-message-id]");
 	const rows = all(".sidebar-preview-row");
 	const triggers = all(".conversation-actions-trigger");
@@ -33,6 +37,16 @@ export function contextMenuState(document, retained) {
 		menuOpen: menu?.dataset.state === "open",
 		menuSlot: menu?.dataset.slot ?? null,
 		menuVisible: !!menu?.getClientRects().length,
+		menuWidth: menu?.getBoundingClientRect().width ?? 0,
+		previewPadding: previewStyle
+			? [previewStyle.paddingTop, previewStyle.paddingRight, previewStyle.paddingBottom, previewStyle.paddingLeft]
+			: [],
+		rowBackground: sourceRow && document.defaultView.getComputedStyle(sourceRow).backgroundColor,
+		sourceHovered: sourceRow?.matches(":hover") === true,
+		railVisible:
+			!!rail?.getClientRects().length &&
+			rail.getBoundingClientRect().width > 0 &&
+			document.defaultView.getComputedStyle(rail).opacity === "1",
 		labels: [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].map((node) => node.textContent.trim()),
 		itemsReady:
 			!!menu &&
@@ -75,6 +89,14 @@ export function assertContextMenuOpen(value, baseline, expected, entry) {
 	assert.equal(value.menuCount, 1, "Exactly one menu, including stale or hidden menus");
 	assert.equal(value.menuOpen, true);
 	assert.equal(value.menuVisible, true);
+	assert.ok(
+		Math.abs(value.menuWidth - expected.menuWidth) <= 1,
+		"Both native entries must use the reference menu width",
+	);
+	assert.deepEqual(value.previewPadding, ["8px", "8px", "8px", "8px"]);
+	assert.equal(value.sourceHovered, false, "Measure persistent menu state after leaving the row");
+	assert.equal(value.rowBackground, expected.hoverSurface, "Menu-open row must retain the hover surface");
+	assert.equal(value.railVisible, true, "Menu-open row must retain its action rail");
 	assert.equal(value.menuSlot, `${entry === "context" ? "context" : "dropdown"}-menu-content`);
 	assert.equal(value.previewCount, 0, "Hover preview must not coexist with the menu");
 	assert.equal(value.contextOwners, entry === "context" ? 1 : 0);
@@ -113,6 +135,7 @@ async function pressEscape(cdp) {
 export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 	const evidence = [];
 	let failure;
+	let lastObservation;
 	try {
 		for (const [location, scope] of [
 			["pinned", seed.pins[1]],
@@ -140,7 +163,11 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 				return true;
 			})()`,
 			);
-			const read = () => evaluate(cdp, `(${contextMenuState.toString()})(document,window.__sidebarContext)`);
+			const read = async () => {
+				const value = await evaluate(cdp, `(${contextMenuState.toString()})(document,window.__sidebarContext)`);
+				lastObservation = { location, scope, ...value };
+				return value;
+			};
 			const baseline = await read();
 			assert.equal(baseline.menuCount, 0, "Reject an already open or stale menu before input");
 			assert.deepEqual(baseline.selected, [{ ...seed.pins[0], location: "pinned" }]);
@@ -149,6 +176,8 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 			assertContextContinuity(baseline, baseline);
 			const english = await evaluate(cdp, "document.documentElement.lang.startsWith('en')");
 			const expected = {
+				menuWidth: await evaluate(cdp, "Math.min(320,innerWidth-24)"),
+				hoverSurface: "",
 				title: conversation.title,
 				created: new Date(conversation.createdAt).toISOString(),
 				labels: english
@@ -178,6 +207,10 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 						"new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))",
 					);
 					const settledPoint = await until(sourcePoint, "context source after hover actions reveal");
+					expected.hoverSurface = await evaluate(
+						cdp,
+						"getComputedStyle(window.__sidebarContext.source.closest('.sidebar-preview-row')).backgroundColor",
+					);
 					for (const type of ["mousePressed", "mouseReleased"])
 						await cdp.request("Input.dispatchMouseEvent", { type, ...settledPoint, button: "right", clickCount: 1 });
 				} else await click(cdp, trigger);
@@ -192,6 +225,11 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 						value.previewCount === 0
 					);
 				}, `${entry} runtime menu ready`);
+				await hover(cdp, '[role="menu"]');
+				await until(async () => {
+					const value = await read();
+					return !value.sourceHovered && value.railVisible && Math.abs(value.menuWidth - expected.menuWidth) <= 1;
+				}, `${entry} menu geometry and retained rail settle`);
 				const opened = await read();
 				const observation = { location, scope, entry, opened };
 				evidence.push(observation);
@@ -224,7 +262,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 	} finally {
 		await writeFile(
 			join(directory, "sidebar-context-menus.json"),
-			`${JSON.stringify({ evidence, failure }, null, 2)}\n`,
+			`${JSON.stringify({ evidence, failure, lastObservation }, null, 2)}\n`,
 		);
 		await evaluate(cdp, "delete window.__sidebarContext");
 	}

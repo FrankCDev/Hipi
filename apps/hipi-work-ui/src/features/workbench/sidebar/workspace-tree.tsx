@@ -6,7 +6,7 @@ import {
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { Archive, Ellipsis, MessageCircle, SquarePen } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { type RefObject, useId, useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import {
 	ActionMenu,
@@ -32,6 +32,7 @@ import type { SidebarOrderAction } from "./drag-provider.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./preview-row.tsx";
 import { ProjectPreviewCard } from "./project-preview-card.tsx";
+import { RecentConversations } from "./recent-conversations.tsx";
 import { SidebarSectionContent, SidebarSectionHeading, useSidebarSection } from "./section.tsx";
 import type { SidebarLocation } from "./selection-owner.ts";
 import { SidebarTitle } from "./title.tsx";
@@ -39,6 +40,10 @@ import { useNavigation } from "./use-navigation.ts";
 import "./layout.css";
 
 type TreeProps = {
+	recentWindow?: boolean;
+	navigationVisible?: boolean;
+	recentLast?: boolean;
+	scrollRef?: RefObject<HTMLElement | null>;
 	catalog: CatalogSession;
 	presentation?: PresentationSession;
 	guard: (action: () => void) => void;
@@ -85,9 +90,36 @@ export function WorkspaceTree(props: TreeProps) {
 							.filter((workspace) => props.section !== "recent" && workspace.workspaceId !== props.defaultWorkspaceId)
 							.map((workspace) => <WorkspaceBranch key={workspace.workspaceId} {...props} workspace={workspace} />)}
 
-				{props.section !== "projects" && <WorkspaceBranch key="recent" {...props} />}
+				{props.section !== "projects" &&
+					(props.recentWindow ? <RecentBranch key="recent" {...props} /> : <WorkspaceBranch key="recent" {...props} />)}
 			</ul>
 		</nav>
+	);
+}
+
+function RecentBranch(props: TreeProps) {
+	const [filter, setFilter] = useState<"active" | "archived">("active");
+	const { locale } = usePreferences();
+	return (
+		<RecentConversations
+			key={`${props.logicalReady !== false}:${filter}`}
+			catalog={props.catalog}
+			presentation={props.presentation}
+			onSelect={(conversation) => props.onSelect(conversation, { kind: "recent" })}
+			selected={
+				props.selectedConversation
+					? { workspaceId: props.selectedWorkspace, conversationId: props.selectedConversation }
+					: undefined
+			}
+			logicalReady={props.logicalReady !== false}
+			visible={props.navigationVisible}
+			last={props.recentLast}
+			scrollRef={props.scrollRef}
+			filter={filter}
+			filterMenu={
+				<ProjectConversationMenu name={catalogLabels(locale).recent} filter={filter} onFilterChange={setFilter} />
+			}
+		/>
 	);
 }
 

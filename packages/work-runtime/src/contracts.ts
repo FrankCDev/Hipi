@@ -32,7 +32,15 @@ import {
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
-import { ACTIVITY_BASES, type NavigationMethods } from "./navigation/contracts.ts";
+import {
+	ACTIVITY_BASES,
+	NAVIGATION_LIMITS,
+	type NavigationMethods,
+	type SidebarConversation,
+	type SidebarCoverage,
+	type SidebarView,
+	type SidebarWindowRequest,
+} from "./navigation/contracts.ts";
 import {
 	isProjectMethod,
 	type ProjectMethods,
@@ -51,6 +59,8 @@ export type {
 	SidebarCoverage,
 	SidebarPage,
 	SidebarView,
+	SidebarWindowRequest,
+	SidebarWindowResult,
 } from "./navigation/contracts.ts";
 export type {
 	ConversationMembership,
@@ -473,6 +483,22 @@ export function parseScope(value: unknown): Scope {
 	const p = object(value);
 	return { workspaceId: id(p.workspaceId), conversationId: id(p.conversationId) };
 }
+function parseSidebarView(value: unknown): SidebarView {
+	const view = object(value);
+	if (view.kind === "recent" || view.kind === "project_recent") {
+		fields(view, ["kind"]);
+		return { kind: view.kind };
+	}
+	if (view.kind === "project") {
+		fields(view, ["kind", "projectId"]);
+		return { kind: "project", projectId: view.projectId === null ? null : id(view.projectId) };
+	}
+	if (view.kind === "workspace") {
+		fields(view, ["kind", "workspaceId"]);
+		return { kind: "workspace", workspaceId: id(view.workspaceId) };
+	}
+	throw new AppError("INVALID_REQUEST");
+}
 /** Reject unknown fields rather than silently ignoring future semantic changes. */
 export function parseRequest(value: unknown): Request {
 	if (!fitsPayloadBudget(value)) throw new AppError("INVALID_REQUEST");
@@ -541,37 +567,49 @@ export function parseRequest(value: unknown): Request {
 				params: p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) },
 			};
 			break;
-		case "listSidebarConversations": {
-			const view = object(p.view);
-			if (
-				view.kind !== "recent" &&
-				view.kind !== "project_recent" &&
-				view.kind !== "workspace" &&
-				view.kind !== "project"
-			)
-				throw new AppError("INVALID_REQUEST");
-			fields(
-				view,
-				view.kind === "recent" || view.kind === "project_recent"
-					? ["kind"]
-					: view.kind === "project"
-						? ["kind", "projectId"]
-						: ["kind", "workspaceId"],
-			);
+		case "listSidebarConversations":
+		case "listSidebarWindow": {
+			const view = parseSidebarView(p.view);
 			if (p.filter !== undefined && p.filter !== "active" && p.filter !== "archived" && p.filter !== "all")
 				throw new AppError("INVALID_REQUEST");
+			const common: Pick<SidebarWindowRequest, "view" | "filter"> = {
+				view,
+				...(p.filter === undefined ? {} : { filter: p.filter }),
+			};
+			if (r.method === "listSidebarConversations") {
+				request = {
+					version: PROTOCOL_VERSION,
+					method: r.method,
+					params: { ...common, ...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }) },
+				};
+				break;
+			}
+			const rawPosition = object(p.position);
+			let position: SidebarWindowRequest["position"];
+			if (rawPosition.kind === "head") {
+				fields(rawPosition, ["kind"]);
+				position = { kind: "head" };
+			} else if (rawPosition.kind === "continue") {
+				fields(rawPosition, ["kind", "cursor"]);
+				position = { kind: "continue", cursor: string(rawPosition.cursor, LIMITS.cursor) };
+			} else if (rawPosition.kind === "around") {
+				fields(rawPosition, ["kind", "anchor"]);
+				position = { kind: "around", anchor: parseObservationScope(rawPosition.anchor) };
+			} else throw new AppError("INVALID_REQUEST");
+			let retainedScopes: Scope[] | undefined;
+			if (p.retainedScopes !== undefined) {
+				if (!Array.isArray(p.retainedScopes) || p.retainedScopes.length > NAVIGATION_LIMITS.retained)
+					throw new AppError("INVALID_REQUEST");
+				const scopes = Array.from(p.retainedScopes, parseObservationScope);
+				retainedScopes = [...new Map(scopes.map((scope) => [JSON.stringify(scope), scope])).values()];
+			}
 			request = {
 				version: PROTOCOL_VERSION,
 				method: r.method,
 				params: {
-					view:
-						view.kind === "recent" || view.kind === "project_recent"
-							? { kind: view.kind }
-							: view.kind === "project"
-								? { kind: "project", projectId: view.projectId === null ? null : id(view.projectId) }
-								: { kind: "workspace", workspaceId: id(view.workspaceId) },
-					...(p.filter === undefined ? {} : { filter: p.filter }),
-					...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }),
+					...common,
+					position,
+					...(retainedScopes === undefined ? {} : { retainedScopes }),
 				},
 			};
 			break;
@@ -1358,6 +1396,48 @@ function parsePage<T>(value: unknown, max: number, parse: (value: unknown) => T,
 	if (new Set(items.map(key)).size !== items.length) throw new AppError("INVALID_REQUEST");
 	return { items, nextCursor: cursor(p.nextCursor) };
 }
+function parseSidebarConversation(value: unknown, coverage: SidebarCoverage): SidebarConversation {
+	const row = object(value);
+	fields(row, [
+		"conversation",
+		"recencyAt",
+		"activityBasis",
+		...(coverage.projectMembershipGeneration === undefined ? [] : ["membership"]),
+	]);
+	const activityBasis = ACTIVITY_BASES.find((basis) => basis === row.activityBasis);
+	if (!activityBasis || (activityBasis === "unknown") !== (row.recencyAt === null))
+		throw new AppError("INVALID_REQUEST");
+	const conversation = parseConversation(row.conversation);
+	let membership: ReturnType<typeof parseConversationMembership> | undefined;
+	if (coverage.projectMembershipGeneration !== undefined) {
+		try {
+			membership = parseConversationMembership(row.membership);
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+		if (
+			membership.workspaceId !== conversation.workspaceId ||
+			membership.conversationId !== conversation.conversationId
+		)
+			throw new AppError("INVALID_REQUEST");
+	}
+	return {
+		conversation,
+		...(membership ? { membership } : {}),
+		recencyAt: row.recencyAt === null ? null : integer(row.recencyAt),
+		activityBasis,
+	};
+}
+function parseSidebarItems(value: unknown, coverage: SidebarCoverage): SidebarConversation[] {
+	if (!Array.isArray(value) || value.length > NAVIGATION_LIMITS.page) throw new AppError("INVALID_REQUEST");
+	const items = Array.from(value, (raw) => parseSidebarConversation(raw, coverage));
+	if (
+		new Set(items.map(({ conversation: c }) => JSON.stringify([c.workspaceId, c.conversationId]))).size !==
+		items.length
+	)
+		throw new AppError("INVALID_REQUEST");
+	return items;
+}
 export function parseResult<M extends Method>(method: M, value: unknown): Result<M> {
 	if (!fitsPayloadBudget(value)) throw new AppError("INVALID_REQUEST");
 	if (isSidebarPinMethod(method)) {
@@ -1424,48 +1504,63 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 	} else if (method === "listSidebarConversations") {
 		const p = object(value);
 		fields(p, ["items", "coverage", "nextCursor"]);
-		if (!Array.isArray(p.items) || p.items.length > LIMITS.directoryPage) throw new AppError("INVALID_REQUEST");
 		const coverage = parseResult("refreshSidebarProjection", p.coverage);
-		const items = p.items.map((raw) => {
-			const row = object(raw);
-			fields(row, [
-				"conversation",
-				"recencyAt",
-				"activityBasis",
-				...(coverage.projectMembershipGeneration === undefined ? [] : ["membership"]),
-			]);
-			const activityBasis = ACTIVITY_BASES.find((basis) => basis === row.activityBasis);
-			if (!activityBasis || (activityBasis === "unknown") !== (row.recencyAt === null))
-				throw new AppError("INVALID_REQUEST");
-			const conversation = parseConversation(row.conversation);
-			let membership: ReturnType<typeof parseConversationMembership> | undefined;
-			if (coverage.projectMembershipGeneration !== undefined) {
-				try {
-					membership = parseConversationMembership(row.membership);
-				} catch {
-					throw new AppError("INVALID_REQUEST");
-				}
-				if (
-					membership.workspaceId !== conversation.workspaceId ||
-					membership.conversationId !== conversation.conversationId
-				)
-					throw new AppError("INVALID_REQUEST");
-			}
-			return {
-				conversation,
-				...(membership ? { membership } : {}),
-				recencyAt: row.recencyAt === null ? null : integer(row.recencyAt),
-				activityBasis,
-			};
-		});
-		if (
-			new Set(items.map(({ conversation: c }) => JSON.stringify([c.workspaceId, c.conversationId]))).size !==
-			items.length
-		)
-			throw new AppError("INVALID_REQUEST");
+		const items = parseSidebarItems(p.items, coverage);
 		const nextCursor = cursor(p.nextCursor);
 		if (coverage.state === "building" && (items.length || nextCursor !== null)) throw new AppError("INVALID_REQUEST");
 		result = { items, coverage, nextCursor };
+	} else if (method === "listSidebarWindow") {
+		const p = object(value);
+		const coverage = parseResult("refreshSidebarProjection", p.coverage);
+		if (p.kind === "unpublished") {
+			fields(p, ["kind", "coverage"]);
+			if (coverage.state !== "building") throw new AppError("INVALID_REQUEST");
+			result = { kind: "unpublished", coverage };
+		} else if (p.kind === "anchor_unavailable") {
+			fields(p, ["kind", "coverage", "anchor", "reason"]);
+			if (coverage.state === "building" || (p.reason !== "missing" && p.reason !== "ineligible"))
+				throw new AppError("INVALID_REQUEST");
+			result = { kind: "anchor_unavailable", coverage, anchor: parseObservationScope(p.anchor), reason: p.reason };
+		} else if (p.kind === "window") {
+			fields(p, ["kind", "coverage", "items", "previousCursor", "nextCursor", "retained"]);
+			if (coverage.state === "building") throw new AppError("INVALID_REQUEST");
+			const items = parseSidebarItems(p.items, coverage);
+			const retained = object(p.retained);
+			fields(retained, ["eligible", "unavailable"]);
+			if (
+				!Array.isArray(retained.eligible) ||
+				!Array.isArray(retained.unavailable) ||
+				retained.eligible.length + retained.unavailable.length > NAVIGATION_LIMITS.retained
+			)
+				throw new AppError("INVALID_REQUEST");
+			const eligible = Array.from(retained.eligible, (raw) => {
+				const proof = object(raw);
+				fields(proof, ["row", "placement"]);
+				if (proof.placement !== "before" && proof.placement !== "inside" && proof.placement !== "after")
+					throw new AppError("INVALID_REQUEST");
+				return { row: parseSidebarConversation(proof.row, coverage), placement: proof.placement } as const;
+			});
+			const unavailable = Array.from(retained.unavailable, (raw) => {
+				const proof = object(raw);
+				fields(proof, ["scope", "reason"]);
+				if (proof.reason !== "missing" && proof.reason !== "ineligible") throw new AppError("INVALID_REQUEST");
+				return { scope: parseObservationScope(proof.scope), reason: proof.reason } as const;
+			});
+			const scopes = [...eligible.map(({ row }) => row.conversation), ...unavailable.map(({ scope }) => scope)];
+			if (
+				new Set(scopes.map((scope) => JSON.stringify([scope.workspaceId, scope.conversationId]))).size !==
+				scopes.length
+			)
+				throw new AppError("INVALID_REQUEST");
+			result = {
+				kind: "window",
+				coverage,
+				items,
+				previousCursor: cursor(p.previousCursor),
+				nextCursor: cursor(p.nextCursor),
+				retained: { eligible, unavailable },
+			};
+		} else throw new AppError("INVALID_REQUEST");
 	} else if (method === "refreshConversationSearch") {
 		const p = object(value);
 		fields(p, ["generation", "state", "completedAt", "nextCursor"]);

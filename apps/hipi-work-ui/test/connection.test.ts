@@ -11,6 +11,39 @@ import {
 	verifyConnection,
 } from "../src/app/connection.ts";
 
+// Observe the actual native request promises; do not replace Web Locks with a mock.
+class NativeLockRequests implements LockManager {
+	readonly requests: Promise<unknown>[] = [];
+	query(): Promise<LockManagerSnapshot> {
+		return navigator.locks.query();
+	}
+	request<T>(name: string, callback: LockGrantedCallback<T>): Promise<Awaited<T>>;
+	request<T>(name: string, options: LockOptions, callback: LockGrantedCallback<T>): Promise<Awaited<T>>;
+	request<T>(
+		name: string,
+		options: LockOptions | LockGrantedCallback<T>,
+		callback?: LockGrantedCallback<T>,
+	): Promise<Awaited<T>> {
+		let request: Promise<Awaited<T>>;
+		if (typeof options === "function") request = navigator.locks.request(name, options);
+		else {
+			assert.ok(callback);
+			request = navigator.locks.request(name, options, callback);
+		}
+		this.requests.push(request);
+		return request;
+	}
+	async released(): Promise<void> {
+		const settled = await Promise.allSettled(this.requests.splice(0));
+		for (const result of settled) {
+			if (result.status === "rejected") assert.ok(result.reason instanceof StoreInUseError);
+		}
+		const snapshot = await this.query();
+		assert.deepEqual(snapshot.held, [], "native held locks remain after release");
+		assert.deepEqual(snapshot.pending, [], "native pending locks remain after release");
+	}
+}
+
 function clientReturning(result: unknown | Promise<unknown>): AppClient {
 	return {
 		async call(method) {
@@ -73,33 +106,41 @@ test("authentication, browser network and malformed response errors stay distinc
 	assert.equal(connectionFailure(new UnsupportedBrowserError()), "unsupportedBrowser");
 });
 
-test("store editing lease excludes another tab until explicit disconnect release", async () => {
-	const first = await acquireStoreLease("lease-test-store", navigator.locks);
+test("store editing lease excludes another tab until explicit disconnect release", async (t) => {
+	const locks = new NativeLockRequests();
+	const first = await acquireStoreLease("lease-test-store", locks);
 	try {
-		await assert.rejects(acquireStoreLease("lease-test-store", navigator.locks), StoreInUseError);
-		const other = await acquireStoreLease("lease-other-store", navigator.locks);
+		await assert.rejects(acquireStoreLease("lease-test-store", locks), StoreInUseError);
+		const other = await acquireStoreLease("lease-other-store", locks);
 		other.release();
 	} finally {
 		first.release();
 	}
-	// Let the completed lock callback release its native lease before reconnecting.
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	const reconnected = await acquireStoreLease("lease-test-store", navigator.locks);
+	await locks.released();
+	const reconnected = await acquireStoreLease("lease-test-store", locks);
 	reconnected.release();
+	await locks.released();
+	t.diagnostic("native lease requests settled; held and pending locks are empty");
 });
 
 test("missing browser Web Locks fails closed", async () => {
 	await assert.rejects(acquireStoreLease("store", undefined), UnsupportedBrowserError);
 });
 
-test("abrupt owner termination releases the native store lease", async () => {
+test("abrupt owner termination releases the native store lease", async (t) => {
+	const locks = new NativeLockRequests();
 	const worker = new Worker(new URL("./fixtures/lease-worker.ts", import.meta.url));
 	try {
-		await once(worker, "message");
-		await assert.rejects(acquireStoreLease("terminated-owner-store", navigator.locks), StoreInUseError);
+		assert.deepEqual(await once(worker, "message"), ["acquired"]);
+		await assert.rejects(acquireStoreLease("terminated-owner-store", locks), StoreInUseError);
 	} finally {
-		await worker.terminate();
+		assert.equal(await worker.terminate(), 1, "abrupt worker termination must finish");
+		assert.equal(worker.threadId, -1, "terminated worker must no longer have a thread");
 	}
-	const recovered = await acquireStoreLease("terminated-owner-store", navigator.locks);
+	await locks.released();
+	t.diagnostic("abrupt worker termination completed; native held and pending locks are empty");
+	const recovered = await acquireStoreLease("terminated-owner-store", locks);
 	recovered.release();
+	await locks.released();
+	t.diagnostic("recovered native lease request settled; held and pending locks are empty");
 });

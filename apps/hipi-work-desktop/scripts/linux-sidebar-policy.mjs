@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { posix } from "node:path";
 
 // One approved CI attempt, not a reusable Linux launch workaround.
 export const sidebarPolicyMarker = "[hipi-sidebar-policy-once-20261020-231348]";
@@ -97,10 +97,10 @@ export function createSidebarPolicy(
 			// The harness's generated basename is the complete grammar: no AppArmor
 			// variables, quotes, glob syntax, escaping, controls, or arbitrary paths.
 			assert.match(owned, /^\/tmp\/Hipi GUI 中文 验证-[A-Za-z0-9]{6}$/u);
-			assert.equal(binary, join(owned, "真实 应用", "hipi-work"));
+			assert.equal(binary, posix.join(owned, "真实 应用", "hipi-work"));
 			for (const [path, file] of [
 				[owned, false],
-				[join(owned, "真实 应用"), false],
+				[posix.join(owned, "真实 应用"), false],
 				[binary, true],
 			]) {
 				assert.equal(await io.realpath(path), path, "Policy target must be canonical");

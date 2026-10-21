@@ -208,6 +208,7 @@ export function Workbench({
 	const [sidebarSelection, setSidebarSelection] = useState<SidebarLocation | null>(null);
 	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
 	const navigationRevision = useRef(0);
+	const [newChatLookup, setNewChatLookup] = useState<{ revision: number; failed: boolean } | null>(null);
 	useEffect(() => {
 		let owner: { requestId: string; revision: number; current: boolean; admitted: boolean } | undefined;
 		return presentation.subscribePinLifecycle((event) => {
@@ -582,6 +583,7 @@ export function Workbench({
 		openSearch,
 	]);
 	const selectWorkspace = (id: string) => {
+		setNewChatLookup(null);
 		homeDraft.cancel();
 		setComposerFocusRevision((value) => value + 1);
 		setSidebarSelection(null);
@@ -612,6 +614,7 @@ export function Workbench({
 		if (project) selectKnownProject(project);
 	};
 	const selectConversation = (item: Conversation, onSelected?: () => void, location: SidebarLocation | null = null) => {
+		setNewChatLookup(null);
 		homeDraft.cancel();
 		if (
 			location &&
@@ -643,12 +646,50 @@ export function Workbench({
 		select();
 		onSelected?.();
 	};
-	const openNewConversation = (requestedProjectId?: string | null) => {
+	const openNewConversation = async (requestedProjectId?: string | null) => {
 		homeDraft.cancel();
-		const projectId = requestedProjectId !== undefined ? requestedProjectId : currentProjectId;
-		if (projectId === undefined) return;
-		if (projectId) selectProject(projectId);
-		else selectWorkspace("");
+		const origin = ++navigationRevision.current;
+		const scope = { ...currentScope.current };
+		const current = () =>
+			connectionLease.active &&
+			currentConnection.current === connectionLease &&
+			navigationRevision.current === origin &&
+			currentScope.current.workspaceId === scope.workspaceId &&
+			currentScope.current.conversationId === scope.conversationId;
+		setNewChatLookup({ revision: origin, failed: false });
+		try {
+			let projectId = requestedProjectId !== undefined ? requestedProjectId : currentProjectId;
+			if (projectId === undefined) {
+				if (!scope.workspaceId || !scope.conversationId) throw new Error("PROJECT_DESTINATION_UNVERIFIED");
+				// Join the existing scoped query, but retain the click's navigation owner.
+				const membership = await cache.fetchQuery({
+					queryKey: ["conversation-membership", scope.workspaceId, scope.conversationId],
+					queryFn: ({ signal }) => client.call("getConversationMembership", scope, signal),
+					retry: false,
+				});
+				if (!current()) return;
+				if (membership.workspaceId !== scope.workspaceId || membership.conversationId !== scope.conversationId)
+					throw new Error("PROJECT_DESTINATION_UNVERIFIED");
+				projectId = membership.projectId;
+			}
+			if (projectId === null) {
+				selectWorkspace("");
+				return;
+			}
+			const project =
+				projectById.get(projectId)?.project ??
+				(currentProject?.projectId === projectId ? currentProject : undefined) ??
+				(await cache.fetchQuery({
+					queryKey: ["project", projectId],
+					queryFn: ({ signal }) => client.call("getProject", { projectId }, signal),
+					retry: false,
+				}));
+			if (!current()) return;
+			if (!project || project.projectId !== projectId) throw new Error("PROJECT_DESTINATION_UNVERIFIED");
+			selectKnownProject(project);
+		} catch {
+			if (current()) setNewChatLookup({ revision: origin, failed: true });
+		}
 	};
 	const activateSearch = async (hit: ConversationSearchHit, signal: AbortSignal) => {
 		const origin = navigationRevision.current;
@@ -670,6 +711,8 @@ export function Workbench({
 		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
 		const state = catalog.getSnapshot();
 		if (state.projectResult && !state.pending) {
+			if (state.projectResult.method === "renameProject")
+				void cache.invalidateQueries({ queryKey: ["project", state.projectResult.result.projectId] });
 			void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
 			void cache.invalidateQueries({ queryKey: ["projects"] });
 			void cache.invalidateQueries({ queryKey: ["project-catalog"] });
@@ -810,6 +853,10 @@ export function Workbench({
 			throw new Error("UNCONFIRMED");
 	};
 	const workspaceTreeProps = {
+		recentWindow: true,
+		navigationVisible: !settingsOpen && (narrow ? navigationOpen : !navigationCollapsed),
+		recentLast: visibleSections.at(-1) === "recent",
+		scrollRef: navigationList,
 		workspaces: workspaces.items,
 		catalog,
 		presentation,
@@ -909,11 +956,21 @@ export function Workbench({
 				</div>
 				<section className="conversation-nav">
 					<div className="workspace-create">
-						<Button variant="ghost" className="new-conversation-trigger" onClick={() => openNewConversation()}>
+						<Button
+							variant="ghost"
+							className="new-conversation-trigger"
+							aria-busy={newChatLookup?.revision === navigationRevision.current && !newChatLookup.failed}
+							onClick={() => void openNewConversation()}
+						>
 							<SquarePen size={16} aria-hidden="true" />
 							{t("nav.newConversation")}
 						</Button>
 					</div>
+					{newChatLookup?.revision === navigationRevision.current && newChatLookup.failed && (
+						<p className="nav-feedback" role="alert">
+							{cl.currentFailed}
+						</p>
+					)}
 					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
 						<SidebarInitialLoading>
 							<SidebarDragProvider

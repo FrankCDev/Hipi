@@ -55,6 +55,7 @@ import { WorkbenchWelcome } from "../../src/features/workbench/workbench-welcome
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({ cells: [] as Cell[], cursor: 0, commits: [] as (() => void)[], changed: false }));
 const measurement = vi.hoisted(() => ({ width: 1000 }));
+const membershipRead = vi.hoisted(() => ({ pending: false }));
 // Bounded hook adapter: invoke Workbench's production JSX callbacks and commit its
 // owner effects, without mounting descendants. DOM input/focus, portals, React
 // reconciliation and execution streams require separate integration/native coverage.
@@ -123,7 +124,9 @@ vi.mock("@tanstack/react-query", async () => ({
 				: kind === "project"
 					? projectItems().find((item) => item.project.projectId === workspaceId)?.project
 					: kind === "conversation-membership"
-						? { workspaceId, conversationId, projectId: workspaceId, revision: 1 }
+						? membershipRead.pending
+							? undefined
+							: { workspaceId, conversationId, projectId: workspaceId, revision: 1 }
 						: kind === "workspaces"
 							? { items: workspaces, nextCursor: null }
 							: kind === "workspace"
@@ -414,6 +417,7 @@ function assertPreserved(current: ReturnType<typeof drive>, initial: ReturnType<
 
 let windowEvents: EventTarget;
 beforeEach(() => {
+	membershipRead.pending = false;
 	measurement.width = 1000;
 	hooks.cells = [];
 	hooks.commits = [];
@@ -874,6 +878,152 @@ test("New chat opens the scoped composer without creating objects or discarding 
 	}
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 });
+
+async function requestNewChat(current: ReturnType<typeof drive>) {
+	// The shared callback also serves the global button, which supplies no project override.
+	const result: unknown = Reflect.apply(current.tree.onNewConversation, undefined, []);
+	await result;
+}
+
+test.each([null, "other", "off-page"])(
+	"New chat retains pending membership intent for exact destination %s",
+	async (projectId) => {
+		membershipRead.pending = true;
+		const response = Promise.withResolvers<void>();
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+			if (method === "getConversationMembership") {
+				assert.deepEqual(params, { workspaceId: "current", conversationId: "task" });
+				await response.promise;
+				return parseResult(method, { workspaceId: "current", conversationId: "task", projectId, revision: 1 });
+			}
+			assert.equal(method, "getProject");
+			assert.deepEqual(params, { projectId: "off-page" });
+			return parseResult(method, {
+				projectId: "off-page",
+				homeWorkspaceId: "physical-home",
+				name: "Off page",
+				revision: 1,
+			});
+		});
+		const initial = drive();
+		const running = requestNewChat(initial);
+		assert.equal(drive().tree.selectedConversation, "task");
+		assert.equal(
+			elements(drive().content, Button).find((button) => button.props.className === "new-conversation-trigger")?.props[
+				"aria-busy"
+			],
+			true,
+		);
+		response.resolve();
+		await running;
+		const after = drive();
+		assert.equal(after.tree.selectedConversation, "");
+		assert.equal(
+			after.tree.selectedWorkspace,
+			projectId === null ? "" : projectId === "off-page" ? "physical-home" : "other",
+		);
+		assert.equal(after.tree.selectedProjectId, projectId);
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.deepEqual(local.pending(scope), pending);
+		assert.ok(
+			vi
+				.mocked(client.call)
+				.mock.calls.every(([method]) => method === "getConversationMembership" || method === "getProject"),
+		);
+	},
+);
+
+test.each(["away", "away-back", "explicit-new", "repeat", "retired", "failure"] as const)(
+	"pending New chat cannot supersede %s and never navigates on failure",
+	async (outcome) => {
+		membershipRead.pending = true;
+		const response = Promise.withResolvers<void>();
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			assert.equal(method, "getConversationMembership");
+			await response.promise;
+			return parseResult(method, { workspaceId: "current", conversationId: "task", projectId: null, revision: 1 });
+		});
+		const initial = drive();
+		const first = requestNewChat(initial);
+		let second: Promise<void> | undefined;
+		if (outcome === "away" || outcome === "away-back") {
+			drive().tree.onOpenProject("other");
+			if (outcome === "away-back") drive().tree.onSelect(conversation);
+		} else if (outcome === "explicit-new") drive().tree.onNewConversation("other");
+		else if (outcome === "repeat") second = requestNewChat(drive());
+		else if (outcome === "retired") for (const cell of hooks.cells) cell?.cleanup?.();
+		if (outcome === "failure") response.reject(new Error("Membership unavailable"));
+		else response.resolve();
+		await first;
+		await second;
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.deepEqual(local.pending(scope), pending);
+		if (outcome === "retired") {
+			assert.equal(local.read("conversation"), "task");
+			return;
+		}
+		const after = drive();
+		assert.equal(
+			after.tree.selectedWorkspace,
+			outcome === "repeat" ? "" : outcome === "away" || outcome === "explicit-new" ? "other" : "current",
+		);
+		assert.equal(after.tree.selectedConversation, outcome === "failure" || outcome === "away-back" ? "task" : "");
+		assert.equal(
+			elements(after.content, "p").some(
+				(node) => node.props.role === "alert" && node.props.className === "nav-feedback",
+			),
+			outcome === "failure",
+		);
+		if (outcome === "failure") {
+			vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) =>
+				parseResult(method, { workspaceId: "current", conversationId: "task", projectId: null, revision: 1 }),
+			);
+			await requestNewChat(after);
+			assert.equal(drive().tree.selectedConversation, "");
+		}
+	},
+);
+
+test.each(["missing", "away-back", "success"] as const)(
+	"New chat rechecks ownership after delayed off-page project resolution: %s",
+	async (outcome) => {
+		membershipRead.pending = true;
+		const response = Promise.withResolvers<ProjectListItem["project"] | undefined>();
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			if (method === "getConversationMembership")
+				return parseResult(method, {
+					workspaceId: "current",
+					conversationId: "task",
+					projectId: "logical",
+					revision: 1,
+				});
+			assert.equal(method, "getProject");
+			return parseResult(method, await response.promise);
+		});
+		const running = requestNewChat(drive());
+		await vi.waitFor(() => assert.ok(vi.mocked(client.call).mock.calls.some(([method]) => method === "getProject")));
+		if (outcome === "away-back") {
+			drive().tree.onOpenProject("other");
+			drive().tree.onSelect(conversation);
+		}
+		response.resolve(
+			outcome === "missing"
+				? undefined
+				: { projectId: "logical", homeWorkspaceId: "physical", name: "Logical project", revision: 1 },
+		);
+		await running;
+		const after = drive();
+		assert.equal(after.tree.selectedConversation, outcome === "success" ? "" : "task");
+		assert.equal(after.tree.selectedWorkspace, outcome === "success" ? "physical" : "current");
+		assert.equal(local.read(`draft.${scope}`), draft);
+		assert.equal(
+			elements(after.content, "p").some(
+				(node) => node.props.role === "alert" && node.props.className === "nav-feedback",
+			),
+			outcome === "missing",
+		);
+	},
+);
 
 test("explicit legacy text recovery keeps the current destination and preserves both source records", async () => {
 	saveCommand(local, "catalog", null);
@@ -1347,6 +1497,47 @@ function prepareDisconnect() {
 	assert.ok(actions.props.prepareDisconnect);
 	return actions.props.prepareDisconnect();
 }
+test("restored rename recovery invalidates only its exact project without replay or historical cache overwrite", async () => {
+	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
+	const command = {
+		version: PROTOCOL_VERSION,
+		method: "renameProject",
+		params: { requestId: "restored-rename", projectId: "off-page", expectedRevision: 1, name: "Renamed" },
+	} as const;
+	local.write("command.catalog", JSON.stringify({ version: 6, kind: "project-command", request: command }));
+	let completed = false;
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
+		assert.equal(method, "getProjectCommandResult");
+		assert.deepEqual(params, { requestId: command.params.requestId });
+		return parseResult(
+			method,
+			completed
+				? {
+						status: "completed",
+						method: command.method,
+						params: command.params,
+						result: { projectId: "off-page", homeWorkspaceId: "physical", name: "Renamed", revision: 2 },
+					}
+				: null,
+		);
+	});
+	const initial = drive();
+	const recover = () =>
+		element(drive().content, PreparedTaskRecovery).props.onResolve(() => initial.tree.catalog.check());
+	await recover();
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	assert.ok(initial.tree.catalog.getSnapshot().pending);
+	completed = true;
+	await recover();
+	assert.equal(initial.tree.catalog.getSnapshot().pending, null);
+	assert.deepEqual(
+		cache.invalidateQueries.mock.calls.map(([input]) => input.queryKey),
+		[["project", "off-page"], ["sidebar-pins"], ["projects"], ["project-catalog"], ["sidebar-navigation"]],
+	);
+	assert.equal(cache.setQueryData.mock.calls.length, 0);
+	assert.equal(drive().tree.selectedConversation, "task");
+	assert.equal(vi.mocked(client.call).mock.calls.length, 2);
+});
 test("one disconnect confirmation captures protected owners; cancel leaves all work and dispatch untouched", async () => {
 	const initial = drive();
 	await initial.session.open({ workspaceId: "current", rootId: "root", path: "first.txt" }, true);

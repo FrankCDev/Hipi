@@ -324,3 +324,40 @@ test("a project metadata-only no-row commit retires waiting focus before unrelat
 	unsubscribe();
 	cache.clear();
 });
+
+test("Recent window focus settlement requires its committed generation and excludes unpublished retention", () => {
+	const document = new FocusDocument(),
+		root = new FocusElement(document),
+		region = new FocusElement(document);
+	root.regions = [region];
+	const key = ["sidebar-window", { kind: "project_recent" }, "active"];
+	const cache = new QueryClient();
+	const data = {
+		pages: [page()],
+		retained: { eligible: [], unavailable: [] },
+		paused: false,
+		unpublished: false,
+		action: "refresh",
+		revision: 1,
+	};
+	cache.setQueryData(key, data, { updatedAt: 2 });
+	const observer = new QueryObserver(cache, { queryKey: key, queryFn: async () => data, staleTime: Infinity });
+	const unsubscribe = observer.subscribe(() => {});
+	region.dataset.sidebarQuery = JSON.stringify(key);
+	region.dataset.sidebarUpdatedAt = "1";
+	assert.equal(navigationFocusSettled(dom(root), cache, scope), false);
+	region.dataset.sidebarUpdatedAt = "2";
+	assert.equal(navigationFocusSettled(dom(root), cache, scope), true);
+	cache.setQueryData(key, { ...data, unpublished: true }, { updatedAt: 3 });
+	region.dataset.sidebarUpdatedAt = "3";
+	assert.equal(navigationFocusSettled(dom(root), cache, scope), false);
+	cache.setQueryData(key, { ...data, refreshPaused: "budget" }, { updatedAt: 4 });
+	region.dataset.sidebarUpdatedAt = "4";
+	assert.equal(
+		navigationFocusSettled(dom(root), cache, scope),
+		false,
+		"Retained old rows are not a settled replacement",
+	);
+	unsubscribe();
+	cache.clear();
+});

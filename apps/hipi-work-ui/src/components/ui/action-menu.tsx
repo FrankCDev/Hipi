@@ -111,6 +111,7 @@ export function ActionMenuLabel(props: ComponentProps<typeof Dropdown.DropdownMe
 	return (
 		<ContextMenu.Label
 			{...rest}
+			data-slot="context-menu-label"
 			data-inset={inset}
 			className={cn("px-2 py-1.25 font-medium data-[inset]:ps-8", className)}
 		/>

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { capture, click, evaluate, hover, until } from "../../gui-flow.mjs";
+import { assertSidebarShellGeometry, sidebarShellGeometry } from "../../gui-sidebar-geometry.mjs";
 import { assertSidebarHoverTrace, startSidebarHoverTrace } from "../../gui-sidebar-hover.mjs";
 import { exerciseSidebarContextMenus } from "./context-menu.mjs";
 import { defaultRoleEntry } from "./manifest.mjs";
+import { nativeKeyEvents } from "./native-key.mjs";
 
 const heading = (id) => `[data-sidebar-section="${id}"] .sidebar-section-toggle`;
 const project = (id) => `.workspace-branch[data-workspace-id="${id}"] .project-open`;
@@ -71,7 +73,7 @@ export function assertAliasSelection(value, scope, location, draft, projectId) {
 	assert.equal(value.sameHistory, true, "Alias navigation must retain the history node");
 }
 
-async function exerciseAliasSelection(cdp, seed) {
+async function exerciseAliasSelection(cdp, seed, observeGeometry) {
 	const scope = seed.alias;
 	assert.ok(scope, "Fixture requires an unpinned project conversation");
 	const row = `.conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
@@ -114,6 +116,7 @@ async function exerciseAliasSelection(cdp, seed) {
 		const value = await read();
 		assertAliasSelection(value, scope, location, draft, seed.aliasProjectId);
 		evidence.push(value);
+		await observeGeometry(`alias selection: ${location}`);
 	};
 	try {
 		await verify("recent");
@@ -161,7 +164,7 @@ export function homeInputAcceptsEditing(document) {
 	return !!input && !input.disabled && !input.readOnly;
 }
 
-async function exerciseNewChatContext(cdp, seed, directory) {
+async function exerciseNewChatContext(cdp, seed, directory, observeGeometry) {
 	const draft = "SIDEBAR_HOME_SHARED 中文";
 	const inputFocused = () =>
 		until(
@@ -215,6 +218,7 @@ async function exerciseNewChatContext(cdp, seed, directory) {
 		evidence.push({ step, expectedProject: workspaceId, expectedDraft: draft, ...value, continuousHome });
 		await writeFile(join(directory, "sidebar-new-chat-context.json"), `${JSON.stringify({ evidence }, null, 2)}\n`);
 		assertHomeDraftContext(value, workspaceId, draft, continuousHome);
+		await observeGeometry(step);
 	};
 	try {
 		await verify("typed inherited project draft", seed.alias.workspaceId);
@@ -257,8 +261,19 @@ async function exerciseNewChatContext(cdp, seed, directory) {
 		await verify("New chat from project conversation", seed.alias.workspaceId, false);
 		await click(cdp, ".prepared-task-input");
 		await key(cdp, "a", process.platform === "darwin" ? 4 : 2);
+		const selection = await evaluate(
+			cdp,
+			"(()=>{const input=document.querySelector('.prepared-task-input');return {value:input.value,focused:document.activeElement===input,selectionStart:input.selectionStart,selectionEnd:input.selectionEnd}})()",
+		);
+		evidence.push({ step: "native select all before clearing home draft", ...selection });
+		assert.equal(selection.focused, true, "Native select all must target the focused home input");
+		assert.equal(selection.value, draft, "Native select all must not change the draft");
+		assert.equal(selection.selectionStart, 0, "Native select all must start at the beginning");
+		assert.equal(selection.selectionEnd, selection.value.length, "Native select all must cover the entire draft");
 		await key(cdp, "Backspace");
-		assert.equal(await evaluate(cdp, "document.querySelector('.prepared-task-input').value"), "");
+		const clearedDraft = await evaluate(cdp, "document.querySelector('.prepared-task-input').value");
+		evidence.push({ step: "native Backspace clears home draft", draft: clearedDraft });
+		assert.equal(clearedDraft, "");
 		return evidence;
 	} catch (error) {
 		failure = error.message;
@@ -273,26 +288,7 @@ async function exerciseNewChatContext(cdp, seed, directory) {
 }
 
 async function key(cdp, value, modifiers = 0) {
-	const keys = {
-		Enter: [13, "Enter"],
-		" ": [32, "Space"],
-		Tab: [9, "Tab"],
-		Escape: [27, "Escape"],
-		ArrowUp: [38, "ArrowUp"],
-		ArrowDown: [40, "ArrowDown"],
-		a: [65, "KeyA"],
-		Backspace: [8, "Backspace"],
-	};
-	assert.ok(keys[value]);
-	for (const type of ["keyDown", "keyUp"])
-		await cdp.request("Input.dispatchKeyEvent", {
-			type,
-			key: value,
-			code: keys[value][1],
-			windowsVirtualKeyCode: keys[value][0],
-			modifiers,
-			...(type === "keyDown" && [" ", "Enter"].includes(value) ? { text: value === "Enter" ? "\r" : " " } : {}),
-		});
+	for (const event of nativeKeyEvents(value, modifiers)) await cdp.request("Input.dispatchKeyEvent", event);
 }
 async function point(cdp, selector, fraction = 0.5, scroll = true) {
 	const value = await evaluate(
@@ -461,6 +457,23 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		"three sections and two real projects",
 	);
 	const actions = [];
+	const geometry = [];
+	const observeGeometry = async (stage, qualify = true) => {
+		try {
+			geometry.push({ stage, value: await evaluate(cdp, `(${sidebarShellGeometry.toString()})(document)`) });
+		} catch {
+			geometry.push({ stage, unavailable: true });
+		}
+		await writeFile(
+			join(directory, `sidebar-shell-geometry-${reopened ? "cold" : "first"}.json`),
+			`${JSON.stringify({ geometry }, null, 2)}\n`,
+		);
+		if (qualify) {
+			assert.ok(geometry.at(-1).value, "Native geometry observation unavailable");
+			assertSidebarShellGeometry(geometry.at(-1).value);
+		}
+	};
+	await observeGeometry("ready before native journey");
 	let failure;
 	try {
 		if (reopened) {
@@ -490,10 +503,12 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			await capture(cdp, directory, "sidebar-cold-restored");
 			return { final, coldRestored: true };
 		}
-		const aliasSelection = await exerciseAliasSelection(cdp, seed);
+		const aliasSelection = await exerciseAliasSelection(cdp, seed, observeGeometry);
+		await observeGeometry("after alias selection");
 		actions.push({ name: "native project Recent alias ownership and disclosure fallback", aliasSelection });
 		record({ sidebarAction: "native project Recent alias ownership and disclosure fallback" });
-		const newChatContext = await exerciseNewChatContext(cdp, seed, directory);
+		const newChatContext = await exerciseNewChatContext(cdp, seed, directory, observeGeometry);
+		await observeGeometry("after New chat context");
 		actions.push({ name: "native New chat project inheritance and shared draft", newChatContext });
 		record({ sidebarAction: "native New chat project inheritance and shared draft" });
 		await click(cdp, pin(seed.pins[0]));
@@ -539,6 +554,7 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		};
 		const completed = async (name) => {
 			await continuity();
+			await observeGeometry(name);
 			actions.push({ name, state: await readState(cdp) });
 			record({ sidebarAction: name });
 		};
@@ -773,6 +789,7 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		failure = error.message;
 		throw error;
 	} finally {
+		await observeGeometry(failure ? "journey failure" : "journey completion", !failure);
 		await writeFile(
 			join(directory, `sidebar-actions-${reopened ? "cold" : "first"}.json`),
 			`${JSON.stringify({ actions, failure, state: await readState(cdp) }, null, 2)}\n`,

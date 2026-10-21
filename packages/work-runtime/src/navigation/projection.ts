@@ -1,29 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
-import {
-	AppError,
-	type Conversation,
-	LIMITS,
-	type Params,
-	parseResult,
-	type Scope,
-	type Workspace,
-} from "../contracts.ts";
-import {
-	type ConversationMembership,
-	type ProjectConversationSummary,
-	parseConversationMembership,
-} from "../projects/contracts.ts";
+import { AppError, type Conversation, type Params, parseResult, type Scope, type Workspace } from "../contracts.ts";
+import type { ProjectConversationSummary } from "../projects/contracts.ts";
 import {
 	type ActivityBasis,
 	NAVIGATION_LIMITS,
 	type NavigationInvalidation,
-	type SidebarConversation,
 	type SidebarCoverage,
 	type SidebarPage,
+	type SidebarWindowRequest,
+	type SidebarWindowResult,
 } from "./contracts.ts";
-import { navigationQuery, PROJECT_SUMMARY_CANDIDATES } from "./query.ts";
+import { decodeNavigationCursor as decode, encodeNavigationCursor as encode } from "./cursor.ts";
+import { PROJECT_SUMMARY_CANDIDATES } from "./query.ts";
+import { NavigationReader } from "./reader.ts";
 import { type ActivityPosition, type NavigationSource, readActivityStep } from "./source.ts";
 
 export type NavigationPorts = {
@@ -54,25 +45,6 @@ function integer(value: unknown): number {
 function text(value: unknown): string {
 	if (typeof value !== "string") throw new AppError("INDEX_RECOVERY_REQUIRED");
 	return value;
-}
-function encode(value: object): string {
-	return Buffer.from(JSON.stringify(value)).toString("base64url");
-}
-function decode(raw: string, keys: string[]): Record<string, unknown> {
-	try {
-		if (raw.length > LIMITS.cursor || !/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error();
-		const value: unknown = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
-		if (
-			!value ||
-			typeof value !== "object" ||
-			Array.isArray(value) ||
-			Object.keys(value).sort().join() !== keys.sort().join()
-		)
-			throw new Error();
-		return value as Record<string, unknown>;
-	} catch {
-		throw new AppError("INVALID_REQUEST");
-	}
 }
 /** Catalog-owned derived navigation. A publication callback only marks dirty; this owner does the I/O. */
 export class NavigationProjection {
@@ -139,23 +111,33 @@ export class NavigationProjection {
 		this.#db.exec("BEGIN IMMEDIATE");
 		try {
 			let changed = false;
+			// Only these cycles can be served or published. Restart replaces state.cycle;
+			// in-flight refreshes check epoch/revision before publication. Retired rows
+			// await cleanup and must not invalidate or inflate metadata point work.
+			// Separate from window's 128-row budget: <=256 facts x <=2 live identities,
+			// each with one PK SELECT and UPDATE (<=1,024 point statements total).
+			const cycles = [
+				...new Set([state.cycle, this.#publication().cycle].filter((cycle): cycle is string => cycle !== null)),
+			];
 			for (const fact of this.#metadata.values()) {
 				const value = fact.conversation,
 					source = JSON.stringify([fact.generation, fact.durableId]);
-				if (
-					this.#db
-						.prepare(
-							"SELECT 1 FROM navigation_sources WHERE workspace_id=? AND public_id=? AND source_generation!=? LIMIT 1",
-						)
-						.get(value.workspaceId, value.conversationId, source)
-				)
-					this.#resetPublication = true;
-				const result = this.#db
-					.prepare(
-						"UPDATE navigation_sources SET conversation=? WHERE workspace_id=? AND public_id=? AND source_generation=? AND json_extract(conversation,'$.revision')<=?",
+				for (const cycle of cycles) {
+					if (
+						this.#db
+							.prepare(
+								"SELECT 1 FROM navigation_sources WHERE cycle=? AND workspace_id=? AND public_id=? AND source_generation!=? LIMIT 1",
+							)
+							.get(cycle, value.workspaceId, value.conversationId, source)
 					)
-					.run(JSON.stringify(value), value.workspaceId, value.conversationId, source, value.revision);
-				changed ||= Number(result.changes) > 0;
+						this.#resetPublication = true;
+					const result = this.#db
+						.prepare(
+							"UPDATE navigation_sources SET conversation=? WHERE cycle=? AND workspace_id=? AND public_id=? AND source_generation=? AND json_extract(conversation,'$.revision')<=?",
+						)
+						.run(JSON.stringify(value), cycle, value.workspaceId, value.conversationId, source, value.revision);
+					changed ||= Number(result.changes) > 0;
+				}
 			}
 			if (this.#resetPublication)
 				this.#db.exec("UPDATE navigation_publication SET cycle=NULL,generation=NULL WHERE singleton=1");
@@ -514,176 +496,22 @@ export class NavigationProjection {
 			coverage,
 		};
 	}
-	list(input: Params<"listSidebarConversations">): SidebarPage {
+	#reader(input: Params<"listSidebarConversations">) {
 		if (this.#closed) throw new AppError("CLOSED");
 		this.#applyDirty();
 		if (this.#failure) throw this.#failure;
 		if (input.view.kind === "workspace" && !this.#ports.hasWorkspace(input.view.workspaceId))
 			throw new AppError("NOT_FOUND");
-		const logical = input.view.kind === "project" || input.view.kind === "project_recent";
-		let projectMembership: number | undefined, projectOrderGeneration: number | undefined;
-		if (logical) {
-			const catalog = this.#db
-				.prepare("SELECT state,membership_generation FROM project_catalog_state WHERE singleton=1")
-				.get();
-			if (catalog?.state !== "ready") throw new AppError("INDEX_RECOVERY_REQUIRED");
-			projectMembership = integer(catalog.membership_generation);
-			projectOrderGeneration = integer(
-				this.#db.prepare("SELECT order_generation FROM project_presentation_state WHERE singleton=1").get()
-					?.order_generation,
-			);
-			if (
-				input.view.kind === "project" &&
-				input.view.projectId !== null &&
-				!this.#db.prepare("SELECT 1 FROM projects WHERE project_id=? AND status='ready'").get(input.view.projectId)
-			)
-				throw new AppError("NOT_FOUND");
-		}
-		const state = this.#state(),
-			coverage: SidebarCoverage = {
-				...this.#status(state),
-				...(projectMembership === undefined
-					? {}
-					: { projectMembershipGeneration: projectMembership, projectOrderGeneration }),
-			};
 		const published = this.#publication();
-		const membership = integer(
-			this.#db.prepare("SELECT generation FROM presentation_state WHERE singleton=1").get()?.generation,
-		);
-		const query = JSON.stringify([
-			input.view.kind,
-			input.view.kind === "workspace"
-				? input.view.workspaceId
-				: input.view.kind === "project"
-					? input.view.projectId
-					: null,
-			input.filter ?? "active",
-			"activity-source-order-v1",
-		]);
-		let after: [number, string, number, string] | undefined;
-		if (input.cursor) {
-			const p = decode(input.cursor, [
-				"v",
-				"kind",
-				"storeId",
-				"query",
-				"generation",
-				"membership",
-				...(logical ? ["projectMembership", "projectOrderGeneration"] : []),
-				"after",
-			]);
-			if (
-				p.v !== 1 ||
-				p.kind !== "navigation-page" ||
-				p.storeId !== this.#storeId ||
-				p.query !== query ||
-				typeof p.generation !== "string" ||
-				!Number.isSafeInteger(p.membership) ||
-				Number(p.membership) < 0 ||
-				(projectMembership !== undefined &&
-					(!Number.isSafeInteger(p.projectMembership) || Number(p.projectMembership) < 0)) ||
-				(logical && (!Number.isSafeInteger(p.projectOrderGeneration) || Number(p.projectOrderGeneration) < 0)) ||
-				!Array.isArray(p.after) ||
-				p.after.length !== 4 ||
-				!Number.isSafeInteger(p.after[0]) ||
-				p.after[0] < -1 ||
-				typeof p.after[1] !== "string" ||
-				!/^[A-Za-z0-9_-]{1,128}$/.test(p.after[1]) ||
-				!Number.isSafeInteger(p.after[2]) ||
-				p.after[2] < 0 ||
-				typeof p.after[3] !== "string" ||
-				!/^[A-Za-z0-9_-]{1,128}$/.test(p.after[3])
-			)
-				throw new AppError("INVALID_REQUEST");
-			if (
-				p.generation !== published.generation ||
-				p.membership !== membership ||
-				p.projectMembership !== projectMembership ||
-				p.projectOrderGeneration !== projectOrderGeneration ||
-				published.cycle === null
-			)
-				throw new AppError("CURSOR_STALE");
-			after = p.after as [number, string, number, string];
-			if (input.view.kind === "workspace" && after[1] !== input.view.workspaceId)
-				throw new AppError("INVALID_REQUEST");
-			const anchor = this.#db
-				.prepare(
-					"SELECT ordinal,recency_at FROM navigation_sources WHERE cycle=? AND workspace_id=? AND public_id=?",
-				)
-				.get(published.cycle, after[1], after[3]);
-			if (!anchor || anchor.ordinal !== after[2] || (anchor.recency_at ?? -1) !== after[0])
-				throw new AppError("INVALID_REQUEST");
-		}
-		if (published.cycle === null) {
-			this.#schedule();
-			return { items: [], coverage, nextCursor: null };
-		}
-		const queryPlan = navigationQuery(
-			published.cycle,
-			input.view.kind === "workspace" ? input.view.workspaceId : undefined,
-			after,
-			logical,
-		);
-		const rows = this.#db.prepare(queryPlan.sql).all(...queryPlan.params);
-		const items: SidebarConversation[] = [];
-		let consumed = 0,
-			position = after;
-		for (const row of rows.slice(0, NAVIGATION_LIMITS.candidates)) {
-			const conversation = parseResult("getConversation", JSON.parse(String(row.conversation)));
-			consumed++;
-			position = [
-				row.recency_at === null ? -1 : integer(row.recency_at),
-				conversation.workspaceId,
-				integer(row.ordinal),
-				conversation.conversationId,
-			];
-			let logicalMembership: ConversationMembership | undefined;
-			if (logical) {
-				try {
-					logicalMembership = parseConversationMembership({
-						workspaceId: conversation.workspaceId,
-						conversationId: conversation.conversationId,
-						projectId: row.membership_project_id,
-						revision: row.membership_revision,
-					});
-				} catch {
-					throw new AppError("INDEX_RECOVERY_REQUIRED");
-				}
-				if (logicalMembership.projectId !== null && row.membership_project_status !== "ready")
-					throw new AppError("INDEX_RECOVERY_REQUIRED");
-				if (input.view.kind === "project" && logicalMembership.projectId !== input.view.projectId) continue;
-				if (input.view.kind === "project_recent" && row.membership_project_pinned === 1) continue;
-			}
-			const filter = input.filter ?? "active";
-			// An archive commit is authoritative even if its subsequent pin cleanup was interrupted.
-			// Archived conversations cannot be pinned; do not hide archive browsing behind stale cleanup metadata.
-			if (conversation.archivedAt === null && row.pin_ordinal !== null && row.pin_ordinal !== undefined) continue;
-			if (filter !== "all" && (conversation.archivedAt !== null) !== (filter === "archived")) continue;
-			items.push({
-				conversation,
-				...(logicalMembership === undefined ? {} : { membership: logicalMembership }),
-				recencyAt: row.recency_at === null ? null : integer(row.recency_at),
-				activityBasis: row.basis as ActivityBasis,
-			});
-			if (items.length === NAVIGATION_LIMITS.page) break;
-		}
-		return {
-			items,
-			coverage,
-			nextCursor:
-				rows.length > consumed && position
-					? encode({
-							v: 1,
-							kind: "navigation-page",
-							storeId: this.#storeId,
-							query,
-							generation: published.generation,
-							membership,
-							...(logical ? { projectMembership, projectOrderGeneration } : {}),
-							after: position,
-						})
-					: null,
-		};
+		const reader = new NavigationReader(this.#db, this.#storeId, input, published.cycle, this.#status());
+		if (published.cycle === null) this.#schedule();
+		return reader;
+	}
+	list(input: Params<"listSidebarConversations">): SidebarPage {
+		return this.#reader(input).list(input.cursor);
+	}
+	window(input: SidebarWindowRequest): SidebarWindowResult {
+		return this.#reader(input).window(input);
 	}
 	async close(): Promise<void> {
 		this.#closed = true;

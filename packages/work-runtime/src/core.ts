@@ -95,6 +95,7 @@ export type RuntimePorts = {
 		signal?: AbortSignal,
 	): Promise<Result<"refreshSidebarProjection">>;
 	listSidebarConversations(input: Params<"listSidebarConversations">): Promise<Result<"listSidebarConversations">>;
+	listSidebarWindow(input: Params<"listSidebarWindow">): Promise<Result<"listSidebarWindow">>;
 	refreshConversationSearch(
 		input: Params<"refreshConversationSearch">,
 		signal?: AbortSignal,
@@ -269,6 +270,7 @@ export class WorkRuntime implements AppClient {
 		if (request.method === "refreshSidebarProjection")
 			return this.#ports.refreshSidebarProjection(request.params, readSignal);
 		if (request.method === "listSidebarConversations") return this.#ports.listSidebarConversations(request.params);
+		if (request.method === "listSidebarWindow") return this.#ports.listSidebarWindow(request.params);
 		if (request.method === "getConversationPresentation")
 			return this.#ports.getConversationPresentation(request.params);
 		if (request.method === "listPinnedConversations") return this.#ports.listPinnedConversations(request.params);

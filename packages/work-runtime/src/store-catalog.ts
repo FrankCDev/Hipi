@@ -483,6 +483,9 @@ export class StoreCatalog {
 	): Promise<Result<"listSidebarConversations">> {
 		return this.#navigation.list(input);
 	}
+	async listSidebarWindow(input: Params<"listSidebarWindow">): Promise<Result<"listSidebarWindow">> {
+		return this.#navigation.window(input);
+	}
 	listPinnedConversations(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">> {
 		return this.#presentations.list(input);
 	}

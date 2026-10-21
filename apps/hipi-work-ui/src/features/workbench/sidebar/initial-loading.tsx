@@ -14,7 +14,7 @@ export function isSidebarInitialLoading(cache: QueryClient) {
 			const [owner, view, filter] = query.queryKey;
 			if (owner === "projects" || owner === "sidebar-pins") return query.queryKey.length === 2 && view === "pages";
 			return (
-				owner === "sidebar-navigation" &&
+				(owner === "sidebar-navigation" || owner === "sidebar-window") &&
 				query.queryKey.length === 3 &&
 				view !== null &&
 				typeof view === "object" &&

@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
 	ActionMenuBoundary,
 	ActionMenuContextTrigger,
@@ -14,6 +14,7 @@ import {
 import { type SidebarOrderAction, useSidebarDragging, useSidebarSortable } from "./drag-provider.tsx";
 import { useSidebarPreviewCoordinator, useSidebarPreviewDisabled } from "./preview-provider.tsx";
 import { useSidebarSection } from "./section.tsx";
+import { useWindowInteraction } from "./window-interaction.tsx";
 
 const focusableSelector =
 	'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
@@ -61,6 +62,8 @@ export function SidebarPreviewRow({
 	orderAction?: SidebarOrderAction;
 }) {
 	const dragging = useSidebarDragging();
+	const protectWindow = useWindowInteraction();
+	const windowOwner = useId();
 	const surfaceDisabled = useSidebarPreviewDisabled();
 	const surfaceState = useRef(surfaceDisabled);
 	surfaceState.current = surfaceDisabled;
@@ -81,6 +84,17 @@ export function SidebarPreviewRow({
 	const ownedDialog = useRef(false);
 	const focusOwner = useRef<EventTarget | null>(null);
 	const [menu, setMenu] = useState<{ entry: ActionMenuEntry; open: boolean }>({ entry: "ellipsis", open: false });
+	useLayoutEffect(() => {
+		protectWindow?.(windowOwner, menu.open || dialogOpen, row.current);
+		return () => protectWindow?.(windowOwner, false);
+	}, [protectWindow, windowOwner, menu.open, dialogOpen]);
+	useEffect(
+		() => () => {
+			protectWindow?.(`${windowOwner}:dialog`, false);
+			protectWindow?.(`${windowOwner}:portal`, false);
+		},
+		[protectWindow, windowOwner],
+	);
 	const contextPosition = useRef<ActionMenuState["contextPosition"]>(undefined);
 	const card = useRef<HTMLDivElement>(null);
 	const [interaction] = useState(
@@ -403,6 +417,7 @@ export function SidebarPreviewRow({
 								},
 								onOverlayChange: (owner, open) => {
 									if (owner === "dialog") ownedDialog.current = open;
+									if (owner === "dialog") protectWindow?.(`${windowOwner}:dialog`, open, row.current);
 									interaction.setOverlayOpen(owner, open);
 								},
 								onReturnFocus: returnFocus,
@@ -433,7 +448,13 @@ export function SidebarPreviewRow({
 						}
 						interaction.leave();
 					}}
-					onFocusCapture={() => interaction.pin()}
+					onFocusCapture={() => {
+						interaction.pin();
+						protectWindow?.(`${windowOwner}:portal`, true, row.current);
+					}}
+					onBlurCapture={(event) => {
+						if (!event.currentTarget.contains(event.relatedTarget)) protectWindow?.(`${windowOwner}:portal`, false);
+					}}
 					onKeyDown={(event) => {
 						if (
 							event.key !== "Tab" ||
