@@ -1,0 +1,17 @@
+/* Home context/composer and active transcript/footer use the same border-box column.
+   Optional body padding expands the outer maximum; the toolbar fallback stays inside it. */
+.conversation-panel,
+.work-conversation-frame > .welcome {
+	--thread-content-max-width: var(--reading-width);
+	--conversation-inline-padding: calc(var(--spacing) * 4);
+}
+.conversation-column {
+	--thread-content-max-width: var(--thread-content-responsive-max-width, inherit);
+	--thread-body-max-width: calc(var(--thread-content-max-width) + var(--thread-body-inline-padding, 0px) * 2);
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	max-width: var(--thread-body-max-width);
+	margin-inline: auto;
+	padding-inline: var(--thread-body-inline-padding, var(--conversation-inline-padding));
+}

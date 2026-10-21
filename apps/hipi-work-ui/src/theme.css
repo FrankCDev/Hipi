@@ -533,10 +533,6 @@
 	width: 100%;
 	margin-top: 0;
 }
-.welcome[data-project-ready="true"] .welcome-action {
-	width: 100%;
-	max-width: calc(var(--reading-width) + 24px);
-}
 .welcome[data-project-ready="true"] .welcome-mark {
 	margin-bottom: 20px;
 }
@@ -1223,8 +1219,6 @@
 .permission-detail-dialog {
 	font-size: 13px;
 }
-.conversation-tools,
-.conversation-model-controls,
 .permission-controls,
 .permission-attention {
 	display: flex;
@@ -1233,56 +1227,14 @@
 	gap: 6px;
 	min-width: 0;
 }
-.conversation-tools {
-	padding: 0;
-	flex-shrink: 0;
-	font-size: 12px;
-	column-gap: 4px;
-	justify-content: space-between;
-}
-.conversation-tools [data-slot="button"] {
-	font-size: 13px;
-	padding-inline: 8px;
-}
-.conversation-model-controls {
-	min-height: 28px;
-	flex-wrap: nowrap;
-	margin-inline-start: auto;
-}
-.conversation-model-controls[data-execution-state="paused"],
-.conversation-model-controls[data-execution-state="cancellation_pending"],
-.conversation-model-controls:has([role="alert"]) {
-	flex-wrap: wrap;
-}
-.conversation-model-controls,
 .permission-controls {
 	max-width: 100%;
-}
-.conversation-tools p[role="alert"] {
-	color: var(--warning);
-	padding: 3px 8px;
-	background: var(--warning-soft);
-	border-radius: 6px;
 }
 .model-state {
 	color: var(--muted);
 	font-size: 12px;
 	min-width: 0;
 	overflow-wrap: anywhere;
-}
-.model-status-trigger {
-	height: var(--composer-action-size);
-	border-radius: var(--composer-auxiliary-radius);
-	padding-block: 0;
-	padding-inline: var(--composer-auxiliary-inline-padding);
-	line-height: var(--composer-auxiliary-line-height);
-	max-width: 160px;
-	min-width: 0;
-	color: var(--muted);
-}
-.model-status-trigger > span {
-	overflow: hidden;
-	text-overflow: ellipsis;
 }
 .model-status-popover {
 	width: min(340px, calc(100vw - 24px));
@@ -1298,20 +1250,6 @@
 	border-radius: 8px;
 	background: var(--warning-soft);
 	color: var(--warning);
-}
-@container composer-footer (max-width: 475px) {
-	.conversation-tools {
-		gap: 4px;
-	}
-	.conversation-model-controls {
-		margin-inline-start: 0;
-	}
-	.permission-controls {
-		min-height: 28px;
-	}
-	.model-status-trigger {
-		max-width: 130px;
-	}
 }
 .diagnostics-grid {
 	display: grid;
@@ -2777,7 +2715,8 @@ dl.conversation-preview-summary {
 	justify-self: start;
 }
 .sidebar-preview-row,
-.sidebar-preview-trigger,
+/* biome-ignore lint/style/noDescendingSpecificity: This shared transition-only rule does not compete with the earlier sidebar trigger geometry; removing the old composer container exposed this diagnostic. */
+	.sidebar-preview-trigger,
 .project-row > button,
 .conversation-filter-tab,
 .sidebar-settings-trigger {

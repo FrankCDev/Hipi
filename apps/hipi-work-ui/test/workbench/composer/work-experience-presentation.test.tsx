@@ -116,8 +116,8 @@ test("running replaces Send with the real execution Stop, not observation cancel
 	}
 	function buttons(node: ReactNode): ReactNode[] {
 		if (Array.isArray(node)) return node.flatMap(buttons);
-		if (!isValidElement<{ children?: ReactNode }>(node)) return [];
-		return [...(node.type === Button ? [node] : []), ...buttons(node.props.children)];
+		if (!isValidElement<{ children?: ReactNode; actions?: ReactNode }>(node)) return [];
+		return [...(node.type === Button ? [node] : []), ...buttons(node.props.children), ...buttons(node.props.actions)];
 	}
 	for (const state of ["running", "cancellation_pending", "ready"] as const) {
 		const html = renderToStaticMarkup(

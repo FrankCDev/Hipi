@@ -31,6 +31,7 @@ test("project home composes a localized question with the real selector and keep
 				: /我们应该在<button type="button">Project A<\/button>中做些什么？/,
 		);
 		assert.ok(html.indexOf("welcome-context") < html.indexOf("<form>"));
+		assert.match(html, /class="welcome-action conversation-column"/);
 		assert.match(html, /class="welcome-composer"><form>/);
 		assert.doesNotMatch(html.match(/<form>.*<\/form>/)?.[0] ?? "", /Local folder/);
 	}
@@ -57,7 +58,7 @@ test("composer inset belongs to its child, not the equal-flex home split", () =>
 	);
 	const outer = css.match(/\.work-conversation-frame > \.welcome \{([^}]+)\}/)?.[1];
 	assert.ok(outer);
-	assert.match(outer, /padding: 24px var\(--home-inline-padding\) 0;/);
+	assert.match(outer, /padding: 24px 0 0;/);
 	assert.match(outer, /--home-composer-top-padding: 6px;/);
 	assert.match(outer, /--home-composer-bottom-padding: 16px;/);
 	assert.match(

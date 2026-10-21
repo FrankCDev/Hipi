@@ -35,6 +35,7 @@ vi.mock("react", async () => {
 	return {
 		...actual,
 		useLayoutEffect: () => {},
+		useMemo: <T,>(factory: () => T) => factory(),
 		useId: () => `input-${hooks.cursor++}`,
 		useState: <T,>(initial?: T | (() => T)) => {
 			const index = hooks.cursor++;
@@ -66,6 +67,11 @@ vi.mock("react", async () => {
 		},
 	};
 });
+// This handler suite has no mounted DOM; actual adaptive measurement has its own mounted suite.
+vi.mock("../../../src/features/workbench/composer/footer.tsx", () => ({ useComposerFooterWidth: () => null }));
+vi.mock("../../../src/features/workbench/composer/use-inline-collapse.ts", () => ({
+	useInlineCollapse: () => ({ model: { hideLabel: false, hideControl: false } }),
+}));
 vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));

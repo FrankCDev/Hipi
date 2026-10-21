@@ -57,9 +57,16 @@ vi.mock("../../../src/features/tool-activities/tool-activities.tsx", () => ({
 vi.mock("../../../src/features/workbench/conversation/history.tsx", () => ({
 	ConversationHistory: ({ snapshot }: { snapshot: Snapshot }) => <div>{snapshot.partial}</div>,
 }));
-vi.mock("../../../src/features/workbench/conversation/model.tsx", () => ({ ConversationModelControls: () => null }));
+vi.mock("../../../src/features/workbench/conversation/model.tsx", () => ({
+	ConversationModelControls: () => null,
+	ConversationModelAttention: () => null,
+}));
 vi.mock("../../../src/features/conversation-capabilities/conversation-capabilities.tsx", () => ({
-	ConversationCapabilities: () => null,
+	ConversationCapabilities: ({
+		children,
+	}: {
+		children: (view: { controls: React.ReactNode; attention: React.ReactNode }) => React.ReactNode;
+	}) => children({ controls: null, attention: null }),
 }));
 const scope = { workspaceId: "workspace", conversationId: "conversation" };
 const conversation: Conversation = { ...scope, title: "Recovery", revision: 1, createdAt: 1, archivedAt: null };

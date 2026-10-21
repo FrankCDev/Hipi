@@ -1,6 +1,6 @@
 import type { Conversation, ModelReference } from "@hipi/work-runtime/contracts";
 import { Blocks, FolderPlus, Plus, ShieldCheck } from "lucide-react";
-import { type MouseEvent, useId, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { ActionTooltip } from "../../components/ui/action-tooltip.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -21,10 +21,12 @@ export function ConversationCapabilities({
 	conversation,
 	model,
 	connected,
+	children,
 }: {
 	conversation: Conversation;
 	model?: ModelReference;
 	connected: boolean;
+	children?: (view: { controls: ReactNode; attention: ReactNode }) => ReactNode;
 }) {
 	const { locale } = usePreferences();
 	const l = capabilityLabels(locale);
@@ -55,118 +57,133 @@ export function ConversationCapabilities({
 					active={section === "tool-packs"}
 					connected={connected}
 				>
-					{(toolPacks) => (
-						<section className="permission-controls capabilities-controls" aria-label={l["capabilities.title"]}>
-							<div className="capability-actions">
-								<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+					{(toolPacks) => {
+						const controls = (
+							<section className="permission-controls capabilities-controls" aria-label={l["capabilities.title"]}>
+								<div className="capability-actions">
+									<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+										<ActionTooltip
+											label={l["capabilities.add"]}
+											disabled={menuOpen || section !== null || contextAction["aria-expanded"]}
+										>
+											<DropdownMenuTrigger asChild>
+												<Button
+													ref={plusTrigger}
+													variant="ghost"
+													size="icon-sm"
+													className="composer-add-trigger"
+													aria-label={l["capabilities.add"]}
+												>
+													<Plus size={16} aria-hidden="true" />
+												</Button>
+											</DropdownMenuTrigger>
+										</ActionTooltip>
+										<DropdownMenuContent
+											className="composer-add-menu"
+											align="start"
+											side="top"
+											onCloseAutoFocus={(event) => {
+												if (openingDialog.current) event.preventDefault();
+												openingDialog.current = false;
+											}}
+										>
+											<DropdownMenuItem asChild disabled={contextAction.disabled}>
+												<button
+													type="button"
+													className="capability-context-trigger"
+													{...contextAction}
+													onClick={(event) => {
+														openingDialog.current = true;
+														contextAction.onClick(event);
+														setMenuOpen(false);
+													}}
+												>
+													<FolderPlus size={16} aria-hidden="true" />
+													{l["capabilities.contextAction"]}
+												</button>
+											</DropdownMenuItem>
+											<DropdownMenuItem asChild>
+												<button
+													type="button"
+													className="capability-tools-trigger"
+													aria-haspopup="dialog"
+													onClick={() => {
+														openingDialog.current = true;
+														returnFocus.current = plusTrigger.current;
+														setMenuOpen(false);
+														setSection("tool-packs");
+													}}
+												>
+													<Blocks size={16} aria-hidden="true" />
+													{l["capabilities.toolsAction"]}
+												</button>
+											</DropdownMenuItem>
+										</DropdownMenuContent>
+									</DropdownMenu>
 									<ActionTooltip
-										label={l["capabilities.add"]}
-										disabled={menuOpen || section !== null || contextAction["aria-expanded"]}
+										label={l["capabilities.permissions"]}
+										disabled={section !== null || contextAction["aria-expanded"]}
 									>
-										<DropdownMenuTrigger asChild>
-											<Button
-												ref={plusTrigger}
-												variant="ghost"
-												size="icon-sm"
-												className="composer-add-trigger"
-												aria-label={l["capabilities.add"]}
-											>
-												<Plus size={16} aria-hidden="true" />
-											</Button>
-										</DropdownMenuTrigger>
+										<Button
+											variant="ghost"
+											size="sm"
+											className="capabilities-trigger permission-mode-trigger"
+											aria-label={l["capabilities.permissions"]}
+											aria-haspopup="dialog"
+											aria-expanded={section === "files"}
+											aria-controls={dialogId}
+											onClick={showPermissions}
+										>
+											<ShieldCheck size={16} aria-hidden="true" />
+											<span>{l["capabilities.permissions"]}</span>
+										</Button>
 									</ActionTooltip>
-									<DropdownMenuContent
-										className="composer-add-menu"
-										align="start"
-										side="top"
-										onCloseAutoFocus={(event) => {
-											if (openingDialog.current) event.preventDefault();
-											openingDialog.current = false;
-										}}
-									>
-										<DropdownMenuItem asChild disabled={contextAction.disabled}>
-											<button
-												type="button"
-												className="capability-context-trigger"
-												{...contextAction}
-												onClick={(event) => {
-													openingDialog.current = true;
-													contextAction.onClick(event);
-													setMenuOpen(false);
-												}}
-											>
-												<FolderPlus size={16} aria-hidden="true" />
-												{l["capabilities.contextAction"]}
-											</button>
-										</DropdownMenuItem>
-										<DropdownMenuItem asChild>
-											<button
-												type="button"
-												className="capability-tools-trigger"
-												aria-haspopup="dialog"
-												onClick={() => {
-													openingDialog.current = true;
-													returnFocus.current = plusTrigger.current;
-													setMenuOpen(false);
-													setSection("tool-packs");
-												}}
-											>
-												<Blocks size={16} aria-hidden="true" />
-												{l["capabilities.toolsAction"]}
-											</button>
-										</DropdownMenuItem>
-									</DropdownMenuContent>
-								</DropdownMenu>
-								<ActionTooltip
-									label={l["capabilities.permissions"]}
-									disabled={section !== null || contextAction["aria-expanded"]}
-								>
-									<Button
-										variant="ghost"
-										size="sm"
-										className="capabilities-trigger permission-mode-trigger"
-										aria-label={l["capabilities.permissions"]}
-										aria-haspopup="dialog"
-										aria-expanded={section === "files"}
-										aria-controls={dialogId}
-										onClick={showPermissions}
-									>
-										<ShieldCheck size={16} aria-hidden="true" />
-										<span>{l["capabilities.permissions"]}</span>
-									</Button>
-								</ActionTooltip>
-							</div>
-							<Dialog
-								open={section !== null}
-								onOpenChange={(open) => {
-									if (!open) setSection(null);
-								}}
-							>
-								<DialogContent
-									id={dialogId}
-									className="conversation-options-dialog"
-									scrollBody
-									data-section={section}
-									closeLabel={l["capabilities.close"]}
-									aria-describedby={undefined}
-									onSubmit={(event) => event.stopPropagation()}
-									onCloseAutoFocus={(event) => {
-										if (returnFocus.current?.isConnected) {
-											event.preventDefault();
-											returnFocus.current.focus();
-										}
+								</div>
+							</section>
+						);
+						return (
+							<>
+								{children ? (
+									children({ controls, attention: section === null ? attention : null })
+								) : (
+									<>
+										{controls}
+										{section === null && attention}
+									</>
+								)}
+								<Dialog
+									open={section !== null}
+									onOpenChange={(open) => {
+										if (!open) setSection(null);
 									}}
 								>
-									<DialogTitle>{l[section === "tool-packs" ? "capabilities.tools" : "capabilities.files"]}</DialogTitle>
-									<DialogBody>
-										{attention}
-										{section === "tool-packs" ? toolPacks : permissions}
-									</DialogBody>
-								</DialogContent>
-							</Dialog>
-							{section === null && attention}
-						</section>
-					)}
+									<DialogContent
+										id={dialogId}
+										className="conversation-options-dialog"
+										scrollBody
+										data-section={section}
+										closeLabel={l["capabilities.close"]}
+										aria-describedby={undefined}
+										onSubmit={(event) => event.stopPropagation()}
+										onCloseAutoFocus={(event) => {
+											if (returnFocus.current?.isConnected) {
+												event.preventDefault();
+												returnFocus.current.focus();
+											}
+										}}
+									>
+										<DialogTitle>
+											{l[section === "tool-packs" ? "capabilities.tools" : "capabilities.files"]}
+										</DialogTitle>
+										<DialogBody>
+											{attention}
+											{section === "tool-packs" ? toolPacks : permissions}
+										</DialogBody>
+									</DialogContent>
+								</Dialog>
+							</>
+						);
+					}}
 				</ToolPacksPanel>
 			)}
 		</AgentPermissionManagement>

@@ -1,20 +1,10 @@
+@import "../thread-column.css";
+
 /* Ordinary desktop conversation, with a flow header rather than native edge-scroll.
    Transcript and footer share the same border-box column and inheritance rules. */
 .conversation-panel {
-	--thread-content-max-width: var(--reading-width);
-	--conversation-inline-padding: calc(var(--spacing) * 4);
 	--conversation-content-top-inset: calc(var(--spacing) * 8);
 	--conversation-footer-fade-height: calc(var(--spacing) * 8);
-}
-.conversation-column {
-	--thread-content-max-width: var(--thread-content-responsive-max-width, inherit);
-	--thread-body-max-width: calc(var(--thread-content-max-width) + var(--thread-body-inline-padding, 0px) * 2);
-	box-sizing: border-box;
-	width: 100%;
-	min-width: 0;
-	max-width: var(--thread-body-max-width);
-	margin-inline: auto;
-	padding-inline: var(--thread-body-inline-padding, var(--conversation-inline-padding));
 }
 .conversation-panel .message-scroll {
 	padding: var(--conversation-content-top-inset) 0 0;

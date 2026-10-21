@@ -259,9 +259,10 @@ test("pending and stopped states retain the same pane/editor; search jump follow
 	assert.equal(layoutOptions.paddingEnd, 212);
 	assert.equal(query(".message-stage").style.getPropertyValue("--thread-scroll-padding-bottom"), "196px");
 });
-test("layout CSS retains the source formula and removes breakpoint drift without touching home", () => {
+test("layout CSS consumes the shared source formula without changing active conversation geometry", () => {
 	const css = postcss.parse(
-		readFileSync(new NodeURL("../../../src/features/workbench/conversation/layout.css", import.meta.url), "utf8"),
+		readFileSync(new NodeURL("../../../src/features/workbench/thread-column.css", import.meta.url), "utf8") +
+			readFileSync(new NodeURL("../../../src/features/workbench/conversation/layout.css", import.meta.url), "utf8"),
 	);
 	const declarations = (selector: string) => {
 		const values = new Map<string, string>();

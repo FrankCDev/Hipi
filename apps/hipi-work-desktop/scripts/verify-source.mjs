@@ -145,6 +145,7 @@ nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/projectio
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/history.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/turns/projection.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/history-continuous-window.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/composer/inline-collapse.test.ts");
 const storageTests = [
 	"packages/durable/test/harness-compaction.test.ts",
 	"packages/durable/test/harness-generation.test.ts",
@@ -183,6 +184,8 @@ const uiTests = [
 	"workbench/composer/prepared-task-entry",
 	"workbench/composer/use-home-draft",
 	"workbench/composer/draft-recovery",
+	"workbench/composer/footer-layout-mounted",
+	"workbench/composer/home-layout-mounted",
 	"workbench/composer/active-composer-mounted",
 	"workbench/composer/editor-mounted",
 	"workbench/composer/project-picker-mounted",

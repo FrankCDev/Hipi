@@ -1,0 +1,92 @@
+.composer-footer-grid {
+	display: grid;
+	grid-template-columns: minmax(0, auto) auto minmax(0, 1fr);
+	align-items: center;
+	column-gap: var(--composer-footer-column-gap);
+	padding-inline: var(--composer-footer-inline-padding);
+	padding-bottom: var(--composer-footer-bottom-padding);
+}
+.composer-footer-input {
+	grid-column: 1 / -1;
+	grid-row: 1;
+	min-width: 0;
+	margin-inline: calc(-1 * var(--composer-footer-inline-padding));
+	margin-bottom: var(--composer-input-footer-gap);
+}
+.composer-footer-leading {
+	grid-column: 1;
+	grid-row: 2;
+	min-width: 0;
+}
+.composer-footer-trailing {
+	grid-column: 3;
+	grid-row: 2;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	min-width: 0;
+	width: 100%;
+}
+.composer-footer-expanding {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	justify-content: flex-end;
+}
+.composer-footer-actions,
+.composer-footer-primary {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+}
+.composer-footer-primary {
+	margin-inline-start: var(--composer-primary-inline-gap);
+}
+.composer-attention {
+	display: grid;
+	gap: var(--composer-attention-gap);
+	margin-bottom: var(--composer-attention-gap);
+}
+.composer-attention:not(:has(> :not(:empty))) {
+	display: none;
+}
+.conversation-model-controls {
+	display: flex;
+	align-items: center;
+	gap: var(--composer-inline-controls-gap);
+	min-width: 0;
+}
+.composer-inline-control {
+	flex-shrink: 0;
+}
+.composer-inline-control[hidden] {
+	display: none;
+}
+.conversation-model-attention {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--composer-attention-gap);
+	min-width: 0;
+}
+.conversation-model-attention:empty {
+	display: none;
+}
+.conversation-model-attention > [role="alert"] {
+	color: var(--warning);
+}
+.model-status-trigger {
+	height: var(--composer-action-size);
+	min-width: var(--composer-action-size);
+	border-radius: var(--composer-auxiliary-radius);
+	padding-block: 0;
+	padding-inline: var(--composer-auxiliary-inline-padding);
+	gap: var(--composer-inline-controls-gap);
+	font-size: calc(var(--font-ui-size) - 1px);
+	line-height: var(--composer-auxiliary-line-height);
+	color: var(--muted);
+}
+.model-status-trigger[data-compact="true"] {
+	width: var(--composer-action-size);
+	padding-inline: 0;
+}

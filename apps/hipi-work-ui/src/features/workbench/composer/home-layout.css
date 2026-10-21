@@ -1,16 +1,17 @@
+@import "../thread-column.css";
+
 /* User-supplied desktop Codex home: non-shared composer branch, with two flexible regions. */
 .work-conversation-frame > .welcome {
-	--home-inline-padding: 20px;
+	--home-hero-inline-padding: calc(var(--spacing) * 3);
 	--home-composer-top-padding: 6px;
 	--home-composer-bottom-padding: 16px;
 	--home-hero-min-height: 112px;
 	--home-hero-composer-gap: 96px;
 	--home-heading-size: 32px;
 	--home-heading-line-height: 38px;
-	--home-content-width: calc(var(--reading-width) + 24px);
 	width: 100%;
 	max-height: 100%;
-	padding: 24px var(--home-inline-padding) 0;
+	padding: 24px 0 0;
 	align-items: center;
 	justify-content: flex-start;
 }
@@ -19,8 +20,10 @@
 	flex: 1 0 0;
 	min-height: fit-content;
 	align-items: flex-end;
+	box-sizing: border-box;
 	width: 100%;
-	max-width: var(--home-content-width);
+	max-width: var(--thread-content-max-width);
+	padding-inline: var(--home-hero-inline-padding);
 	padding-bottom: var(--home-hero-composer-gap);
 }
 .welcome .welcome-hero h1 {
@@ -63,8 +66,6 @@
 	min-height: fit-content;
 	flex-direction: column;
 	justify-content: flex-end;
-	width: 100%;
-	max-width: var(--home-content-width);
 }
 .welcome-context {
 	width: 100%;

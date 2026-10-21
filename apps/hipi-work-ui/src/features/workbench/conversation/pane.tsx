@@ -18,7 +18,7 @@ import { ConversationComposer } from "../composer/input.tsx";
 import { conversationFailureTrackerFor } from "./failure.ts";
 import { ConversationHistory } from "./history.tsx";
 import type { SearchHistoryAnchor } from "./history-controller.ts";
-import { ConversationModelControls } from "./model.tsx";
+import { ConversationModelAttention, ConversationModelControls } from "./model.tsx";
 import { ConversationReceipt } from "./receipt.tsx";
 import { useConversation } from "./use-conversation.ts";
 import "./layout.css";
@@ -150,20 +150,28 @@ export function ConversationPane({
 					/>
 					<div className="conversation-footer" ref={footer}>
 						<div className="conversation-column">
-							<ConversationComposer
-								controller={controller}
-								controls={
-									<div className="conversation-tools">
-										<ConversationCapabilities
-											key={`${conversation.workspaceId}/${conversation.conversationId}`}
-											conversation={conversation}
-											model={controller.model.data?.model}
-											connected={observation.connection === "connected"}
-										/>
-										<ConversationModelControls controller={controller} onOpenModelSettings={onOpenModelSettings} />
-									</div>
-								}
-							/>
+							<ConversationCapabilities
+								key={`${conversation.workspaceId}/${conversation.conversationId}`}
+								conversation={conversation}
+								model={controller.model.data?.model}
+								connected={observation.connection === "connected"}
+							>
+								{({ controls, attention }) => (
+									<ConversationComposer
+										controller={controller}
+										controls={controls}
+										expandingControls={
+											<ConversationModelControls controller={controller} onOpenModelSettings={onOpenModelSettings} />
+										}
+										attention={
+											<>
+												{attention}
+												<ConversationModelAttention controller={controller} />
+											</>
+										}
+									/>
+								)}
+							</ConversationCapabilities>
 						</div>
 					</div>
 					<ActivityHistoryDialog />

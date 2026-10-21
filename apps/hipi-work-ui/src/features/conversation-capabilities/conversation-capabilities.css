@@ -1,14 +1,14 @@
 .capability-actions {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: var(--composer-leading-controls-gap);
 	min-width: 0;
 }
 .capability-actions > button {
-	height: 28px;
-	min-height: 28px;
+	height: var(--composer-action-size);
+	min-height: var(--composer-action-size);
 	border-radius: 6px;
-	font-size: 13px;
+	font-size: calc(var(--font-ui-size) - 1px);
 	color: var(--muted);
 }
 .capability-actions > button:hover:not(:disabled),
@@ -17,11 +17,11 @@
 	color: var(--text);
 }
 .composer-add-trigger {
-	width: 28px;
+	width: var(--composer-action-size);
 	padding: 0;
 }
 .permission-mode-trigger {
-	gap: 4px;
+	gap: var(--composer-inline-controls-gap);
 }
 .capabilities-controls .capability-actions > .permission-mode-trigger {
 	height: var(--composer-action-size);
@@ -52,9 +52,4 @@
 }
 .context-consent-dialog {
 	overscroll-behavior: contain;
-}
-@container composer-footer (max-width: 475px) {
-	.permission-mode-trigger > span {
-		display: none;
-	}
 }

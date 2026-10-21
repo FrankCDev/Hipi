@@ -15,6 +15,11 @@
 	--composer-input-footer-gap: 4px;
 	--composer-footer-inline-padding: 8px;
 	--composer-footer-bottom-padding: 8px;
+	--composer-footer-column-gap: 5px;
+	--composer-leading-controls-gap: 5px;
+	--composer-inline-controls-gap: calc(var(--spacing) * 1);
+	--composer-primary-inline-gap: calc(var(--spacing) * 2);
+	--composer-attention-gap: calc(var(--spacing) * 2);
 	--composer-placeholder-opacity: 0.5;
 	--composer-elevation: 0 0 0 1px #0000000a, 0 2px 8px #0000000a, 0 4px 80px 8px #00000006;
 }

@@ -40,7 +40,7 @@ export function WorkbenchWelcome({
 					</h1>
 				)}
 			</div>
-			<div className="welcome-action">
+			<div className="welcome-action conversation-column">
 				{context && <div className="welcome-context">{context}</div>}
 				<div className="welcome-composer">{action}</div>
 			</div>

@@ -7,13 +7,18 @@ import { Icon } from "../../../components/ui/icon.tsx";
 import { ReceiptRecovery } from "../conversation/receipt.tsx";
 import type { ConversationController } from "../conversation/use-conversation.ts";
 import { ComposerEditor, type ComposerEditorHandle } from "./editor.tsx";
+import { ComposerFooter } from "./footer.tsx";
 
 export function ConversationComposer({
 	controller,
 	controls,
+	expandingControls,
+	attention,
 }: {
 	controller: ConversationController;
 	controls?: ReactNode;
+	expandingControls?: ReactNode;
+	attention?: ReactNode;
 }) {
 	const { t } = usePreferences();
 	const inputId = useId();
@@ -55,6 +60,7 @@ export function ConversationComposer({
 				</p>
 			)}
 			<ReceiptRecovery controller={controller} />
+			<div className="composer-attention">{attention}</div>
 			<div
 				className="composer"
 				data-has-draft={draft.length > 0}
@@ -77,52 +83,56 @@ export function ConversationComposer({
 					editor.current?.focus({ preventScroll: true });
 				}}
 			>
-				<form
-					id={`${inputId}-form`}
-					className="composer-form"
-					onSubmit={(event) => {
-						event.preventDefault();
-						submit();
-					}}
-				>
-					<ComposerEditor
-						ref={editor}
-						id={inputId}
-						value={draft}
-						onChange={setDraft}
-						onSubmit={submit}
-						onComposingChange={(value) => {
-							composing.current = value;
-						}}
-						maxLength={LIMITS.text}
-						placeholder={t("work.placeholder")}
-						label={t("work.draft")}
-						describedBy={hintId}
-					/>
-				</form>
-				{/* Permission dialogs can own forms. Keep their React event tree outside the submission form. */}
-				<div className="composer-actions">
-					<div className="composer-controls">{controls}</div>
-					<Button
-						type={stopping ? "button" : "submit"}
-						form={stopping ? undefined : `${inputId}-form`}
-						size="icon"
-						className="composer-submit"
-						data-action={stopping ? "stop" : "send"}
-						disabled={pending || (stopping ? controller.model.isError : !draft.trim() || blocked)}
-						onClick={stopping ? () => controller.execution.mutate("cancel") : undefined}
-						aria-label={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
-						aria-busy={pending || undefined}
-					>
-						{pending ? (
-							<LoaderCircle size={18} className="composer-pending-icon" aria-hidden="true" />
-						) : stopping ? (
-							<Square size={13} fill="currentColor" aria-hidden="true" />
-						) : (
-							<Icon name="arrowUp" size={18} />
-						)}
-					</Button>
-				</div>
+				<ComposerFooter
+					input={
+						<form
+							id={`${inputId}-form`}
+							className="composer-form"
+							onSubmit={(event) => {
+								event.preventDefault();
+								submit();
+							}}
+						>
+							<ComposerEditor
+								ref={editor}
+								id={inputId}
+								value={draft}
+								onChange={setDraft}
+								onSubmit={submit}
+								onComposingChange={(value) => {
+									composing.current = value;
+								}}
+								maxLength={LIMITS.text}
+								placeholder={t("work.placeholder")}
+								label={t("work.draft")}
+								describedBy={hintId}
+							/>
+						</form>
+					}
+					leading={controls}
+					expanding={expandingControls}
+					actions={
+						<Button
+							type={stopping ? "button" : "submit"}
+							form={stopping ? undefined : `${inputId}-form`}
+							size="icon"
+							className="composer-submit"
+							data-action={stopping ? "stop" : "send"}
+							disabled={pending || (stopping ? controller.model.isError : !draft.trim() || blocked)}
+							onClick={stopping ? () => controller.execution.mutate("cancel") : undefined}
+							aria-label={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
+							aria-busy={pending || undefined}
+						>
+							{pending ? (
+								<LoaderCircle size={18} className="composer-pending-icon" aria-hidden="true" />
+							) : stopping ? (
+								<Square size={13} fill="currentColor" aria-hidden="true" />
+							) : (
+								<Icon name="arrowUp" size={18} />
+							)}
+						</Button>
+					}
+				/>
 			</div>
 			<p className="sr-only" id={hintId}>
 				{t("work.composer.shortcuts")}

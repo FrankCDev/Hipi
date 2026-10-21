@@ -140,7 +140,7 @@ test("actual model status remains a usable popup beside the composer primary act
 	await act(async () =>
 		root.render(
 			<QueryClientProvider client={cache}>
-				<ConversationComposer controller={state} controls={<ConversationModelControls controller={state} />} />
+				<ConversationComposer controller={state} expandingControls={<ConversationModelControls controller={state} />} />
 			</QueryClientProvider>,
 		),
 	);
