@@ -53,15 +53,28 @@ type ActivityTranscript = {
 	historyTrigger: RefObject<HTMLButtonElement | null>;
 	dialogId: string;
 	expandedGroups: ReadonlySet<string>;
+	groupChoices: ReadonlyMap<string, boolean>;
+	setGroupChoice: (key: string, expanded: boolean) => void;
 	toggleGroup: (key: string) => void;
 	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
 };
 const ActivityContext = createContext<ActivityTranscript | null>(null);
 // Only disclosure keys persist across conversation navigation, never output or
 // activity records. Bound both the number of scopes and keys in each scope.
-type ClientActivityView = { key: number; groups: Map<string, ReadonlySet<string>> };
+type ClientActivityView = { key: number; groups: Map<string, ReadonlyMap<string, boolean>> };
 const clientGroups = new WeakMap<AppClient, ClientActivityView>();
 let nextClientView = 0;
+
+function changedGroupChoice(current: ReadonlyMap<string, boolean>, key: string, expanded: boolean) {
+	const next = new Map(current);
+	next.delete(key);
+	next.set(key, expanded);
+	if (next.size > 128) {
+		const first = next.keys().next().value;
+		if (first !== undefined) next.delete(first);
+	}
+	return next;
+}
 
 export function useActivityTranscript() {
 	return useContext(ActivityContext);
@@ -73,7 +86,7 @@ export function ActivityTranscriptProvider(props: Props) {
 	const owner = useMemo(() => {
 		const existing = clientGroups.get(client);
 		if (existing) return existing;
-		const view = { key: ++nextClientView, groups: new Map<string, ReadonlySet<string>>() };
+		const view = { key: ++nextClientView, groups: new Map<string, ReadonlyMap<string, boolean>>() };
 		clientGroups.set(client, view);
 		return view;
 	}, [client]);
@@ -98,7 +111,7 @@ function ScopedActivityTranscript({
 	rootRef,
 }: Props & {
 	client: AppClient;
-	savedGroups: Map<string, ReadonlySet<string>>;
+	savedGroups: Map<string, ReadonlyMap<string, boolean>>;
 }) {
 	const session = useMemo(
 		() =>
@@ -114,9 +127,16 @@ function ScopedActivityTranscript({
 	const [inlinePage, setInlinePage] = useState(state.cursor ? undefined : state.page);
 	const [open, setOpenState] = useState(false);
 	const scopeKey = JSON.stringify([scope.workspaceId, scope.conversationId]);
-	const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(
-		() => savedGroups.get(scopeKey) ?? new Set(),
+	const [groupChoices, setGroupChoices] = useState<ReadonlyMap<string, boolean>>(
+		() => savedGroups.get(scopeKey) ?? new Map(),
 	);
+	const expandedGroups = useMemo(
+		() => new Set([...groupChoices].filter(([, expanded]) => expanded).map(([key]) => key)),
+		[groupChoices],
+	);
+	const setGroupChoice = (key: string, expanded: boolean) => {
+		setGroupChoices((current) => changedGroupChoice(current, key, expanded));
+	};
 	const [visible, setVisible] = useState(
 		() => typeof document === "undefined" || document.visibilityState !== "hidden",
 	);
@@ -125,12 +145,12 @@ function ScopedActivityTranscript({
 	const dialogId = useId();
 	useEffect(() => {
 		savedGroups.delete(scopeKey);
-		savedGroups.set(scopeKey, expandedGroups);
+		savedGroups.set(scopeKey, groupChoices);
 		if (savedGroups.size > 24) {
 			const oldest = savedGroups.keys().next().value;
 			if (oldest !== undefined) savedGroups.delete(oldest);
 		}
-	}, [scopeKey, expandedGroups, savedGroups]);
+	}, [scopeKey, groupChoices, savedGroups]);
 	useEffect(() => {
 		session.activate();
 		return () => session.dispose();
@@ -185,25 +205,15 @@ function ScopedActivityTranscript({
 				historyTrigger,
 				dialogId,
 				expandedGroups,
+				groupChoices,
+				setGroupChoice,
 				onOpenArtifact,
 				setOpen(next) {
 					setOpenState(next);
 					if (!next) session.collapse();
 				},
 				toggleGroup(key) {
-					setExpandedGroups((current) => {
-						const next = new Set(current);
-						if (next.has(key)) next.delete(key);
-						else {
-							next.add(key);
-							// Only small disclosure keys survive virtual row eviction.
-							if (next.size > 128) {
-								const first = next.values().next().value;
-								if (first !== undefined) next.delete(first);
-							}
-						}
-						return next;
-					});
+					setGroupChoices((current) => changedGroupChoice(current, key, !current.get(key)));
 				},
 			}}
 		>

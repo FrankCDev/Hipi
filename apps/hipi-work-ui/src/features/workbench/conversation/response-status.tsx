@@ -7,11 +7,15 @@ import "./response-status.css";
 /** A visual waiting state only. The stable ResponseAnnouncement owns live announcements. */
 export function ResponseStatus({ phase = "generating" }: { phase?: ResponsePhase }) {
 	const { locale } = usePreferences();
-	// running alone does not prove reasoning, environment setup or a tool phase.
+	// The local-conversation reference calls its no-visible-output fallback
+	// "Thinking". It is product copy, not an internal reasoning event or payload.
 	const label = responseLabel(`response.${phase}`, locale);
 	return (
 		<div className="response-status" data-response-phase={phase}>
-			<CadencedText>{label}</CadencedText>
+			<div className="response-status-content">
+				<span className="response-status-spacer" aria-hidden="true" />
+				<CadencedText>{label}</CadencedText>
+			</div>
 		</div>
 	);
 }

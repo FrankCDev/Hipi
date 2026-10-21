@@ -133,9 +133,12 @@ describe("inbox", () => {
 			"pi.assistant:first",
 			"note:w",
 			"pi.user:f1",
+			"pi.run-result",
 			"pi.assistant:second",
 			"pi.user:f2",
+			"pi.run-result",
 			"pi.assistant:third",
+			"pi.run-result",
 		]);
 		const answers = (await allEntries(root)).filter((entry) => entry.kind === "pi.assistant");
 		expect(await status(input)).toMatchObject({ status: "done", answer: answers[0]!.id });
@@ -165,7 +168,9 @@ describe("inbox", () => {
 			"pi.assistant:first",
 			"pi.user:f1",
 			"pi.user:f2",
+			"pi.run-result",
 			"pi.assistant:both",
+			"pi.run-result",
 		]);
 		expect(setup.faux.state.callCount).toBe(2);
 		await harness.close(context);
@@ -224,7 +229,9 @@ describe("inbox", () => {
 			"pi.user:s",
 			"pi.assistant:after tools",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:follow-up",
+			"pi.run-result",
 		]);
 		const answers = (await allEntries(root)).filter((entry) => entry.kind === "pi.assistant");
 		expect(await status(input)).toMatchObject({ status: "done", answer: answers[1]!.id });
@@ -257,7 +264,9 @@ describe("inbox", () => {
 			"pi.tool-result",
 			"pi.reset",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:fresh",
+			"pi.run-result",
 		]);
 		const reset = (await allEntries(root)).find((entry) => ResetEntry.is(entry))!;
 		expect(reset.head).toBe(reset.id);
@@ -279,7 +288,12 @@ describe("inbox", () => {
 		await input.wait(context);
 		await harness.waitForIdle(context);
 		expect(await status(input)).toMatchObject({ status: "done" });
-		expect(transcript(await allEntries(root))).toEqual(["pi.user:a", "pi.assistant:first", "pi.reset:handoff"]);
+		expect(transcript(await allEntries(root))).toEqual([
+			"pi.user:a",
+			"pi.assistant:first",
+			"pi.reset:handoff",
+			"pi.run-result",
+		]);
 		expect((await root.context(context)).messages).toEqual([
 			{ role: "user", content: "handoff", timestamp: expect.any(Number) },
 		]);
@@ -358,8 +372,15 @@ describe("inbox", () => {
 		const entries = await allEntries(root);
 		const calling = entries.find((entry) => entry.kind === "pi.assistant")!;
 		expect(settled).toMatchObject({ status: "done", answer: calling.id });
-		expect(transcript(entries)).toEqual(["pi.user:a", "pi.assistant", "pi.tool-result", "pi.reset:continue here"]);
-		expect(entries.at(-1)!.head).toBe(entries.at(-1)!.id);
+		expect(transcript(entries)).toEqual([
+			"pi.user:a",
+			"pi.assistant",
+			"pi.tool-result",
+			"pi.reset:continue here",
+			"pi.run-result",
+		]);
+		const reset = entries.find((entry) => ResetEntry.is(entry))!;
+		expect(reset.head).toBe(reset.id);
 		expect(setup.faux.state.callCount).toBe(1);
 		expect(await harness.snapshot(LiveDoc, root.id, context)).toEqual({});
 		await harness.close(context);
@@ -382,7 +403,9 @@ describe("inbox", () => {
 			"pi.user:a",
 			"pi.assistant:first",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:second",
+			"pi.run-result",
 		]);
 		await harness.close(context);
 	});
@@ -424,11 +447,13 @@ describe("inbox", () => {
 		const g = await root.submit({ type: "input", content: "g", whenBusy: "reject" }, context);
 		await g.wait(context);
 		expect(await status(f)).toMatchObject({ status: "done" });
-		expect(transcript(await allEntries(root)).slice(-4)).toEqual([
+		expect(transcript(await allEntries(root)).slice(-6)).toEqual([
 			"pi.user:f",
 			"pi.assistant:for f",
 			"pi.user:g",
+			"pi.run-result",
 			"pi.assistant:for g",
+			"pi.run-result",
 		]);
 		await harness.close(context);
 	});
@@ -449,7 +474,12 @@ describe("inbox", () => {
 		opened = await openChat(await openNodeSqliteStorage(path), setup);
 		const settled = await (await opened.harness.submission(f, context))!.wait(context);
 		expect(settled).toMatchObject({ status: "done" });
-		expect(transcript(await allEntries(opened.root)).slice(-2)).toEqual(["pi.user:f", "pi.assistant:f"]);
+		expect(transcript(await allEntries(opened.root)).slice(-4)).toEqual([
+			"pi.user:f",
+			"pi.run-result",
+			"pi.assistant:f",
+			"pi.run-result",
+		]);
 		await opened.harness.close(context);
 	});
 
@@ -532,8 +562,13 @@ describe("inbox", () => {
 			"note:w",
 			"pi.user:more",
 			"pi.assistant:second",
+			"pi.run-result",
 		]);
-		expect(await status(input)).toMatchObject({ status: "done", answer: entries.at(-1)!.id });
+		const settled = await status(input);
+		if (settled.status !== "done" || settled.type !== "input") throw new Error(`Unexpected ${settled.status}`);
+		const settledAnswer = entries.find((entry) => entry.id === settled.answer);
+		expect(settledAnswer).toMatchObject({ kind: "pi.assistant" });
+		expect(textOf(settledAnswer?.model?.[0])).toBe("second");
 		expect(await status(write)).toMatchObject({ status: "done" });
 		await harness.close(context);
 	});
@@ -551,7 +586,12 @@ describe("inbox", () => {
 		await input.wait(context);
 		await harness.waitForIdle(context);
 		expect(await status(input)).toMatchObject({ status: "done" });
-		expect(transcript(await allEntries(root))).toEqual(["pi.user:a", "pi.assistant:first", "pi.reset"]);
+		expect(transcript(await allEntries(root))).toEqual([
+			"pi.user:a",
+			"pi.assistant:first",
+			"pi.reset",
+			"pi.run-result",
+		]);
 		expect(setup.faux.state.callCount).toBe(1);
 		await harness.close(context);
 	});
@@ -579,7 +619,9 @@ describe("inbox", () => {
 			"pi.user:s2",
 			"pi.assistant:after tools",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:follow-up",
+			"pi.run-result",
 		]);
 		const answers = entries.filter((entry) => entry.kind === "pi.assistant");
 		for (const submission of [input, s1, s2]) {
@@ -602,7 +644,12 @@ describe("inbox", () => {
 		const steer = await root.submit({ type: "input", content: "s", whenBusy: "steer" }, context);
 		const settled = await steer.wait(context);
 		expect(await status(f)).toMatchObject({ status: "done", answer: settled.status === "done" && settled.answer });
-		expect(transcript(await allEntries(root)).slice(-3)).toEqual(["pi.user:f", "pi.user:s", "pi.assistant:both"]);
+		expect(transcript(await allEntries(root)).slice(-4)).toEqual([
+			"pi.user:f",
+			"pi.user:s",
+			"pi.assistant:both",
+			"pi.run-result",
+		]);
 		await harness.close(context);
 	});
 
@@ -624,7 +671,9 @@ describe("inbox", () => {
 			"pi.assistant",
 			"pi.tool-result",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:follow-up",
+			"pi.run-result",
 		]);
 		await harness.close(context);
 	});
@@ -660,11 +709,13 @@ describe("inbox", () => {
 		firstGate.resolve();
 		await f.wait(context);
 		expect(await status(input)).toMatchObject({ status: "done" });
-		expect(transcript(await allEntries(root)).slice(-4)).toEqual([
+		expect(transcript(await allEntries(root)).slice(-6)).toEqual([
 			"pi.tool-result",
 			"pi.reset:two",
 			"pi.user:f",
+			"pi.run-result",
 			"pi.assistant:follow-up",
+			"pi.run-result",
 		]);
 		await harness.close(context);
 	});

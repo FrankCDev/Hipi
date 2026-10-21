@@ -29,9 +29,21 @@ const withExecution = (changes: Partial<ConversationExecution>): Snapshot => ({
 
 test("generic generation is only an active no-text fallback, never an inferred reasoning phase", () => {
 	assert.equal(responsePhase(snapshot), "generating");
-	assert.equal(responsePhase({ ...snapshot, execution: undefined }), "generating");
+	assert.equal(responsePhase({ ...snapshot, execution: undefined }), "working");
 	assert.equal(responsePhase({ ...snapshot, partial: "Text", partialLength: 4 }), undefined);
 	assert.equal(responsePhase(withExecution({ generation: { attempt: 3 } })), "generating");
+});
+test("missing generation, pending tools and retained current text never claim Thinking", () => {
+	assert.equal(responsePhase(withExecution({ generation: undefined })), "working");
+	assert.equal(responsePhase({ ...withExecution({ generation: undefined }), partial: "Visible output" }), undefined);
+	assert.equal(
+		responsePhase(
+			withExecution({
+				tools: { items: [{ callId: "pending", name: "read", status: "pending" }], total: 1, active: 1 },
+			}),
+		),
+		"tools",
+	);
 });
 test("current execution metadata renders actual waits even when partial text remains", () => {
 	assert.equal(responsePhase(withExecution({ generation: { attempt: 2, retryAt: 0 } })), "retry");

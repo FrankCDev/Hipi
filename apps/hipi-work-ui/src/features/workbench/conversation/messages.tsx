@@ -21,8 +21,11 @@ import { InlineApproval } from "../../agent-permissions/inline-approval.tsx";
 import {
 	InlineLiveActivities,
 	InlineMessageActivities,
+	useActivityTranscript,
 	useActivityTranscriptProjection,
 } from "../../tool-activities/activity-transcript.tsx";
+import { RunActivityHeader } from "./activity/header.tsx";
+import { projectRunActivities } from "./activity/projection.ts";
 import type { ConversationFailure } from "./failure.ts";
 import { AssistantClipboardCopy } from "./markdown/assistant-clipboard-copy.tsx";
 import { ClipboardCopy } from "./markdown/clipboard-copy.tsx";
@@ -79,6 +82,7 @@ export function ConversationMessages({
 	onJumpLatest?: () => void;
 }) {
 	const { t } = usePreferences();
+	const activityContext = useActivityTranscript();
 	const incoming: DisplaySnapshot | undefined = useMemo(
 		() => sourceSnapshot && { ...sourceSnapshot, requestFailure: failure },
 		[sourceSnapshot, failure],
@@ -116,7 +120,18 @@ export function ConversationMessages({
 	const published = useRef(incoming);
 	const followFinal = useRef(false);
 	const previousRows = useRef<readonly TranscriptRow[]>([]);
-	const rows = useMemo(() => projectTranscript(snapshot, previousRows.current, snapshot?.requestFailure), [snapshot]);
+	const baseRows = useMemo(
+		() => projectTranscript(snapshot, previousRows.current, snapshot?.requestFailure),
+		[snapshot],
+	);
+	const groupChoices = activityContext?.groupChoices;
+	const rows = useMemo(() => {
+		if (!groupChoices) return baseRows;
+		const protectedKeys = new Set<string>();
+		if (focusedKey) protectedKeys.add(focusedKey);
+		if (selectionRange) for (const row of baseRows) protectedKeys.add(row.key);
+		return projectRunActivities(baseRows, snapshot, groupChoices, protectedKeys, responseActive !== false);
+	}, [baseRows, snapshot, groupChoices, focusedKey, selectionRange, responseActive]);
 	useLayoutEffect(() => {
 		previousRows.current = rows;
 	}, [rows]);
@@ -518,7 +533,15 @@ export function ConversationMessages({
 									className="virtual-message-row"
 									style={{ transform: `translateY(${item.start}px)` }}
 								>
-									{row.kind === "request-failure" ? (
+									{row.kind === "run-activity" ? (
+										<RunActivityHeader
+											activity={row.activity}
+											onToggle={() => {
+												if (selectionIntersects(messages.current, document.getSelection())) return;
+												activityContext?.setGroupChoice(row.activity.key, !row.activity.expanded);
+											}}
+										/>
+									) : row.kind === "request-failure" ? (
 										<ConversationTurnFailure failure={row.failure} onOpenModelSettings={onOpenModelSettings} />
 									) : (
 										<TranscriptMessage
@@ -572,7 +595,7 @@ const TranscriptMessage = memo(
 		onOffsetChange,
 		searchAnchor,
 	}: {
-		row: Exclude<TranscriptRow, { kind: "request-failure" }>;
+		row: Exclude<TranscriptRow, { kind: "request-failure" | "run-activity" }>;
 		scope: Scope;
 		stream?: Snapshot;
 		responseActive?: boolean;

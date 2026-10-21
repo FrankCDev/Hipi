@@ -302,7 +302,7 @@ test("reload only checks exact outcomes and never creates grants, pending submit
 });
 
 test.each(["createConversation", "authorizeAgentContext", "submit"] as const)(
-	"protocol v8 %s recovery remains read-only after upgrading to v11",
+	"protocol v8 %s recovery remains read-only after upgrading to v12",
 	async (stage) => {
 		const f = fixture();
 		f.override((method) => (method === stage ? Promise.reject(new Error("lost")) : undefined));
@@ -320,10 +320,10 @@ test.each(["createConversation", "authorizeAgentContext", "submit"] as const)(
 		const local = new LocalState("store", f.storage);
 		const reopened = new CatalogSession(f.client, local, f.authority);
 		const task = reopened.getSnapshot().initialSend;
-		assert.equal(PROTOCOL_VERSION, 11);
+		assert.equal(PROTOCOL_VERSION, 12);
 		assert.equal(reopened.getSnapshot().incompatible, false, stage);
 		assert.ok(task?.context);
-		assert.equal(task.conversationCommand.version, 11);
+		assert.equal(task.conversationCommand.version, 12);
 		assert.equal(task.text, prompt);
 		assert.equal(task.submissionId, record.initialSend.submissionId);
 		assert.deepEqual(task.context, record.initialSend.context);

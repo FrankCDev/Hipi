@@ -8,6 +8,8 @@ import {
 	type Snapshot,
 } from "@hipi/work-runtime/contracts";
 
+import { mergeRunResults } from "./activity/results.ts";
+
 // Provisional cache capacities, not measured performance guarantees. Never evict read messages.
 export const HISTORY_CAPACITY = { messages: 2048, textUnits: 4 * 1024 * 1024, pages: 2048 } as const;
 export type ConversationHistoryState = {
@@ -236,6 +238,7 @@ export class ConversationHistoryController {
 		) {
 			this.snapshot = {
 				...incoming,
+				runResults: mergeRunResults(held.runResults, incoming.runResults),
 				messages: unique([...held.messages, ...incoming.messages.slice(overlap + 1)]),
 				historyCursor: !tail && held.historyCursor === null ? incoming.historyCursor : held.historyCursor,
 			};
@@ -335,6 +338,7 @@ export class ConversationHistoryController {
 			if (!held) return;
 			if (bridge) {
 				const messages = unique([...page.messages, ...bridge.messages]);
+				const runResults = mergeRunResults(bridge.snapshot.runResults, page.runResults);
 				if (!this.fits(held.messages, messages, this.queued?.messages ?? [])) {
 					this.capacity = true;
 					return;
@@ -344,6 +348,7 @@ export class ConversationHistoryController {
 				if (overlap >= 0 || (!tail && page.nextCursor === null)) {
 					this.snapshot = {
 						...bridge.snapshot,
+						runResults: mergeRunResults(held.runResults, runResults),
 						messages: unique([...held.messages, ...messages.slice(overlap + 1)]),
 						historyCursor: tail ? held.historyCursor : null,
 					};
@@ -354,6 +359,7 @@ export class ConversationHistoryController {
 					if (queued) this.acceptLive(queued);
 				} else {
 					if (page.nextCursor === null) throw new AppError("INVALID_REQUEST");
+					bridge.snapshot = { ...bridge.snapshot, runResults };
 					bridge.messages = messages;
 					bridge.cursor = page.nextCursor;
 				}
@@ -365,7 +371,12 @@ export class ConversationHistoryController {
 					this.capacity = true;
 					return;
 				}
-				this.snapshot = { ...held, messages, historyCursor: page.nextCursor };
+				this.snapshot = {
+					...held,
+					messages,
+					historyCursor: page.nextCursor,
+					runResults: mergeRunResults(held.runResults, page.runResults),
+				};
 				if (page.messages.length > 0) {
 					this.nearTop = false;
 					this.scanPages = -1;

@@ -12,6 +12,8 @@ import {
 	type MessageToolCalls,
 	type Scope,
 } from "./contracts.ts";
+import { RUN_LIMITS, type RunResults, runResultsBytes } from "./runs/contracts.ts";
+import { projectMessageRunId, projectRunResult, responseMessageId } from "./runs/projection.ts";
 
 /** Offsets and lengths use UTF-16 code units; boundaries never split a surrogate pair. */
 export function textOf(message: PiMessage): string {
@@ -32,6 +34,7 @@ export function previewMessage(entry: EntryRecord, index: number): Message | und
 	if (!message || (message.role !== "user" && message.role !== "assistant")) return undefined;
 	const text = textOf(message);
 	const end = textEnd(text, 0, LIMITS.messagePreview);
+	const runId = projectMessageRunId(entry);
 	let toolCalls: MessageToolCalls | undefined;
 	if (message.role === "assistant") {
 		const total = message.content.filter((part) => part.type === "toolCall").length;
@@ -59,6 +62,7 @@ export function previewMessage(entry: EntryRecord, index: number): Message | und
 		text: text.slice(0, end),
 		textLength: text.length,
 		truncated: end < text.length,
+		...(runId === undefined ? {} : { runId }),
 		...(toolCalls ? { toolCalls } : {}),
 		...(message.role === "assistant" && message.stopReason === "aborted" ? { interrupted: true as const } : {}),
 	};
@@ -143,15 +147,48 @@ export async function readHistory(
 	)
 		throw new AppError("INVALID_REQUEST");
 	const messages: Message[] = [];
+	const terminals: EntryRecord[] = [];
+	const finish = async (nextCursor: string | null): Promise<HistoryPage> => {
+		const runResults: RunResults = { items: [], omitted: false };
+		const answers = new Map(page.items.map((entry) => [Number(entry.id), entry]));
+		const attempted = new Set<number>();
+		let lookups = 0;
+		for (const terminal of terminals) {
+			const projected = projectRunResult(terminal);
+			if (!projected) {
+				runResults.omitted = true;
+				continue;
+			}
+			const { result, answerId } = projected;
+			if (result.terminalCause === "response" && answerId !== undefined && answerId <= position.fence) {
+				if (!answers.has(answerId) && !attempted.has(answerId) && lookups < RUN_LIMITS.answerLookups) {
+					lookups++;
+					attempted.add(answerId);
+					const answer = await visibleEntry(conversation, answerId);
+					if (answer) answers.set(answerId, answer);
+				}
+				const response = responseMessageId(terminal, result, answers.get(answerId));
+				if (response) result.responseMessageId = response;
+			}
+			if (
+				runResults.items.length < RUN_LIMITS.results &&
+				runResultsBytes({ items: [...runResults.items, result], omitted: true }) <= RUN_LIMITS.bytes
+			)
+				runResults.items.push(result);
+			else runResults.omitted = true;
+		}
+		return { ...scope, messages: messages.reverse(), nextCursor, ...(terminals.length ? { runResults } : {}) };
+	};
 	let slots = 0;
 	let nextCursor: string | null = null;
 	for (let e = 0; e < page.items.length; e++) {
 		const entry = page.items[e]!;
+		if (entry.kind === "pi.run-result") terminals.push(entry);
 		const start = e === 0 && position.index !== null ? position.index : (entry.model?.length ?? 0) - 1;
 		for (let index = start; index >= 0; index--) {
 			if (messages.length === LIMITS.historyMessages || slots === LIMITS.historyScanSlots) {
 				nextCursor = encode({ ...position, entry: entry.id, index });
-				return { ...scope, messages: messages.reverse(), nextCursor };
+				return finish(nextCursor);
 			}
 			slots++;
 			const message = previewMessage(entry, index);
@@ -162,7 +199,7 @@ export async function readHistory(
 		const last = page.items.at(-1)!;
 		if (last.id > 1) nextCursor = encode({ ...position, entry: last.id - 1, index: null });
 	}
-	return { ...scope, messages: messages.reverse(), nextCursor };
+	return finish(nextCursor);
 }
 export async function readMessageText(
 	conversation: Pick<PiConversation, "entries">,

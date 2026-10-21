@@ -215,7 +215,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 			timers: hostTimers(options.setTimer, (error) => report(error, { type: "host_error", callback: "setTimer" })),
 			writeAtClose: (writes) => this.writeAtClose(writes),
 			report: this.#report,
-			settleOutcome: settleSchedulerOutcome,
+			settleOutcome: (tx, record, outcome) => settleSchedulerOutcome(tx, record, outcome, now()),
 			withdrawInputs: withdrawQueuedInputs,
 			conversation: async (id, binding, callContext) => {
 				const record = await this.readOnLine(() => storage.conversation(id, callContext));

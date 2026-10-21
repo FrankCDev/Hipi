@@ -1,0 +1,56 @@
+.run-activity-header {
+	--run-disclosure-icon-size: 14px;
+	--run-disclosure-duration: 150ms;
+	--run-disclosure-radius: 0.5rem;
+	width: min(100%, var(--reading-width));
+	margin-inline: auto;
+	color: var(--muted);
+	font-size: var(--font-ui-size);
+	font-variant-numeric: tabular-nums;
+}
+.run-activity-toggle {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--ui-conversation-grouped-gap);
+	border: 0;
+	border-radius: var(--run-disclosure-radius);
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: start;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.run-activity-header[data-run-collapsible="true"]::after {
+	content: "";
+	display: block;
+	margin-block-start: var(--ui-conversation-grouped-gap);
+	border-block-start: 1px solid var(--line);
+}
+.run-activity-toggle > svg {
+	width: var(--run-disclosure-icon-size);
+	height: var(--run-disclosure-icon-size);
+	flex-shrink: 0;
+	transition: transform var(--run-disclosure-duration);
+}
+:root[data-reduced-motion="on"] .run-activity-toggle > svg {
+	transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .run-activity-toggle > svg {
+		transition: none;
+	}
+}
+.run-activity-toggle[aria-expanded="true"] > svg {
+	transform: rotate(90deg);
+}
+.run-activity-toggle:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+}
+@media (hover: hover) {
+	.run-activity-toggle:hover {
+		color: var(--text);
+	}
+}

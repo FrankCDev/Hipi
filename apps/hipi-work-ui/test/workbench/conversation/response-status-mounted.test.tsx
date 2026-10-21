@@ -64,13 +64,16 @@ const page = async (hidden: boolean) => {
 	});
 };
 
-test("waiting decoration follows the viewport and page without announcing a fake thinking phase", async () => {
+test("Thinking is waiting copy, gated by viewport and page without a private reasoning phase", async () => {
 	await render(<ResponseStatus />);
 	const status = host.querySelector<HTMLElement>(".cadenced-text");
 	assert.ok(status);
 	assert.equal(status.dataset.animate, "false");
 	assert.equal(status.querySelector('[aria-hidden="true"]')?.textContent, status.firstChild?.textContent);
-	assert.doesNotMatch(status.innerHTML, /<output|aria-live|role="status"|思考|准备环境/);
+	assert.doesNotMatch(status.innerHTML, /<output|aria-live|role="status"|准备环境/);
+	assert.match(status.firstChild?.textContent ?? "", /Thinking|思考中/);
+	assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, "generating");
+	assert.ok(host.querySelector('.response-status-spacer[aria-hidden="true"]'));
 	await viewport(true);
 	assert.equal(status.dataset.animate, "true");
 	await page(true);
@@ -147,4 +150,28 @@ test("authoritative tool/wait status can coexist with text, but cancellation/dis
 	);
 	assert.equal(host.querySelector("article"), article);
 	assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, "retry");
+});
+
+test("actual waits replace Thinking and completion removes the placeholder instead of inventing elapsed time", async () => {
+	const execution = {
+		ownerTaskId: "11",
+		submissionIds: ["10"],
+		submissionCount: 1,
+		tools: { items: [], total: 0, active: 0 },
+		blockingCompactionCount: 0,
+	};
+	for (const [changes, expected] of [
+		[{ generation: { attempt: 1 } }, "generating"],
+		[{ generation: { attempt: 2, retryAt: 10 } }, "retry"],
+		[{ generation: { attempt: 2, deferredPollAt: 20 } }, "deferred"],
+		[{ blockingCompactionCount: 1 }, "compacting"],
+		[{ generation: { attempt: 3 } }, "generating"],
+	] as const) {
+		await render(<StreamingMessage snapshot={{ ...snapshot, execution: { ...execution, ...changes } }} />);
+		assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, expected);
+		assert.equal(host.querySelectorAll(".response-status").length, 1);
+		assert.doesNotMatch(host.textContent ?? "", /Worked for|已用时|耗时|\d+\s*(seconds|秒)/);
+	}
+	await render(<StreamingMessage snapshot={{ ...snapshot, running: false, execution }} />);
+	assert.equal(host.querySelector(".response-status"), null);
 });

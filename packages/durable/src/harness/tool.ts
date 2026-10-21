@@ -643,6 +643,12 @@ async function settle(
 	await runtime.commit(async (tx) => {
 		const conversationId = runtime.conversationId;
 		const live = await tx.doc(LiveDoc, conversationId);
+		const origin = input.kind === "model" ? await tx.entry(AssistantEntry, input.assistant) : undefined;
+		const task = input.kind === "model" ? await tx.task(runtime.taskId) : undefined;
+		const runId =
+			origin?.conversationId === conversationId && task?.owner !== undefined && origin.byTaskId === task.owner
+				? origin.runId
+				: undefined;
 		const slot = toolSlot(live, runtime.taskId);
 		const result = build(slot);
 		let settled: ToolTaskResult;
@@ -660,7 +666,7 @@ async function settle(
 			}
 			settled = { kind: "nested" };
 		} else {
-			const timing = { timestamp: runtime.now(), durationMs };
+			const timing = { timestamp: runtime.now(), durationMs, runId };
 			const entry = await appendToolResult(tx, conversationId, call, result, timing);
 			if (slot !== undefined && !("parentTaskId" in slot)) {
 				finishSlot(slot);
@@ -874,7 +880,7 @@ export async function appendToolResult(
 	conversationId: ConversationId,
 	call: ToolCall,
 	result: ToolExecutionResult,
-	meta: { readonly timestamp: number; readonly durationMs?: number },
+	meta: { readonly timestamp: number; readonly durationMs?: number; readonly runId?: TaskId },
 ): Promise<TypedEntry<{ diagnostics: ToolDiagnostic[] }>> {
 	const { timestamp, durationMs } = meta;
 	const diagnostics = [...(result.diagnostics ?? [])];
@@ -892,7 +898,11 @@ export async function appendToolResult(
 		timestamp,
 	} as ToolResultMessage;
 	if (result.usage !== undefined) await recordUsage(tx, conversationId, "tools", call.name, result.usage);
-	return tx.appendEntry(ToolResultEntry, conversationId, { model: [message], data: { diagnostics } });
+	return tx.appendEntry(ToolResultEntry, conversationId, {
+		model: [message],
+		data: { diagnostics },
+		...(meta.runId === undefined ? {} : { runId: meta.runId }),
+	});
 }
 
 function renderDiagnostics(diagnostics: readonly ToolDiagnostic[]): string {

@@ -210,7 +210,7 @@ export const GenerationTask = defineTask<GenerationInput, GenerationCheckpoint, 
 			const conversationId = runtime.conversationId;
 			await runtime.commit(async (tx) => {
 				const live = await tx.doc(LiveDoc, conversationId);
-				await convertPartial(tx, live, conversationId);
+				await convertPartial(tx, live, conversationId, runtime.taskId);
 				live.generation = { attempt };
 				return undefined;
 			}, context);
@@ -296,12 +296,21 @@ export const GenerationTask = defineTask<GenerationInput, GenerationCheckpoint, 
 				: [];
 		await runtime.commit(async (tx) => {
 			const live = await tx.doc(LiveDoc, conversationId);
-			await convertPartial(tx, live, conversationId);
+			await convertPartial(tx, live, conversationId, runtime.taskId);
 			for (const call of unstarted) {
 				const result = harnessError("aborted", `Tool ${call.name} was aborted`);
-				await appendToolResult(tx, conversationId, call, result, { timestamp: runtime.now() });
+				await appendToolResult(tx, conversationId, call, result, {
+					timestamp: runtime.now(),
+					runId: live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+				});
 			}
-			endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "aborted" });
+			await endRun(
+				tx,
+				live,
+				runtime.taskId,
+				{ status: "unanswered", reason: "aborted" },
+				{ conversationId, settledAt: runtime.now(), terminalCause: "unanswered" },
+			);
 			return { status: "terminal", outcome: { status: "aborted" } };
 		}, context);
 	},
@@ -412,22 +421,36 @@ async function endFailedRun(
 	settlement: SubmissionSettlement,
 ): Promise<void> {
 	const conversationId = runtime.conversationId;
-	endRun(tx, live, runtime.taskId, settlement);
+	await endRun(tx, live, runtime.taskId, settlement, {
+		conversationId,
+		settledAt: runtime.now(),
+		terminalCause: "unanswered",
+	});
 	if (failure.policy === "withdraw") await withdrawQueuedInputs(tx, conversationId, "run_failed");
 	if (failure.boundary === undefined) return;
 	const { users } = await applyBoundary(tx, failure.boundary, "final", runtime.now());
-	if (users.length > 0) await startRun(tx, conversationId, live, users);
+	if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
 }
 
 /**
  * Append a committed partial left by an interrupted, aborted, faulted, or orphaned attempt as an aborted assistant
  * entry; the caller replaces or removes `generation`.
  */
-export async function convertPartial(tx: Tx, live: Draft<LiveState>, conversationId: ConversationId): Promise<void> {
+export async function convertPartial(
+	tx: Tx,
+	live: Draft<LiveState>,
+	conversationId: ConversationId,
+	ownerTaskId: TaskId,
+): Promise<void> {
 	const partial = live.generation?.message;
 	if (partial === undefined) return;
 	const message = copyJson(partial) as unknown as AssistantMessage;
-	await appendAssistant(tx, conversationId, { ...message, stopReason: "aborted" });
+	await appendAssistant(
+		tx,
+		conversationId,
+		{ ...message, stopReason: "aborted" },
+		live.run?.taskId === ownerTaskId ? live.run.group?.id : undefined,
+	);
 }
 
 /**
@@ -539,7 +562,12 @@ async function classify(
 			const text = message.errorMessage ?? "Context overflow";
 			await runtime.commit(async (tx): Promise<Next> => {
 				const live = await tx.doc(LiveDoc, conversationId);
-				await appendAssistant(tx, conversationId, message);
+				await appendAssistant(
+					tx,
+					conversationId,
+					message,
+					live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+				);
 				delete live.generation;
 				const child = await createCompaction(tx, conversationId, { reason: "overflow" }, runtime.taskId);
 				const checkpoint = { phase: "prepare", attempt, compacted: child, overflow: text } as const;
@@ -561,7 +589,12 @@ async function classify(
 		// Read before the first table write; only a failure uses it.
 		const failure = retry ? undefined : await prepareFailure(tx, runtime);
 		const live = await tx.doc(LiveDoc, conversationId);
-		await appendAssistant(tx, conversationId, message);
+		await appendAssistant(
+			tx,
+			conversationId,
+			message,
+			live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+		);
 		if (failure === undefined) {
 			live.generation = { attempt, retry: { at: until, error: message.errorMessage ?? "" } };
 			const checkpoint = {
@@ -597,18 +630,39 @@ async function answer(runtime: Runtime, message: AssistantMessage, context: Cont
 		// Queue modes are read on the Session line, when the boundary is decided.
 		const boundary = await prepareBoundary(tx, conversationId, runtime.settings);
 		const live = await tx.doc(LiveDoc, conversationId);
-		const entry = await appendAssistant(tx, conversationId, message);
+		const entry = await appendAssistant(
+			tx,
+			conversationId,
+			message,
+			live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+		);
 		const result: Next = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
 		const { users, reset } = await applyBoundary(tx, boundary, "final", runtime.now());
 		if (continuation !== undefined && users.length === 0 && !reset) {
 			const user = { role: "user", content: continuation, timestamp: runtime.now() } as const;
-			await tx.appendEntry(UserEntry, conversationId, { model: [user] });
+			await tx.appendEntry(UserEntry, conversationId, {
+				model: [user],
+				...(live.run?.taskId !== runtime.taskId || live.run.group === undefined
+					? {}
+					: { runId: live.run.group.id }),
+			});
 			handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
 			delete live.generation;
 			return result;
 		}
-		endRun(tx, live, runtime.taskId, { status: "done", answer: entry.id });
-		if (users.length > 0) await startRun(tx, conversationId, live, users);
+		await endRun(
+			tx,
+			live,
+			runtime.taskId,
+			{ status: "done", answer: entry.id },
+			{
+				conversationId,
+				settledAt: runtime.now(),
+				terminalCause: "response",
+				answerRequestStartedAt: message.timestamp,
+			},
+		);
+		if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
 		return result;
 	}, context);
 }
@@ -639,14 +693,22 @@ async function startToolRound(
 		);
 	await runtime.commit(async (tx): Promise<Next> => {
 		const live = await tx.doc(LiveDoc, conversationId);
-		const entry = await appendAssistant(tx, conversationId, message);
+		const entry = await appendAssistant(
+			tx,
+			conversationId,
+			message,
+			live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+		);
 		const slots: ToolSlot[] = [];
 		const tools: TaskId<ToolTaskResult>[] = [];
 		const pending: string[] = [];
 		for (const call of calls) {
 			if (!offered.has(call.name)) {
 				const unavailable = harnessError("tool_unavailable", `Tool ${call.name} is not available`);
-				const result = await appendToolResult(tx, conversationId, call, unavailable, { timestamp: runtime.now() });
+				const result = await appendToolResult(tx, conversationId, call, unavailable, {
+					timestamp: runtime.now(),
+					runId: live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
+				});
 				slots.push({ callId: call.id, name: call.name, status: "done", entry: result.id });
 				continue;
 			}
@@ -709,14 +771,30 @@ async function finishToolRound(
 				boundary.head = entry.id;
 			}
 			const { users } = await applyBoundary(tx, boundary, "final", now);
-			endRun(tx, live, runtime.taskId, { status: "done", answer: assistant });
-			if (users.length > 0) await startRun(tx, conversationId, live, users);
+			await endRun(
+				tx,
+				live,
+				runtime.taskId,
+				{ status: "done", answer: assistant },
+				{
+					conversationId,
+					settledAt: now,
+					terminalCause: handoff === undefined ? "tool-terminate" : "tool-handoff",
+				},
+			);
+			if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
 		} else {
 			const { users, reset } = await applyBoundary(tx, boundary, "postTools", now);
 			if (reset) {
 				// The queued reset cut the run's context before an answer.
-				endRun(tx, live, runtime.taskId, { status: "unanswered", reason: "reset" });
-				if (users.length > 0) await startRun(tx, conversationId, live, users);
+				await endRun(
+					tx,
+					live,
+					runtime.taskId,
+					{ status: "unanswered", reason: "reset" },
+					{ conversationId, settledAt: now, terminalCause: "unanswered" },
+				);
+				if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
 			} else {
 				delete live.tools;
 				delete live.nestedTools;
@@ -736,9 +814,13 @@ async function appendAssistant(
 	tx: Tx,
 	conversationId: ConversationId,
 	message: AssistantMessage,
+	runId?: TaskId,
 ): Promise<TypedEntry<never>> {
 	await recordUsage(tx, conversationId, "models", `${message.provider}/${message.model}`, message.usage);
-	return tx.appendEntry(AssistantEntry, conversationId, { model: [message] });
+	return tx.appendEntry(AssistantEntry, conversationId, {
+		model: [message],
+		...(runId === undefined ? {} : { runId }),
+	});
 }
 
 /** Start a run for `inputs`, placed input submissions: a new generation takes `pi.live.run`. */
@@ -747,8 +829,14 @@ export async function startRun(
 	conversationId: ConversationId,
 	live: Draft<LiveState>,
 	inputs: SubmissionId[],
+	admittedAt: number,
 ): Promise<void> {
-	live.run = { taskId: await createGeneration(tx, conversationId), inputs };
+	const taskId = await createGeneration(tx, conversationId);
+	live.run = {
+		taskId,
+		inputs,
+		...(Number.isFinite(admittedAt) && admittedAt >= 0 ? { group: { id: taskId, admittedAt } } : {}),
+	};
 }
 
 /** A generation owned by its conversation. */

@@ -1,8 +1,18 @@
 import type { Draft, JsonRepresentation, JsonValue } from "@earendil-works/chord";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { defineDoc } from "../documents.ts";
+import { RunResultEntry, type RunTerminalCause, type RunUnansweredReason } from "../entries.ts";
 import type { Transaction } from "../session/transaction.ts";
-import type { EntryId, JsonObject, SubmissionId, SubmissionSettlement, TaskId, TaskRecord, Tx } from "../types.ts";
+import type {
+	ConversationId,
+	EntryId,
+	JsonObject,
+	SubmissionId,
+	SubmissionSettlement,
+	TaskId,
+	TaskRecord,
+	Tx,
+} from "../types.ts";
 import { convertPartial } from "./generation.ts";
 import type { SchedulerOutcome } from "./scheduler.ts";
 import type { CompactionReason, CompactionResult, ToolDiagnostic } from "./types.ts";
@@ -81,7 +91,12 @@ export type CompactionFailure = {
 /** Built-in live conversation state: run control and presentation of the current generation and tool round. */
 export type LiveState = {
 	/** Run control: the task that settles the run's inputs, and those inputs; present exactly while busy. */
-	run?: { taskId: TaskId; inputs: SubmissionId[] };
+	run?: {
+		taskId: TaskId;
+		inputs: SubmissionId[];
+		/** Optional observations only. Older writers may preserve this but omit member/terminal records. */
+		group?: { id: TaskId; admittedAt: number };
+	};
 	/** Presentation of the current generation attempt. */
 	generation?: {
 		attempt: number;
@@ -108,6 +123,7 @@ export type LiveState = {
 	compactionFailure?: CompactionFailure;
 };
 
+// Optional run observations deliberately retain v1: older writers may omit members/terminal evidence.
 export const LiveDoc = defineDoc<LiveState>({
 	kind: "pi.live",
 	version: 1,
@@ -131,12 +147,74 @@ const RUN_TASK_KINDS: ReadonlySet<string> = new Set(["pi.generation"]);
 const TOOL_TASK_KIND = "pi.tool";
 const COMPACTION_TASK_KIND = "pi.compaction";
 
+/** Only fixed built-in reason codes are safe to duplicate into transcript observations. */
+function knownRunReason(reason: string): RunUnansweredReason | undefined {
+	switch (reason) {
+		case "aborted":
+		case "reset":
+		case "faulted":
+		case "model_error":
+		case "no_model":
+			return reason;
+		default:
+			return undefined;
+	}
+}
+
 /**
  * End the run owned by `taskId`: settle each of its inputs and remove `run`. Always removes `generation`, `tools`, and
  * `nestedTools`, whose presentation belongs to the ending run.
  */
-export function endRun(tx: Tx, live: Draft<LiveState>, taskId: TaskId, settlement: SubmissionSettlement): void {
+export async function endRun(
+	tx: Tx,
+	live: Draft<LiveState>,
+	taskId: TaskId,
+	settlement: SubmissionSettlement,
+	evidence: {
+		conversationId: ConversationId;
+		settledAt: number;
+		terminalCause: RunTerminalCause;
+		answerRequestStartedAt?: number;
+	},
+): Promise<void> {
 	if (live.run?.taskId === taskId) {
+		const group = live.run.group;
+		if (
+			group !== undefined &&
+			(settlement.status === "done"
+				? evidence.terminalCause !== "unanswered"
+				: evidence.terminalCause === "unanswered") &&
+			Number.isFinite(group.admittedAt) &&
+			group.admittedAt >= 0 &&
+			Number.isFinite(evidence.settledAt) &&
+			evidence.settledAt >= 0
+		) {
+			const answerRequestStartedAt = evidence.answerRequestStartedAt;
+			const reason = settlement.status === "unanswered" ? knownRunReason(settlement.reason) : undefined;
+			await tx.appendEntry(RunResultEntry, evidence.conversationId, {
+				runId: group.id,
+				data: {
+					runId: group.id,
+					admittedAt: group.admittedAt,
+					settledAt: evidence.settledAt,
+					terminalCause: evidence.terminalCause,
+					settlement:
+						settlement.status === "done"
+							? { status: "done", answer: settlement.answer }
+							: {
+									status: "unanswered",
+									...(reason === undefined ? {} : { reason }),
+								},
+					...(evidence.terminalCause === "response" &&
+					settlement.status === "done" &&
+					answerRequestStartedAt !== undefined &&
+					Number.isFinite(answerRequestStartedAt) &&
+					answerRequestStartedAt >= 0
+						? { answerRequestStartedAt }
+						: {}),
+				},
+			});
+		}
 		for (const id of live.run.inputs) tx.settleSubmission(id, settlement);
 		delete live.run;
 	}
@@ -240,6 +318,7 @@ export async function settleSchedulerOutcome(
 	tx: Transaction,
 	record: TaskRecord<JsonValue, JsonValue, JsonValue>,
 	outcome: SchedulerOutcome,
+	settledAt: number,
 ): Promise<void> {
 	if (record.kind === TOOL_TASK_KIND) {
 		const live = await tx.doc(LiveDoc, record.conversationId);
@@ -256,13 +335,14 @@ export async function settleSchedulerOutcome(
 	if (!RUN_TASK_KINDS.has(record.kind)) return;
 	const live = await tx.doc(LiveDoc, record.conversationId);
 	if (live.run?.taskId !== record.id) return;
-	await convertPartial(tx, live, record.conversationId);
-	endRun(
+	await convertPartial(tx, live, record.conversationId, record.id);
+	await endRun(
 		tx,
 		live,
 		record.id,
 		outcome.status === "faulted"
 			? { status: "unanswered", reason: "faulted", detail: outcome.error.message }
 			: { status: "unanswered", reason: outcome.reason },
+		{ conversationId: record.conversationId, settledAt, terminalCause: "unanswered" },
 	);
 }

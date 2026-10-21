@@ -1,3 +1,5 @@
+import { parseRunAdmission, type RunAdmission } from "../runs/contracts.ts";
+
 /** Bounded, presentation-only metadata. Never command authority or a second execution state machine. */
 export const EXECUTION_LIMITS = { tools: 16, submissions: 64, label: 256 } as const;
 
@@ -13,6 +15,8 @@ export type ExecutionTool = {
 };
 
 export type ConversationExecution = {
+	/** Same committed live run; presence does not mean execution is currently active. */
+	run?: RunAdmission;
 	/** Current generation owner. Changes on handover; not a permanent run or message ID. */
 	ownerTaskId: string;
 	/** Exact receipt.submissionId correlation; omitted IDs must never be inferred. */
@@ -53,6 +57,7 @@ function label(value: unknown): string {
 export function parseExecution(value: unknown): ConversationExecution {
 	const p = object(value, [
 		"ownerTaskId",
+		"run",
 		"submissionIds",
 		"submissionCount",
 		"generation",
@@ -120,6 +125,7 @@ export function parseExecution(value: unknown): ConversationExecution {
 	}
 	return {
 		ownerTaskId: identifier(p.ownerTaskId),
+		...(p.run === undefined ? {} : { run: parseRunAdmission(p.run) }),
 		submissionIds,
 		submissionCount,
 		...(generation ? { generation } : {}),

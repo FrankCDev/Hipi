@@ -131,7 +131,18 @@ nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
 nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
 nodeTests.push("packages/work-runtime/test/office-zip-normalization.test.ts");
 nodeTests.push("packages/work-runtime/test/file-presentation.test.ts");
+nodeTests.push("packages/work-runtime/test/run-metadata.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/projection.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/history.test.ts");
 const storageTests = [
+	"packages/durable/test/harness-compaction.test.ts",
+	"packages/durable/test/harness-generation.test.ts",
+	"packages/durable/test/harness-generation-recovery.test.ts",
+	"packages/durable/test/harness-inbox.test.ts",
+	"packages/durable/test/harness-input-entries.test.ts",
+	"packages/durable/test/harness-run-metadata.test.ts",
+	"packages/durable/test/harness-run-metadata-transactions.test.ts",
+
 	"packages/chord/test/sqlite-readonly.test.ts",
 	"packages/chord/test/sqlite/node.test.ts",
 	"packages/durable/test/sqlite-readonly.test.ts",
@@ -140,6 +151,9 @@ const storageTests = [
 	"packages/durable/test/sqlite-migrations.test.ts",
 ];
 const uiTests = [
+	"workbench/conversation/activity/header-mounted",
+	"workbench/conversation/activity/transcript-mounted",
+
 	"activity-approval-presentation",
 	"activity-transcript",
 	"workbench/conversation/conversation-selection-interaction",
@@ -149,6 +163,7 @@ const uiTests = [
 	"workbench/composer/work-experience-presentation",
 	"workbench/composer/prepared-task-entry",
 	"workbench/composer/use-home-draft",
+	"workbench/composer/active-composer-mounted",
 	"workbench/composer/editor-mounted",
 	"workbench/composer/project-picker-mounted",
 	"workbench/composer/welcome",

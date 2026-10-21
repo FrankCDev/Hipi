@@ -68,6 +68,7 @@ describe("generation recovery", () => {
 			"pi.user",
 			"pi.system",
 			"pi.assistant",
+			"pi.run-result",
 		]);
 		await opened.harness.close(context);
 	});
@@ -118,6 +119,7 @@ describe("generation recovery", () => {
 			"pi.user",
 			"pi.system",
 			"pi.assistant",
+			"pi.run-result",
 		]);
 		await opened.harness.close(context);
 	});
@@ -154,7 +156,7 @@ describe("generation recovery", () => {
 		expect((await (await opened.harness.submission(id, context))!.wait(context)).status).toBe("done");
 		expect(sent).toEqual([["user"]]);
 		const entries = await allEntries(opened.root);
-		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.assistant"]);
+		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.assistant", "pi.run-result"]);
 		const converted = entries[1]!.model![0] as AssistantMessage;
 		expect(converted.stopReason).toBe("aborted");
 		expect(textOf(converted)).toBe(partial);
@@ -195,7 +197,7 @@ describe("generation recovery", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(setup.faux.state.callCount).toBe(1);
 		expect(await opened.harness.snapshot(LiveDoc, opened.root.id, context)).toEqual({
-			run: { taskId, inputs: [id] },
+			run: { taskId, inputs: [id], group: { id: taskId, admittedAt: 1_000 } },
 			generation: { attempt: 1, retry: { at: 61_000, error: "503 Service Unavailable" } },
 		});
 		now = 61_000;
@@ -205,6 +207,7 @@ describe("generation recovery", () => {
 			"pi.user",
 			"pi.assistant",
 			"pi.assistant",
+			"pi.run-result",
 		]);
 		await opened.harness.close(context);
 	});

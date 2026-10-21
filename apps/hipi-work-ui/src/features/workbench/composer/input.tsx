@@ -1,12 +1,12 @@
 import { AppError, LIMITS } from "@hipi/work-runtime/contracts";
-import { Square } from "lucide-react";
-import { type ReactNode, useId } from "react";
+import { LoaderCircle, Square } from "lucide-react";
+import { type ReactNode, useId, useRef } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
 import { ReceiptRecovery } from "../conversation/receipt.tsx";
 import type { ConversationController } from "../conversation/use-conversation.ts";
-import { ComposerEditor } from "./editor.tsx";
+import { ComposerEditor, type ComposerEditorHandle } from "./editor.tsx";
 
 export function ConversationComposer({
 	controller,
@@ -18,8 +18,10 @@ export function ConversationComposer({
 	const { t } = usePreferences();
 	const inputId = useId();
 	const hintId = useId();
+	const editor = useRef<ComposerEditorHandle>(null);
 	const { draft, setDraft, submit, blocked, composing, mutation, receipt, errorCode } = controller;
 	const stopping = controller.model.data?.executionState === "running";
+	const pending = stopping ? controller.execution.isPending : mutation.isPending;
 	const contextRequired =
 		errorCode === "CONTEXT_AUTHORIZATION_REQUIRED" ||
 		(controller.execution.error instanceof AppError &&
@@ -53,7 +55,28 @@ export function ConversationComposer({
 				</p>
 			)}
 			<ReceiptRecovery controller={controller} />
-			<div className="composer" data-has-draft={draft.length > 0} aria-busy={mutation.isPending}>
+			<div
+				className="composer"
+				data-has-draft={draft.length > 0}
+				aria-busy={pending}
+				onPointerDown={(event) => {
+					if (
+						event.button !== 0 ||
+						event.defaultPrevented ||
+						!(event.target instanceof Element) ||
+						!event.currentTarget.contains(event.target)
+					)
+						return;
+					if (
+						event.target.closest(
+							'a[href], button, input, select, textarea, [contenteditable="true"], [draggable="true"], [role="button"], [role="link"], [role="menuitem"], [role="option"], [tabindex]:not([tabindex="-1"])',
+						)
+					)
+						return;
+					event.preventDefault();
+					editor.current?.focus({ preventScroll: true });
+				}}
+			>
 				<form
 					id={`${inputId}-form`}
 					className="composer-form"
@@ -63,6 +86,7 @@ export function ConversationComposer({
 					}}
 				>
 					<ComposerEditor
+						ref={editor}
 						id={inputId}
 						value={draft}
 						onChange={setDraft}
@@ -85,12 +109,18 @@ export function ConversationComposer({
 						size="icon"
 						className="composer-submit"
 						data-action={stopping ? "stop" : "send"}
-						disabled={stopping ? controller.execution.isPending || controller.model.isError : !draft.trim() || blocked}
+						disabled={pending || (stopping ? controller.model.isError : !draft.trim() || blocked)}
 						onClick={stopping ? () => controller.execution.mutate("cancel") : undefined}
 						aria-label={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
-						title={t(stopping ? "model.cancelExecution" : mutation.isPending ? "work.sending" : "work.send")}
+						aria-busy={pending || undefined}
 					>
-						{stopping ? <Square size={13} fill="currentColor" aria-hidden="true" /> : <Icon name="arrowUp" size={18} />}
+						{pending ? (
+							<LoaderCircle size={18} className="composer-pending-icon" aria-hidden="true" />
+						) : stopping ? (
+							<Square size={13} fill="currentColor" aria-hidden="true" />
+						) : (
+							<Icon name="arrowUp" size={18} />
+						)}
 					</Button>
 				</div>
 			</div>

@@ -221,7 +221,7 @@ export async function admitSubmission(
 		}
 		if (boundary === undefined) return id;
 		const { users } = await applyBoundary(tx, boundary, "final", now);
-		if (users.length > 0) await startRun(tx, conversationId, live, users);
+		if (users.length > 0) await startRun(tx, conversationId, live, users, now);
 		return id;
 	}
 	if (draft.type === "write") {
@@ -236,6 +236,6 @@ export async function admitSubmission(
 	const entry = await appendInput(tx, conversationId, draft.content, draft.entry, now);
 	const input = { conversationId, ...requestId, type: "input", status: "placed", entry: entry.id } as const;
 	const { id } = await tx.createSubmission(input);
-	await startRun(tx, conversationId, live, [id]);
+	await startRun(tx, conversationId, live, [id], now);
 	return id;
 }

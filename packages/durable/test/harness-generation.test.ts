@@ -99,7 +99,7 @@ describe("generation", () => {
 		const answer = await root.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
 		expect(textOf(answer?.model?.[0])).toBe("Hello there");
 		const entries = await allEntries(root);
-		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.system", "pi.assistant"]);
+		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.system", "pi.assistant", "pi.run-result"]);
 		expect(entries[0]!.id).toBe(settled.entry);
 		expect(entries[1]!.model).toEqual([
 			{ role: "system", content: "", sections: { preamble: "You are helpful." }, timestamp: expect.any(Number) },
@@ -108,7 +108,7 @@ describe("generation", () => {
 		const task = (await harness.commit((tx) => tx.scanTasks({ conversationId: root.id }, 10), context)).items[0];
 		expect(task?.kind).toBe("pi.generation");
 		// Entries written by the generation are attributed to it; the admitted user entry is not task work.
-		expect(entries.map((entry) => entry.byTaskId)).toEqual([undefined, task!.id, task!.id]);
+		expect(entries.map((entry) => entry.byTaskId)).toEqual([undefined, task!.id, task!.id, task!.id]);
 		expect(task?.state).toEqual({
 			status: "terminal",
 			outcome: { status: "completed", result: { entryId: settled.answer } },
@@ -170,7 +170,7 @@ describe("generation", () => {
 		await root.configure({ model: { provider: "faux", modelId: "missing" } }, context);
 		const unknown = await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
 		expect(unknown).toMatchObject({ status: "unanswered", reason: "no_model", entry: expect.any(Number) });
-		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user"]);
+		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user", "pi.run-result"]);
 		const tasks = await harness.commit((tx) => tx.scanTasks({ conversationId: root.id }, 10), context);
 		expect(tasks.items[0]!.state).toEqual({
 			status: "terminal",
@@ -195,7 +195,13 @@ describe("generation", () => {
 		const settled = await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
 		expect(settled.status).toBe("done");
 		const entries = await allEntries(root);
-		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.system", "pi.assistant", "pi.assistant"]);
+		expect(entries.map((entry) => entry.kind)).toEqual([
+			"pi.user",
+			"pi.system",
+			"pi.assistant",
+			"pi.assistant",
+			"pi.run-result",
+		]);
 		expect((entries[2]!.model![0] as AssistantMessage).stopReason).toBe("error");
 		expect(values.some((value) => value.generation?.retry?.error === "503 Service Unavailable")).toBe(true);
 		expect(values.some((value) => value.generation?.attempt === 2)).toBe(true);
@@ -211,7 +217,12 @@ describe("generation", () => {
 		harness.resume();
 		const settled = await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
 		expect(settled).toMatchObject({ status: "unanswered", reason: "model_error", detail: "503 Service Unavailable" });
-		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.assistant"]);
+		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual([
+			"pi.user",
+			"pi.assistant",
+			"pi.assistant",
+			"pi.run-result",
+		]);
 		expect(setup.faux.getPendingResponseCount()).toBe(1);
 		await harness.close(context);
 	});
@@ -247,7 +258,7 @@ describe("generation", () => {
 		expect((await (await root.submit({ type: "input", content: "hi" }, context)).wait(context)).status).toBe("done");
 		expect(setup.reports).toContainEqual(new Error("wrapper failed"));
 		// The failed section is absent, so nothing was rendered.
-		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant"]);
+		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.run-result"]);
 		await harness.close(context);
 	});
 
@@ -300,7 +311,7 @@ describe("generation", () => {
 		expect(await harness.abortTask(taskId, context)).toBe("marked");
 		expect(await submission.wait(context)).toMatchObject({ status: "unanswered", reason: "aborted" });
 		const entries = await allEntries(root);
-		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant"]);
+		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.run-result"]);
 		const converted = entries[1]!.model![0] as AssistantMessage;
 		expect(converted.stopReason).toBe("aborted");
 		expect(textOf(converted)!.startsWith(textOf(partial as Message)!)).toBe(true);
@@ -611,7 +622,7 @@ describe("generation", () => {
 		expect(values.some((value) => value.generation?.message !== undefined)).toBe(false);
 		await harness.abortTask((await live(harness, root))!.run!.taskId, context);
 		expect(await submission.wait(context)).toMatchObject({ status: "unanswered", reason: "aborted" });
-		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user"]);
+		expect((await allEntries(root)).map((entry) => entry.kind)).toEqual(["pi.user", "pi.run-result"]);
 		await harness.close(context);
 	});
 
@@ -629,7 +640,7 @@ describe("generation", () => {
 		});
 		expect(values.some((value) => textOf(value.generation?.message as Message) === "partial")).toBe(true);
 		const entries = await allEntries(root);
-		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant"]);
+		expect(entries.map((entry) => entry.kind)).toEqual(["pi.user", "pi.assistant", "pi.run-result"]);
 		expect(entries[1]!.model![0]).toMatchObject({ role: "assistant", stopReason: "aborted" });
 		expect(textOf(entries[1]!.model![0])).toBe("partial");
 		expect(await live(harness, root)).toEqual({});

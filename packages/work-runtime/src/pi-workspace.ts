@@ -929,6 +929,7 @@ export class PiWorkspace implements WorkspacePort {
 			...scope,
 			...(execution ? { execution } : {}),
 			messages: history.messages,
+			...(history.runResults === undefined ? {} : { runResults: history.runResults }),
 			historyCursor: history.nextCursor,
 			partial: partial.slice(0, end),
 			partialLength: partial.length,

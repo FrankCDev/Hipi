@@ -1,4 +1,5 @@
 import type { Message, Snapshot } from "@hipi/work-runtime/contracts";
+import type { RunActivity } from "./activity/contracts.ts";
 import type { ConversationFailure } from "./failure.ts";
 
 export const STREAM_ROW_KEY = "partial-output";
@@ -6,6 +7,7 @@ export const STREAM_ROW_KEY = "partial-output";
 // five blocks of overscan until realistic mixed-turn browser evidence says less.
 export const TRANSCRIPT_OVERSCAN = 5;
 export type TranscriptRow =
+	| { key: string; kind: "run-activity"; activity: RunActivity; message?: never }
 	| { key: string; kind: "user-message" | "assistant-message"; message: Message }
 	| { key: string; kind: "request-failure"; failure: ConversationFailure; message?: never }
 	| { key: string; kind: "assistant-stream"; message?: never };

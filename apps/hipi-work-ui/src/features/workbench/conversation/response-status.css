@@ -2,10 +2,27 @@
 	/* Private reference status geometry, mapped to the existing conversation font and surface tokens. */
 	--response-status-color: color-mix(in srgb, var(--text) 60%, transparent);
 	--response-status-line-height: 1.5;
+	--response-status-spacer-height: 1rem;
 	max-width: var(--reading-width);
 	width: 100%;
 	margin-inline: auto;
 	font-size: var(--font-ui-size);
 	line-height: var(--response-status-line-height);
 	color: var(--response-status-color);
+}
+.response-status-content {
+	display: inline-flex;
+	min-width: 0;
+	max-width: 100%;
+	align-items: center;
+	overflow: hidden;
+}
+.response-status-spacer {
+	width: 0;
+	height: var(--response-status-spacer-height);
+	flex-shrink: 0;
+}
+.response-status-content > .cadenced-text {
+	min-width: 0;
+	flex: 1;
 }

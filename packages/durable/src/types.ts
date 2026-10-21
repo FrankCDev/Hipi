@@ -435,6 +435,8 @@ export type EntryRecord = {
 	readonly edits?: readonly ContextEdit[];
 	/** Task that appended this entry, when it was produced by durable work. */
 	readonly byTaskId?: TaskId;
+	/** Optional producer-recorded execution membership; absence and incomplete coverage remain unknown. */
+	readonly runId?: TaskId;
 };
 
 /** Entry content supplied before the Session assigns identity and task attribution. */

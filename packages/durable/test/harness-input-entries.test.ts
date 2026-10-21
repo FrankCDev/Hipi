@@ -108,10 +108,18 @@ describe("input entries", () => {
 		expect(transcript(entries)).toEqual([
 			["chat.mention", { author: "ann", text: "hi" }, "ann: hi"],
 			["pi.assistant", "hi ann"],
+			["pi.run-result"],
 		]);
 		const placed = entries.find((entry) => entry.kind === "chat.mention")!;
 		expect(placed.model).toEqual([{ role: "user", content: "ann: hi", timestamp: 42 }]);
-		expect(settled).toMatchObject({ status: "done", entry: placed.id, answer: entries.at(-1)!.id });
+		const response = entries.find((entry) => entry.id === (settled.status === "done" ? settled.answer : undefined));
+		expect(response).toMatchObject({ kind: "pi.assistant", model: [{ role: "assistant" }] });
+		expect(settled).toMatchObject({ status: "done", entry: placed.id, answer: response!.id });
+		expect(entries.at(-1)).toMatchObject({
+			kind: "pi.run-result",
+			data: { settlement: { status: "done", answer: response!.id } },
+		});
+		expect(entries.at(-1)!.model).toBeUndefined();
 		expect(requests).toEqual([["user:ann: hi"]]);
 		// The context of a fork at the input is the same as for a pi.user entry.
 		const view = await root.context(context, { at: placed.id });
@@ -215,7 +223,9 @@ describe("input entries", () => {
 			["chat.mention", { author: "ann", text: "s" }, "s"],
 			["pi.assistant", "after tools"],
 			["p2.input", "f"],
+			["pi.run-result"],
 			["pi.assistant", "follow-up"],
+			["pi.run-result"],
 		]);
 		const answers = entries.filter((entry) => entry.kind === "pi.assistant");
 		const placed = (kind: string) => entries.find((entry) => entry.kind === kind)!.id;
@@ -298,6 +308,7 @@ describe("data-only writes", () => {
 			["chat.message", { author: "bob", text: "lunch?" }],
 			["pi.tool-result"],
 			["pi.assistant", "done"],
+			["pi.run-result"],
 		]);
 		expect(requests).toEqual([
 			["system:", "user:a"],
@@ -323,7 +334,12 @@ describe("data-only writes", () => {
 		const entries = await allEntries(root);
 		const reset = entries.find((entry) => entry.kind === "pi.reset")!;
 		expect(settled.status === "done" && settled.entry).toBeGreaterThan(reset.id);
-		expect((await root.context(context)).entries.map((entry) => entry.kind)).toEqual(["pi.reset", "chat.message"]);
+		expect((await root.context(context)).entries.map((entry) => entry.kind)).toEqual([
+			"pi.reset",
+			"chat.message",
+			"pi.run-result",
+		]);
+		expect((await root.context(context)).messages).toEqual([]);
 		// Once the reset is placed, display-only writes go in at once again.
 		const later = await root.submit({ type: "write", entry: { kind: "chat.message", data: "again" } }, context);
 		expect((await later.status(context)).status).toBe("done");
@@ -354,7 +370,16 @@ describe("data-only writes", () => {
 		expect(requests[1]).toEqual(["system:", "user:a", "assistant:one", "user:b"]);
 		const kinds = (await allEntries(root)).map((entry) => entry.kind);
 		// The unchanged prompt adds no second pi.system entry.
-		expect(kinds).toEqual(["pi.user", "pi.system", "pi.assistant", "pi.user", "chat.message", "pi.assistant"]);
+		expect(kinds).toEqual([
+			"pi.user",
+			"pi.system",
+			"pi.assistant",
+			"pi.run-result",
+			"pi.user",
+			"chat.message",
+			"pi.assistant",
+			"pi.run-result",
+		]);
 		await harness.close(context);
 	});
 
@@ -381,9 +406,12 @@ describe("data-only writes", () => {
 		await g.wait(context);
 		expect(transcript(await allEntries(root)).filter(([kind]) => kind !== "pi.assistant")).toEqual([
 			["pi.user", "a"],
+			["pi.run-result"],
 			["note", "n"],
 			["chat.mention", { author: "ann", text: "f" }, "f"],
 			["pi.user", "g"],
+			["pi.run-result"],
+			["pi.run-result"],
 		]);
 		await harness.close(context);
 	});
@@ -448,7 +476,9 @@ describe("data-only writes", () => {
 			["note", "m"],
 			["redact"],
 			["pi.user", "f"],
+			["pi.run-result"],
 			["pi.assistant", "second"],
+			["pi.run-result"],
 		]);
 		expect(await input.status(context)).toMatchObject({ status: "done" });
 		await harness.close(context);

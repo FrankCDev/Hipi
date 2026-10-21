@@ -35,8 +35,16 @@ import {
 } from "./activities/contracts.ts";
 import { type FilePresentation, parseFilePresentation } from "./activities/file-presentation.ts";
 import { type ConversationExecution, parseExecution } from "./execution/contracts.ts";
+import { parseRunIdentifier, parseRunResults, type RunResults } from "./runs/contracts.ts";
 
 export type { FilePresentation } from "./activities/file-presentation.ts";
+export {
+	RUN_LIMITS,
+	type RunAdmission,
+	type RunResultObservation,
+	type RunResults,
+	runWallElapsedMs,
+} from "./runs/contracts.ts";
 
 import { validateRelativePath } from "./files/contracts.ts";
 
@@ -139,7 +147,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -313,6 +321,8 @@ export type ReceiptView = Receipt & {
 export type TextPreview = { text: string; textLength: number; truncated: boolean };
 export type Message = TextPreview & {
 	id: string;
+	/** Producer-recorded membership only; never inferred from adjacency or stream identity. */
+	runId?: string;
 	role: "user" | "assistant";
 	toolCalls?: MessageToolCalls;
 	interrupted?: true;
@@ -320,6 +330,7 @@ export type Message = TextPreview & {
 	streamId?: string;
 };
 export type Snapshot = Scope & {
+	runResults?: RunResults;
 	/** Committed presentation metadata; may remain present while execution is paused. */
 	execution?: ConversationExecution;
 	messages: Message[];
@@ -331,7 +342,7 @@ export type Snapshot = Scope & {
 	running: boolean;
 	historyCursor: string | null;
 };
-export type HistoryPage = Scope & { messages: Message[]; nextCursor: string | null };
+export type HistoryPage = Scope & { messages: Message[]; nextCursor: string | null; runResults?: RunResults };
 export type MessageTextChunk = Scope & {
 	messageId: string;
 	text: string;
@@ -1006,7 +1017,15 @@ function parseMessageToolCalls(value: unknown): MessageToolCalls {
 }
 function parseMessage(value: unknown): Message {
 	const m = object(value);
-	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId", "toolCalls"]);
+	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId", "toolCalls", "runId"]);
+	let runId: string | undefined;
+	if (m.runId !== undefined) {
+		try {
+			runId = parseRunIdentifier(m.runId);
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (m.toolCalls !== undefined && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	if (m.interrupted !== undefined && (m.interrupted !== true || m.role !== "assistant"))
 		throw new AppError("INVALID_REQUEST");
@@ -1014,6 +1033,7 @@ function parseMessage(value: unknown): Message {
 	if (m.role !== "user" && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	return {
 		id: string(m.id, 256),
+		...(runId === undefined ? {} : { runId }),
 		role: m.role,
 		...(m.toolCalls === undefined ? {} : { toolCalls: parseMessageToolCalls(m.toolCalls) }),
 		...preview(m.text, m.textLength, m.truncated, LIMITS.messagePreview),
@@ -1050,6 +1070,7 @@ export function parseSnapshot(value: unknown): Snapshot {
 		"running",
 		"historyCursor",
 		"execution",
+		"runResults",
 	]);
 	if (typeof p.running !== "boolean") throw new AppError("INVALID_REQUEST");
 	const partial = preview(p.partial, p.partialLength, p.partialTruncated, LIMITS.partialPreview);
@@ -1073,13 +1094,26 @@ export function parseSnapshot(value: unknown): Snapshot {
 		...(partialId === undefined ? {} : { partialId }),
 		running: p.running,
 		messages: committed,
+		...(p.runResults === undefined ? {} : { runResults: runResults(p.runResults) }),
 		historyCursor: cursor(p.historyCursor),
 	};
 }
 export function parseHistoryPage(value: unknown): HistoryPage {
 	const p = object(value);
-	fields(p, ["workspaceId", "conversationId", "messages", "nextCursor"]);
-	return { ...parseScope(p), messages: messages(p.messages), nextCursor: cursor(p.nextCursor) };
+	fields(p, ["workspaceId", "conversationId", "messages", "nextCursor", "runResults"]);
+	return {
+		...parseScope(p),
+		messages: messages(p.messages),
+		nextCursor: cursor(p.nextCursor),
+		...(p.runResults === undefined ? {} : { runResults: runResults(p.runResults) }),
+	};
+}
+function runResults(value: unknown): RunResults {
+	try {
+		return parseRunResults(value);
+	} catch {
+		throw new AppError("INVALID_REQUEST");
+	}
 }
 export function parseMessageTextChunk(value: unknown): MessageTextChunk {
 	const p = object(value);

@@ -1,4 +1,5 @@
 import type { ConversationView, LiveState } from "@earendil-works/pi-durable";
+import { projectRunAdmission } from "../runs/projection.ts";
 import { type ConversationExecution, EXECUTION_LIMITS, type ExecutionTool } from "./contracts.ts";
 
 /** Pure projection of the same committed LiveState as the partial; no asynchronous or historical reads. */
@@ -7,6 +8,7 @@ export function projectExecution(
 	view?: Pick<ConversationView, "conversation" | "entries">,
 ): ConversationExecution | undefined {
 	if (!live?.run) return undefined;
+	const run = projectRunAdmission(live);
 	// Prove ownership and the COMPLETE ordered round before applying the presentation cap.
 	// Neither a matching call ID nor the latest assistant entry is sufficient evidence.
 	let anchors: NonNullable<ExecutionTool["anchor"]>[] | undefined;
@@ -71,6 +73,7 @@ export function projectExecution(
 	}
 	return {
 		ownerTaskId: String(live.run.taskId),
+		...(run === undefined ? {} : { run }),
 		submissionIds: live.run.inputs.slice(0, EXECUTION_LIMITS.submissions).map(String),
 		submissionCount: live.run.inputs.length,
 		...(live.generation

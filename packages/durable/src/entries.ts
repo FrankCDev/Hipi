@@ -1,6 +1,6 @@
 import type { JsonValue } from "@earendil-works/chord";
 import type { CompactionReason, ToolDiagnostic } from "./harness/types.ts";
-import type { Entry, EntryRecord, TypedEntry } from "./types.ts";
+import type { Entry, EntryId, EntryRecord, TaskId, TypedEntry } from "./types.ts";
 
 /** Define a typed entry kind whose `is()` guard narrows by `EntryRecord.kind`. */
 export function defineEntry<D extends JsonValue = never>(kind: string): Entry<D> {
@@ -32,3 +32,23 @@ export const ResetEntry = defineEntry("pi.reset");
  * compaction tasks, directly or through a write submission.
  */
 export const CompactionEntry = defineEntry<{ reason: CompactionReason }>("pi.compaction");
+
+/** Generic termination origin, not a claim about a response's display or semantic phase. */
+export type RunTerminalCause = "response" | "tool-terminate" | "tool-handoff" | "unanswered";
+
+/** Known built-in codes safe to duplicate into observational transcript metadata. */
+export type RunUnansweredReason = "aborted" | "reset" | "faulted" | "model_error" | "no_model";
+
+/** Bounded observational run facts. Times are wall-clock samples, not active execution durations. */
+export type RunResult = {
+	runId: TaskId;
+	admittedAt: number;
+	settledAt: number;
+	terminalCause: RunTerminalCause;
+	settlement: { status: "done"; answer: EntryId } | { status: "unanswered"; reason?: RunUnansweredReason };
+	/** Exact settled response's model request timestamp, never first token or UI item-start time. */
+	answerRequestStartedAt?: number;
+};
+
+/** Model-less terminal bookkeeping, committed atomically with input settlement. */
+export const RunResultEntry = defineEntry<RunResult>("pi.run-result");

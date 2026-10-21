@@ -1,0 +1,48 @@
+/* Shared desktop composer geometry; browser-only reference overrides are intentionally excluded. */
+:root {
+	--composer-radius: 22px;
+	--composer-action-size: 28px;
+	--composer-auxiliary-radius: 999px;
+	--composer-auxiliary-inline-padding: 8px;
+	--composer-auxiliary-line-height: 18px;
+	--composer-bottom-inset: 16px;
+	--composer-editor-line-height: 20px;
+	--composer-editor-min-height: 44px;
+	--composer-editor-max-height: 25dvh;
+	--composer-editor-padding: 0 12px;
+	--composer-empty-attachment-height: 14px;
+	--composer-input-footer-gap: 4px;
+	--composer-footer-inline-padding: 8px;
+	--composer-footer-bottom-padding: 8px;
+	--composer-placeholder-opacity: 0.5;
+	--composer-elevation: 0 0 0 1px #0000000a, 0 2px 8px #0000000a, 0 4px 80px 8px #00000006;
+}
+:root[data-theme="dark"] {
+	--composer-elevation: inset 0 0 1px #ffffff33;
+}
+@media (max-width: 40rem) {
+	:root:not([data-theme="dark"]) {
+		--composer-elevation: 0 0 0 1px #0000000a, 0 2px 8px #0000000a, 0 4px 40px 8px #00000006;
+	}
+}
+.composer-submit:disabled {
+	background: var(--brand);
+	color: var(--on-brand);
+	opacity: 0.5;
+}
+.composer-pending-icon {
+	animation: composer-pending-spin 1s linear infinite;
+}
+@keyframes composer-pending-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+:root[data-reduced-motion="on"] .composer-pending-icon {
+	animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .composer-pending-icon {
+		animation: none;
+	}
+}

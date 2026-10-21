@@ -31,7 +31,7 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it } from "vitest";
-import { selectCut, serializeConversation } from "../src/harness/compaction.ts";
+import { estimateContext, selectCut, serializeConversation, summarizedMessages } from "../src/harness/compaction.ts";
 import { orderToolResults } from "../src/harness/context.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, toolsNamed, waitFor } from "./chat-support.ts";
@@ -274,6 +274,33 @@ describe("range selection", () => {
 		expect(selectCut(view(entries), 50)).toBe(3);
 	});
 
+	it("run-result entries contribute no model text and do not change the selected first-kept entry", () => {
+		const plain = [
+			entry("pi.user", [user(text("u1", 100))]),
+			entry("pi.assistant", [assistant(text("a1", 100))]),
+			entry("pi.user", [user(text("u2", 100))]),
+			entry("pi.assistant", [assistant(text("a2", 100))]),
+		];
+		const first = { ...entry("pi.run-result", []), model: undefined };
+		const last = { ...entry("pi.run-result", []), model: undefined };
+		const withResults = [plain[0]!, plain[1]!, first, plain[2]!, plain[3]!, last];
+		const baseline = view(plain),
+			observed = view(withResults);
+		expect(observed.messages).toEqual(baseline.messages);
+		expect(estimateContext(observed, [user("next")])).toBe(estimateContext(baseline, [user("next")]));
+		expect(observed.contributions[2]).toEqual([]);
+		expect(observed.contributions[5]).toEqual([]);
+		for (const budget of [50, 150, 250]) {
+			const before = selectCut(baseline, budget)!;
+			const after = selectCut(observed, budget)!;
+			expect(withResults[after]!.id).toBe(plain[before]!.id);
+			expect(summarizedMessages(observed, after)).toEqual(summarizedMessages(baseline, before));
+			expect(serializeConversation(observed.contributions.slice(0, after).flat())).toBe(
+				serializeConversation(baseline.contributions.slice(0, before).flat()),
+			);
+		}
+	});
+
 	it("keeps a huge last tool result together with its assistant", () => {
 		const entries = [
 			entry("pi.user", [user("u")]),
@@ -456,7 +483,7 @@ describe("manual compaction", () => {
 		const placed = await (await chat.harness.submission(submissionId!, context))!.wait(context);
 		expect(placed.status).toBe("done");
 		// The summary follows the answer; the kept range still includes the busy turn.
-		expect((await kinds(chat.root)).slice(-3)).toEqual(["pi.user", "pi.assistant", "pi.compaction"]);
+		expect((await kinds(chat.root)).slice(-4)).toEqual(["pi.user", "pi.assistant", "pi.compaction", "pi.run-result"]);
 		await chat.harness.close(context);
 	});
 
@@ -489,11 +516,12 @@ describe("manual compaction", () => {
 		const continuation = chat.faux.agentRequests.at(-1)!.messages;
 		expect(continuation[0]?.role).toBe("system");
 		expect(userText(continuation[1])).toContain("<summary>\nSUMMARY\n</summary>");
-		expect((await kinds(chat.root)).slice(-4)).toEqual([
+		expect((await kinds(chat.root)).slice(-5)).toEqual([
 			"pi.tool-result",
 			"pi.compaction",
 			"pi.system",
 			"pi.assistant",
+			"pi.run-result",
 		]);
 		await chat.harness.close(context);
 	});
@@ -568,7 +596,7 @@ describe("manual compaction", () => {
 		answerGate.resolve();
 		expect((await input.wait(context)).status).toBe("done");
 		expect((await submission.wait(context)).status).toBe("done");
-		expect((await kinds(chat.root)).slice(-3)).toEqual(["pi.user", "pi.assistant", "pi.compaction"]);
+		expect((await kinds(chat.root)).slice(-4)).toEqual(["pi.user", "pi.assistant", "pi.compaction", "pi.run-result"]);
 		await chat.harness.close(context);
 	});
 
@@ -780,9 +808,16 @@ describe("compaction outcomes", () => {
 			"pi.user",
 			"pi.system",
 			"pi.assistant",
+			"pi.run-result",
 			"pi.user",
 			"pi.assistant",
+			"pi.run-result",
 		]);
+		expect(
+			compaction.entries
+				.filter((record) => record.kind === "pi.run-result")
+				.every((record) => record.model === undefined),
+		).toBe(true);
 		expect(compaction.messages.filter((message) => message.role !== "system").map(userText)).toEqual([
 			text("u1", 100),
 			text("a1", 100),
@@ -1091,7 +1126,12 @@ describe("blocking threshold compaction", () => {
 		gate.resolve();
 		expect((await input.wait(context)).status).toBe("done");
 		expect((await result(chat, child!.id as TaskId<CompactionResult>)).status).toBe("completed");
-		expect((await kinds(chat.root)).slice(-3)).toEqual(["pi.compaction", "pi.system", "pi.assistant"]);
+		expect((await kinds(chat.root)).slice(-4)).toEqual([
+			"pi.compaction",
+			"pi.system",
+			"pi.assistant",
+			"pi.run-result",
+		]);
 		const request = chat.faux.agentRequests.at(-1)!.messages;
 		expect(firstUserText(request)).toContain("SUMMARY");
 		const systems = request.filter((message) => message.role === "system");
@@ -1140,7 +1180,7 @@ describe("blocking threshold compaction", () => {
 			detail: "Compaction failed: Summarization failed: bad request",
 		});
 		expect(chat.faux.agentRequests).toHaveLength(requests);
-		expect((await kinds(chat.root)).at(-1)).toBe("pi.user");
+		expect((await kinds(chat.root)).slice(-2)).toEqual(["pi.user", "pi.run-result"]);
 		const state = await live(chat);
 		expect(state.compactions).toBeUndefined();
 		expect(state.compactionFailure).toMatchObject({
@@ -1238,12 +1278,13 @@ describe("overflow compaction", () => {
 		const input = await chat.root.submit({ type: "input", content: text("u4", 100) }, context);
 		expect((await input.wait(context)).status).toBe("done");
 		expect(attempt).toBe(1);
-		expect((await kinds(chat.root)).slice(-5)).toEqual([
+		expect((await kinds(chat.root)).slice(-6)).toEqual([
 			"pi.user",
 			"pi.assistant",
 			"pi.compaction",
 			"pi.system",
 			"pi.assistant",
+			"pi.run-result",
 		]);
 		const [compaction] = (await allEntries(chat.root)).filter((record) => record.kind === "pi.compaction");
 		expect(compaction).toMatchObject({ data: { reason: "overflow" } });
@@ -1267,7 +1308,7 @@ describe("overflow compaction", () => {
 			detail: OVERFLOW,
 		});
 		expect((await kinds(chat.root)).filter((kind) => kind === "pi.compaction")).toHaveLength(1);
-		expect((await kinds(chat.root)).at(-1)).toBe("pi.assistant");
+		expect((await kinds(chat.root)).slice(-2)).toEqual(["pi.assistant", "pi.run-result"]);
 		await chat.harness.close(context);
 	});
 
@@ -1777,7 +1818,12 @@ describe("compaction recovery", () => {
 		chat.faux.summaries.push(summary());
 		chat.faux.agent.push(answer("a4"));
 		expect((await (await chat.harness.submission(input.id, context))!.wait(context)).status).toBe("done");
-		expect((await kinds(chat.root)).slice(-3)).toEqual(["pi.compaction", "pi.system", "pi.assistant"]);
+		expect((await kinds(chat.root)).slice(-4)).toEqual([
+			"pi.compaction",
+			"pi.system",
+			"pi.assistant",
+			"pi.run-result",
+		]);
 		await chat.harness.close(context);
 	});
 
@@ -1836,7 +1882,7 @@ describe("compaction and the inbox", () => {
 			await run.input.wait(context);
 			const settled = await submission.wait(context);
 			expect(settled.status).toBe(order === "summary first" ? "done" : "unanswered");
-			expect((await kinds(chat.root)).at(-1)).toBe("pi.reset");
+			expect((await kinds(chat.root)).slice(-2)).toEqual(["pi.reset", "pi.run-result"]);
 			expect((await chat.root.context(context)).head?.kind).toBe("pi.reset");
 			await chat.harness.close(context);
 		}
@@ -2241,8 +2287,8 @@ describe("blocking and manual compaction together", () => {
 		const request = chat.faux.agentRequests.at(-1)!.messages;
 		expect(firstUserText(request)).toContain("SUMMARY");
 		expect(request.map(userText)).toContain("u5");
-		const tail = (await allEntries(chat.root)).slice(-4).map((record) => record.kind);
-		expect(tail).toEqual(["pi.compaction", "pi.user", "pi.system", "pi.assistant"]);
+		const tail = (await allEntries(chat.root)).slice(-5).map((record) => record.kind);
+		expect(tail).toEqual(["pi.compaction", "pi.user", "pi.system", "pi.assistant", "pi.run-result"]);
 		await chat.harness.close(context);
 	});
 });
@@ -2305,9 +2351,19 @@ describe("compaction pinning, silent overflow, and late policy changes", () => {
 			};
 			chat.faux.agent.push(response);
 			const input = await chat.root.submit({ type: "input", content: "go" }, context);
-			expect((await input.wait(context)).status).toBe("done");
-			const [last] = (await allEntries(chat.root)).slice(-1);
-			const message = last!.model![0] as AssistantMessage;
+			const settled = await input.wait(context);
+			expect(settled.status).toBe("done");
+			const entries = await allEntries(chat.root);
+			const responseEntry = entries.find(
+				(record) => record.id === (settled.status === "done" ? settled.answer : undefined),
+			);
+			expect(responseEntry?.kind).toBe("pi.assistant");
+			expect(entries.at(-1)).toMatchObject({
+				kind: "pi.run-result",
+				data: { settlement: { status: "done", answer: responseEntry!.id } },
+			});
+			expect(entries.at(-1)!.model).toBeUndefined();
+			const message = responseEntry!.model![0] as AssistantMessage;
 			expect(message.usage.input).toBeGreaterThanOrEqual(300);
 			expect(chat.faux.summaryRequests).toHaveLength(0);
 			await chat.harness.close(context);
