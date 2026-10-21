@@ -450,7 +450,7 @@ export function WorkspaceBranch({
 										{expanded ? cl.collapseProject : cl.expandProject}
 									</span>
 									<span className="project-icon" aria-hidden="true">
-										<SidebarIcon name="folder" />
+										<SidebarIcon name={expanded ? "folderOpen" : "folder"} />
 									</span>
 									<span className="project-chevron" data-expanded={expanded} aria-hidden="true">
 										<SidebarIcon name="disclosure" />

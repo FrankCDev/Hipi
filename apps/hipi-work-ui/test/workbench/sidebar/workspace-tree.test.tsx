@@ -137,6 +137,7 @@ test("current conversation and its containing project retain distinct SSR surfac
 	);
 	assert.doesNotMatch(html, /aria-current=/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
+	assert.match(html, /data-sidebar-icon="folderOpen"/);
 	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>/)?.[0];
 	assert.ok(open);
 	assert.match(open, /aria-labelledby="[^"]+"/);
@@ -172,6 +173,8 @@ test("project overview alone marks the project as current", () => {
 test("collapsed projects retain their row preview entry and expansion semantics", () => {
 	const html = renderTree(false);
 	assert.match(html, /class="project-toggle" aria-expanded="false"/);
+	assert.match(html, /data-sidebar-icon="folder"/);
+	assert.doesNotMatch(html, /data-sidebar-icon="folderOpen"/);
 	assert.match(html, />展开项目<\/span>/);
 	assert.match(html, /class="project-open"/);
 	const region = html.match(/<section\b[^>]*class="project-conversations"[^>]*>/)?.[0];

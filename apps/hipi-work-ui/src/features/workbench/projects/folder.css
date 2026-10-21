@@ -85,3 +85,25 @@
 	font-weight: 500;
 	overflow-wrap: anywhere;
 }
+.project-folder-summary[data-compact="true"] {
+	--project-strip-gap: 8px;
+	gap: var(--project-strip-gap);
+	padding: 6px 12px;
+	margin-bottom: 0;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+}
+.project-folder-summary[data-compact="true"][data-healthy="true"] .project-folder-copy {
+	display: block;
+	overflow: hidden;
+}
+.project-folder-summary[data-compact="true"][data-healthy="true"] strong {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.project-folder-summary[data-compact="true"] > svg {
+	flex-shrink: 0;
+}

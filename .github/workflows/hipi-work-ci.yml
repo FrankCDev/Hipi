@@ -27,7 +27,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-check:
+    # Development-first phase: keep source checks without starting native acceptance.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dot/develop' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, repository baseline
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, repository baseline
+        with:
+          node-version: '24.19.0'
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Hydrate only the hash-pinned public model catalog
+        run: node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs
+      - name: Hydrate the pinned runtime fixture for source integrity tests without executing it
+        run: node apps/hipi-work-desktop/scripts/hydrate-maintenance-runtime.mjs
+      - name: Verify explicit deterministic source test lists and boundaries
+        run: node apps/hipi-work-desktop/scripts/verify-source.mjs
   unsigned-package:
+    # Resume push-triggered native acceptance after the feature/UI development round.
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/dot/develop' }}
     # These are build hosts, not product minimum OS or tested support claims.
     strategy:
       fail-fast: false

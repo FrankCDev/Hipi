@@ -14,7 +14,7 @@ import { defaultRoleEntry, sidebarWorkspaceIds } from "./manifest.mjs";
 const seed = {
 	workspaceIds: [...sidebarWorkspaceIds],
 	defaultWorkspaceId: sidebarWorkspaceIds[0],
-	handshake: { storeId: "owned-store", protocolVersion: 9 },
+	handshake: { storeId: "owned-store", protocolVersion: 10 },
 	pins: [
 		{ workspaceId: sidebarWorkspaceIds[1], conversationId: "same-a" },
 		{ workspaceId: sidebarWorkspaceIds[1], conversationId: "same-b" },
@@ -197,7 +197,13 @@ test("fixture writes only the verified store-scoped completed default role, neve
 			workspaceId: "sidebar-chats",
 		}),
 	});
-	assert.deepEqual(defaultRoleEntry({ ...seed, handshake: { ...seed.handshake, protocolVersion: 10 } }), entry);
+	assert.deepEqual(
+		defaultRoleEntry({
+			...seed,
+			handshake: { ...seed.handshake, protocolVersion: seed.handshake.protocolVersion + 1 },
+		}),
+		entry,
+	);
 	for (const changed of [
 		{ ...seed, defaultWorkspaceId: "other" },
 		{ ...seed, workspaceIds: ["other"] },
@@ -254,4 +260,28 @@ test("independent sidebar runner precedes font/Settings GUI flow and always reta
 	);
 	assert.match(journey, /Input\.dispatchMouseEvent/);
 	assert.match(journey, /Input\.dispatchKeyEvent/);
+});
+
+test("development pushes retain source checks while manual and PR native acceptance remain available", async () => {
+	const workflow = await readFile(
+		new URL("../../../../../.github/workflows/hipi-work-ci.yml", import.meta.url),
+		"utf8",
+	);
+	const source = workflow.slice(workflow.indexOf("  source-check:\n"), workflow.indexOf("  unsigned-package:\n"));
+	const native = workflow.slice(workflow.indexOf("  unsigned-package:\n"));
+	assert.match(source, /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/dot\/develop' \}\}/);
+	assert.match(native, /if: \$\{\{ github\.event_name != 'push' \|\| github\.ref != 'refs\/heads\/dot\/develop' \}\}/);
+	assert.match(source, /runs-on: ubuntu-24\.04/);
+	assert.deepEqual(
+		[...source.matchAll(/run: (.+)/g)].map((match) => match[1]),
+		[
+			"npm ci --ignore-scripts",
+			"node apps/hipi-work-desktop/scripts/hydrate-release-models.mjs",
+			"node apps/hipi-work-desktop/scripts/hydrate-maintenance-runtime.mjs",
+			"node apps/hipi-work-desktop/scripts/verify-source.mjs",
+		],
+	);
+	assert.doesNotMatch(source, /strategy:|matrix:|upload-artifact|package-release|smoke-packaged|sudo/);
+	assert.match(workflow, / {2}workflow_dispatch:\n/);
+	assert.match(workflow, / {2}pull_request:\n/);
 });

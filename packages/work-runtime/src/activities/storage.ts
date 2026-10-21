@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { ConversationId, EntryId, EntryRecord, Storage, TaskId } from "@earendil-works/pi-durable";
-import { AppError, fitsPayloadBudget, parseResult } from "../contracts.ts";
+import { AppError, fitsPayloadBudget, parseResult, parseToolActivitySelector } from "../contracts.ts";
 import { validateRelativePath } from "../files/contracts.ts";
 import {
 	ACTIVITY_LIMITS,
 	type ActivityReadScope,
 	type ToolActivity,
 	type ToolActivityPage,
+	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./contracts.ts";
 import { object, projectEntry, projectTask, resultEvidence, type StoredTask } from "./projection.ts";
+import { taskSelection } from "./selection.ts";
 
 type ActivityStorage = Pick<
 	Storage,
@@ -52,7 +54,7 @@ function decode(raw: string, scope: ActivityReadScope): Record<string, unknown> 
 			"generation",
 			"kind",
 			...(value.kind === "activities"
-				? ["stage", "upperTask", "upperEntry", "after"]
+				? ["stage", "upperTask", "upperEntry", "after", "selector"]
 				: ["activityId", "entryId", "offset"]),
 		];
 		if (Object.keys(value).some((key) => !keys.includes(key))) throw new Error();
@@ -159,12 +161,51 @@ export async function readToolActivities(
 	storage: ActivityStorage,
 	scope: ActivityReadScope,
 	cursor?: string,
+	selector?: ToolActivitySelector,
 ): Promise<ToolActivityPage> {
+	selector = selector === undefined ? undefined : parseToolActivitySelector(selector);
 	if (!(await storage.conversation(scope.durableId as ConversationId, context))) throw new AppError("NOT_FOUND");
 	const read = reader(storage, scope);
+	const selection = taskSelection(read, scope);
+	if (selector?.kind === "tasks") {
+		if (cursor !== undefined) throw new AppError("INVALID_REQUEST");
+		const items: ToolActivity[] = [];
+		const unavailableTaskIds: string[] = [];
+		for (const id of selector.taskIds) {
+			const task = await selection.task(Number(id));
+			if (!task || !(await selection.visible(task))) unavailableTaskIds.push(id);
+			else items.push((await taskActivity(read, scope, task)).activity);
+		}
+		const result: ToolActivityPage = {
+			items,
+			unavailableTaskIds,
+			nextCursor: null,
+			coverage: "tasks",
+			membershipFence: encode({ ...scopeToken(scope), selector }),
+		};
+		if (!fitsPayloadBudget(result)) throw new AppError("CAPACITY_EXCEEDED");
+		return result;
+	}
+	let messageAnchor: { assistantEntryId: string; modelIndex: number; contentIndex?: number } | undefined;
+	if (selector?.kind === "message") {
+		const [entryId, modelIndex] = selector.messageId.split("_").map(Number);
+		const entry = await read.entry(entryId);
+		const message = entry?.model?.[modelIndex];
+		if (
+			message?.role !== "assistant" ||
+			(selector.contentIndex !== undefined && message.content[selector.contentIndex]?.type !== "toolCall")
+		)
+			throw new AppError("NOT_FOUND");
+		messageAnchor = {
+			assistantEntryId: String(entryId),
+			modelIndex,
+			...(selector.contentIndex === undefined ? {} : { contentIndex: selector.contentIndex }),
+		};
+	}
 	let position: Position;
 	if (cursor) {
 		const value = decode(cursor, scope);
+		if (JSON.stringify(value.selector) !== JSON.stringify(selector)) throw new AppError("INVALID_REQUEST");
 		if (
 			value.kind !== "activities" ||
 			(value.stage !== "tasks" && value.stage !== "entries") ||
@@ -174,6 +215,7 @@ export async function readToolActivities(
 			value.after > (value.stage === "tasks" ? value.upperTask : value.upperEntry)
 		)
 			throw new AppError("INVALID_REQUEST");
+		if (selector && value.stage !== "tasks") throw new AppError("INVALID_REQUEST");
 		position = { stage: value.stage, upperTask: value.upperTask, upperEntry: value.upperEntry, after: value.after };
 	} else {
 		const tasks = read.budget(
@@ -184,18 +226,20 @@ export async function readToolActivities(
 				context,
 			),
 		);
-		const entries = read.budget(
-			await storage.scanEntries(
-				{ conversationId: scope.durableId as ConversationId, order: "descending" },
-				1,
-				undefined,
-				context,
-			),
-		);
+		const entries = selector
+			? undefined
+			: read.budget(
+					await storage.scanEntries(
+						{ conversationId: scope.durableId as ConversationId, order: "descending" },
+						1,
+						undefined,
+						context,
+					),
+				);
 		position = {
 			stage: "tasks",
 			upperTask: tasks.items[0]?.id ?? 0,
-			upperEntry: entries.items[0]?.id ?? 0,
+			upperEntry: entries?.items[0]?.id ?? 0,
 			after: 0,
 		};
 	}
@@ -211,10 +255,30 @@ export async function readToolActivities(
 				context,
 			),
 		);
-		for (const task of page.items) items.push((await taskActivity(read, scope, task)).activity);
+		for (const task of page.items) {
+			if (messageAnchor) {
+				const input = object(task.input);
+				if (
+					input?.kind !== "model" ||
+					String(input.assistant) !== messageAnchor.assistantEntryId ||
+					!(await selection.visible(task))
+				)
+					continue;
+			}
+			const activity = (await taskActivity(read, scope, task)).activity;
+			if (
+				messageAnchor &&
+				(activity.anchor?.assistantEntryId !== messageAnchor.assistantEntryId ||
+					activity.anchor.modelIndex !== messageAnchor.modelIndex ||
+					(messageAnchor.contentIndex !== undefined &&
+						activity.anchor.contentIndex !== messageAnchor.contentIndex))
+			)
+				continue;
+			items.push(activity);
+		}
 		next = page.next
 			? { ...position, after: page.items.at(-1)?.id ?? position.after }
-			: position.upperEntry
+			: !selector && position.upperEntry
 				? { ...position, stage: "entries", after: 0 }
 				: undefined;
 	} else {
@@ -245,8 +309,14 @@ export async function readToolActivities(
 	const result = {
 		items,
 		coverage,
-		nextCursor: next ? encode({ v: 1, ...scopeToken(scope), kind: "activities", ...next }) : null,
-		membershipFence: encode({ task: position.upperTask, entry: position.upperEntry }),
+		nextCursor: next
+			? encode({ v: 1, ...scopeToken(scope), kind: "activities", ...next, ...(selector ? { selector } : {}) })
+			: null,
+		membershipFence: encode({
+			task: position.upperTask,
+			entry: position.upperEntry,
+			...(selector ? { selector } : {}),
+		}),
 	};
 	if (!fitsPayloadBudget(result)) throw new AppError("CAPACITY_EXCEEDED");
 	return result;

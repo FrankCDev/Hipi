@@ -1,7 +1,17 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { EntryId, EntryRecord, Conversation as PiConversation } from "@earendil-works/pi-durable";
-import { AppError, type HistoryPage, LIMITS, type Message, type MessageTextChunk, type Scope } from "./contracts.ts";
+import {
+	ACTIVITY_LIMITS,
+	AppError,
+	type HistoryPage,
+	jsonBytes,
+	LIMITS,
+	type Message,
+	type MessageTextChunk,
+	type MessageToolCalls,
+	type Scope,
+} from "./contracts.ts";
 
 /** Offsets and lengths use UTF-16 code units; boundaries never split a surrogate pair. */
 export function textOf(message: PiMessage): string {
@@ -22,12 +32,34 @@ export function previewMessage(entry: EntryRecord, index: number): Message | und
 	if (!message || (message.role !== "user" && message.role !== "assistant")) return undefined;
 	const text = textOf(message);
 	const end = textEnd(text, 0, LIMITS.messagePreview);
+	let toolCalls: MessageToolCalls | undefined;
+	if (message.role === "assistant") {
+		const total = message.content.filter((part) => part.type === "toolCall").length;
+		if (total) {
+			toolCalls = { items: [], total };
+			for (const [contentIndex, part] of message.content.entries()) {
+				if (
+					part.type !== "toolCall" ||
+					!part.id.length ||
+					!part.name.length ||
+					part.id.length > 256 ||
+					part.name.length > 256
+				)
+					continue;
+				if (toolCalls.items.length === ACTIVITY_LIMITS.summaryItems) break;
+				const item = { contentIndex, callId: part.id, name: part.name };
+				if (jsonBytes({ items: [...toolCalls.items, item], total }) <= ACTIVITY_LIMITS.summaryBytes)
+					toolCalls.items.push(item);
+			}
+		}
+	}
 	return {
 		id: `${entry.id}_${index}`,
 		role: message.role,
 		text: text.slice(0, end),
 		textLength: text.length,
 		truncated: end < text.length,
+		...(toolCalls ? { toolCalls } : {}),
 		...(message.role === "assistant" && message.stopReason === "aborted" ? { interrupted: true as const } : {}),
 	};
 }

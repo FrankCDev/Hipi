@@ -1,0 +1,108 @@
+/* User-supplied desktop Codex home: non-shared composer branch, with two flexible regions. */
+.work-conversation-frame > .welcome {
+	--home-inline-padding: 20px;
+	--home-composer-top-padding: 6px;
+	--home-composer-bottom-padding: 16px;
+	--home-hero-min-height: 112px;
+	--home-hero-composer-gap: 96px;
+	--home-heading-size: 32px;
+	--home-heading-line-height: 38px;
+	--home-content-width: calc(var(--reading-width) + 24px);
+	width: 100%;
+	max-height: 100%;
+	padding: 24px var(--home-inline-padding) 0;
+	align-items: center;
+	justify-content: flex-start;
+}
+.welcome .welcome-hero {
+	display: flex;
+	flex: 1 0 0;
+	min-height: fit-content;
+	align-items: flex-end;
+	width: 100%;
+	max-width: var(--home-content-width);
+	padding-bottom: var(--home-hero-composer-gap);
+}
+.welcome .welcome-hero h1 {
+	min-height: var(--home-hero-min-height);
+	padding: 0;
+	font-size: var(--home-heading-size);
+	line-height: var(--home-heading-line-height);
+}
+.welcome-heading-placeholder {
+	min-height: var(--home-hero-min-height);
+	width: 100%;
+}
+.welcome-hero h1 > span {
+	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+.welcome-hero h1 button {
+	display: inline-block;
+	vertical-align: baseline;
+	max-width: 100%;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	text-align: inherit;
+	white-space: normal;
+	overflow-wrap: break-word;
+	background: transparent;
+	border: 0;
+	text-decoration: underline dotted var(--muted);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 4px;
+}
+.welcome-hero h1 button:hover {
+	color: var(--muted);
+}
+.welcome .welcome-action {
+	display: flex;
+	flex: 1 0 0;
+	min-height: fit-content;
+	flex-direction: column;
+	justify-content: flex-end;
+	width: 100%;
+	max-width: var(--home-content-width);
+}
+.welcome-context {
+	width: 100%;
+	text-align: start;
+}
+.welcome-composer {
+	padding-block: var(--home-composer-top-padding) var(--home-composer-bottom-padding);
+}
+.welcome-context .project-folder-summary {
+	gap: 8px;
+	padding: 6px 12px;
+	margin-bottom: 8px;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: var(--muted);
+}
+.welcome-context .project-folder-summary:hover {
+	background: var(--surface);
+}
+.welcome-context .project-folder-summary strong {
+	font-size: var(--font-ui-size);
+	font-weight: 400;
+}
+.home-project-menu {
+	width: min(320px, calc(100vw - 24px));
+	max-height: min(420px, var(--radix-dropdown-menu-content-available-height));
+}
+.home-project-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.conversation-entry-pending {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 1;
+	color: var(--muted);
+	font-size: var(--font-ui-size);
+}

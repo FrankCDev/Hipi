@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import assert from "node:assert/strict";
 import {
 	type AppClient,
@@ -7,96 +8,29 @@ import {
 	type Snapshot,
 	type ToolActivityPage,
 } from "@hipi/work-runtime/contracts";
-import type * as React from "react";
-import { isValidElement } from "react";
+import { act, type ReactNode, type RefObject, StrictMode, useLayoutEffect } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { ThemeProvider } from "../../../src/app/theme/provider.tsx";
 import type { ActivityState } from "../../../src/features/tool-activities/activity-session.ts";
-import { ActivityTranscriptProvider } from "../../../src/features/tool-activities/activity-transcript.tsx";
+import {
+	ActivityTranscriptProvider,
+	useActivityTranscript,
+} from "../../../src/features/tool-activities/activity-transcript.tsx";
 import { ConversationHistory } from "../../../src/features/workbench/conversation/history.tsx";
 import { ConversationMessages } from "../../../src/features/workbench/conversation/messages.tsx";
 import { ConversationReadingPositions } from "../../../src/features/workbench/conversation/reading-position.ts";
 
-type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void; setup?: React.EffectCallback };
-type Hooks = { cells: Cell[]; cursor: number; commits: (() => void)[]; changed: boolean };
-const adapter = vi.hoisted(() => ({ current: undefined as Hooks | undefined }));
-
-// Bounded hook adapter: run production layout/effect and JSX callbacks with
-// deterministic ref, selection, virtualizer and frame ports. This is not a DOM
-// mount, React reconciliation test, browser selection test or native scroll test.
-vi.mock("react", async () => {
-	const actual = await vi.importActual<typeof React>("react");
-	function cell() {
-		const hooks = adapter.current;
-		if (!hooks) throw new Error("No active hook adapter");
-		const index = hooks.cursor++;
-		return { hooks, index, previous: hooks.cells[index] };
-	}
-	const changed = (before: React.DependencyList | undefined, after: React.DependencyList | undefined) =>
-		!before ||
-		!after ||
-		before.length !== after.length ||
-		after.some((value, index) => !Object.is(value, before[index]));
-	function memo<T>(create: () => T, deps: React.DependencyList) {
-		const { hooks, index, previous } = cell();
-		if (!previous || changed(previous.deps, deps)) hooks.cells[index] = { value: create(), deps };
-		return hooks.cells[index]?.value;
-	}
-	function effect(create: React.EffectCallback, deps?: React.DependencyList) {
-		const { hooks, index, previous } = cell();
-		if (!previous || changed(previous.deps, deps))
-			hooks.commits.push(() => {
-				previous?.cleanup?.();
-				const cleanup = create();
-				hooks.cells[index] = {
-					value: undefined,
-					deps,
-					setup: create,
-					cleanup: typeof cleanup === "function" ? cleanup : undefined,
-				};
-			});
-	}
-	return {
-		...actual,
-		useState: <T,>(initial?: T | (() => T)) => {
-			const { hooks, index, previous } = cell();
-			const current = previous ?? { value: typeof initial === "function" ? (initial as () => T)() : initial };
-			hooks.cells[index] = current;
-			return [
-				current.value,
-				(next: T | ((value: T) => T)) => {
-					const value = typeof next === "function" ? (next as (value: T) => T)(current.value as T) : next;
-					if (!Object.is(value, current.value)) hooks.changed = true;
-					current.value = value;
-				},
-			];
-		},
-		useRef: <T,>(initial: T) => memo(() => ({ current: initial }), []),
-		useMemo: memo,
-		useCallback: <T,>(callback: T, deps: React.DependencyList) => memo(() => callback, deps),
-		useId: () => {
-			const { hooks, index } = cell();
-			hooks.cells[index] = { value: `selection-${index}` };
-			return `selection-${index}`;
-		},
-		useLayoutEffect: effect,
-		useEffect: effect,
-		useSyncExternalStore: (subscribe: (listener: () => void) => () => void, snapshot: () => unknown) => {
-			const hooks = adapter.current;
-			effect(
-				() =>
-					subscribe(() => {
-						if (hooks) hooks.changed = true;
-					}),
-				[subscribe],
-			);
-			return snapshot();
-		},
-	};
-});
+// React, context propagation, effects, DOM refs and events are real. Only layout,
+// virtualizer geometry and animation frame scheduling are deterministic ports.
 vi.mock("@tanstack/react-virtual", async () => ({
 	...(await vi.importActual("@tanstack/react-virtual")),
 	useVirtualizer: (options: VirtualOptions) => {
 		virtualizer.options = options;
+		useLayoutEffect(() => {
+			const section = options.getScrollElement();
+			if (section) root = section;
+		});
 		return virtualizer;
 	},
 }));
@@ -104,43 +38,9 @@ vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
 vi.mock("../../../src/app/client-provider.tsx", () => ({ useAppClient: () => client }));
-
-class EventPort extends EventTarget {
-	readonly listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
-	override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
-		if (!listener) return;
-		const listeners = this.listeners.get(type) ?? new Set();
-		listeners.add(listener);
-		this.listeners.set(type, listeners);
-		super.addEventListener(type, listener);
-	}
-	override removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
-		if (!listener) return;
-		this.listeners.get(type)?.delete(listener);
-		super.removeEventListener(type, listener);
-	}
-	get listenerCount() {
-		return [...this.listeners.values()].reduce((count, listeners) => count + listeners.size, 0);
-	}
-}
-class ElementPort extends EventPort {
-	scrollTop = 0;
-	scrollHeight = 1000;
-	clientHeight = 200;
-	parentElement = null;
-	dataset = {};
-	closest() {
-		return null;
-	}
-	contains(node: unknown) {
-		return node === this;
-	}
-	querySelector() {
-		return searchMark;
-	}
-}
 type VirtualOptions = {
 	count: number;
+	getScrollElement: () => HTMLElement | null;
 	getItemKey: (index: number) => string;
 	followOnAppend: boolean;
 	scrollEndThreshold: number;
@@ -149,6 +49,7 @@ type VirtualOptions = {
 function createVirtualizer() {
 	const options: VirtualOptions = {
 		count: 0,
+		getScrollElement: () => root,
 		getItemKey: (index: number) => `${index}`,
 		followOnAppend: false,
 		scrollEndThreshold: -1,
@@ -217,92 +118,84 @@ const client: AppClient = {
 		throw new Error("Selection tests must not observe execution");
 	}),
 };
-let root = new ElementPort();
-let documentEvents = new EventPort();
-let windowEvents = new EventPort();
+
+let root: HTMLElement;
 let virtualizer = createVirtualizer();
 let selected = false;
-const searchMark = { scrollIntoView: vi.fn() };
+let outsideAnchor: HTMLSpanElement;
+let outsideFocus: HTMLSpanElement;
 let nextFrame = 0;
 const frames = new Map<number, FrameRequestCallback>();
 const observers = new Set<{ disconnect: () => void }>();
-const hosts: Hooks[] = [];
-const outsideAnchor = new ElementPort();
-const outsideFocus = new ElementPort();
+const hosts: { dispose: () => void }[] = [];
+const listeners = new Map<EventTarget, Map<string, Set<EventListenerOrEventListenerObject>>>();
+const searchMark = { scrollIntoView: vi.fn() };
+let originalScrollIntoView: PropertyDescriptor | undefined;
 const selection = {
-	get isCollapsed() {
-		return !selected;
+	get anchorNode() {
+		return document.getSelection()?.anchorNode ?? null;
 	},
-	rangeCount: 1,
-	anchorNode: outsideAnchor,
-	focusNode: outsideFocus,
-	getRangeAt: () => ({ intersectsNode: (node: unknown) => selected && node === root }),
+	get focusNode() {
+		return document.getSelection()?.focusNode ?? null;
+	},
 };
-
-function elements(node: React.ReactNode, type: string): React.ReactElement<Record<string, unknown>>[] {
-	if (Array.isArray(node)) return node.flatMap((child) => elements(child, type));
-	if (!isValidElement<{ children?: React.ReactNode }>(node)) return [];
-	return [
-		...(node.type === type ? [node as React.ReactElement<Record<string, unknown>>] : []),
-		...elements(node.props.children, type),
-	];
-}
-function host(render: () => React.ReactNode, attach: (node: React.ReactNode) => void = () => {}) {
-	const hooks: Hooks = { cells: [], cursor: 0, commits: [], changed: false };
-	hosts.push(hooks);
-	return {
+function host(render: () => ReactNode, strict = false, container?: HTMLElement) {
+	const mount = container ?? document.createElement("div");
+	if (!mount.isConnected) document.body.insertBefore(mount, outsideFocus);
+	const renderer = createRoot(mount);
+	let disposed = false;
+	function View() {
+		return <ThemeProvider>{render()}</ThemeProvider>;
+	}
+	const owner = {
+		mount,
 		drive() {
-			for (let attempt = 0; attempt < 8; attempt++) {
-				adapter.current = hooks;
-				hooks.cursor = 0;
-				hooks.changed = false;
-				const node = render();
-				attach(node);
-				for (const commit of hooks.commits.splice(0)) commit();
-				if (!hooks.changed) return node;
-			}
-			throw new Error("Production component did not settle");
+			act(() => {
+				renderer.render(
+					strict ? (
+						<StrictMode>
+							<View />
+						</StrictMode>
+					) : (
+						<View />
+					),
+				);
+			});
+			return mount;
 		},
 		dispose() {
-			for (const cell of hooks.cells) {
-				cell.cleanup?.();
-				cell.cleanup = undefined;
-			}
-		},
-		replayEffects() {
-			for (const cell of hooks.cells) {
-				cell.cleanup?.();
-				cell.cleanup = undefined;
-			}
-			for (const cell of hooks.cells) {
-				const cleanup = cell.setup?.();
-				cell.cleanup = typeof cleanup === "function" ? cleanup : undefined;
-			}
+			if (disposed) return;
+			disposed = true;
+			act(() => {
+				renderer.unmount();
+			});
+			mount.remove();
 		},
 	};
+	hosts.push(owner);
+	return owner;
 }
-function conversation(options: { key?: string; snapshot?: Snapshot; searchAnchor?: SearchHistoryWindow } = {}) {
+function conversation(
+	options: { key?: string; snapshot?: Snapshot; searchAnchor?: SearchHistoryWindow; strict?: boolean } = {},
+) {
 	const positions = new ConversationReadingPositions();
 	if (options.key) positions.save(scope, { key: options.key, pixel: -25.5, following: false }, []);
 	let snapshot = options.snapshot ?? latest;
 	const onNearTop = vi.fn();
 	const onJumpLatest = vi.fn();
 	const owner = host(
-		() =>
-			ConversationMessages({
-				snapshot,
-				error: false,
-				scope,
-				readingPositions: positions,
-				onNearTop,
-				searchAnchor: options.searchAnchor,
-				onJumpLatest: options.searchAnchor ? onJumpLatest : undefined,
-			}),
-		(node) => {
-			const section = elements(node, "section")[0];
-			assert.ok(section?.props.ref && typeof section.props.ref === "object");
-			Reflect.set(section.props.ref, "current", root);
-		},
+		() => (
+			<ConversationMessages
+				snapshot={snapshot}
+				error={false}
+				scope={scope}
+				readingPositions={positions}
+				onNearTop={onNearTop}
+				searchAnchor={options.searchAnchor}
+				onJumpLatest={options.searchAnchor ? onJumpLatest : undefined}
+			/>
+		),
+		options.strict,
 	);
 	return {
 		...owner,
@@ -314,82 +207,138 @@ function conversation(options: { key?: string; snapshot?: Snapshot; searchAnchor
 			return owner.drive();
 		},
 		scroll() {
-			const section = elements(owner.drive(), "section")[0];
-			assert.ok(section && typeof section.props.onScroll === "function");
-			Reflect.apply(section.props.onScroll, undefined, [{ currentTarget: root }]);
+			act(() => {
+				root.dispatchEvent(new Event("scroll", { bubbles: true }));
+			});
 		},
 	};
 }
 function frame() {
-	const batch = [...frames.keys()];
-	for (const id of batch) {
-		const callback = frames.get(id);
-		if (!callback) continue;
-		frames.delete(id);
-		callback(performance.now());
-	}
+	act(() => {
+		for (const id of [...frames.keys()]) {
+			const callback = frames.get(id);
+			if (!callback) continue;
+			frames.delete(id);
+			callback(performance.now());
+		}
+	});
 }
 function select(value: boolean) {
 	selected = value;
-	documentEvents.dispatchEvent(new Event("selectionchange"));
+	act(() => {
+		const range = document.createRange();
+		const selection = document.getSelection();
+		assert.ok(selection);
+		selection.removeAllRanges();
+		if (value) {
+			range.setStart(outsideAnchor.firstChild ?? outsideAnchor, 0);
+			range.setEnd(outsideFocus.firstChild ?? outsideFocus, 1);
+			selection.addRange(range);
+		}
+		document.dispatchEvent(new Event("selectionchange"));
+	});
+}
+async function advance(ms: number) {
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(ms);
+	});
 }
 function activity(providedRoot: boolean, running = false) {
-	const rootRef: React.RefObject<HTMLElement | null> = { current: null };
-	// Ref assignment is the adapter boundary, not a cast to a complete DOM.
-	Reflect.set(rootRef, "current", root);
-	const outer = host(() =>
-		ActivityTranscriptProvider({
-			scope,
-			connected: true,
-			running,
-			children: null,
-			rootRef: providedRoot ? rootRef : undefined,
-		}),
+	root = document.createElement("div");
+	root.className = "activity-context";
+	document.body.insertBefore(root, outsideFocus);
+	const rootRef: RefObject<HTMLElement | null> = { current: root };
+	let state: ActivityState | undefined;
+	function Consumer() {
+		const context = useActivityTranscript();
+		assert.ok(context);
+		state = context.state;
+		return <span ref={context.summary}>Activity</span>;
+	}
+	if (selected) select(true);
+	const owner = host(
+		() => (
+			<ActivityTranscriptProvider
+				scope={scope}
+				connected
+				running={running}
+				rootRef={providedRoot ? rootRef : undefined}
+			>
+				<Consumer />
+			</ActivityTranscriptProvider>
+		),
+		false,
+		root,
 	);
-	const child = outer.drive();
-	assert.ok(isValidElement(child) && typeof child.type === "function");
-	const component = child.type;
-	const inner = host(
-		() => Reflect.apply(component, undefined, [child.props]),
-		(node) => {
-			assert.ok(isValidElement<{ value: { summary: React.RefObject<HTMLSpanElement | null> } }>(node));
-			Reflect.set(node.props.value.summary, "current", { closest: () => root });
-		},
-	);
-	inner.drive();
+	owner.drive();
 	return {
-		...inner,
+		...owner,
 		state() {
-			const node = inner.drive();
-			assert.ok(isValidElement<{ value: { state: ActivityState } }>(node));
-			return node.props.value.state;
+			assert.ok(state);
+			return state;
 		},
 	};
 }
-
 beforeEach(() => {
 	vi.useFakeTimers();
 	vi.clearAllMocks();
-	root = new ElementPort();
-	documentEvents = new EventPort();
-	windowEvents = new EventPort();
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	// React's shared document delegation is renderer-owned and intentionally
+	// survives individual roots. Initialize it before measuring product owners.
+	const warm = createRoot(document.createElement("div"));
+	act(() => warm.unmount());
+	listeners.clear();
+	const add = EventTarget.prototype.addEventListener;
+	const remove = EventTarget.prototype.removeEventListener;
+	// React keeps its nondelegated scroll listener on the detached section;
+	// track product-owned listeners, not renderer delegation on discarded DOM.
+	const tracked = (target: EventTarget, type: string) =>
+		(target instanceof HTMLElement && target.matches(".message-scroll") && type !== "scroll") ||
+		((target === document || target === window) &&
+			["selectionchange", "visibilitychange", "pointermove", "pointerup", "pointercancel"].includes(type));
+	vi.spyOn(EventTarget.prototype, "addEventListener").mockImplementation(function (
+		this: EventTarget,
+		type,
+		listener,
+		options,
+	) {
+		if (listener && tracked(this, type)) {
+			const types = listeners.get(this) ?? new Map<string, Set<EventListenerOrEventListenerObject>>();
+			const callbacks = types.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+			callbacks.add(listener);
+			types.set(type, callbacks);
+			listeners.set(this, types);
+		}
+		add.call(this, type, listener, options);
+	});
+	vi.spyOn(EventTarget.prototype, "removeEventListener").mockImplementation(function (
+		this: EventTarget,
+		type,
+		listener,
+		options,
+	) {
+		if (listener) listeners.get(this)?.get(type)?.delete(listener);
+		remove.call(this, type, listener, options);
+	});
+	outsideAnchor = document.createElement("span");
+	outsideAnchor.textContent = "Before";
+	outsideFocus = document.createElement("span");
+	outsideFocus.textContent = "After";
+	document.body.append(outsideAnchor, outsideFocus);
+	root = document.createElement("div");
 	virtualizer = createVirtualizer();
 	selected = false;
 	nextFrame = 0;
 	frames.clear();
 	hosts.length = 0;
-	vi.stubGlobal("Element", ElementPort);
-	vi.stubGlobal("document", {
-		visibilityState: "visible",
-		documentElement: { dataset: { reducedMotion: "on" } },
-		activeElement: null,
-		getSelection: () => selection,
-		addEventListener: documentEvents.addEventListener.bind(documentEvents),
-		removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
-	});
-	vi.stubGlobal("window", {
-		addEventListener: windowEvents.addEventListener.bind(windowEvents),
-		removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+	vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
+	vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(200);
+	originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+	Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+		configurable: true,
+		value: searchMark.scrollIntoView,
 	});
 	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
 		frames.set(++nextFrame, callback);
@@ -403,32 +352,45 @@ beforeEach(() => {
 				observers.add(this);
 			}
 			observe() {}
+			unobserve() {}
 			disconnect() {
 				observers.delete(this);
 			}
 		},
 	);
+	vi.stubGlobal(
+		"IntersectionObserver",
+		class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		},
+	);
 });
 afterEach(async () => {
 	try {
-		for (const hooks of hosts.reverse())
-			for (const cell of hooks.cells) {
-				cell.cleanup?.();
-				cell.cleanup = undefined;
-			}
-		await vi.advanceTimersByTimeAsync(0);
+		for (const owner of hosts.toReversed()) owner.dispose();
+		await advance(0);
 		assert.equal(frames.size, 0, "All production RAF owners clean up");
 		assert.equal(observers.size, 0, "All production resize observers disconnect");
-		assert.equal(documentEvents.listenerCount + windowEvents.listenerCount + root.listenerCount, 0);
+		assert.equal(
+			[...listeners.values()]
+				.flatMap((types) => [...types.values()])
+				.reduce((total, callbacks) => total + callbacks.size, 0),
+			0,
+			"Selection, visibility, pointer and scroll-region listeners leave with their production owner",
+		);
 		assert.equal(vi.getTimerCount(), 0, "No projection, polling or request timers survive cleanup");
 	} finally {
-		adapter.current = undefined;
+		if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+		else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+		document.getSelection()?.removeAllRanges();
+		document.body.replaceChildren();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
 	}
 });
-
 test.each([0, 1])("selection before restore settle frame %s cancels every later offset correction", (settled) => {
 	const owner = conversation({ key: "message:b" });
 	owner.drive();
@@ -487,7 +449,9 @@ test("selection neutralizes recent downward intent even when native scrolling re
 	owner.drive();
 	const wheel = new Event("wheel");
 	Object.assign(wheel, { deltaY: 20, deltaX: 0 });
-	root.dispatchEvent(wheel);
+	act(() => {
+		root.dispatchEvent(wheel);
+	});
 	owner.scroll();
 	assert.equal(virtualizer.options.followOnAppend, true, "Control: downward input at the end resumes following");
 	select(true);
@@ -508,12 +472,12 @@ test.each([true, false])(
 		assert.equal(root.contains(selection.focusNode), false);
 		const owner = activity(providedRoot);
 		assert.equal(vi.mocked(client.call).mock.calls.length, 0);
-		await vi.advanceTimersByTimeAsync(6000);
+		await advance(6000);
 		assert.equal(vi.mocked(client.call).mock.calls.length, 0, "Ranges crossing the root block all page reads");
 		select(false);
-		await vi.advanceTimersByTimeAsync(1999);
+		await advance(1999);
 		assert.equal(vi.mocked(client.call).mock.calls.length, 0);
-		await vi.advanceTimersByTimeAsync(1);
+		await advance(1);
 		assert.equal(
 			vi.mocked(client.call).mock.calls.length,
 			1,
@@ -527,14 +491,14 @@ test.each([true, false])(
 
 test("a crossing selection also pauses an already-running poll until its next check after release", async () => {
 	const owner = activity(true, true);
-	await vi.advanceTimersByTimeAsync(0);
+	await advance(0);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 1);
 	assert.deepEqual(owner.state().page, page);
 	select(true);
-	await vi.advanceTimersByTimeAsync(4000);
+	await advance(4000);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 1);
 	select(false);
-	await vi.advanceTimersByTimeAsync(2000);
+	await advance(2000);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 2);
 	assert.equal(owner.state().failed, false);
 	assert.equal(vi.getTimerCount(), 1, "A running owner retains only its next poll");
@@ -543,10 +507,10 @@ test("a crossing selection also pauses an already-running poll until its next ch
 test("disposing activity polling while selection is held prevents a read after release", async () => {
 	selected = true;
 	const owner = activity(true, true);
-	await vi.advanceTimersByTimeAsync(2000);
+	await advance(2000);
 	owner.dispose();
 	select(false);
-	await vi.advanceTimersByTimeAsync(6000);
+	await advance(6000);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 	assert.equal(vi.getTimerCount(), 0);
 });
@@ -571,7 +535,9 @@ test("search reading scrolls to the exact matching row and chunk, never follows 
 	root.scrollTop = 800;
 	const wheel = new Event("wheel");
 	Object.assign(wheel, { deltaY: 20, deltaX: 0 });
-	root.dispatchEvent(wheel);
+	act(() => {
+		root.dispatchEvent(wheel);
+	});
 	owner.scroll();
 	owner.drive();
 	assert.equal(virtualizer.options.followOnAppend, false);
@@ -616,31 +582,36 @@ test("StrictMode effect replay retains the hydrated anchor and repositions its a
 		olderCursor: "opaque-older",
 		newerCursor: "opaque-newer",
 	};
-	const owner = conversation({ searchAnchor });
-	owner.drive();
-	owner.replayEffects();
+	const owner = conversation({ searchAnchor, strict: true });
 	owner.drive();
 	frame();
 	frame();
 	assert.equal(searchMark.scrollIntoView.mock.calls.length, 1, "Replay restores cancelled exact-match positioning");
 	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
-	const outer = ConversationHistory({
-		scope,
-		snapshot: latest,
-		error: false,
-		searchAnchor: { window: searchAnchor, locator: "opaque" },
-	});
-	assert.equal(typeof outer.type, "function");
-	const scoped = host(() =>
-		Reflect.apply(outer.type as (...args: unknown[]) => React.ReactNode, undefined, [outer.props]),
+	owner.dispose();
+	searchMark.scrollIntoView.mockClear();
+	const history = host(
+		() => (
+			<ConversationHistory
+				scope={scope}
+				snapshot={latest}
+				error={false}
+				searchAnchor={{ window: searchAnchor, locator: "opaque" }}
+			/>
+		),
+		true,
 	);
-	const first = scoped.drive();
-	assert.ok(isValidElement<React.ComponentProps<typeof ConversationMessages>>(first));
-	assert.equal(first.props.searchAnchor, searchAnchor);
-	scoped.replayEffects();
-	const replayed = scoped.drive();
-	assert.ok(isValidElement<React.ComponentProps<typeof ConversationMessages>>(replayed));
-	assert.equal(replayed.props.searchAnchor, searchAnchor, "A replacement controller re-applies the same prop anchor");
-	assert.deepEqual(replayed.props.snapshot?.messages, searchAnchor.messages);
-	assert.equal(replayed.props.snapshot?.historyCursor, null);
+	history.drive();
+	frame();
+	frame();
+	assert.equal(history.mount.querySelector(".message-scroll")?.getAttribute("data-reading-mode"), "search");
+	assert.equal(history.mount.querySelector(".search-match-text")?.textContent, "Second");
+	assert.ok(history.mount.querySelector('[data-message-id="a"]'));
+	assert.ok(history.mount.querySelector('[data-message-id="b"]'));
+	assert.ok(
+		searchMark.scrollIntoView.mock.calls.length > 0,
+		"Replacement controller re-applies its hydrated search anchor",
+	);
+	// This checks the original hydrated-history contract, not an initial-jump
+	// guarantee: History publishes its search anchor in a layout effect.
 });

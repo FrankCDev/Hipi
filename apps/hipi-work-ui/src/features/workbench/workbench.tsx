@@ -35,7 +35,9 @@ import { PreparedTaskRecovery } from "./catalog/prepared-task-recovery.tsx";
 import { CatalogSession } from "./catalog/session.ts";
 import { useCatalogPages } from "./catalog/use-pages.ts";
 import { DraftRecovery } from "./composer/draft-recovery.tsx";
+import { conversationEntryState, projectHomeState } from "./composer/entry-state.ts";
 import { PreparedTaskEntry } from "./composer/prepared-entry.tsx";
+import { HomeProjectPicker } from "./composer/project-picker.tsx";
 import { useHomeDraft } from "./composer/use-home-draft.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
 import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
@@ -481,6 +483,7 @@ export function Workbench({
 		retry: false,
 	});
 	const currentProject = currentProjectQuery.data;
+	const homeProjectState = projectHomeState(currentProjectId, currentProject, currentProjectQuery.isError);
 	useEffect(() => {
 		if (selectedConversation || selectedProjectId || !selectedWorkspace) return;
 		const project = projects.items.find((item) => item.project.homeWorkspaceId === selectedWorkspace)?.project;
@@ -498,6 +501,7 @@ export function Workbench({
 		return () => window.removeEventListener("beforeunload", warn);
 	}, [local, session]);
 	const selected = selectedQuery.data;
+	const entryState = conversationEntryState(navigationState.scope, selected);
 	const workspace = workspaceQuery.data;
 	useEffect(() => {
 		const command = (event: KeyboardEvent) => {
@@ -743,6 +747,8 @@ export function Workbench({
 		const active = homeDraft.inventory?.active;
 		if (!active || homeDraft.busy || homeDraft.failed) throw new Error("INITIAL_SEND_SOURCE_UNAVAILABLE");
 		if (
+			homeProjectState === "pending" ||
+			homeProjectState === "error" ||
 			currentProjectId === undefined ||
 			(currentProjectId === null && !canCreateProjectless(local, projectCatalog.data))
 		)
@@ -1296,7 +1302,7 @@ export function Workbench({
 							aria-hidden={filePanelFullWidth || undefined}
 							style={{ width: retainedConversationWidth }}
 						>
-							{selected ? (
+							{entryState === "ready" && selected ? (
 								<ConversationPane
 									key={`${selected.workspaceId}.${selected.conversationId}`}
 									conversation={selected}
@@ -1321,49 +1327,72 @@ export function Workbench({
 										else detailsTrigger.current?.focus();
 									}}
 								/>
+							) : entryState === "pending" ? (
+								<output className="conversation-entry-pending" aria-busy={!selectedQuery.isError}>
+									{t(selectedQuery.isError ? "nav.loadError" : "common.loading")}
+								</output>
 							) : (
 								<WorkbenchWelcome
+									projectState={homeProjectState}
 									workspaceName={currentProject?.name}
-									action={
-										<>
-											{currentProject && (
-												<ProjectFolderSummary
-													workspaceId={currentProject.homeWorkspaceId}
-													failed={folderCreationFailures[currentProject.homeWorkspaceId]}
-													onManage={(trigger) =>
-														manageProjectFolder(
-															{ workspaceId: currentProject.homeWorkspaceId, name: currentProject.name },
-															() => {
-																if (trigger.isConnected) trigger.focus({ preventScroll: true });
-															},
-														)
-													}
-												/>
-											)}
-											<PreparedTaskEntry
-												key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
-												workspaceId={currentProject?.homeWorkspaceId ?? ""}
-												draft={homeDraft.text}
-												onDraftChange={homeDraft.change}
-												readOnly={homeDraft.busy || !homeDraft.inventory?.active}
-												disabled={
-													catalogBlocked ||
-													homeDraft.busy ||
-													homeDraft.failed ||
-													!homeDraft.inventory?.active ||
-													(!!currentProjectId && !currentProject) ||
-													(!currentProjectId && !canCreateProjectless(local, projectCatalog.data))
-												}
-												busy={catalogState.busy}
-												onSend={sendInitial}
-												focusRevision={composerFocusRevision}
-												onManageModels={(returnFocus) => {
-													settingsReturn.current = returnFocus;
-													setSettingsCategory("models");
-													setSettingsOpen(true);
+									projectSelector={
+										homeProjectState === "ready" &&
+										currentProject && (
+											<HomeProjectPicker
+												current={currentProject}
+												pages={projects}
+												disabled={catalogBlocked || homeDraft.busy || homeDraft.failed}
+												allowProjectless={canCreateProjectless(local, projectCatalog.data)}
+												onSelect={(project) => {
+													if (project) selectKnownProject(project);
+													else void openNewConversation(null);
 												}}
 											/>
-										</>
+										)
+									}
+									context={
+										homeProjectState === "ready" &&
+										currentProject && (
+											<ProjectFolderSummary
+												compact
+												workspaceId={currentProject.homeWorkspaceId}
+												failed={folderCreationFailures[currentProject.homeWorkspaceId]}
+												onManage={(trigger) =>
+													manageProjectFolder(
+														{ workspaceId: currentProject.homeWorkspaceId, name: currentProject.name },
+														() => {
+															if (trigger.isConnected) trigger.focus({ preventScroll: true });
+														},
+													)
+												}
+											/>
+										)
+									}
+									action={
+										<PreparedTaskEntry
+											key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
+											workspaceId={currentProject?.homeWorkspaceId ?? ""}
+											draft={homeDraft.text}
+											onDraftChange={homeDraft.change}
+											readOnly={homeDraft.busy || !homeDraft.inventory?.active}
+											disabled={
+												catalogBlocked ||
+												homeDraft.busy ||
+												homeDraft.failed ||
+												!homeDraft.inventory?.active ||
+												homeProjectState === "pending" ||
+												homeProjectState === "error" ||
+												(!currentProjectId && !canCreateProjectless(local, projectCatalog.data))
+											}
+											busy={catalogState.busy}
+											onSend={sendInitial}
+											focusRevision={composerFocusRevision}
+											onManageModels={(returnFocus) => {
+												settingsReturn.current = returnFocus;
+												setSettingsCategory("models");
+												setSettingsOpen(true);
+											}}
+										/>
 									}
 								/>
 							)}

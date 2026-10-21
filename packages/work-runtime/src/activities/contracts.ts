@@ -1,6 +1,24 @@
 import type { FileOperationStatus, Scope, ToolApprovalStatus } from "../contracts.ts";
 
-export const ACTIVITY_LIMITS = { page: 16, textBytes: 8192, hydrationBytes: 2097152 } as const;
+export const ACTIVITY_LIMITS = {
+	page: 16,
+	textBytes: 8192,
+	hydrationBytes: 2097152,
+	summaryItems: 16,
+	summaryBytes: 8192,
+	taskIds: 16,
+	parentEdges: 16,
+	taskHydrations: 64,
+} as const;
+
+export type MessageToolCalls = {
+	items: { contentIndex: number; callId: string; name: string }[];
+	/** Includes calls omitted by identity or serialized-byte limits. */
+	total: number;
+};
+export type ToolActivitySelector =
+	| { kind: "tasks"; taskIds: string[] }
+	| { kind: "message"; messageId: string; contentIndex?: number };
 
 export type ToolActivity = {
 	activityId: string;
@@ -32,9 +50,11 @@ export type ToolActivity = {
 	outputTruncated: boolean;
 };
 
-/** Two bounded scan sections, not a globally time-sorted timeline or a state snapshot. */
+/** Default: two scan sections. Message: filtered task scan. Exact: finite selection, never a state snapshot. */
 export type ToolActivityPage = {
 	items: ToolActivity[];
+	/** Exact selection only. Echoed requested IDs, without disclosing why evidence is unavailable. */
+	unavailableTaskIds?: string[];
 	nextCursor: string | null;
 	coverage: "tasks" | "entries";
 	membershipFence: string;

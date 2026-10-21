@@ -17,6 +17,7 @@ import { readingPositionsFor } from "./reading-position.ts";
 type Props = {
 	scope: Scope;
 	snapshot: Snapshot | undefined;
+	responseActive?: boolean;
 	error: boolean;
 	footerRef?: RefObject<HTMLElement | null>;
 	failure?: ConversationFailure;
@@ -39,6 +40,7 @@ export function ConversationHistory(props: Props) {
 function ScopedHistory({
 	scope,
 	snapshot,
+	responseActive,
 	error,
 	footerRef,
 	failure,
@@ -111,6 +113,7 @@ function ScopedHistory({
 			onOpenModelSettings={onOpenModelSettings}
 			readingPositions={positions}
 			snapshot={state.snapshot}
+			responseActive={responseActive}
 			error={error}
 			onNearTop={onNearTop}
 			searchAnchor={state.anchor?.window}

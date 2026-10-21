@@ -10,7 +10,7 @@ import { sidebarStartupDiagnostic } from "./startup-diagnostic.mjs";
 const seed = {
 	workspaceIds: ["sidebar-chats", "sidebar-project-a", "sidebar-project-b"],
 	defaultWorkspaceId: "sidebar-chats",
-	handshake: { protocolVersion: 9, storeId: "fixture-store" },
+	handshake: { protocolVersion: 10, storeId: "fixture-store" },
 };
 test("first-start reload failure captures diagnostics and lifecycle without entering the journey", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-startup-reload-"));
@@ -133,7 +133,7 @@ test("startup diagnostics read only the verified store and two exact local entri
 test("wrong store or protocol forbids all further reads including localStorage", async () => {
 	for (const handshake of [
 		{ ...seed.handshake, storeId: "other" },
-		{ ...seed.handshake, protocolVersion: 10 },
+		{ ...seed.handshake, protocolVersion: seed.handshake.protocolVersion + 1 },
 	]) {
 		let calls = 0;
 		const result = await sidebarStartupDiagnostic(

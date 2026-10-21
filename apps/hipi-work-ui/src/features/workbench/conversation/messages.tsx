@@ -14,9 +14,15 @@ import {
 } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { BrandMark } from "../../../components/brand-mark.tsx";
+import { ActionTooltip } from "../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
-import { InlineMessageActivities } from "../../tool-activities/activity-transcript.tsx";
+import { InlineApproval } from "../../agent-permissions/inline-approval.tsx";
+import {
+	InlineLiveActivities,
+	InlineMessageActivities,
+	useActivityTranscriptProjection,
+} from "../../tool-activities/activity-transcript.tsx";
 import type { ConversationFailure } from "./failure.ts";
 import { ClipboardCopy } from "./markdown/clipboard-copy.tsx";
 import { MessageMeasurementPolicy } from "./message-measurement-policy.ts";
@@ -24,7 +30,10 @@ import { MessageProjection, prefersReducedMotion, selectionIntersects } from "./
 import { MessageContent } from "./message-text-reader.tsx";
 import { ConversationReadingPositions } from "./reading-position.ts";
 import { ResponseAnnouncement } from "./response-announcement.tsx";
+import { responsePhase } from "./response-phase.ts";
+import { ResponseStatus } from "./response-status.tsx";
 import {
+	bindDisclosureAnchoring,
 	CONVERSATION_END_THRESHOLD,
 	CONVERSATION_HISTORY_THRESHOLD,
 	ConversationScrollIntent,
@@ -47,6 +56,7 @@ type DisplaySnapshot = Snapshot & { requestFailure?: ConversationFailure };
 
 export function ConversationMessages({
 	snapshot: sourceSnapshot,
+	responseActive,
 	error,
 	onNearTop,
 	historyStatus,
@@ -59,6 +69,7 @@ export function ConversationMessages({
 	onJumpLatest,
 }: {
 	snapshot: Snapshot | undefined;
+	responseActive?: boolean;
 	error: boolean;
 	onNearTop: (nearTop: boolean) => void;
 	historyStatus?: ReactNode;
@@ -76,10 +87,15 @@ export function ConversationMessages({
 		[sourceSnapshot, failure],
 	);
 	const messages = useRef<HTMLElement>(null);
+	const scrollIntent = useRef<ConversationScrollIntent | null>(null);
 	const [measurementPolicy] = useState(
-		() => new MessageMeasurementPolicy(() => selectionIntersects(messages.current, document.getSelection())),
+		() =>
+			new MessageMeasurementPolicy(
+				() => !!scrollIntent.current?.holdingHeader || selectionIntersects(messages.current, document.getSelection()),
+			),
 	);
 	const [snapshot, setSnapshot] = useState(incoming);
+	useActivityTranscriptProjection(snapshot, responseActive !== false && !!snapshot?.running);
 	const [positions] = useState(() => readingPositions ?? new ConversationReadingPositions());
 	const [savedPosition] = useState(() => {
 		const boundScope = scope ?? incoming;
@@ -87,7 +103,6 @@ export function ConversationMessages({
 	});
 	const pendingRestore = useRef(savedPosition?.following === false ? savedPosition : undefined);
 	const restorationFrames = useRef<number[]>([]);
-	const scrollIntent = useRef<ConversationScrollIntent | null>(null);
 	const interruptReading = useRef<(direction: number) => void>(() => {});
 	const projection = useRef<MessageProjection<DisplaySnapshot | undefined> | null>(null);
 	const [nearEnd, setNearEnd] = useState(true);
@@ -181,6 +196,9 @@ export function ConversationMessages({
 		});
 		controller.setFollow(initialSearchAnchor ? false : (savedPosition?.following ?? true));
 		scrollIntent.current = controller;
+		const unbindDisclosure = bindDisclosureAnchoring(node, controller, () =>
+			selectionIntersects(node, document.getSelection()),
+		);
 		const intent = (direction: number) => {
 			pendingRestore.current = undefined;
 			for (const frame of restorationFrames.current) cancelAnimationFrame(frame);
@@ -241,6 +259,7 @@ export function ConversationMessages({
 		window.addEventListener("pointercancel", pointerUp);
 		return () => {
 			interruptReading.current = () => {};
+			unbindDisclosure();
 			controller.dispose();
 			scrollIntent.current = null;
 			for (const frame of restorationFrames.current) cancelAnimationFrame(frame);
@@ -506,6 +525,7 @@ export function ConversationMessages({
 											row={row}
 											scope={snapshot}
 											stream={row.message ? undefined : snapshot}
+											responseActive={responseActive}
 											offset={originalOffsets.get(row.key)}
 											onOffsetChange={setOriginalOffsets}
 											searchAnchor={row.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
@@ -520,21 +540,23 @@ export function ConversationMessages({
 			<ResponseAnnouncement snapshot={snapshot} error={error} failure={snapshot?.requestFailure} />
 			{displayPaused && <output className="message-pending small-copy">{t("markdown.pending")}</output>}
 			{(searchAnchor || !nearEnd) && (
-				<Button
-					className="jump-latest bg-popover rounded-full"
-					variant="outline"
-					size="sm"
-					aria-label={t("work.jumpLatest")}
-					title={t("work.jumpLatest")}
-					style={{ bottom: footerHeight + 24 }}
-					disabled={selectionRange !== null}
-					onClick={() => {
-						if (onJumpLatest) onJumpLatest();
-						else scrollIntent.current?.jump();
-					}}
-				>
-					<Icon name="arrowDown" size={16} />
-				</Button>
+				<ActionTooltip label={t("work.jumpLatest")} disabled={selectionRange !== null}>
+					<Button
+						className="jump-latest bg-popover rounded-full"
+						variant="outline"
+						size="sm"
+						aria-label={t("work.jumpLatest")}
+						style={{ bottom: footerHeight + 24 }}
+						disabled={selectionRange !== null}
+						onClick={() => {
+							scrollIntent.current?.cancelHeader();
+							if (onJumpLatest) onJumpLatest();
+							else scrollIntent.current?.jump();
+						}}
+					>
+						<Icon name="arrowDown" size={16} />
+					</Button>
+				</ActionTooltip>
 			)}
 		</div>
 	);
@@ -545,6 +567,7 @@ const TranscriptMessage = memo(
 		row,
 		scope,
 		stream,
+		responseActive,
 		offset,
 		onOffsetChange,
 		searchAnchor,
@@ -552,6 +575,7 @@ const TranscriptMessage = memo(
 		row: Exclude<TranscriptRow, { kind: "request-failure" }>;
 		scope: Scope;
 		stream?: Snapshot;
+		responseActive?: boolean;
 		offset: number | undefined;
 		onOffsetChange: (update: (current: ReadonlyMap<string, number>) => ReadonlyMap<string, number>) => void;
 		searchAnchor?: SearchHistoryWindow;
@@ -564,13 +588,25 @@ const TranscriptMessage = memo(
 			textLength: stream?.partialLength ?? 0,
 			truncated: stream?.partialTruncated ?? false,
 		};
-		if (stream && !stream.partial)
-			return stream.running ? <output className="stream-status">{t("work.generating")}</output> : null;
+		const active = !!stream?.running && responseActive !== false;
+		const phase = stream ? responsePhase(stream, active) : undefined;
+		if (stream && !stream.partial) {
+			if (!active && !stream.execution?.tools.total) return null;
+			return (
+				<article className="message message-assistant" data-content-search-unit-key={row.key} aria-busy={active}>
+					<div className="message-content">
+						{phase && <ResponseStatus phase={phase} />}
+						<InlineLiveActivities snapshot={stream} active={active} />
+						<InlineApproval snapshot={stream} active={active} />
+					</div>
+				</article>
+			);
+		}
 		return (
 			<article
 				className={`message message-${message.role}`}
 				data-content-search-unit-key={row.key}
-				aria-busy={stream?.running}
+				aria-busy={stream ? active : undefined}
 			>
 				<div className="message-content">
 					<h4 className="sr-only">{t(message.role === "user" ? "work.you" : "work.assistant")}</h4>
@@ -590,7 +626,12 @@ const TranscriptMessage = memo(
 							});
 						}}
 					/>
-					{!stream && message.role === "assistant" && <InlineMessageActivities messageId={message.id} />}
+					{phase && <ResponseStatus phase={phase} />}
+					{stream && <InlineLiveActivities snapshot={stream} active={active} />}
+					{stream && <InlineApproval snapshot={stream} active={active} />}
+					{!stream && message.role === "assistant" && (
+						<InlineMessageActivities messageId={message.id} toolCalls={message.toolCalls} />
+					)}
 					{message.interrupted && <span className="status-pill">{t("work.interrupted")}</span>}
 					{!stream && !message.truncated && message.text && (
 						<div className="message-actions">
@@ -611,6 +652,7 @@ const TranscriptMessage = memo(
 	(before, after) =>
 		before.row === after.row &&
 		before.stream === after.stream &&
+		before.responseActive === after.responseActive &&
 		before.scope.workspaceId === after.scope.workspaceId &&
 		before.scope.conversationId === after.scope.conversationId &&
 		before.offset === after.offset &&
@@ -618,12 +660,13 @@ const TranscriptMessage = memo(
 		before.onOffsetChange === after.onOffsetChange,
 );
 
-export function StreamingMessage({ snapshot }: { snapshot: Snapshot }) {
+export function StreamingMessage({ snapshot, responseActive }: { snapshot: Snapshot; responseActive?: boolean }) {
 	return (
 		<TranscriptMessage
 			row={{ key: snapshot.partialId ?? "partial-output", kind: "assistant-stream" }}
 			scope={snapshot}
 			stream={snapshot}
+			responseActive={responseActive}
 			offset={undefined}
 			onOffsetChange={() => {}}
 		/>

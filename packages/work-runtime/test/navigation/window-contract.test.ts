@@ -55,8 +55,8 @@ function request(params: unknown) {
 	return parseRequest({ version: PROTOCOL_VERSION, method: "listSidebarWindow", params });
 }
 
-test("window requests accept every view and position without changing protocol 9", () => {
-	assert.equal(PROTOCOL_VERSION, 9);
+test("window requests accept every view and position in protocol 10", () => {
+	assert.equal(PROTOCOL_VERSION, 10);
 	const views: SidebarWindowRequest["view"][] = [
 		{ kind: "recent" },
 		{ kind: "project_recent" },

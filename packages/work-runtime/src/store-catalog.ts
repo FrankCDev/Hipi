@@ -949,6 +949,7 @@ export class StoreCatalog {
 					storeId: this.storeId,
 				},
 				input.cursor,
+				input.selector,
 			);
 		});
 	}

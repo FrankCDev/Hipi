@@ -67,7 +67,7 @@ test("composer isolates permission form events while the named send action targe
 	assert.equal(forms.length, 2);
 	const task = forms.find((form) => form.includes("composer-form"));
 	assert.ok(task);
-	assert.match(task, /<textarea/);
+	assert.match(task, /composer-editor/);
 	assert.doesNotMatch(task, /Authorize context|composer-controls|<button/);
 	const taskId = /id="([^"]+)"/.exec(task)?.[1];
 	assert.ok(taskId);

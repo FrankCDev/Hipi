@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { PROTOCOL_VERSION, parseRequest } from "@hipi/work-runtime/contracts";
+import { type AppClient, PROTOCOL_VERSION, parseRequest, parseResult } from "@hipi/work-runtime/contracts";
 import { test } from "vitest";
+import { CatalogSession } from "../../src/features/workbench/catalog/session.ts";
 import { type CatalogCommand, readCommand, saveCommand } from "../../src/features/workbench/command-recovery.ts";
 import type { BrowserStorage } from "../../src/features/workbench/local-persistence.ts";
 import { LocalState } from "../../src/features/workbench/local-state.ts";
@@ -113,42 +114,125 @@ test("unknown saved wire versions are not silently upgraded into replayable comm
 	assert.equal(local.read("command.catalog"), raw);
 });
 
-test("only verified protocol 8 local commands normalize; the same envelopes remain invalid on the wire", () => {
-	const legacy = { ...request, version: 8 };
-	assert.throws(() => parseRequest(legacy), { code: "INVALID_REQUEST" });
-	assert.deepEqual(parseStoredRequest(legacy), request);
-	assert.equal(legacy.version, 8);
-	const storage = new MemoryStorage();
-	const local = new LocalState("store", storage);
-	const raw = JSON.stringify({ version: 2, request: legacy });
-	local.write("command.catalog", raw);
-	const restored = new LocalState("store", storage);
-	assert.deepEqual(readCommand(restored, "catalog").request, request);
-	assert.equal(restored.read("command.catalog"), raw);
-	assert.equal(readCommand(new LocalState("other", storage), "catalog").request, null);
-	for (const invalid of [
-		{ ...legacy, version: 7 },
-		{ ...legacy, version: 10 },
-		{ ...legacy, expectedStoreId: "store" },
-		{ ...legacy, extra: true },
-		{ ...legacy, params: { ...legacy.params, extra: true } },
-		{ ...legacy, params: { ...legacy.params, requestId: undefined } },
-		{
-			version: 8,
-			method: "submit",
-			params: { workspaceId: "workspace", conversationId: "conversation", requestId: "submit", text: "never replay" },
-		},
-		{ version: 8, method: "handshake", params: {} },
-		{ version: 8, method: "refreshSidebarProjection", params: {} },
-	]) {
-		const saved = JSON.stringify({ version: 2, request: invalid });
-		local.write("command.catalog", saved);
+test.each([8, 9])(
+	"only verified protocol %i local commands normalize; old envelopes remain invalid on the wire",
+	(version) => {
+		const legacy = { ...request, version };
+		assert.throws(() => parseRequest(legacy), { code: "INVALID_REQUEST" });
+		assert.deepEqual(parseStoredRequest(legacy), request);
+		assert.equal(legacy.version, version);
+		const storage = new MemoryStorage();
+		const local = new LocalState("store", storage);
+		const raw = JSON.stringify({ version: 2, request: legacy });
+		local.write("command.catalog", raw);
+		const restored = new LocalState("store", storage);
+		assert.deepEqual(readCommand(restored, "catalog").request, request);
+		assert.equal(restored.read("command.catalog"), raw);
+		assert.equal(readCommand(new LocalState("other", storage), "catalog").request, null);
+		for (const invalid of [
+			{ ...legacy, version: 7 },
+			{ ...legacy, version: PROTOCOL_VERSION + 1 },
+			{ ...legacy, expectedStoreId: "store" },
+			{ ...legacy, extra: true },
+			{ ...legacy, params: { ...legacy.params, extra: true } },
+			{ ...legacy, params: { ...legacy.params, requestId: undefined } },
+			{
+				version: 8,
+				method: "submit",
+				params: { workspaceId: "workspace", conversationId: "conversation", requestId: "submit", text: "never replay" },
+			},
+			{ version: 8, method: "handshake", params: {} },
+			{ version: 8, method: "refreshSidebarProjection", params: {} },
+		]) {
+			const saved = JSON.stringify({ version: 2, request: invalid });
+			local.write("command.catalog", saved);
+			assert.equal(readCommand(local, "catalog").incompatible, true);
+			assert.equal(local.read("command.catalog"), saved);
+			assert.throws(() => parseStoredRequest(invalid));
+		}
+		const unknownWrapper = JSON.stringify({ version: 2, request: null, futureIntent: true });
+		local.write("command.catalog", unknownWrapper);
 		assert.equal(readCommand(local, "catalog").incompatible, true);
-		assert.equal(local.read("command.catalog"), saved);
-		assert.throws(() => parseStoredRequest(invalid));
-	}
-	const unknownWrapper = JSON.stringify({ version: 2, request: null, futureIntent: true });
-	local.write("command.catalog", unknownWrapper);
-	assert.equal(readCommand(local, "catalog").incompatible, true);
-	assert.equal(local.read("command.catalog"), unknownWrapper);
-});
+		assert.equal(local.read("command.catalog"), unknownWrapper);
+	},
+);
+
+test.each([8, 9])(
+	"protocol %i recovery preserves approval identities and digest bytes and rejects malformed fields",
+	(version) => {
+		const params = {
+			workspaceId: "workspace",
+			conversationId: "conversation",
+			requestId: "original-request",
+			approvalId: "original-approval",
+			expectedRevision: 3,
+			decision: "approve",
+			argumentsDigest: "a".repeat(64),
+			contentDigest: "b".repeat(64),
+		};
+		const command = { version, method: "decideToolApproval", params };
+		const raw = JSON.stringify(command);
+		assert.deepEqual(parseStoredRequest(command).params, params);
+		assert.equal(JSON.stringify(command), raw);
+		for (const patch of [
+			{ requestId: "invalid/id" },
+			{ workspaceId: "" },
+			{ conversationId: "foreign/scope" },
+			{ approvalId: "" },
+			{ argumentsDigest: "a".repeat(63) },
+			{ contentDigest: "G".repeat(64) },
+			{ expectedRevision: 0 },
+		]) {
+			const local = new LocalState();
+			const saved = JSON.stringify({ version: 2, request: { ...command, params: { ...params, ...patch } } });
+			local.write("command.permissions", saved);
+			assert.deepEqual(readCommand(local, "permissions"), { request: null, incompatible: true });
+			assert.equal(local.read("command.permissions"), saved);
+			assert.equal(local.hasUnsavedWork(), true);
+		}
+	},
+);
+
+test.each([8, 9])(
+	"protocol %i unknown outcome remains receipt-only after reload without rewriting or resending",
+	async (version) => {
+		const storage = new MemoryStorage();
+		const local = new LocalState("store", storage);
+		const raw = JSON.stringify({ version: 2, request: { ...request, version } }, null, 2);
+		local.write("command.catalog", raw);
+		const originalStorage = [...storage.values];
+		const restored = new LocalState("store", storage);
+		const calls: unknown[] = [];
+		const client: AppClient = {
+			call: async (method, params) => {
+				calls.push({ method, params });
+				assert.equal(method, "getConversationCommandResult");
+				return parseResult(method, null);
+			},
+			observe: async () => {
+				throw new Error("Recovery must not observe or execute a conversation");
+			},
+		};
+		const session = new CatalogSession(client, restored);
+		try {
+			assert.deepEqual(calls, []);
+			await session.check();
+			await session.check();
+			assert.deepEqual(
+				calls,
+				Array(2).fill({
+					method: "getConversationCommandResult",
+					params: { workspaceId: "workspace", requestId: "request" },
+				}),
+			);
+			assert.equal(session.getSnapshot().notFound, true);
+			assert.equal(session.getSnapshot().incompatible, false);
+			assert.deepEqual(session.getSnapshot().pending, request);
+			assert.equal(restored.hasUnsavedWork(), true);
+			assert.equal(restored.read("command.catalog"), raw);
+			assert.deepEqual([...storage.values], originalStorage);
+		} finally {
+			session.dispose();
+		}
+	},
+);

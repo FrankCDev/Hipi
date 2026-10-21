@@ -1,0 +1,266 @@
+// @vitest-environment jsdom
+import assert from "node:assert/strict";
+import {
+	type AppClient,
+	type Method,
+	type Params,
+	parseResult,
+	type Snapshot,
+	type ToolActivity,
+} from "@hipi/work-runtime/contracts";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { ThemeProvider } from "../../src/app/theme/provider.tsx";
+import {
+	ActivityTranscriptProvider,
+	InlineLiveActivities,
+	InlineMessageActivities,
+	useActivityTranscriptProjection,
+} from "../../src/features/tool-activities/activity-transcript.tsx";
+
+const scope = { workspaceId: "w", conversationId: "c" };
+const item: ToolActivity = {
+	activityId: "task:9",
+	taskId: "9",
+	callId: "same",
+	toolName: "hipi_files_read",
+	source: "task",
+	inherited: false,
+	anchor: { assistantEntryId: "2", modelIndex: 0, contentIndex: 1 },
+	phase: "running",
+	toolResult: "unavailable",
+	abortRequested: false,
+	receiptIds: [],
+	textAvailable: false,
+	outputTruncated: false,
+};
+const calls: Params<"getToolActivities">[] = [];
+let unavailable = false;
+let deferExact = false;
+let releaseExact: (() => void) | undefined;
+const panel = { current: null as HTMLElement | null };
+let client: AppClient = {
+	call: async <M extends Method>(method: M, params: Params<M>) => {
+		assert.equal(method, "getToolActivities");
+		const input = params as Params<"getToolActivities">;
+		calls.push(input);
+		if (input.selector?.kind === "tasks" && deferExact)
+			await new Promise<void>((resolve) => {
+				releaseExact = resolve;
+			});
+		return parseResult(method, {
+			items: unavailable ? [] : [item],
+			nextCursor: null,
+			coverage: "tasks",
+			membershipFence: "f",
+			...(input.selector?.kind === "tasks" ? { unavailableTaskIds: unavailable ? ["9"] : [] } : {}),
+		});
+	},
+	observe: async () => ({ dispose: async () => {} }),
+};
+vi.mock("../../src/app/client-provider.tsx", () => ({ useAppClient: () => client }));
+vi.mock("../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
+const snapshot: Snapshot = {
+	...scope,
+	messages: [
+		{
+			id: "1_0",
+			role: "assistant",
+			text: "",
+			textLength: 0,
+			truncated: false,
+			toolCalls: { items: [{ callId: "same", name: "hipi_files_read", contentIndex: 1 }], total: 1 },
+		},
+		{
+			id: "2_0",
+			role: "assistant",
+			text: "",
+			textLength: 0,
+			truncated: false,
+			toolCalls: { items: [{ callId: "same", name: "hipi_files_read", contentIndex: 1 }], total: 1 },
+		},
+	],
+	partial: "",
+	partialLength: 0,
+	partialTruncated: false,
+	running: true,
+	historyCursor: null,
+	execution: {
+		ownerTaskId: "8",
+		submissionIds: ["7"],
+		submissionCount: 1,
+		tools: {
+			items: [{ taskId: "9", callId: "same", name: "hipi_files_read", status: "running" }],
+			total: 1,
+			active: 1,
+		},
+		blockingCompactionCount: 0,
+	},
+};
+function Transcript({ value, connected }: { value: Snapshot; connected: boolean }) {
+	useActivityTranscriptProjection(value, value.running && connected);
+	return (
+		<>
+			{value.messages.map((message) => (
+				<InlineMessageActivities key={message.id} messageId={message.id} toolCalls={message.toolCalls} />
+			))}
+			<InlineLiveActivities snapshot={value} active={value.running && connected} />
+		</>
+	);
+}
+let root: Root;
+let host: HTMLDivElement;
+beforeEach(() => {
+	client = { ...client };
+	vi.stubGlobal(
+		"IntersectionObserver",
+		class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		},
+	);
+	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	calls.length = 0;
+	unavailable = false;
+	deferExact = false;
+	releaseExact = undefined;
+	host = document.createElement("div");
+	document.body.append(host);
+	root = createRoot(host);
+	panel.current = host;
+});
+afterEach(async () => {
+	await act(async () => root.unmount());
+	host.remove();
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+});
+async function render(value: Snapshot, connected = true) {
+	await act(async () =>
+		root.render(
+			<ThemeProvider>
+				<ActivityTranscriptProvider scope={scope} connected={connected} running={value.running} rootRef={panel}>
+					<Transcript value={value} connected={connected} />
+				</ActivityTranscriptProvider>
+			</ThemeProvider>,
+		),
+	);
+}
+test("one exact live owner attaches only the current anchored row, then hands over to retained summary", async () => {
+	await render(snapshot);
+	assert.equal(calls.filter((call) => call.selector?.kind === "tasks").length, 1);
+	assert.equal(
+		calls.filter((call) => call.selector?.kind === "message").length,
+		0,
+		"anchored expanded row reuses exact owner",
+	);
+	assert.equal(host.querySelector(".activity-live-slots"), null, "no duplicate tail after anchored association");
+	assert.equal(host.querySelector('[data-activity-message-id="1_0"] button')?.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "true");
+	assert.equal(host.querySelectorAll(".inline-tool-result").length, 1);
+	await render({ ...snapshot, running: false, execution: undefined });
+	assert.equal(host.querySelectorAll("[data-activity-message-id]").length, 2);
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelectorAll(".inline-tool-result").length, 0);
+});
+test("off-page and unavailable exact records stay in the tail rather than matching an old same-callId row", async () => {
+	await render({ ...snapshot, messages: snapshot.messages.filter((message) => message.id !== "2_0") });
+	assert.ok(host.querySelector(".activity-live-slots"));
+	assert.equal(host.querySelector('[data-activity-message-id="1_0"] button')?.getAttribute("aria-expanded"), "false");
+	await render({ ...snapshot, running: false, execution: undefined });
+	unavailable = true;
+	assert.ok(snapshot.execution);
+	await render({ ...snapshot, execution: { ...snapshot.execution, ownerTaskId: "new" } });
+	assert.ok(host.querySelector(".activity-live-slots"));
+	assert.match(host.textContent ?? "", /Execution state unavailable/);
+});
+test("explicit disclosure intent survives completion and transfers to one selector-scoped history reader", async () => {
+	await render(snapshot);
+	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] > button');
+	assert.ok(toggle);
+	await act(async () => toggle.click());
+	assert.equal(toggle.getAttribute("aria-expanded"), "false");
+	await act(async () => toggle.click());
+	assert.equal(toggle.getAttribute("aria-expanded"), "true");
+	await render({ ...snapshot, running: false, execution: undefined });
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] > button')?.getAttribute("aria-expanded"), "true");
+	assert.equal(calls.filter((call) => call.selector?.kind === "message").length, 1);
+	assert.equal(host.querySelectorAll(".inline-tool-result").length, 1);
+	assert.equal(host.querySelector(".activity-live-slots"), null);
+});
+
+test("late exact metadata waits for selection release before moving a live tool into its historical row", async () => {
+	deferExact = true;
+	await render(snapshot);
+	const selected = host.querySelector(".activity-live-slots span");
+	assert.ok(selected);
+	const range = document.createRange();
+	range.selectNodeContents(selected);
+	document.getSelection()?.addRange(range);
+	await act(async () => document.dispatchEvent(new Event("selectionchange")));
+	assert.ok(releaseExact);
+	await act(async () => releaseExact?.());
+	assert.equal(selected.isConnected, true);
+	assert.ok(host.querySelector(".activity-live-slots"));
+	await act(async () => {
+		document.getSelection()?.removeAllRanges();
+		document.dispatchEvent(new Event("selectionchange"));
+	});
+	assert.equal(host.querySelector(".activity-live-slots"), null);
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "true");
+});
+test("transient disconnect stops live decoration but retains the exact same readable tool evidence", async () => {
+	await render(snapshot);
+	const article = host.querySelector(".inline-tool-result");
+	assert.ok(article);
+	await render(snapshot, false);
+	assert.equal(host.querySelector(".inline-tool-result"), article);
+	assert.match(host.textContent ?? "", /Last read/);
+	assert.match(host.textContent ?? "", /Disconnected/);
+	assert.equal(host.querySelector(".activity-live-slots"), null);
+});
+
+test("round anchor places a not-yet-instantiated tool once, without a speculative historical reader", async () => {
+	assert.ok(snapshot.execution);
+	const value: Snapshot = {
+		...snapshot,
+		execution: {
+			...snapshot.execution,
+			tools: {
+				...snapshot.execution.tools,
+				items: [{ callId: "same", name: "hipi_files_read", status: "pending", anchor: item.anchor }],
+			},
+		},
+	};
+	await render(value);
+	const current = host.querySelector('[data-activity-message-id="2_0"]');
+	assert.ok(current);
+	assert.ok(current.querySelector(".activity-live-slots"));
+	assert.equal(host.querySelectorAll(".activity-live-slots").length, 1);
+	assert.equal(calls.filter((call) => !!call.selector).length, 0);
+	assert.equal(host.querySelector('[data-activity-message-id="1_0"] button')?.getAttribute("aria-expanded"), "false");
+	assert.match(current.textContent ?? "", /Pending/);
+});
+test("authoritative round anchor retains unavailable exact detail in the committed row, not a duplicate tail", async () => {
+	unavailable = true;
+	assert.ok(snapshot.execution);
+	await render({
+		...snapshot,
+		execution: {
+			...snapshot.execution,
+			tools: {
+				...snapshot.execution.tools,
+				items: [{ taskId: "9", callId: "same", name: "hipi_files_read", status: "running", anchor: item.anchor }],
+			},
+		},
+	});
+	const current = host.querySelector('[data-activity-message-id="2_0"]');
+	assert.ok(current);
+	assert.ok(current.querySelector(".activity-live-slots"));
+	assert.equal(host.querySelectorAll(".activity-live-slots").length, 1);
+	assert.equal(calls.filter((call) => call.selector?.kind === "message").length, 0);
+	assert.match(current.textContent ?? "", /Execution state unavailable/);
+});

@@ -215,6 +215,27 @@ test("sidebar dimensions remain token-driven and font-adaptive rather than repea
 	// jsdom validates the cascade/reference, not browser var() layout resolution or pixels.
 });
 
+test("selection preserves navigation title weight and keyboard outlines stay inside controls", async () => {
+	const { theme, sidebar } = await styles();
+	for (const ordered of [
+		[sidebar, theme],
+		[theme, sidebar],
+	]) {
+		mount(optimize(ordered.join("\n").replaceAll(":focus-visible", ".test-keyboard-focus"), { minify: true }).code);
+		const title = document.querySelector<HTMLElement>("#project");
+		assert.ok(title?.parentElement);
+		for (const selected of [false, true]) {
+			title.parentElement.dataset.selected = String(selected);
+			assert.equal(getComputedStyle(title).fontWeight, "var(--sidebar-label-weight)");
+			assert.equal(getComputedStyle(title).lineHeight, "var(--sidebar-label-line-height)");
+		}
+		title.classList.add("test-keyboard-focus");
+		assert.equal(getComputedStyle(title).outlineOffset, "calc(-1 * var(--sidebar-focus-width))");
+		assert.equal(computed(".new-conversation-trigger").fontWeight, "var(--sidebar-label-weight)");
+		assert.equal(computed(".nav-section-heading").fontWeight, "500");
+	}
+});
+
 test("expanded project separates its hovered header from the selected first session without changing other list gaps", async () => {
 	const { theme, sidebar } = await styles();
 	for (const ordered of [

@@ -1,4 +1,14 @@
 .inline-activity {
+	--activity-header-gap: 0.25rem;
+	--activity-summary-gap: 0.375rem;
+	--activity-summary-icon-size: 1rem;
+	--activity-chevron-size: 0.75rem;
+	--activity-body-gap: 0.5rem;
+	--activity-body-indent: 1.5rem;
+	--activity-body-padding-start: 0.5rem;
+	--activity-body-padding-end: 0.25rem;
+	--activity-disclosure-duration: 0.3s;
+	--activity-summary-color: color-mix(in oklab, var(--text) 60%, transparent);
 	margin-block: 12px;
 	color: var(--muted);
 	font-size: var(--font-ui-size);
@@ -9,25 +19,110 @@
 	padding-inline: 0;
 	font-weight: 400;
 }
-.inline-activity-toggle > span {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
 .inline-activity-count,
 .inline-activity-phase {
 	color: var(--muted);
 	font-size: 0.85em;
 }
 .inline-activity-details {
-	margin-block-start: 8px;
-	padding-inline-start: 14px;
-	border-inline-start: 1px solid var(--line);
+	padding-block: var(--activity-body-padding-start) var(--activity-body-padding-end);
+	padding-inline-start: var(--activity-body-indent);
 	display: grid;
-	gap: 8px;
+	gap: var(--activity-body-gap);
 }
 .inline-activity-details > article {
 	border: 0;
 	border-radius: 0;
 	background: transparent;
 	padding: 8px;
+}
+.inline-activity-details[data-variant="grouped"] {
+	--activity-body-gap: 0.25rem;
+	--activity-body-padding-start: 0.25rem;
+	--activity-body-padding-end: 0;
+	--activity-body-indent: 0;
+}
+/* The summary and the trailing accessories have distinct spacing contracts. */
+.activity-disclosure-toggle {
+	display: inline-flex;
+	min-width: 0;
+	max-width: 100%;
+	align-items: center;
+	gap: var(--activity-header-gap);
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: var(--activity-summary-color);
+	font: inherit;
+	text-align: start;
+	cursor: pointer;
+}
+.activity-disclosure-heading {
+	display: inline-flex;
+	min-width: 0;
+	align-items: center;
+	gap: var(--activity-summary-gap);
+}
+.activity-disclosure-summary {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.activity-disclosure-heading > svg {
+	width: var(--activity-summary-icon-size);
+	height: var(--activity-summary-icon-size);
+	flex-shrink: 0;
+}
+.activity-disclosure-toggle:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: -2px;
+}
+.activity-disclosure-toggle > .activity-disclosure-chevron {
+	flex-shrink: 0;
+	width: var(--activity-chevron-size);
+	height: var(--activity-chevron-size);
+	opacity: 0;
+	transition: transform var(--activity-disclosure-duration);
+}
+.activity-disclosure-toggle[aria-expanded="true"] > .activity-disclosure-chevron {
+	transform: rotate(90deg);
+	opacity: 1;
+}
+.activity-disclosure-toggle:focus-visible > .activity-disclosure-chevron {
+	opacity: 1;
+}
+@media (hover: hover) {
+	.activity-disclosure-toggle:hover {
+		color: var(--text);
+	}
+	.activity-disclosure-toggle:hover > .activity-disclosure-chevron {
+		opacity: 1;
+	}
+}
+.activity-disclosure-body {
+	overflow: hidden;
+}
+.activity-disclosure-body[data-expanded="true"] {
+	overflow: visible;
+}
+.activity-live-slots {
+	display: grid;
+	gap: var(--activity-summary-gap);
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+.activity-live-slots li {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--activity-summary-gap);
+}
+:root[data-reduced-motion="on"] .activity-disclosure-chevron {
+	transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .activity-disclosure-chevron {
+		transition: none;
+	}
 }

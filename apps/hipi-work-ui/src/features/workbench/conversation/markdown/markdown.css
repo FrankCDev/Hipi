@@ -223,3 +223,120 @@
 	outline: 2px solid var(--focus);
 	outline-offset: 2px;
 }
+
+/* Conversation prose has its own rhythm. The shared Markdown renderer is also
+ * used by the IDE; keep its document-preview typography outside this scope. */
+.message .message-text.markdown-body {
+	--message-prose-space: calc(var(--font-ui-size) / 4);
+	--message-prose-leading: 1.625;
+	--message-prose-line: calc(var(--font-ui-size) * var(--message-prose-leading));
+	--message-prose-heading-weight: 600;
+	--message-prose-heading-one: 1.5em;
+	--message-prose-heading-two: 1.25em;
+	--message-prose-heading-three: 1.125em;
+	line-height: var(--message-prose-leading);
+}
+.message .message-text.markdown-body > :where(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, hr) {
+	margin-block-start: 0;
+}
+.message .message-text.markdown-body p {
+	margin-block: 0 var(--message-prose-space);
+}
+.message .message-text.markdown-body > p:not(:first-child) {
+	margin-block-start: calc(var(--message-prose-space) * 2);
+}
+.message .message-text.markdown-body > p + p {
+	margin-block: calc(var(--message-prose-space) * 4);
+}
+.message .message-text.markdown-body :where(h1, h2, h3, h4, h5, h6) {
+	font-weight: var(--message-prose-heading-weight);
+	letter-spacing: normal;
+}
+.message .message-text.markdown-body h1 {
+	font-size: var(--message-prose-heading-one);
+	line-height: calc(var(--message-prose-space) * 8);
+	margin-block: calc(var(--message-prose-space) * 4) calc(var(--message-prose-space) * 2);
+}
+.message .message-text.markdown-body h2 {
+	font-size: var(--message-prose-heading-two);
+	line-height: calc(var(--message-prose-space) * 7);
+	margin-block: calc(var(--message-prose-space) * 4) var(--message-prose-space);
+}
+.message .message-text.markdown-body h3 {
+	font-size: var(--message-prose-heading-three);
+	line-height: calc(var(--message-prose-space) * 7);
+	margin-block: calc(var(--message-prose-space) * 4) var(--message-prose-space);
+}
+.message .message-text.markdown-body h4 {
+	font-size: 1em;
+	line-height: calc(var(--message-prose-space) * 6);
+	margin-block: calc(var(--message-prose-space) * 4) 0;
+}
+.message .message-text.markdown-body :where(h5, h6) {
+	font-size: 1em;
+	line-height: var(--message-prose-line);
+	margin-block: 0;
+}
+.message .message-text.markdown-body > :where(h1, h2, h3, h4) + p {
+	margin-block-start: 0;
+}
+.message .message-text.markdown-body :where(ul, ol) {
+	margin-block: 0;
+	padding-inline-start: var(--message-prose-line);
+}
+.message .message-text.markdown-body ul ul ul {
+	list-style-type: square;
+}
+.message .message-text.markdown-body li {
+	padding-inline-start: calc(var(--message-prose-space) * 1.5);
+}
+.message .message-text.markdown-body li + li {
+	margin-block-start: 0;
+}
+.message .message-text.markdown-body li > :where(p, ul, ol) {
+	margin-block: 0;
+}
+.message .message-text.markdown-body li > p + p {
+	margin-block-start: calc(var(--message-prose-space) * 4);
+}
+.message .message-text.markdown-body :where(ul, ol).contains-task-list {
+	padding-inline-start: 0;
+}
+.message .message-text.markdown-body blockquote {
+	position: relative;
+	margin-block: 0 calc(var(--message-prose-space) * 2);
+	border: 0;
+	padding-block: calc(var(--message-prose-space) * 2);
+	padding-inline-start: calc(var(--message-prose-space) * 6);
+	line-height: calc(var(--message-prose-space) * 6);
+}
+.message .message-text.markdown-body blockquote::after {
+	content: "";
+	position: absolute;
+	inset-inline-start: 0;
+	inset-block: calc(var(--message-prose-space) * 2);
+	width: var(--message-prose-space);
+	border-radius: calc(var(--message-prose-space) / 2);
+	background: var(--line);
+}
+.message .message-text.markdown-body blockquote > p {
+	margin-block: 0;
+}
+.message .message-text.markdown-body hr {
+	margin-block: calc(var(--message-prose-space) * 7);
+}
+.message .message-text.markdown-body hr + * {
+	margin-block-start: 0;
+}
+.message .message-text.markdown-body strong {
+	font-weight: var(--message-prose-heading-weight);
+}
+.message .message-text.markdown-body[data-markdown-tone="user"] > p {
+	margin-block: 0;
+}
+.message .message-text.markdown-body > :first-child {
+	margin-block-start: 0;
+}
+.message .message-text.markdown-body > :last-child {
+	margin-block-end: 0;
+}

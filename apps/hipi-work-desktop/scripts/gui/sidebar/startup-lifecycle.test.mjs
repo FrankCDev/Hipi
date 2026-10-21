@@ -7,7 +7,7 @@ import { seedSidebarDocument } from "./startup-lifecycle.mjs";
 const seed = {
 	workspaceIds: ["sidebar-chats", "sidebar-project-a", "sidebar-project-b"],
 	defaultWorkspaceId: "sidebar-chats",
-	handshake: { storeId: "fixture-store", protocolVersion: 9 },
+	handshake: { storeId: "fixture-store", protocolVersion: 10 },
 };
 const url = "hipi-work://app/index.html";
 const key = "hipi.work.local.v1.fixture-store.value.default-chat-workspace";

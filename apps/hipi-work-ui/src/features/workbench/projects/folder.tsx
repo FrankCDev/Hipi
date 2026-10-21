@@ -16,22 +16,31 @@ export function ProjectFolderSummary({
 	workspaceId,
 	onManage,
 	failed = false,
+	compact = false,
 }: {
 	workspaceId: string;
 	onManage: (trigger: HTMLButtonElement) => void;
 	failed?: boolean;
+	compact?: boolean;
 }) {
 	const { locale } = usePreferences();
 	const { fileAuthority } = useFiles();
 	const l = projectFolderLabels(locale);
 	const project = useProjectFolder(workspaceId);
 	const folder = project.data;
+	const healthy = !failed && !!fileAuthority?.getProject && !project.isError && folder?.status === "available";
 	return (
-		<button type="button" className="project-folder-summary" onClick={(event) => onManage(event.currentTarget)}>
+		<button
+			type="button"
+			className="project-folder-summary"
+			data-compact={compact || undefined}
+			data-healthy={healthy}
+			onClick={(event) => onManage(event.currentTarget)}
+		>
 			<Folder size={18} aria-hidden="true" />
 			<span className="project-folder-copy">
 				<strong>{folder?.displayName ?? l.title}</strong>
-				<span className="project-folder-secondary">
+				<span className={compact && healthy ? "sr-only" : "project-folder-secondary"}>
 					{failed
 						? l.createFolderFailed
 						: !fileAuthority?.getProject

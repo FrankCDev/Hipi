@@ -393,3 +393,187 @@ test("nested retired result remains unavailable, and hydration bytes fail closed
 		);
 		await assert.rejects(readToolActivityText(storage, scope, "entry:30"), { code: "CAPACITY_EXCEEDED" });
 	}));
+
+test("message selectors advance empty bounded pages and never join reused call IDs across turns", async () =>
+	fixture(async (storage) => {
+		await storage.commit(
+			[
+				{
+					type: "entry",
+					value: {
+						id: 11 as EntryId,
+						conversationId,
+						kind: "pi.assistant",
+						model: [fauxAssistantMessage([fauxToolCall("other", {}, { id: "call" })])],
+					},
+				},
+			],
+			context,
+		);
+		for (let id = 20; id < 40; id++)
+			await storage.commit([{ type: "task", value: task(id, id === 20 ? 10 : 11, 999) }], context);
+		const selector = { kind: "message", messageId: "10_0", contentIndex: 0 } as const;
+		const first = await readToolActivities(storage, scope, undefined, selector);
+		assert.deepEqual(first.items, []);
+		assert.ok(first.nextCursor);
+		assert.equal(first.unavailableTaskIds, undefined);
+		const second = await readToolActivities(storage, scope, first.nextCursor, selector);
+		assert.deepEqual(
+			second.items.map((item) => item.taskId),
+			["20"],
+		);
+		assert.equal(second.nextCursor, null);
+		assert.equal(second.membershipFence, first.membershipFence);
+		for (const changed of [undefined, { kind: "message", messageId: "11_0" } as const])
+			await assert.rejects(readToolActivities(storage, scope, first.nextCursor, changed), {
+				code: "INVALID_REQUEST",
+			});
+		await assert.rejects(
+			readToolActivities(storage, { ...scope, generation: "replaced" }, first.nextCursor, selector),
+			{ code: "CURSOR_STALE" },
+		);
+		await assert.rejects(readToolActivities(storage, scope, undefined, { ...selector, contentIndex: 1 }), {
+			code: "NOT_FOUND",
+		});
+	}));
+
+test("exact selection preserves valid cards without exposing missing, foreign, invisible or cyclic tasks", async () =>
+	fixture(async (storage) => {
+		const nested = (id: number, parent: number): StoredTask => ({
+			...task(id),
+			input: {
+				kind: "nested",
+				parent,
+				call: { id: `child-${id}`, name: "nested", arguments: { secret: "PRIVATE_INPUT" } },
+			},
+		});
+		await storage.commit(
+			[
+				{ type: "conversation", value: { id: 2 as ConversationId } },
+				{ type: "task", value: task(20) },
+				{ type: "task", value: { ...task(21), conversationId: 2 as ConversationId } },
+				{ type: "task", value: task(22, 999) },
+				{ type: "task", value: { ...task(23), kind: "other" } },
+				{ type: "task", value: nested(24, 20) },
+				{ type: "task", value: nested(25, 26) },
+				{ type: "task", value: nested(26, 25) },
+				{ type: "task", value: nested(27, 21) },
+			],
+			context,
+		);
+		const readEntry = storage.entry.bind(storage);
+		let foreignEvidenceReads = 0;
+		// A foreign task must not cause its assistant/evidence to be hydrated.
+		const foreign = { ...task(21, 888), conversationId: 2 as ConversationId };
+		await storage.commit([{ type: "task", value: foreign }], context);
+		storage.entry = ((...args: Parameters<Storage["entry"]>) => {
+			if (args[1] === 888) foreignEvidenceReads++;
+			return readEntry(...args);
+		}) as Storage["entry"];
+		const ids = ["20", "21", "22", "23", "24", "25", "27", "999"];
+		const page = await readToolActivities(storage, scope, undefined, { kind: "tasks", taskIds: ids });
+		assert.deepEqual(
+			page.items.map((item) => item.taskId),
+			["20", "24"],
+		);
+		assert.deepEqual(page.unavailableTaskIds, ["21", "22", "23", "25", "27", "999"]);
+		assert.equal(foreignEvidenceReads, 0);
+		assert.equal(page.nextCursor, null);
+		assert.equal(JSON.stringify(page).includes("PRIVATE_INPUT"), false);
+		await assert.rejects(readToolActivities(storage, scope, "cursor", { kind: "tasks", taskIds: ["20"] }), {
+			code: "INVALID_REQUEST",
+		});
+		await storage.commit(
+			[{ type: "conversation", value: { id: 60 as ConversationId, parent: { conversationId, at: 10 as EntryId } } }],
+			context,
+		);
+		const fork = await readToolActivities(storage, { ...scope, durableId: 60 }, undefined, {
+			kind: "tasks",
+			taskIds: ["20"],
+		});
+		assert.deepEqual(fork.items, []);
+		assert.deepEqual(fork.unavailableTaskIds, ["20"]);
+		for (let id = 100; id <= 116; id++)
+			await storage.commit([{ type: "task", value: nested(id, id === 100 ? 20 : id - 1) }], context);
+		const deep = await readToolActivities(storage, scope, undefined, { kind: "tasks", taskIds: ["115", "116"] });
+		assert.deepEqual(
+			deep.items.map((item) => item.taskId),
+			["115"],
+		);
+		assert.deepEqual(deep.unavailableTaskIds, ["116"]);
+	}));
+
+test("exact ancestry hydration has a hard request budget and propagates storage failures", async () =>
+	fixture(async (storage) => {
+		await storage.commit([{ type: "task", value: task(20) }], context);
+		for (let id = 200; id < 264; id++)
+			await storage.commit(
+				[
+					{
+						type: "task",
+						value: {
+							...task(id),
+							input: {
+								kind: "nested",
+								parent: (id - 200) % 16 === 0 ? 20 : id - 1,
+								call: { id: `nested-${id}`, name: "nested", arguments: {} },
+							},
+						},
+					},
+				],
+				context,
+			);
+		const original = storage.task.bind(storage);
+		let reads = 0;
+		storage.task = (...args) => {
+			reads++;
+			return original(...args);
+		};
+		await assert.rejects(
+			readToolActivities(storage, scope, undefined, { kind: "tasks", taskIds: ["215", "231", "247", "263"] }),
+			{ code: "CAPACITY_EXCEEDED" },
+		);
+		assert.equal(reads, ACTIVITY_LIMITS.taskHydrations);
+		storage.task = async () => {
+			throw new Error("Storage failed");
+		};
+		await assert.rejects(
+			readToolActivities(storage, scope, undefined, { kind: "tasks", taskIds: ["20"] }),
+			/Storage failed/,
+		);
+	}));
+
+test("message selection respects model and content indexes rather than presentation position", async () =>
+	fixture(async (storage) => {
+		await storage.commit(
+			[
+				{
+					type: "entry",
+					value: {
+						id: 12 as EntryId,
+						conversationId,
+						kind: "pi.assistant",
+						model: [
+							fauxAssistantMessage("intro"),
+							fauxAssistantMessage([
+								{ type: "text", text: "before" },
+								fauxToolCall("official.pack.tool", {}, { id: "call" }),
+							]),
+						],
+					},
+				},
+				{ type: "task", value: task(20, 12, 999) },
+			],
+			context,
+		);
+		const found = await readToolActivities(storage, scope, undefined, {
+			kind: "message",
+			messageId: "12_1",
+			contentIndex: 1,
+		});
+		assert.deepEqual(found.items[0].anchor, { assistantEntryId: "12", modelIndex: 1, contentIndex: 1 });
+		assert.deepEqual(
+			(await readToolActivities(storage, scope, undefined, { kind: "message", messageId: "12_0" })).items,
+			[],
+		);
+	}));

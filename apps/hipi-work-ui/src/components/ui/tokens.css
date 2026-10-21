@@ -1,6 +1,8 @@
 /* Shared internal roles, calibrated against the desktop UI. Appearance settings
    still own colors/fonts; these dimensions reuse Tailwind's rem-based spacing. */
 :root {
+	--ui-streaming-text-duration: 700ms;
+	--ui-streaming-text-easing: cubic-bezier(0.37, 0.55, 0.86, 0.88);
 	--ui-modal-layer: 50;
 	--ui-control-compact-size: calc(var(--spacing) * 5);
 	--ui-control-toolbar-size: calc(var(--spacing) * 7);

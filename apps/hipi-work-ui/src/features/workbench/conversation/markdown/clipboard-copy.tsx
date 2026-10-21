@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { usePreferences } from "../../../../app/preferences.tsx";
+import { ActionTooltip } from "../../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../../components/ui/button.tsx";
 import { markdownLabels } from "./labels.ts";
 import { useClipboardFeedback } from "./use-clipboard-feedback.ts";
@@ -40,22 +41,23 @@ function ClipboardCopyAction({
 	const accessibleLabel = disabled ? (disabledLabel ?? label) : feedback;
 	return (
 		<div className={containerClassName}>
-			<Button
-				className={className}
-				size={iconOnly ? "icon-sm" : "sm"}
-				variant={variant}
-				disabled={disabled || pending}
-				aria-label={accessibleLabel}
-				title={accessibleLabel}
-				onClick={() => {
-					if (!disabled) clipboard.copy(text);
-				}}
-			>
-				{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-				<span className={iconOnly ? "sr-only" : undefined} aria-live="polite">
-					{feedback}
-				</span>
-			</Button>
+			<ActionTooltip label={accessibleLabel} disabled={disabled || pending}>
+				<Button
+					className={className}
+					size={iconOnly ? "icon-sm" : "sm"}
+					variant={variant}
+					disabled={disabled || pending}
+					aria-label={accessibleLabel}
+					onClick={() => {
+						if (!disabled) clipboard.copy(text);
+					}}
+				>
+					{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
+					<span className={iconOnly ? "sr-only" : undefined} aria-live="polite">
+						{feedback}
+					</span>
+				</Button>
+			</ActionTooltip>
 			{clipboard.status === "failed" && (
 				<p className={errorClassName} role="alert">
 					{t("common.copyFailed")}

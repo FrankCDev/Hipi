@@ -5,6 +5,7 @@ import {
 	CONVERSATION_HISTORY_THRESHOLD,
 	CONVERSATION_JUMP_DURATION,
 	ConversationScrollIntent,
+	DISCLOSURE_ANCHOR_DURATION,
 	isScrollbarPointer,
 	nativeScrollDirection,
 } from "../../../src/features/workbench/conversation/scroll-intent.ts";
@@ -195,4 +196,71 @@ test("scrollbar detection handles both-edge gutters without treating content cli
 	assert.equal(isScrollbarPointer(490, rect, 16, 368), true);
 	assert.equal(isScrollbarPointer(120, rect, 16, 368), false);
 	assert.equal(isScrollbarPointer(99, rect, 16, 368), false);
+});
+
+test("disclosure keeps fractional header position for 350ms, including reduced motion", () => {
+	for (const reduced of [false, true]) {
+		const model = fixture();
+		if (reduced) model.reduced();
+		let top = 400.125;
+		let cleaned = 0;
+		model.controller.holdHeader(
+			() => top - model.offset,
+			() => cleaned++,
+		);
+		assert.equal(model.controller.holdingHeader, true);
+		assert.equal(model.controller.jumping, false);
+		top += 20.25;
+		model.frame(16);
+		assert.equal(model.offset, 120.25);
+		top -= 5.125;
+		model.frame(220);
+		assert.equal(model.offset, 115.125);
+		model.frame(DISCLOSURE_ANCHOR_DURATION);
+		assert.equal(model.controller.holdingHeader, false);
+		assert.equal(model.pending, 0);
+		assert.equal(cleaned, 1);
+		assert.equal(model.controller.follows, false);
+	}
+});
+test("disclosure restores only previous following that still lies at the bottom", () => {
+	for (const previous of [false, true])
+		for (const near of [false, true]) {
+			const model = fixture();
+			model.offsetTo(990);
+			model.controller.setFollow(previous);
+			model.controller.holdHeader(
+				() => 10,
+				() => {},
+			);
+			if (!near) model.endTo(1500);
+			model.frame(DISCLOSURE_ANCHOR_DURATION);
+			assert.equal(model.controller.follows, previous && near);
+		}
+});
+test("disclosure cancels on user intent, removed anchor, jump, replacement and disposal", () => {
+	for (const reason of ["intent", "removed", "jump", "replacement", "dispose"] as const) {
+		const model = fixture();
+		let valid = true;
+		let cleaned = 0;
+		model.controller.holdHeader(
+			() => (valid ? 50 : undefined),
+			() => cleaned++,
+		);
+		if (reason === "intent") model.controller.userIntent(-1);
+		if (reason === "removed") {
+			valid = false;
+			model.frame(16);
+		}
+		if (reason === "jump") model.controller.jump();
+		if (reason === "replacement")
+			model.controller.holdHeader(
+				() => 20,
+				() => {},
+			);
+		if (reason === "dispose") model.controller.dispose();
+		assert.equal(cleaned, 1);
+		model.controller.dispose();
+		assert.equal(model.pending, 0);
+	}
 });

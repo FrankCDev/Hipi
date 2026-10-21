@@ -115,3 +115,45 @@ test("activity read requests cannot resume, reconcile, select host paths or expa
 			});
 	}
 });
+
+test("selectors and exact unavailable partition reject ambiguous or expanded identities", () => {
+	for (const selector of [
+		{ kind: "tasks", taskIds: ["1", "2"] },
+		{ kind: "message", messageId: "1_0", contentIndex: 0 },
+	]) {
+		const request = { version: PROTOCOL_VERSION, method: "getToolActivities", params: { ...scope, selector } };
+		assert.deepEqual(parseRequest(request), request);
+	}
+	for (const selector of [
+		{ kind: "tasks", taskIds: [] },
+		{ kind: "tasks", taskIds: ["1", "1"] },
+		{ kind: "tasks", taskIds: ["01"] },
+		{ kind: "tasks", taskIds: ["9007199254740992"] },
+		{ kind: "tasks", taskIds: Array.from({ length: 17 }, (_, i) => String(i + 1)) },
+		{ kind: "message", messageId: "1_01" },
+		{ kind: "message", messageId: "1_0", contentIndex: -1 },
+		{ kind: "message", messageId: "1_0", callId: "guess" },
+	])
+		assert.throws(
+			() => parseRequest({ version: PROTOCOL_VERSION, method: "getToolActivities", params: { ...scope, selector } }),
+			{ code: "INVALID_REQUEST" },
+		);
+	assert.throws(
+		() =>
+			parseRequest({
+				version: PROTOCOL_VERSION,
+				method: "getToolActivities",
+				params: { ...scope, selector: { kind: "tasks", taskIds: ["1"] }, cursor: "cursor" },
+			}),
+		{ code: "INVALID_REQUEST" },
+	);
+	const exact = { ...page, items: [{ ...activity, taskId: "1" }], unavailableTaskIds: ["2"] };
+	assert.deepEqual(parseResult("getToolActivities", exact), exact);
+	for (const patch of [
+		{ unavailableTaskIds: ["1"] },
+		{ unavailableTaskIds: ["2", "2"] },
+		{ nextCursor: "cursor" },
+		{ coverage: "entries" },
+	])
+		assert.throws(() => parseResult("getToolActivities", { ...exact, ...patch }), { code: "INVALID_REQUEST" });
+});

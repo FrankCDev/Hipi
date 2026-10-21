@@ -136,6 +136,26 @@ test("real faux save projects approval and artifact then cold read does not resu
 		});
 		assert.equal(pending.toolResult, "unavailable");
 		assert.equal(pending.effect, undefined);
+		const liveSnapshot = await runtime.call("snapshot", scope);
+		const slot = liveSnapshot.execution?.tools.items.find((item) => item.taskId === pending.taskId);
+		assert.equal(slot?.callId, pending.callId);
+		assert.ok(slot?.taskId);
+		const exact = await runtime.call("getToolActivities", {
+			...scope,
+			selector: { kind: "tasks", taskIds: [slot.taskId, "9007199254740991"] },
+		});
+		assert.deepEqual(
+			exact.items.map((item) => item.activityId),
+			[pending.activityId],
+		);
+		assert.deepEqual(exact.unavailableTaskIds, ["9007199254740991"]);
+		assert.ok(pending.anchor);
+		const messageId = `${pending.anchor.assistantEntryId}_${pending.anchor.modelIndex}`;
+		const toolMessage = liveSnapshot.messages.find((item) => item.id === messageId);
+		assert.deepEqual(toolMessage?.toolCalls, {
+			items: [{ contentIndex: pending.anchor.contentIndex, callId: "save", name: "hipi_files_save" }],
+			total: 1,
+		});
 		const approval = (await runtime.call("listToolApprovals", scope)).items[0];
 		await runtime.call("decideToolApproval", {
 			...scope,
@@ -163,13 +183,71 @@ test("real faux save projects approval and artifact then cold read does not resu
 			const receipt = await runtime.call("getReceipt", { workspaceId: "work", requestId: "submit" });
 			return receipt?.execution === "done" ? receipt : undefined;
 		});
+		// A later cancelled round reuses the provider call ID, but must keep its own durable message/task identity.
+		const currentFile = await files.readText({ ...root, path: "note.txt" });
+		faux.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall(
+						"hipi_files_save",
+						{
+							rootId: root.rootId,
+							path: "note.txt",
+							text: "never approved",
+							ifMatch: currentFile.revision,
+						},
+						{ id: "save" },
+					),
+				],
+				{ stopReason: "toolUse" },
+			),
+		]);
+		await runtime.call("submit", { ...scope, requestId: "cancel-submit", text: "Prepare another edit" });
+		const cancelledActivity = await until(async () => {
+			const value = (await runtime.call("getToolActivities", scope)).items.find(
+				(item) => item.approval?.status === "pending" && item.taskId !== pending.taskId,
+			);
+			return value;
+		});
+		assert.ok(cancelledActivity.anchor);
+		const cancelledMessageId = `${cancelledActivity.anchor.assistantEntryId}_${cancelledActivity.anchor.modelIndex}`;
+		assert.notEqual(cancelledMessageId, messageId);
+		await runtime.call("cancelExecution", scope);
+		await until(async () => {
+			const value = await runtime.call("snapshot", scope);
+			return !value.running && !value.execution ? value : undefined;
+		});
 		await runtime.close();
 		const calls = faux.state.callCount;
 		runtime = await openRuntime(join(directory, "store"), options);
-		const cold = (await runtime.call("getToolActivities", scope)).items[0];
+		const cold = (await runtime.call("getToolActivities", scope)).items.find(
+			(item) => item.activityId === completed.activityId,
+		)!;
 		assert.equal(cold.activityId, completed.activityId);
 		assert.equal(cold.effect?.status, "confirmed");
 		assert.equal(cold.outputTruncated, false);
+		const coldSnapshot = await runtime.call("snapshot", scope);
+		assert.equal(coldSnapshot.execution, undefined);
+		assert.equal(
+			coldSnapshot.messages.find((item) => item.id === cancelledMessageId)?.toolCalls?.items[0]?.callId,
+			"save",
+		);
+		const cancelledPage = await runtime.call("getToolActivities", {
+			...scope,
+			selector: { kind: "message", messageId: cancelledMessageId },
+		});
+		assert.deepEqual(
+			cancelledPage.items.map((item) => item.taskId),
+			[cancelledActivity.taskId],
+		);
+		assert.notEqual(cancelledPage.items[0]?.toolResult, "success");
+		assert.deepEqual(coldSnapshot.messages.find((item) => item.id === messageId)?.toolCalls, toolMessage?.toolCalls);
+		const historical = await runtime.call("getToolActivities", {
+			...scope,
+			selector: { kind: "message", messageId, contentIndex: pending.anchor.contentIndex },
+		});
+		assert.equal(historical.items[0]?.activityId, cold.activityId);
+		assert.equal(historical.unavailableTaskIds, undefined);
 		const output = parseResult(
 			"getToolActivityText",
 			await runtime.call("getToolActivityText", { ...scope, activityId: cold.activityId }),
@@ -186,7 +264,7 @@ test("real faux save projects approval and artifact then cold read does not resu
 		try {
 			await session.page();
 			assert.equal(session.snapshot().failed, false);
-			assert.equal(session.snapshot().page?.items[0]?.activityId, cold.activityId);
+			assert.ok(session.snapshot().page?.items.some((item) => item.activityId === cold.activityId));
 			await session.text(cold.activityId);
 			assert.equal(session.snapshot().failed, false);
 			assert.deepEqual(session.snapshot().text, output);

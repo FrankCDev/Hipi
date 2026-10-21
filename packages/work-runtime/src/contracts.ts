@@ -27,11 +27,17 @@ export {
 
 import {
 	ACTIVITY_LIMITS,
+	type MessageToolCalls,
 	type ToolActivity,
 	type ToolActivityPage,
+	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
+import { type ConversationExecution, parseExecution } from "./execution/contracts.ts";
 import { validateRelativePath } from "./files/contracts.ts";
+
+export { type ConversationExecution, EXECUTION_LIMITS, type ExecutionTool } from "./execution/contracts.ts";
+
 import {
 	ACTIVITY_BASES,
 	NAVIGATION_LIMITS,
@@ -96,8 +102,10 @@ import {
 
 export {
 	ACTIVITY_LIMITS,
+	type MessageToolCalls,
 	type ToolActivity,
 	type ToolActivityPage,
+	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
 export type { ModelFailure, ModelFailureCategory } from "./model-failure.ts";
@@ -126,7 +134,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -301,11 +309,14 @@ export type TextPreview = { text: string; textLength: number; truncated: boolean
 export type Message = TextPreview & {
 	id: string;
 	role: "user" | "assistant";
+	toolCalls?: MessageToolCalls;
 	interrupted?: true;
 	/** Observer-local presentation continuity, never a history identifier or command authority. */
 	streamId?: string;
 };
 export type Snapshot = Scope & {
+	/** Committed presentation metadata; may remain present while execution is paused. */
+	execution?: ConversationExecution;
 	messages: Message[];
 	partial: string;
 	partialLength: number;
@@ -336,7 +347,10 @@ export type Methods = ToolPackMethods &
 	ProviderConfigurationMethods &
 	NavigationMethods &
 	SearchMethods & {
-		getToolActivities: { params: Scope & { cursor?: string }; result: ToolActivityPage };
+		getToolActivities: {
+			params: Scope & { cursor?: string; selector?: ToolActivitySelector };
+			result: ToolActivityPage;
+		};
 		getToolActivityText: { params: Scope & { activityId: string; cursor?: string }; result: ToolActivityTextPage };
 		handshake: { params: Record<string, never>; result: Handshake };
 		listWorkspaces: { params: { cursor?: string }; result: Page<Workspace> };
@@ -780,8 +794,21 @@ export function parseRequest(value: unknown): Request {
 		case "listActiveAgentContexts":
 			request = { version: PROTOCOL_VERSION, method: r.method, params: parseScope(p) };
 			break;
+		case "getToolActivities": {
+			const selector = p.selector === undefined ? undefined : parseToolActivitySelector(p.selector);
+			if (selector?.kind === "tasks" && p.cursor !== undefined) throw new AppError("INVALID_REQUEST");
+			request = {
+				version: PROTOCOL_VERSION,
+				method: r.method,
+				params: {
+					...parseScope(p),
+					...(selector ? { selector } : {}),
+					...(p.cursor === undefined ? {} : { cursor: string(p.cursor, LIMITS.cursor) }),
+				},
+			};
+			break;
+		}
 		case "getHistory":
-		case "getToolActivities":
 		case "listAgentContexts":
 		case "listPendingToolApprovals":
 		case "listToolApprovals":
@@ -918,9 +945,64 @@ function preview(value: unknown, length: unknown, truncated: unknown, max: numbe
 		throw new AppError("INVALID_REQUEST");
 	return { ...result, truncated };
 }
+export function parseToolActivitySelector(value: unknown): ToolActivitySelector {
+	const p = object(value);
+	if (p.kind === "tasks") {
+		fields(p, ["kind", "taskIds"]);
+		const taskIds = activityTaskIds(p.taskIds);
+		if (!taskIds.length) throw new AppError("INVALID_REQUEST");
+		return { kind: "tasks", taskIds };
+	}
+	if (p.kind === "message") {
+		fields(p, ["kind", "messageId", "contentIndex"]);
+		const messageId = string(p.messageId, 256);
+		const match = /^([1-9][0-9]*)_(0|[1-9][0-9]*)$/.exec(messageId);
+		if (!match || !Number.isSafeInteger(Number(match[1])) || !Number.isSafeInteger(Number(match[2])))
+			throw new AppError("INVALID_REQUEST");
+		return {
+			kind: "message",
+			messageId,
+			...(p.contentIndex === undefined ? {} : { contentIndex: integer(p.contentIndex) }),
+		};
+	}
+	throw new AppError("INVALID_REQUEST");
+}
+function activityTaskIds(value: unknown): string[] {
+	if (!Array.isArray(value) || value.length > ACTIVITY_LIMITS.taskIds) throw new AppError("INVALID_REQUEST");
+	const result = Array.from(value, (raw) => {
+		const value = string(raw, 16);
+		if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new AppError("INVALID_REQUEST");
+		return value;
+	});
+	if (new Set(result).size !== result.length) throw new AppError("INVALID_REQUEST");
+	return result;
+}
+function parseMessageToolCalls(value: unknown): MessageToolCalls {
+	const p = object(value);
+	fields(p, ["items", "total"]);
+	if (
+		!Array.isArray(p.items) ||
+		p.items.length > ACTIVITY_LIMITS.summaryItems ||
+		jsonBytes(value) > ACTIVITY_LIMITS.summaryBytes
+	)
+		throw new AppError("INVALID_REQUEST");
+	const total = integer(p.total);
+	let previous = -1;
+	const items = Array.from(p.items, (raw) => {
+		const item = object(raw);
+		fields(item, ["contentIndex", "callId", "name"]);
+		const contentIndex = integer(item.contentIndex);
+		if (contentIndex <= previous) throw new AppError("INVALID_REQUEST");
+		previous = contentIndex;
+		return { contentIndex, callId: string(item.callId, 256), name: string(item.name, 256) };
+	});
+	if (!total || total < items.length) throw new AppError("INVALID_REQUEST");
+	return { items, total };
+}
 function parseMessage(value: unknown): Message {
 	const m = object(value);
-	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId"]);
+	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId", "toolCalls"]);
+	if (m.toolCalls !== undefined && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	if (m.interrupted !== undefined && (m.interrupted !== true || m.role !== "assistant"))
 		throw new AppError("INVALID_REQUEST");
 	if (m.streamId !== undefined && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
@@ -928,6 +1010,7 @@ function parseMessage(value: unknown): Message {
 	return {
 		id: string(m.id, 256),
 		role: m.role,
+		...(m.toolCalls === undefined ? {} : { toolCalls: parseMessageToolCalls(m.toolCalls) }),
 		...preview(m.text, m.textLength, m.truncated, LIMITS.messagePreview),
 		...(m.interrupted === true ? { interrupted: true as const } : {}),
 		...(m.streamId === undefined ? {} : { streamId: streamIdentity(m.streamId) }),
@@ -961,14 +1044,24 @@ export function parseSnapshot(value: unknown): Snapshot {
 		"partialId",
 		"running",
 		"historyCursor",
+		"execution",
 	]);
 	if (typeof p.running !== "boolean") throw new AppError("INVALID_REQUEST");
 	const partial = preview(p.partial, p.partialLength, p.partialTruncated, LIMITS.partialPreview);
 	const committed = messages(p.messages);
 	const partialId = p.partialId === undefined ? undefined : streamIdentity(p.partialId);
+	let execution: ConversationExecution | undefined;
+	if (p.execution !== undefined) {
+		try {
+			execution = parseExecution(p.execution);
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
 	if (partialId && committed.some((message) => message.streamId === partialId)) throw new AppError("INVALID_REQUEST");
 	return {
 		...parseScope(p),
+		...(execution ? { execution } : {}),
 		partial: partial.text,
 		partialLength: partial.textLength,
 		partialTruncated: partial.truncated,
@@ -1663,7 +1756,7 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		};
 	} else if (method === "getToolActivities") {
 		const p = object(value);
-		fields(p, ["items", "nextCursor", "coverage", "membershipFence"]);
+		fields(p, ["items", "nextCursor", "coverage", "membershipFence", "unavailableTaskIds"]);
 		if (
 			!Array.isArray(p.items) ||
 			p.items.length > ACTIVITY_LIMITS.page ||
@@ -1672,8 +1765,19 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 			throw new AppError("INVALID_REQUEST");
 		const items = Array.from(p.items, parseToolActivity);
 		if (new Set(items.map((item) => item.activityId)).size !== items.length) throw new AppError("INVALID_REQUEST");
+		const unavailableTaskIds = p.unavailableTaskIds === undefined ? undefined : activityTaskIds(p.unavailableTaskIds);
+		if (unavailableTaskIds !== undefined) {
+			if (
+				p.coverage !== "tasks" ||
+				p.nextCursor !== null ||
+				items.some((item) => item.source !== "task" || !item.taskId)
+			)
+				throw new AppError("INVALID_REQUEST");
+			activityTaskIds([...items.map((item) => item.taskId), ...unavailableTaskIds]);
+		}
 		result = {
 			items,
+			...(unavailableTaskIds === undefined ? {} : { unavailableTaskIds }),
 			nextCursor: cursor(p.nextCursor),
 			coverage: p.coverage,
 			membershipFence: string(p.membershipFence, 2048),

@@ -1,15 +1,6 @@
 import type { ModelReference, Scope } from "@hipi/work-runtime/contracts";
 import { ShieldCheck } from "lucide-react";
-import {
-	type MouseEventHandler,
-	type ReactNode,
-	useEffect,
-	useId,
-	useRef,
-	useState,
-	useSyncExternalStore,
-} from "react";
-import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
+import { type MouseEventHandler, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
@@ -18,7 +9,8 @@ import { useProjectFolder } from "../workbench/projects/use-folder.ts";
 import { ApprovalCard } from "./approval-card.tsx";
 import { ContextDialog } from "./context-dialog.tsx";
 import { permissionLabels } from "./labels.ts";
-import { MAX_UNRESOLVED_OPERATIONS, PermissionSession } from "./permission-session.ts";
+import { PermissionProvider, usePermissionOwner } from "./permission-provider.tsx";
+import { MAX_UNRESOLVED_OPERATIONS } from "./permission-session.ts";
 import { RetainedContextDialog } from "./retained-context-dialog.tsx";
 
 type AgentPermissionsProps = {
@@ -37,7 +29,7 @@ type ContextAction = {
 };
 
 /** Keep the live session outside any sheet or section so alerts and recovery survive dismissal. */
-export function AgentPermissionManagement({
+function PermissionManagementView({
 	scope,
 	model,
 	connected,
@@ -52,55 +44,17 @@ export function AgentPermissionManagement({
 	onContextRestoreFocus?: () => void;
 	children: (view: { content: ReactNode; attention: ReactNode; contextAction: ContextAction }) => ReactNode;
 }) {
-	const client = useAppClient();
-	const local = useLocalState();
+	const owner = usePermissionOwner();
+	if (!owner) throw new Error("Permission provider is required");
+	const { session, state, now, setNow } = owner;
 	const boundScope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
 	const pl = projectFolderLabels(locale);
 	const project = useProjectFolder(scope.workspaceId, connected);
-	const [session] = useState(
-		() =>
-			new PermissionSession(client, { workspaceId: scope.workspaceId, conversationId: scope.conversationId }, local),
-	);
-	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
 	const [contextOpen, setContextOpen] = useState(false);
 	const contextTrigger = useRef<HTMLButtonElement | null>(null);
 	const contextId = useId();
-	const [now, setNow] = useState(Date.now);
-	const [visible, setVisible] = useState(
-		() => typeof document === "undefined" || document.visibilityState !== "hidden",
-	);
-	useEffect(() => {
-		const update = () => setVisible(document.visibilityState !== "hidden");
-		document.addEventListener("visibilitychange", update);
-		return () => document.removeEventListener("visibilitychange", update);
-	}, []);
-	useEffect(() => {
-		session.activate();
-		return () => session.dispose();
-	}, [session]);
-	useEffect(() => {
-		if (!connected || !visible || state.failed) {
-			session.cancel();
-			return;
-		}
-		let stopped = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const poll = async () => {
-			await session.refresh();
-			if (stopped) return;
-			setNow(Date.now());
-			// Single-page, single-flight polling only while the active conversation is visible.
-			if (!session.getSnapshot().failed) timer = setTimeout(() => void poll(), 2000);
-		};
-		void poll();
-		return () => {
-			stopped = true;
-			clearTimeout(timer);
-			session.cancel();
-		};
-	}, [session, connected, visible, state.failed]);
 	useEffect(() => {
 		// Closed audit views return to the pending queue so new approvals stay discoverable.
 		if (
@@ -475,6 +429,23 @@ export function AgentPermissionManagement({
 				}}
 			/>
 		</>
+	);
+}
+
+export function AgentPermissionManagement(props: Parameters<typeof PermissionManagementView>[0]) {
+	const owner = usePermissionOwner();
+	if (owner) {
+		if (
+			owner.scope.workspaceId !== props.scope.workspaceId ||
+			owner.scope.conversationId !== props.scope.conversationId
+		)
+			throw new Error("Permission scope mismatch");
+		return <PermissionManagementView {...props} />;
+	}
+	return (
+		<PermissionProvider scope={props.scope} connected={props.connected} archived={props.archived}>
+			<PermissionManagementView {...props} />
+		</PermissionProvider>
 	);
 }
 

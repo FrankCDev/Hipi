@@ -1,9 +1,19 @@
-import type { AppClient, Scope, ToolActivityPage, ToolActivityTextPage } from "@hipi/work-runtime/contracts";
+import type {
+	AppClient,
+	Scope,
+	ToolActivityPage,
+	ToolActivitySelector,
+	ToolActivityTextPage,
+} from "@hipi/work-runtime/contracts";
+
+import { validateActivitySelection } from "./activity-selection.ts";
 
 export type ActivityState = {
 	page?: ToolActivityPage;
 	cursor?: string;
 	text?: ToolActivityTextPage;
+	/** Request cursor that produced text; undefined denotes its first chunk. */
+	textCursor?: string;
 	expanded?: string;
 	busy: boolean;
 	failed: boolean;
@@ -20,8 +30,17 @@ export class ActivitySession {
 	private retryRead?: Read;
 	private client: AppClient;
 	private scope: Scope;
-	constructor(client: AppClient, scope: Scope) {
+	private selector?: ToolActivitySelector;
+	private expectedCalls?: ReadonlyMap<string, string>;
+	constructor(
+		client: AppClient,
+		scope: Scope,
+		selector?: ToolActivitySelector,
+		expectedCalls?: ReadonlyMap<string, string>,
+	) {
 		this.client = client;
+		this.selector = selector ? structuredClone(selector) : undefined;
+		this.expectedCalls = expectedCalls ? new Map(expectedCalls) : undefined;
 		this.scope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 	}
 	snapshot = () => this.state;
@@ -46,7 +65,7 @@ export class ActivitySession {
 		this.cancel();
 		const pageFailed = this.state.failed && this.retryRead?.kind === "page";
 		if (!pageFailed) this.retryRead = undefined;
-		this.publish({ ...this.state, text: undefined, expanded: undefined, failed: pageFailed });
+		this.publish({ ...this.state, text: undefined, textCursor: undefined, expanded: undefined, failed: pageFailed });
 	}
 	dispose() {
 		this.active = false;
@@ -55,6 +74,7 @@ export class ActivitySession {
 		this.publish({ busy: false, failed: false });
 	}
 	page(cursor?: string) {
+		if (this.selector?.kind === "tasks" && cursor !== undefined) return Promise.resolve();
 		return this.read({ kind: "page", cursor });
 	}
 	text(activityId: string, cursor?: string) {
@@ -79,6 +99,7 @@ export class ActivitySession {
 				? {
 						expanded: read.activityId,
 						text: this.state.text?.activityId === read.activityId ? this.state.text : undefined,
+						textCursor: this.state.text?.activityId === read.activityId ? this.state.textCursor : undefined,
 					}
 				: {}),
 		});
@@ -94,11 +115,16 @@ export class ActivitySession {
 			const cursor = read.cursor === undefined ? {} : { cursor: read.cursor };
 			if (read.kind === "page") {
 				const page = await Promise.race([
-					this.client.call("getToolActivities", { ...this.scope, ...cursor }, controller.signal),
+					this.client.call(
+						"getToolActivities",
+						{ ...this.scope, ...cursor, ...(this.selector ? { selector: this.selector } : {}) },
+						controller.signal,
+					),
 					aborted,
 				]);
 				if (!this.active || generation !== this.generation) return;
 				if (controller.signal.aborted) throw new Error("Read timed out");
+				validateActivitySelection(page, this.selector, this.expectedCalls);
 				this.publish({ page, cursor: read.cursor, busy: false, failed: false });
 			} else {
 				const text = await Promise.race([
@@ -112,7 +138,7 @@ export class ActivitySession {
 				if (!this.active || generation !== this.generation) return;
 				if (controller.signal.aborted || text.activityId !== read.activityId || !text.retainedOutputOnly)
 					throw new Error("Invalid retained output");
-				this.publish({ ...this.state, text, busy: false, failed: false });
+				this.publish({ ...this.state, text, textCursor: read.cursor, busy: false, failed: false });
 			}
 			this.retryRead = undefined;
 		} catch {

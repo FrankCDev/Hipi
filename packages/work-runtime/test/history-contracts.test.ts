@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { ConversationId, EntryId } from "@earendil-works/pi-durable";
 import {
+	ACTIVITY_LIMITS,
 	fitsPayloadBudget,
 	jsonBytes,
 	LIMITS,
@@ -9,6 +12,7 @@ import {
 	parseRequest,
 	parseResult,
 } from "../src/contracts.ts";
+import { previewMessage } from "../src/history.ts";
 
 const scope = { workspaceId: "work", conversationId: "conversation" };
 const message = { id: "1_0", role: "assistant", text: "hello", textLength: 5, truncated: false };
@@ -221,4 +225,77 @@ test("UTF-8 byte accounting includes JSON escapes and envelope headroom", () => 
 		Buffer.byteLength(`data: ${JSON.stringify({ id: "x".repeat(128), kind: "frame", frame })}\n\n`) <
 			LIMITS.frameBytes,
 	);
+});
+
+test("tool-call summaries survive committed aborted history without arguments and fit a maximal full frame", () => {
+	const calls = Array.from({ length: 40 }, (_, index) =>
+		fauxToolCall("\u0000".repeat(256), { secret: "ARG_SENTINEL" }, { id: `${index}${"\u0000".repeat(250)}` }),
+	);
+	const entry = {
+		id: 1 as EntryId,
+		conversationId: 1 as ConversationId,
+		kind: "pi.assistant",
+		model: [
+			fauxAssistantMessage([{ type: "text" as const, text: "\u0000".repeat(LIMITS.messagePreview) }, ...calls], {
+				stopReason: "aborted",
+			}),
+		],
+	};
+	const projected = previewMessage(entry, 0)!;
+	assert.equal(projected.interrupted, true);
+	assert.equal(projected.toolCalls?.total, 40);
+	assert.ok(projected.toolCalls && projected.toolCalls.items.length > 0 && projected.toolCalls.items.length < 16);
+	assert.ok(jsonBytes(projected.toolCalls) <= ACTIVITY_LIMITS.summaryBytes);
+	assert.equal(JSON.stringify(projected).includes("ARG_SENTINEL"), false);
+	const maximal = {
+		...snapshot,
+		messages: Array.from({ length: LIMITS.historyMessages }, (_, index) => ({ ...projected, id: `${index + 1}_0` })),
+		partial: "\u0000".repeat(LIMITS.partialPreview),
+		partialLength: LIMITS.partialPreview,
+		execution: {
+			ownerTaskId: "1",
+			submissionIds: Array.from({ length: 64 }, (_, i) => String(i + 1)),
+			submissionCount: 64,
+			tools: {
+				items: Array.from({ length: 16 }, (_, i) => ({
+					taskId: String(i + 1),
+					callId: "\u0000".repeat(256),
+					name: "\u0000".repeat(256),
+					status: "pending",
+				})),
+				total: 16,
+				active: 16,
+			},
+			blockingCompactionCount: 0,
+		},
+	};
+	const frame = { kind: "snapshot", epoch: "epoch", version: 1, snapshot: maximal };
+	assert.deepEqual(parseFrame(frame), frame);
+	assert.ok(fitsPayloadBudget(frame));
+	assert.ok(jsonBytes(frame) < LIMITS.frameBytes - LIMITS.envelopeBytes);
+	// Include even the unused byte allowance in every summary, not just this particular escaping pattern.
+	assert.ok(
+		jsonBytes(frame) + LIMITS.historyMessages * (ACTIVITY_LIMITS.summaryBytes - jsonBytes(projected.toolCalls)) <
+			LIMITS.frameBytes - LIMITS.envelopeBytes,
+	);
+	for (const patch of [
+		{ total: 0 },
+		{ items: [projected.toolCalls!.items[0], projected.toolCalls!.items[0]] },
+		{
+			items: Array.from({ length: 16 }, (_, contentIndex) => ({
+				contentIndex,
+				callId: "\u0000".repeat(256),
+				name: "\u0000".repeat(256),
+			})),
+		},
+	])
+		assert.throws(
+			() =>
+				parseResult("getHistory", {
+					...scope,
+					messages: [{ ...projected, toolCalls: { ...projected.toolCalls, ...patch } }],
+					nextCursor: null,
+				}),
+			{ code: "INVALID_REQUEST" },
+		);
 });

@@ -15,14 +15,13 @@ import {
 	DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
-import { Textarea } from "../../../components/ui/textarea.tsx";
 import type { StagedProjectConsent } from "../catalog/initial-context.ts";
 import { useProjectFolder } from "../projects/use-folder.ts";
 import { workbenchLabels } from "../workbench-labels.ts";
-import { ComposerKeyboard } from "./keyboard.ts";
+import { ComposerEditor, type ComposerEditorHandle } from "./editor.tsx";
 import { PreparedProjectConsent, preparedContextCurrent } from "./project-consent.tsx";
 import { preparedProjectConsentLabels } from "./project-consent-labels.ts";
-import { COMPOSER_ROWS, resizeComposerTextarea } from "./textarea.ts";
+import "./prepared-entry.css";
 
 /** Send alone starts work. Opening, editing and choosing a model never create a conversation. */
 export function PreparedTaskEntry({
@@ -50,10 +49,9 @@ export function PreparedTaskEntry({
 	const local = useLocalState();
 	const { fileAuthority } = useFiles();
 	const { t, locale } = usePreferences();
-	const input = useRef<HTMLTextAreaElement>(null);
+	const input = useRef<ComposerEditorHandle>(null);
 	const modelTrigger = useRef<HTMLButtonElement>(null);
 	const modelSettingsHandoff = useRef(false);
-	const keyboard = useRef(new ComposerKeyboard());
 	const sending = useRef(false);
 	const [modelOpen, setModelOpen] = useState(false);
 	const [modelKey, setModelKey] = useState(() => local.read("new-chat-model") ?? "");
@@ -107,9 +105,6 @@ export function PreparedTaskEntry({
 		return () => clearTimeout(timeout);
 	}, [context, workspaceId, project.data, project.isError, selected, client, local, fileAuthority]);
 	useLayoutEffect(() => {
-		if (input.current?.value === draft) resizeComposerTextarea(input.current);
-	}, [draft]);
-	useLayoutEffect(() => {
 		if (focusRevision > 0) input.current?.focus();
 	}, [focusRevision]);
 	const send = () => {
@@ -150,32 +145,45 @@ export function PreparedTaskEntry({
 						send();
 					}}
 				>
-					<label className="sr-only" htmlFor={inputId}>
-						{t("work.draft")}
-					</label>
-					<Textarea
+					<ComposerEditor
 						id={inputId}
 						ref={input}
-						className="composer-input prepared-task-input border-0 bg-transparent shadow-none focus-visible:outline-none"
-						rows={COMPOSER_ROWS.min}
 						value={draft}
+						onChange={onDraftChange}
+						onSubmit={send}
 						readOnly={readOnly}
 						maxLength={LIMITS.text}
 						placeholder={t("work.placeholder")}
-						onChange={(event) => onDraftChange(event.target.value)}
-						onCompositionStart={() => keyboard.current.compositionStart()}
-						onCompositionEnd={(event) => keyboard.current.compositionEnd(event.timeStamp)}
-						onBlur={() => keyboard.current.reset()}
-						onKeyUp={() => keyboard.current.keyUp()}
-						onKeyDown={(event) => {
-							const action = keyboard.current.keyDown(event.nativeEvent);
-							if (action !== "native") event.preventDefault();
-							if (action === "submit") send();
-						}}
+						label={t("work.draft")}
+						describedBy={`${inputId}-hint`}
 					/>
 				</form>
 				<div className="composer-actions">
 					<div className="composer-controls new-chat-controls">
+						{workspaceId && (
+							<Button
+								ref={consentTrigger}
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="prepared-project-permissions"
+								data-staged={!!context}
+								aria-haspopup="dialog"
+								aria-expanded={consentOpen}
+								disabled={disabled || busy}
+								onClick={() => setConsentOpen(true)}
+							>
+								<ShieldCheck size={15} aria-hidden="true" />
+								{context ? consentLabels.staged : consentLabels.control}
+							</Button>
+						)}
+						{selected && !configured(selected.provider) && (
+							<output className="new-chat-model-warning">
+								{t(
+									`model.${catalog.data?.providers.find((item) => item.provider === selected.provider)?.credentialState ?? "unavailable"}`,
+								)}
+							</output>
+						)}
 						<DropdownMenu
 							open={modelOpen}
 							onOpenChange={(open) => {
@@ -273,30 +281,6 @@ export function PreparedTaskEntry({
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
-						{workspaceId && (
-							<Button
-								ref={consentTrigger}
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="prepared-project-permissions"
-								data-staged={!!context}
-								aria-haspopup="dialog"
-								aria-expanded={consentOpen}
-								disabled={disabled || busy}
-								onClick={() => setConsentOpen(true)}
-							>
-								<ShieldCheck size={15} aria-hidden="true" />
-								{context ? consentLabels.staged : consentLabels.control}
-							</Button>
-						)}
-						{selected && !configured(selected.provider) && (
-							<output className="new-chat-model-warning">
-								{t(
-									`model.${catalog.data?.providers.find((item) => item.provider === selected.provider)?.credentialState ?? "unavailable"}`,
-								)}
-							</output>
-						)}
 					</div>
 					<Button
 						type="submit"
@@ -312,6 +296,9 @@ export function PreparedTaskEntry({
 					</Button>
 				</div>
 			</div>
+			<p className="sr-only" id={`${inputId}-hint`}>
+				{t("work.composer.shortcuts")}
+			</p>
 			{context && <p className="prepared-context-note">{consentLabels.onSend}</p>}
 			{contextChanged && <output className="prepared-context-note">{consentLabels.changed}</output>}
 			{consentOpen && (

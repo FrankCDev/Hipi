@@ -1,7 +1,8 @@
 import { PROTOCOL_VERSION, parseRequest, type Request } from "@hipi/work-runtime/contracts";
 
-// Protocol 8 published schemas match these protocol 9 commands exactly. This is a
-// local journal decoder, never a transport compatibility rule or replay authority.
+// Protocols 8 and 9 published schemas match these protocol 10 commands exactly.
+// Preserve pending data recovery only: this local journal decoder is never a
+// transport compatibility rule or replay authority. Re-audit on the next bump.
 const storedMethods = new Set([
 	"createWorkspace",
 	"createConversation",
@@ -28,7 +29,8 @@ export function parseStoredRequest(value: unknown): Request {
 		typeof value !== "object" ||
 		Array.isArray(value) ||
 		!("version" in value) ||
-		(value.version !== PROTOCOL_VERSION && !(PROTOCOL_VERSION === 9 && value.version === 8)) ||
+		(value.version !== PROTOCOL_VERSION &&
+			!(PROTOCOL_VERSION === 10 && (value.version === 8 || value.version === 9))) ||
 		!("method" in value) ||
 		typeof value.method !== "string" ||
 		!storedMethods.has(value.method) ||

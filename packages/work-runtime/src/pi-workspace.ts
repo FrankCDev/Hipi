@@ -56,6 +56,7 @@ import {
 	WorkspaceLiveDoc,
 } from "./conversation-directory.ts";
 import { cancelWait, type WorkspacePort } from "./core.ts";
+import { projectExecution } from "./execution/projection.ts";
 import { ToolPackLifecycle } from "./extensions/lifecycle.ts";
 import type { TrustedAgentFileService } from "./files/service.ts";
 import { readHistory, readMessageText, textEnd, textOf, visibleEntry } from "./history.ts";
@@ -923,8 +924,10 @@ export class PiWorkspace implements WorkspacePort {
 		const message = live?.generation?.message;
 		const partial = message ? textOf(message) : "";
 		const end = textEnd(partial, 0, LIMITS.partialPreview);
+		const execution = projectExecution(live, view);
 		return {
 			...scope,
+			...(execution ? { execution } : {}),
 			messages: history.messages,
 			historyCursor: history.nextCursor,
 			partial: partial.slice(0, end),

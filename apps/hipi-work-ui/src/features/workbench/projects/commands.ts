@@ -3,18 +3,19 @@ import type { CatalogCommand, ProjectCatalogCommand } from "../command-recovery.
 import type { LocalState } from "../local-state.ts";
 import { defaultRoleEvidence } from "./identity.ts";
 
-/** New logical commands have no protocol 8 journal representation. */
+/** Protocol 9 logical journals retain identical commands in 10; protocol 8 had none. */
 export function parseProjectCommand(value: unknown): ProjectCatalogCommand {
 	if (
 		!value ||
 		typeof value !== "object" ||
 		Array.isArray(value) ||
 		!("version" in value) ||
-		value.version !== PROTOCOL_VERSION ||
+		(value.version !== PROTOCOL_VERSION && !(PROTOCOL_VERSION === 10 && value.version === 9)) ||
 		Object.keys(value).some((key) => !["version", "method", "params"].includes(key))
 	)
 		throw new Error("INVALID_PROJECT_COMMAND");
-	const command = parseRequest(value);
+	// Local journal decoding only; old envelopes remain invalid at the transport boundary.
+	const command = parseRequest({ ...value, version: PROTOCOL_VERSION });
 	switch (command.method) {
 		case "createProject":
 		case "createProjectConversation":
@@ -76,8 +77,26 @@ export function assertAdoptionEvidence(
 export function finishProjectCommand(local: LocalState, command: ProjectCatalogCommand, signal: AbortSignal) {
 	return local.withAdmission("command.catalog", () => {
 		signal.throwIfAborted();
-		const expected = JSON.stringify({ version: 6, kind: "project-command", request: command });
-		if (local.storedValue("command.catalog")?.value !== expected) throw new Error("CATALOG_RECOVERY_MISMATCH");
+		const raw = local.storedValue("command.catalog")?.value;
+		const saved: unknown = raw ? JSON.parse(raw) : null;
+		if (!saved || typeof saved !== "object" || !("request" in saved)) throw new Error("CATALOG_RECOVERY_MISMATCH");
+		const original = saved.request;
+		const decoded = parseProjectCommand(original);
+		if (
+			JSON.stringify(decoded) !== JSON.stringify(command) ||
+			!original ||
+			typeof original !== "object" ||
+			!("version" in original)
+		)
+			throw new Error("CATALOG_RECOVERY_MISMATCH");
+		// Preserve the byte-exact owner check, accounting only for the verified stored
+		// envelope version. No rewrite or cleanup happens before this owned completion.
+		const expected = JSON.stringify({
+			version: 6,
+			kind: "project-command",
+			request: { ...command, version: original.version },
+		});
+		if (raw !== expected) throw new Error("CATALOG_RECOVERY_MISMATCH");
 		local.persistValue({ kind: "value", key: "command.catalog", value: JSON.stringify({ version: 2, request: null }) });
 	});
 }

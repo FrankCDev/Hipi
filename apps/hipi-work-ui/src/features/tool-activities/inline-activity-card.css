@@ -1,0 +1,103 @@
+.inline-tool-result {
+	--tool-output-gap: 0.5rem;
+	--tool-output-padding: 0.5rem;
+	--tool-output-radius: 0.5rem;
+	--tool-output-max-height: 12rem;
+	--tool-output-surface: color-mix(in oklab, var(--text) 5%, var(--surface));
+	display: grid;
+	min-width: 0;
+	gap: var(--tool-output-gap);
+	font-size: var(--font-ui-size);
+	line-height: 1.625;
+	color: var(--muted);
+}
+.inline-tool-result p {
+	margin: 0;
+}
+.inline-tool-result-heading {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	gap: var(--tool-output-gap);
+}
+.inline-tool-result-name {
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+.inline-tool-result-state {
+	margin-inline-start: auto;
+	font-size: 0.875em;
+}
+.inline-tool-details-trigger {
+	flex-shrink: 0;
+	color: var(--muted);
+}
+.inline-tool-details-dialog {
+	max-width: min(42rem, calc(100vw - 2rem));
+}
+.inline-tool-notice,
+.inline-tool-note {
+	overflow-wrap: anywhere;
+}
+.inline-tool-result[data-outcome="error"] .inline-tool-notice {
+	color: var(--danger);
+}
+.inline-tool-note {
+	font-size: 0.875em;
+}
+.inline-tool-file {
+	justify-content: flex-start;
+	max-width: 100%;
+	padding-inline: 0;
+}
+.inline-tool-file > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.inline-tool-path {
+	overflow-wrap: anywhere;
+}
+.inline-tool-output-toggle {
+	justify-self: start;
+	padding-inline: 0;
+}
+.inline-tool-text-card {
+	border: 1px solid var(--line);
+	border-radius: var(--tool-output-radius);
+	background: var(--tool-output-surface);
+	overflow: clip;
+	contain: inline-size;
+}
+.inline-tool-text-header {
+	padding: calc(var(--tool-output-padding) / 2) var(--tool-output-padding);
+	font-size: 0.875em;
+	user-select: none;
+}
+.inline-tool-text {
+	margin: 0;
+	max-height: var(--tool-output-max-height);
+	overflow: auto;
+	padding: var(--tool-output-padding);
+	font: inherit;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.inline-tool-output-pages {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--tool-output-gap);
+}
+@media (hover: hover) and (pointer: fine) {
+	.inline-tool-details-trigger {
+		opacity: 0;
+	}
+	.inline-tool-result:hover .inline-tool-details-trigger,
+	.inline-tool-result:focus-within .inline-tool-details-trigger,
+	.inline-tool-details-trigger[data-state="open"] {
+		opacity: 1;
+	}
+}

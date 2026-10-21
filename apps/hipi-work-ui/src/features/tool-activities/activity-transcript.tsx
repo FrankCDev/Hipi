@@ -1,4 +1,4 @@
-import type { AppClient, Scope, ToolActivityPage } from "@hipi/work-runtime/contracts";
+import type { AppClient, MessageToolCalls, Scope, Snapshot, ToolActivityPage } from "@hipi/work-runtime/contracts";
 import {
 	createContext,
 	type ReactNode,
@@ -6,6 +6,7 @@ import {
 	useContext,
 	useEffect,
 	useId,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -19,6 +20,13 @@ import { selectionIntersects } from "../workbench/conversation/message-projectio
 import { ActivityCard, type ToolActivityArtifact } from "./activity-card.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
+import {
+	anchoredLiveActivities,
+	anchoredLiveTools,
+	type LiveActivityRead,
+	useLiveActivityRead,
+} from "./live-activity.ts";
+import { HistoricalTurnActivities, LiveTurnActivities } from "./turn-activities.tsx";
 import "./activity-transcript.css";
 
 type Props = {
@@ -30,6 +38,10 @@ type Props = {
 	children: ReactNode;
 };
 type ActivityTranscript = {
+	scope: Scope;
+	live: LiveActivityRead;
+	transcript?: Snapshot;
+	setTranscript: (view: { snapshot?: Snapshot; active: boolean }) => void;
 	session: ActivitySession;
 	state: ActivityState;
 	inlinePage: ToolActivityPage | undefined;
@@ -97,6 +109,8 @@ function ScopedActivityTranscript({
 		[client, scope.workspaceId, scope.conversationId],
 	);
 	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
+	const [transcript, setTranscript] = useState<{ snapshot?: Snapshot; active: boolean }>({ active: false });
+	const live = useLiveActivityRead(client, scope, transcript.snapshot, connected && transcript.active, rootRef);
 	const [inlinePage, setInlinePage] = useState(state.cursor ? undefined : state.page);
 	const [open, setOpenState] = useState(false);
 	const scopeKey = JSON.stringify([scope.workspaceId, scope.conversationId]);
@@ -157,6 +171,10 @@ function ScopedActivityTranscript({
 	return (
 		<ActivityContext.Provider
 			value={{
+				scope,
+				live,
+				transcript: transcript.snapshot,
+				setTranscript,
 				session,
 				state,
 				inlinePage,
@@ -194,10 +212,25 @@ function ScopedActivityTranscript({
 	);
 }
 
-export function InlineMessageActivities({ messageId }: { messageId: string }) {
+export function InlineMessageActivities({ messageId, toolCalls }: { messageId: string; toolCalls?: MessageToolCalls }) {
 	const context = useActivityTranscript();
 	const { locale } = usePreferences();
 	if (!context) return null;
+	if (toolCalls)
+		return (
+			<HistoricalTurnActivities
+				scope={context.scope}
+				connected={context.connected}
+				messageId={messageId}
+				toolCalls={toolCalls}
+				live={context.live}
+				liveItems={anchoredLiveActivities(context.transcript, context.live.state.page).get(messageId)}
+				liveTools={anchoredLiveTools(context.transcript, context.live.state.page).get(messageId)}
+				expanded={context.expandedGroups.has(messageId)}
+				onToggle={() => context.toggleGroup(messageId)}
+				onOpenArtifact={context.onOpenArtifact}
+			/>
+		);
 	// Match previewMessage's authoritative entry/model index. A conversation-wide
 	// activity with no anchor is never assigned to the newest assistant response.
 	const items =
@@ -246,4 +279,35 @@ export function InlineMessageActivities({ messageId }: { messageId: string }) {
 			)}
 		</div>
 	);
+}
+
+export function InlineLiveActivities({ snapshot, active }: { snapshot: Snapshot; active: boolean }) {
+	const context = useActivityTranscript();
+	if (!context || !snapshot.execution || !snapshot.running) return null;
+	const anchored = anchoredLiveTools(snapshot, context.live.state.page);
+	const bound = new Set([...anchored.values()].flat());
+	const items = snapshot.execution.tools.items.filter((item) => !bound.has(item));
+	const total = snapshot.execution.tools.total - bound.size;
+	if (total <= 0) return null;
+	return (
+		<LiveTurnActivities
+			key={snapshot.execution.ownerTaskId}
+			scope={context.scope}
+			connected={context.connected}
+			execution={{ ...snapshot.execution, tools: { ...snapshot.execution.tools, items, total } }}
+			active={active}
+			live={context.live}
+			onOpenArtifact={context.onOpenArtifact}
+		/>
+	);
+}
+
+/** Uses the already selection-frozen transcript projection, not a second runtime view. */
+export function useActivityTranscriptProjection(snapshot: Snapshot | undefined, active: boolean) {
+	const context = useActivityTranscript();
+	const update = context?.setTranscript;
+	useLayoutEffect(() => {
+		update?.({ snapshot, active });
+	}, [update, snapshot, active]);
+	useEffect(() => () => update?.({ active: false }), [update]);
 }

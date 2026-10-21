@@ -12,7 +12,7 @@ import { Select } from "../../../src/components/ui/select.tsx";
 import { ContextDialog } from "../../../src/features/agent-permissions/context-dialog.tsx";
 import type { PermissionSession } from "../../../src/features/agent-permissions/permission-session.ts";
 import { CreateDialog } from "../../../src/features/workbench/catalog/create-dialog.tsx";
-import { ProjectFolderDialog } from "../../../src/features/workbench/projects/folder.tsx";
+import { ProjectFolderDialog, ProjectFolderSummary } from "../../../src/features/workbench/projects/folder.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
 const hooks = vi.hoisted(() => ({ cells: [] as Cell[], cursor: 0, commits: [] as (() => void)[], changed: false }));
@@ -291,4 +291,28 @@ test("project context is selected by trusted binding, not typed root identifiers
 	assert.equal(authorized[1]?.rootId, "other-root");
 	assert.equal(authorized[1]?.workspaceId, "other");
 	assert.equal(authorized[1]?.conversationId, "other-chat");
+});
+
+test("compact folder strip keeps bound folder identity and routes all recovery states to the existing owner", () => {
+	authority.getProject = vi.fn(async () => folder);
+	const manage = vi.fn();
+	for (const status of ["available", "unbound", "revoked", "moved"] as const) {
+		projectQuery.data = { ...folder, status };
+		const content = ProjectFolderSummary({ workspaceId: "project", compact: true, onManage: manage });
+		assert.equal(content.props["data-compact"], true);
+		assert.equal(content.props["data-healthy"], status === "available");
+		assert.equal(elements(content, "strong")[0]?.props.children, "My files");
+		const statusNode = elements(content, "span").find((item) =>
+			["sr-only", "project-folder-secondary"].includes(item.props.className ?? ""),
+		);
+		assert.equal(statusNode?.props.className, status === "available" ? "sr-only" : "project-folder-secondary");
+		const trigger = { id: "folder-trigger" };
+		Reflect.apply(content.props.onClick, undefined, [{ currentTarget: trigger }]);
+		assert.equal(manage.mock.calls.at(-1)?.[0], trigger);
+	}
+	projectQuery.isError = true;
+	const failed = ProjectFolderSummary({ workspaceId: "project", compact: true, onManage: manage });
+	assert.equal(failed.props["data-healthy"], false);
+	assert.ok(elements(failed, "span").some((item) => item.props.className === "project-folder-secondary"));
+	projectQuery.isError = false;
 });

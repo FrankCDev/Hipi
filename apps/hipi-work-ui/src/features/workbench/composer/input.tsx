@@ -1,14 +1,12 @@
 import { AppError, LIMITS } from "@hipi/work-runtime/contracts";
 import { Square } from "lucide-react";
-import { type ReactNode, useId, useLayoutEffect, useRef } from "react";
+import { type ReactNode, useId } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
-import { Textarea } from "../../../components/ui/textarea.tsx";
 import { ReceiptRecovery } from "../conversation/receipt.tsx";
 import type { ConversationController } from "../conversation/use-conversation.ts";
-import { ComposerKeyboard } from "./keyboard.ts";
-import { COMPOSER_ROWS, resizeComposerTextarea } from "./textarea.ts";
+import { ComposerEditor } from "./editor.tsx";
 
 export function ConversationComposer({
 	controller,
@@ -22,34 +20,12 @@ export function ConversationComposer({
 	const { t } = usePreferences();
 	const inputId = useId();
 	const hintId = useId();
-	const textarea = useRef<HTMLTextAreaElement>(null);
-	const keyboard = useRef(new ComposerKeyboard());
 	const { draft, setDraft, submit, blocked, composing, mutation, receipt, errorCode } = controller;
 	const stopping = controller.model.data?.executionState === "running";
 	const contextRequired =
 		errorCode === "CONTEXT_AUTHORIZATION_REQUIRED" ||
 		(controller.execution.error instanceof AppError &&
 			controller.execution.error.code === "CONTEXT_AUTHORIZATION_REQUIRED");
-	useLayoutEffect(() => {
-		const element = textarea.current;
-		// Only measure the committed controlled value, never each streamed response render.
-		if (element && element.value === draft) {
-			resizeComposerTextarea(element);
-		}
-	}, [draft]);
-	useLayoutEffect(() => {
-		const element = textarea.current;
-		if (!element) return;
-		let width = element.getBoundingClientRect().width;
-		const observer = new ResizeObserver(() => {
-			const nextWidth = element.getBoundingClientRect().width;
-			if (nextWidth === width) return;
-			width = nextWidth;
-			resizeComposerTextarea(element);
-		});
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, []);
 	return (
 		<div className="composer-wrap">
 			{contextRequired && (
@@ -89,37 +65,18 @@ export function ConversationComposer({
 						submit();
 					}}
 				>
-					<label className="sr-only" htmlFor={inputId}>
-						{t("work.draft")}
-					</label>
-					<Textarea
-						className="composer-input border-0 bg-transparent shadow-none focus-visible:outline-none"
-						ref={textarea}
-						rows={COMPOSER_ROWS.min}
+					<ComposerEditor
 						id={inputId}
-						aria-describedby={hintId}
 						value={draft}
+						onChange={setDraft}
+						onSubmit={submit}
+						onComposingChange={(value) => {
+							composing.current = value;
+						}}
 						maxLength={LIMITS.text}
 						placeholder={t("work.placeholder")}
-						onChange={(event) => setDraft(event.target.value)}
-						onCompositionStart={() => {
-							composing.current = true;
-							keyboard.current.compositionStart();
-						}}
-						onCompositionEnd={(event) => {
-							composing.current = false;
-							keyboard.current.compositionEnd(event.timeStamp);
-						}}
-						onBlur={() => {
-							composing.current = false;
-							keyboard.current.reset();
-						}}
-						onKeyUp={() => keyboard.current.keyUp()}
-						onKeyDown={(event) => {
-							const action = keyboard.current.keyDown(event.nativeEvent);
-							if (action !== "native") event.preventDefault();
-							if (action === "submit") submit();
-						}}
+						label={t("work.draft")}
+						describedBy={hintId}
 					/>
 				</form>
 				{/* Permission dialogs can own forms. Keep their React event tree outside the submission form. */}

@@ -15,6 +15,7 @@ import { Popover, PopoverContent } from "../../../src/components/ui/popover.tsx"
 import { Select } from "../../../src/components/ui/select.tsx";
 import { Textarea } from "../../../src/components/ui/textarea.tsx";
 import type { StagedProjectConsent } from "../../../src/features/workbench/catalog/initial-context.ts";
+import { ComposerEditor } from "../../../src/features/workbench/composer/editor.tsx";
 import { PreparedTaskEntry } from "../../../src/features/workbench/composer/prepared-entry.tsx";
 import { PreparedProjectConsent } from "../../../src/features/workbench/composer/project-consent.tsx";
 import { ConversationModelControls } from "../../../src/features/workbench/conversation/model.tsx";
@@ -139,37 +140,14 @@ function render(extra: Partial<React.ComponentProps<typeof PreparedTaskEntry>> =
 	throw new Error("Prepared composer effects did not settle");
 }
 function change(value: string) {
-	const handler = only(render(), Textarea).props.onChange;
+	const handler = only(render(), ComposerEditor).props.onChange;
 	assert.ok(handler);
-	Reflect.apply(handler, undefined, [{ target: { value } }]);
+	Reflect.apply(handler, undefined, [value]);
 }
 function submit(node = render()) {
 	const handler = only(node, "form").props.onSubmit;
 	assert.ok(handler);
 	Reflect.apply(handler, undefined, [{ preventDefault() {} }]);
-}
-function key(nativeEvent: Record<string, unknown>) {
-	const handler = only(render(), Textarea).props.onKeyDown;
-	assert.ok(handler);
-	const preventDefault = vi.fn();
-	Reflect.apply(handler, undefined, [
-		{
-			nativeEvent: {
-				key: "Enter",
-				ctrlKey: false,
-				metaKey: false,
-				shiftKey: false,
-				altKey: false,
-				isComposing: false,
-				keyCode: 13,
-				repeat: false,
-				timeStamp: 1000,
-				...nativeEvent,
-			},
-			preventDefault,
-		},
-	]);
-	return preventDefault;
 }
 beforeEach(() => {
 	hooks.cells = [];
@@ -204,7 +182,7 @@ afterEach(() => {
 test("opening and editing new chat never creates an object or sends", () => {
 	render();
 	change("A goal\nwith constraints");
-	assert.equal(only(render(), Textarea).props.value, "A goal\nwith constraints");
+	assert.equal(only(render(), ComposerEditor).props.value, "A goal\nwith constraints");
 	assert.equal(local.read("task-draft.project"), "A goal\nwith constraints");
 	assert.equal(sent.mock.calls.length, 0);
 	assert.equal(runtimeCall.mock.calls.length, 0);
@@ -228,26 +206,10 @@ test("one explicit Send captures prompt and visible model once, without a Create
 	finish();
 	await Promise.resolve();
 });
-test("Enter sends once while Shift+Enter, IME Enter and repeat remain protected", () => {
+test("shared editor delegates explicit submit to the same guarded owner", () => {
 	change("Hello");
-	assert.equal(key({ shiftKey: true }).mock.calls.length, 0);
-	assert.equal(key({ isComposing: true, keyCode: 229 }).mock.calls.length, 0);
-	assert.equal(key({ repeat: true }).mock.calls.length, 1);
-	assert.equal(sent.mock.calls.length, 0);
-	assert.equal(key({}).mock.calls.length, 1);
+	only(render(), ComposerEditor).props.onSubmit();
 	assert.equal(sent.mock.calls.length, 1);
-});
-test("composition-end confirming Enter does not send", () => {
-	change("你好");
-	const input = only(render(), Textarea);
-	assert.ok(input.props.onCompositionStart);
-	Reflect.apply(input.props.onCompositionStart, undefined, []);
-	key({});
-	assert.equal(sent.mock.calls.length, 0);
-	assert.ok(input.props.onCompositionEnd);
-	Reflect.apply(input.props.onCompositionEnd, undefined, [{ timeStamp: 990 }]);
-	key({});
-	assert.equal(sent.mock.calls.length, 0);
 });
 test("missing credentials, failed model read, busy and pending recovery preserve text without dispatch", () => {
 	change("Keep me");
@@ -270,7 +232,7 @@ test("model setup navigation preserves input and never submits on return", () =>
 	Reflect.apply(action.props.onSelect, undefined, [new Event("select")]);
 	assert.equal(manageModels.mock.calls.length, 1);
 	assert.equal(sent.mock.calls.length, 0);
-	assert.equal(only(render(), Textarea).props.value, "My detailed goal");
+	assert.equal(only(render(), ComposerEditor).props.value, "My detailed goal");
 	const preventDefault = vi.fn();
 	only(node, DropdownMenuContent).props.onCloseAutoFocus?.({ preventDefault } as Event);
 	assert.equal(preventDefault.mock.calls.length, 1, "Menu closure must not steal focus from model settings");
@@ -406,7 +368,7 @@ test("project permissions are off initially; opening and Cancel never create a c
 	dialog.onClose();
 	const node = render({ workspaceId: "project" });
 	assert.equal(find(node, PreparedProjectConsent).length, 0);
-	assert.equal(only(node, Textarea).props.value, "Which files are in my project?");
+	assert.equal(only(node, ComposerEditor).props.value, "Which files are in my project?");
 	assert.equal(runtimeCall.mock.calls.length, 0);
 	assert.equal(sent.mock.calls.length, 0);
 	submit(node);
@@ -449,7 +411,7 @@ test.each(["model", "binding", "root", "expiry", "workspace", "client", "authori
 		else if (changeKind === "authority") activeAuthority = { getProject: runtimeCall };
 		const node = render({ workspaceId: changeKind === "workspace" ? "other" : "project" });
 		assert.ok(find(node, Button).every((button) => button.props["data-staged"] !== true));
-		assert.equal(only(node, Textarea).props.value, "Retain this file question.");
+		assert.equal(only(node, ComposerEditor).props.value, "Retain this file question.");
 		assert.equal(runtimeCall.mock.calls.length, 0);
 		assert.equal(sent.mock.calls.length, 0);
 		assert.ok(find(node, "output").some((item) => item.props.className === "prepared-context-note"));
@@ -465,7 +427,7 @@ test("a fresh composer never restores staged consent from persisted prompt or se
 	hooks.cells = [];
 	const node = render({ workspaceId: "project" });
 	assert.ok(find(node, Button).every((button) => button.props["data-staged"] !== true));
-	assert.equal(only(node, Textarea).props.value, "Keep saved prompt.");
+	assert.equal(only(node, ComposerEditor).props.value, "Keep saved prompt.");
 	assert.equal(sent.mock.calls.length, 0);
 	assert.equal(runtimeCall.mock.calls.length, 0);
 });

@@ -6,6 +6,7 @@ import { afterEach, test, vi } from "vitest";
 import { PreferencesProvider } from "../../../../src/app/preferences.tsx";
 import { defaultConfig } from "../../../../src/app/theme/config.ts";
 import { themeStorageKey } from "../../../../src/app/theme/store.ts";
+import type * as Tooltips from "../../../../src/components/ui/action-tooltip.tsx";
 import type * as Buttons from "../../../../src/components/ui/button.tsx";
 import {
 	ClipboardFeedback,
@@ -45,6 +46,16 @@ vi.mock("../../../../src/features/workbench/conversation/markdown/use-clipboard-
 			copies.controllers.push(controller);
 			return { status: copies.state, copy: (text: string) => controller.copy(text) };
 		},
+	};
+});
+// Callback-only SSR tests have no browser event system. The real Radix interaction
+// path is covered separately by clipboard-copy-mounted.test.tsx.
+vi.mock("../../../../src/components/ui/action-tooltip.tsx", async (original) => {
+	const actual = await original<typeof Tooltips>();
+	return {
+		...actual,
+		ActionTooltip: (props: ComponentProps<typeof Tooltips.ActionTooltip>) =>
+			copies.active ? props.children : <actual.ActionTooltip {...props} />,
 	};
 });
 vi.mock("../../../../src/components/ui/button.tsx", async (original) => {
@@ -284,8 +295,8 @@ test("settled blocks keep long ordinary prose rich while the mutable-tail ceilin
 	const html = render(source, true);
 	assert.match(html, /markdown-body/);
 	assert.doesNotMatch(html, /分页原文/);
-	assert.equal((html.match(/<strong>settled<\/strong>/g) ?? []).length, 140);
-	assert.match(html, /<strong>mutable<\/strong>/);
+	assert.equal((html.match(/<strong><span[^>]*>settled<\/span><\/strong>/g) ?? []).length, 140);
+	assert.match(html, /<strong><span[^>]*>mutable<\/span><\/strong>/);
 });
 
 test("reference definitions, containers and multi-paragraph code keep canonical Markdown semantics", () => {

@@ -13,8 +13,10 @@ import {
 	ORIGINAL_PAGE_UNITS,
 	originalPage,
 } from "./policy.ts";
+import { revealTextPlugin } from "./reveal-plugin.ts";
 import { isOpenCodeFence, markdownSegments } from "./segments.ts";
 import { SyntaxCode } from "./syntax-code.tsx";
+import { RevealedTextLeaf, TextRevealContext, useTextReveal, useTextRevealVisible } from "./text-reveal.tsx";
 import { useStreamingText } from "./use-streaming-text.ts";
 import "./markdown.css";
 
@@ -46,11 +48,14 @@ const allowedElements = [
 	"a",
 	"img",
 	"input",
+	"span",
 ];
 const plugins = [remarkGfm];
+const revealPlugins = [revealTextPlugin];
 type MarkdownTone = "user" | "assistant";
 const SourceContext = createContext({ source: "", streaming: false, tone: "assistant" as MarkdownTone });
 const components: Components = {
+	span: RevealedTextLeaf,
 	a: ({ children, href }) => (
 		<span className="markdown-link">
 			{children}
@@ -206,23 +211,33 @@ const MarkdownBlock = memo(function MarkdownBlock({
 	source,
 	streaming,
 	tone,
+	reveal,
+	visible,
 }: {
 	source: string;
 	streaming: boolean;
 	tone: MarkdownTone;
+	reveal: boolean;
+	visible: boolean;
 }) {
 	const context = useMemo(() => ({ source, streaming, tone }), [source, streaming, tone]);
+	const [decorated, setDecorated] = useState(reveal);
+	if (reveal && !decorated) setDecorated(true);
+	const presentation = useTextReveal(source, reveal && visible);
 	return (
 		<SourceContext.Provider value={context}>
-			<Markdown
-				allowedElements={allowedElements}
-				skipHtml
-				remarkPlugins={plugins}
-				components={components}
-				urlTransform={inertDestination}
-			>
-				{markdownDisplaySource(source, streaming)}
-			</Markdown>
+			<TextRevealContext.Provider value={presentation}>
+				<Markdown
+					allowedElements={allowedElements}
+					skipHtml
+					remarkPlugins={plugins}
+					rehypePlugins={decorated ? revealPlugins : undefined}
+					components={components}
+					urlTransform={inertDestination}
+				>
+					{markdownDisplaySource(source, streaming)}
+				</Markdown>
+			</TextRevealContext.Provider>
 		</SourceContext.Provider>
 	);
 });
@@ -241,6 +256,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
 	const { t } = usePreferences();
 	const root = useRef<HTMLDivElement>(null);
 	const display = useStreamingText({ source, streaming, identity: streamId }, root);
+	const visible = useTextRevealVisible();
 	const segments = useMemo(
 		() => (display.source.length > MAX_RICH_TEXT_UNITS ? [] : markdownSegments(display.source)),
 		[display.source],
@@ -267,6 +283,8 @@ export const MessageMarkdown = memo(function MessageMarkdown({
 							source={segment.source}
 							streaming={display.streaming && !segment.settled}
 							tone={tone}
+							reveal={display.streaming && tone === "assistant"}
+							visible={visible}
 						/>
 					))}
 				</MarkdownBoundary>

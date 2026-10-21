@@ -1,0 +1,61 @@
+.cadenced-text {
+	position: relative;
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: top;
+	user-select: none;
+}
+.cadenced-text-sweep {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	pointer-events: none;
+	transform: translateX(-50%);
+	mask-image: linear-gradient(90deg, transparent 0%, black 20% 30%, transparent 50% 100%);
+}
+.cadenced-text-highlight {
+	display: block;
+	color: var(--cadenced-text-highlight, color-mix(in srgb, var(--color-white) 75%, transparent));
+	transform: translateX(50%);
+}
+/* The reference's private shimmer sweeps for 1s after 600ms, then rests for 3s.
+ * The active quarter of the four-second cycle uses the reference 48 discrete steps.
+ * Motion's existing viewport/page observers gate decoration, not execution state. */
+.cadenced-text[data-animate="true"] .cadenced-text-sweep {
+	animation: cadenced-text-sweep 4s steps(48, end) 600ms infinite;
+}
+.cadenced-text[data-animate="true"] .cadenced-text-highlight {
+	animation: cadenced-text-highlight 4s steps(48, end) 600ms infinite;
+}
+.cadenced-text[data-animate="false"] .cadenced-text-sweep {
+	visibility: hidden;
+}
+@keyframes cadenced-text-sweep {
+	0% {
+		transform: translateX(-50%);
+	}
+	25%,
+	100% {
+		transform: translateX(125%);
+	}
+}
+@keyframes cadenced-text-highlight {
+	0% {
+		transform: translateX(50%);
+	}
+	25%,
+	100% {
+		transform: translateX(-125%);
+	}
+}
+:root[data-reduced-motion="on"] .cadenced-text-sweep {
+	display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .cadenced-text-sweep {
+		display: none;
+	}
+}

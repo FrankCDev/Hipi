@@ -1,8 +1,9 @@
-import { ChevronRight, Ellipsis, Folder, PanelLeft, Pin, Search, SquarePen } from "lucide-react";
+import { ChevronRight, Ellipsis, Folder, FolderOpen, PanelLeft, Pin, Search, SquarePen } from "lucide-react";
 
 const icons = {
 	newChat: SquarePen,
 	folder: Folder,
+	folderOpen: FolderOpen,
 	panel: PanelLeft,
 	search: Search,
 	disclosure: ChevronRight,

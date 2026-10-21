@@ -71,7 +71,7 @@ test("desktop calls pin identity and never automatically replay commands on host
 });
 
 test("incompatible handshake results reject before desktop commands or subscriptions", async () => {
-	for (const protocolVersion of [7, 8, 10]) {
+	for (const protocolVersion of [7, 8, 9, PROTOCOL_VERSION + 1]) {
 		const requests: unknown[] = [];
 		let subscriptions = 0;
 		const client = createDesktopClient({

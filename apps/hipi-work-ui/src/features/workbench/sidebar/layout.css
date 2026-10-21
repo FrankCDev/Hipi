@@ -13,12 +13,32 @@
 	--sidebar-row-radius: calc(var(--ui-row-radius) * var(--sidebar-corner-scale));
 	--sidebar-action-size: var(--ui-control-compact-size);
 	--sidebar-toolbar-size: var(--ui-control-toolbar-size);
+	--sidebar-label-weight: 400;
+	--sidebar-label-line-height: max(calc(var(--spacing) * 5), calc(var(--font-ui-size) * 1.428571));
+	--sidebar-focus-width: calc(var(--spacing) / 2);
 	--sidebar-disclosure-inset: calc((var(--sidebar-toolbar-size) - var(--sidebar-icon-size)) / 2);
 	--sidebar-row-hover-surface: color-mix(
 		in oklab,
 		var(--region-foreground, var(--ui-hover-foreground)) var(--ui-hover-opacity),
 		transparent
 	);
+}
+
+/* Selection changes paint, not title metrics. Keep heading emphasis independent. */
+.sidebar .workspace-tree {
+	font-weight: var(--sidebar-label-weight);
+}
+
+.sidebar
+	:is(
+		.conversation-link,
+		.project-open,
+		.project-toggle,
+		.sidebar-section-toggle,
+		.new-conversation-trigger
+	):focus-visible {
+	outline: var(--sidebar-focus-width) solid var(--focus);
+	outline-offset: calc(-1 * var(--sidebar-focus-width));
 }
 
 .sidebar .sidebar-brand-row {
@@ -72,6 +92,7 @@
 	padding: 0 var(--sidebar-cell-inset);
 	border: 0;
 	font: inherit;
+	font-weight: var(--sidebar-label-weight);
 	line-height: 1.5;
 	border-radius: var(--sidebar-row-radius);
 }
@@ -769,4 +790,9 @@
 }
 .sidebar :is(.sidebar-row-actions, .conversation-hover-actions, .nav-section-heading) .lucide {
 	stroke-width: var(--ui-icon-stroke-width);
+}
+
+.sidebar .workspace-tree .sidebar-preview-row .conversation-link {
+	font-weight: var(--sidebar-label-weight);
+	line-height: var(--sidebar-label-line-height);
 }

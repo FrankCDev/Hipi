@@ -18,6 +18,7 @@ const groups = [
 		"schema runtime backup projection source activity query projects window window-contract",
 	],
 	["packages/work-runtime/test/projects", "catalog contracts schema backup list"],
+	["packages/work-runtime/test/execution", "approval projection recovery"],
 	["packages/work-runtime/test/sidebar-pins", "contracts catalog order schema backup"],
 	[
 		"apps/hipi-work-ui/test/workbench/conversation",
@@ -31,7 +32,7 @@ const groups = [
 		"apps/hipi-work-ui/test/workbench",
 		"bounded-read local-state receipt-reconciliation local-persistence reopen-request",
 	],
-	["apps/hipi-work-ui/test/workbench/composer", "composer-input"],
+	["apps/hipi-work-ui/test/workbench/composer", "composer-input entry-state"],
 	["apps/hipi-work-ui/test/workbench/sidebar", "conversation-preview-interaction"],
 	[
 		"apps/hipi-work-ui/test/workbench/conversation/markdown",
@@ -146,9 +147,13 @@ const uiTests = [
 	"workbench/composer/work-experience-presentation",
 	"workbench/composer/prepared-task-entry",
 	"workbench/composer/use-home-draft",
+	"workbench/composer/editor-mounted",
+	"workbench/composer/project-picker-mounted",
+	"workbench/composer/welcome",
 	"dialog-placement",
 	"disclosure-surface-mounted",
 	"agent-permission-card",
+	"agent-permissions/permission-provider-mounted",
 	"permission-presentation",
 	"retained-context-consent",
 	"workbench/files/file-panel",
@@ -171,6 +176,9 @@ const uiTests = [
 	"custom-provider-settings",
 	"legacy-provider-editor",
 	"workbench/conversation/conversation-turn-failure",
+	"workbench/conversation/disclosure-scroll-anchor-mounted",
+	"workbench/conversation/response-status-mounted",
+	"workbench/conversation/markdown/clipboard-copy-mounted",
 	"workbench/conversation/conversation-draft-recovery",
 	"workbench/conversation/observation-recovery-ui",
 	"workbench/projects/project-folder-interaction",
@@ -211,22 +219,33 @@ const uiTests = [
 	"workbench/catalog/catalog-pages",
 	"workbench/sidebar/sidebar-navigation-callbacks",
 	"workbench/sidebar/workspace-tree-callbacks",
+	"workbench/conversation/markdown/conversation-prose-cascade",
 	"workbench/conversation/markdown/message-markdown",
 	"workbench/conversation/markdown/syntax-code",
+	"workbench/conversation/markdown/text-reveal-mounted",
 	"workbench/conversation/markdown/user-message-content",
 	"workbench/sidebar/conversation-preview",
 	"workbench/sidebar/logical-conversation-preview",
 	"tool-activities",
+	"tool-activities/inline-activity-card",
+	"tool-activities/live-activity-mounted",
+	"tool-activities/turn-activities-mounted",
+	"tool-activities/turn-activity-presentation",
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-geometry-cascade.test.ts");
 uiTests.push("apps/hipi-work-ui/test/agent-permissions.test.ts");
+uiTests.push("apps/hipi-work-ui/test/agent-permissions/approval-correlation.test.ts");
+uiTests.push("apps/hipi-work-ui/test/tool-activities/activity-selection.test.ts");
+uiTests.push("apps/hipi-work-ui/test/tool-activities/live-activity-association.test.ts");
 uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-settings.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-application.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/model-configuration.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/projects/project-folder-change.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/projects/command-recovery.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/conversation/response-phase.test.ts");
 uiTests.push("apps/hipi-work-ui/test/context-paths.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/catalog/catalog-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/catalog/project-pin-continuation.test.ts");

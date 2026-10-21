@@ -92,6 +92,11 @@ test(
 		try {
 			await workspace.submit({ ...scope, requestId: "first", text: "Hello" });
 			const request = await until(() => requests[0]);
+			const beforeText = await until(() => frames.findLast((frame) => frame.snapshot.execution)?.snapshot);
+			assert.equal(beforeText.partial, "");
+			assert.equal(beforeText.execution?.generation?.attempt, 1);
+			const receipt = await workspace.getReceipt("first");
+			assert.deepEqual(beforeText.execution?.submissionIds, [receipt?.submissionId]);
 			request.push("Streaming prefix");
 			const active = await until(() => latestPartial(frames, "Streaming prefix"));
 			request.finish(fauxAssistantMessage("Different canonical final"));
@@ -104,6 +109,7 @@ test(
 			assert.equal(committed?.text, "Different canonical final");
 			assert.ok(committed?.id);
 			assert.equal(final.snapshot.partialId, undefined);
+			assert.equal(final.snapshot.execution, undefined);
 			assert.equal((await workspace.snapshot(scope)).messages.at(-1)?.streamId, undefined);
 			assert.equal((await workspace.getHistory(scope)).messages.at(-1)?.streamId, undefined);
 			const reopened: Frame[] = [];
@@ -155,6 +161,28 @@ for (const mode of ["retry", "tool round"] as const) {
 				const second = await until(() => requests[1]);
 				second.push("second prefix");
 				const next = await until(() => latestPartial(frames, "second prefix"));
+				assert.deepEqual(next.execution?.submissionIds, active.execution?.submissionIds);
+				if (mode === "tool round") {
+					assert.notEqual(next.execution?.ownerTaskId, active.execution?.ownerTaskId);
+					const round = frames.find((frame) =>
+						frame.snapshot.execution?.tools.items.some((tool) => tool.callId === "call"),
+					)?.snapshot;
+					const tool = round?.execution?.tools.items.find((item) => item.callId === "call");
+					assert.ok(tool?.anchor);
+					assert.equal(tool.taskId, undefined);
+					assert.equal(tool.anchor.contentIndex, 1);
+					assert.equal(tool.anchor.modelIndex, 0);
+					assert.ok(
+						round?.messages.some(
+							(message) => message.id === `${tool.anchor?.assistantEntryId}_${tool.anchor?.modelIndex}`,
+						),
+					);
+					assert.equal(next.execution?.tools.total, 0);
+				} else {
+					assert.equal(next.execution?.ownerTaskId, active.execution?.ownerTaskId);
+					assert.ok(frames.some((frame) => frame.snapshot.execution?.generation?.retryAt !== undefined));
+					assert.equal(next.execution?.generation?.attempt, 2);
+				}
 				assert.notEqual(next.partialId, active.partialId);
 				second.finish(fauxAssistantMessage("final canonical"));
 				const final = await until(() =>
@@ -196,6 +224,7 @@ test(
 			const interrupted = final.snapshot.messages.find((message) => message.interrupted);
 			assert.equal(interrupted?.streamId, active.partialId);
 			assert.equal(interrupted?.text, "Interrupted prefix");
+			assert.equal(final.snapshot.execution, undefined);
 			await watcher.dispose();
 			const count = frames.length;
 			request.finish(fauxAssistantMessage("late ignored result"));
@@ -227,6 +256,7 @@ test("real active reconnect has a fresh observer-local identity", { timeout: 150
 		try {
 			const next = await until(() => latestPartial(nextFrames, "same partial"));
 			assert.notEqual(next.partialId, active.partialId);
+			assert.deepEqual(next.execution, active.execution);
 			request.finish(fauxAssistantMessage("same partial"));
 			const final = await until(() =>
 				nextFrames.findLast((frame) =>
