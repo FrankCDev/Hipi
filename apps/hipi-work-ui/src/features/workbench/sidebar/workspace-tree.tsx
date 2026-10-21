@@ -435,6 +435,7 @@ export function WorkspaceBranch({
 							<button
 								type="button"
 								className="project-open"
+								data-sidebar-cycle-item=""
 								disabled={fenced}
 								aria-describedby={describedBy}
 								aria-current={current ? "page" : undefined}

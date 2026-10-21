@@ -184,7 +184,12 @@ test("logical preview counts project membership but folder access uses only its 
 	state.call.mockResolvedValueOnce({ matchedAtLeast: 3, complete: true, coverage: { state: "ready" } });
 	const options = state.options.find((entry) => entry.queryKey[0] === "sidebar-navigation");
 	assert.deepEqual(options?.queryKey, ["sidebar-navigation", "project-summary", "logical", "all"]);
-	assert.deepEqual(await options?.queryFn({ signal }), { count: 3, partial: false, state: "ready" });
+	assert.deepEqual(await options?.queryFn({ signal }), {
+		count: 3,
+		partial: false,
+		state: "ready",
+		coverage: { state: "ready" },
+	});
 	assert.deepEqual(state.call.mock.calls, [
 		["getProjectConversationSummary", { projectId: "logical", filter: "all" }, signal],
 	]);

@@ -8,7 +8,37 @@ import {
 	contextHoverReady,
 	contextMenuState,
 	contextRowSurfaceSettled,
+	retainedTargetPoint,
 } from "./context-menu.mjs";
+
+test("native ellipsis geometry rejects detached, hidden and obstructed retained targets without scrolling", () => {
+	let rect = { x: 12, y: 24, width: 28, height: 28 };
+	const child = {};
+	let hit = child;
+	const node = {
+		isConnected: true,
+		getBoundingClientRect: () => rect,
+		contains: (candidate) => candidate === child,
+		scrollIntoView: () => assert.fail("Native input must not repair geometry by scrolling"),
+	};
+	const document = {
+		elementFromPoint: (x, y) => {
+			assert.equal(x, 26);
+			assert.equal(y, 38);
+			return hit;
+		},
+	};
+	assert.deepEqual(retainedTargetPoint(document, node), { x: 26, y: 38 });
+	hit = {};
+	assert.equal(retainedTargetPoint(document, node), null);
+	hit = null;
+	assert.equal(retainedTargetPoint(document, node), null);
+	node.isConnected = false;
+	assert.equal(retainedTargetPoint(document, node), null);
+	node.isConnected = true;
+	rect = { ...rect, width: 0 };
+	assert.equal(retainedTargetPoint(document, node), null);
+});
 
 // These synthetic observations test only the oracle, never native browser behavior.
 const baseline = {
@@ -35,6 +65,11 @@ const opened = (entry = "context") => ({
 	sameMessages: true,
 	sameRows: true,
 	sameTriggers: true,
+	sameStaticRows: true,
+	sameStaticTriggers: true,
+	sameSourceRow: true,
+	sameSourceTrigger: true,
+	uniqueSource: true,
 	sourceConnected: true,
 	dialogCount: 0,
 	menuCount: 1,
@@ -66,6 +101,8 @@ test("surface observation flushes the genuine row style and reads its animations
 	const animation = Object.freeze({ pending: true, playState: "running" });
 	const row = {
 		dataset: {},
+		isConnected: true,
+		closest: () => null,
 		querySelector: () => null,
 		matches: (selector) => selector === ":hover",
 		getAnimations() {
@@ -86,7 +123,16 @@ test("surface observation flushes the genuine row style and reads its animations
 			},
 		},
 	};
-	const retained = { source, messages: [], rows: [row], triggers: [] };
+	const retained = {
+		source,
+		sourceRow: row,
+		sourceSelector: ".source",
+		messages: [],
+		rows: [row],
+		triggers: [],
+		staticRows: [row],
+		staticTriggers: [],
+	};
 	const value = contextMenuState(document, retained);
 	assert.deepEqual(reads, ["style", "animations"]);
 	assert.equal(value.rowBackground, expected.hoverSurface);
@@ -145,12 +191,97 @@ test("context continuity rejects navigation, duplicate selection, draft loss and
 		["selected", [...baseline.selected, ...baseline.selected]],
 		["draft", ""],
 		["messages", [{ id: "replacement", text: "Answer" }]],
-		...["samePanel", "sameComposer", "sameHistory", "sameMessages", "sameRows", "sameTriggers", "sourceConnected"].map(
-			(field) => [field, false],
-		),
+		...[
+			"samePanel",
+			"sameComposer",
+			"sameHistory",
+			"sameMessages",
+			"sameStaticRows",
+			"sameStaticTriggers",
+			"sameSourceRow",
+			"sameSourceTrigger",
+			"uniqueSource",
+			"sourceConnected",
+		].map((field) => [field, false]),
 		["dialogCount", 1],
 	])
 		assert.throws(() => assertContextContinuity({ ...opened(), [field]: value }, baseline), undefined, field);
+});
+
+test("unowned virtual-window turnover does not weaken exact menu ownership", () => {
+	const value = { ...opened(), sameRows: false, sameTriggers: false };
+	assertContextMenuOpen(value, baseline, expected, "context");
+	for (const field of [
+		"sameSourceRow",
+		"sameSourceTrigger",
+		"uniqueSource",
+		"sourceConnected",
+		"sameStaticRows",
+		"sameStaticTriggers",
+	])
+		assert.throws(
+			() => assertContextMenuOpen({ ...value, [field]: false }, baseline, expected, "context"),
+			undefined,
+			field,
+		);
+});
+
+test("DOM observation distinguishes virtual turnover from replacing the exact row or trigger", () => {
+	const makeRow = (id, virtual) => {
+		const item = { dataset: { workspaceId: "project", conversationId: id } };
+		const row = { isConnected: true, dataset: {}, getAnimations: () => [], matches: () => false };
+		row.closest = (selector) => (selector === "[data-window-row]" && virtual ? item : null);
+		const trigger = { isConnected: true, closest: row.closest, getAttribute: () => null };
+		row.querySelector = (selector) => (selector === ".conversation-actions-trigger" ? trigger : null);
+		return { row, trigger };
+	};
+	const fixed = makeRow("pinned", false);
+	const owned = makeRow("source", true);
+	const retired = makeRow("old-window", true);
+	const entered = makeRow("new-window", true);
+	let currentOwner = owned;
+	const source = { isConnected: true, closest: () => currentOwner.row };
+	const document = {
+		querySelectorAll: (selector) =>
+			({
+				".sidebar-preview-row": [fixed.row, currentOwner.row, entered.row],
+				".conversation-actions-trigger": [fixed.trigger, currentOwner.trigger, entered.trigger],
+				".source": [source],
+			})[selector] ?? [],
+		querySelector: (selector) => (selector === ".source" ? source : null),
+		defaultView: {
+			location: { href: baseline.route },
+			getComputedStyle: () => ({ backgroundColor: expected.hoverSurface }),
+		},
+	};
+	const retained = {
+		source,
+		sourceSelector: ".source",
+		sourceRow: owned.row,
+		trigger: owned.trigger,
+		messages: [],
+		rows: [fixed.row, owned.row, retired.row],
+		triggers: [fixed.trigger, owned.trigger, retired.trigger],
+		staticRows: [fixed.row],
+		staticTriggers: [fixed.trigger],
+	};
+	let state = contextMenuState(document, retained);
+	assert.equal(state.sameRows, false);
+	assert.equal(state.sameTriggers, false);
+	for (const field of ["sameStaticRows", "sameStaticTriggers", "sameSourceRow", "sameSourceTrigger", "uniqueSource"])
+		assert.equal(state[field], true, field);
+	assert.deepEqual(
+		state.virtualRows.map((row) => row.conversationId),
+		["source", "new-window"],
+	);
+	currentOwner = makeRow("source", true);
+	state = contextMenuState(document, retained);
+	assert.equal(state.sourceConnected, true, "A connected child alone cannot establish its row/trigger ownership");
+	assert.equal(state.sameSourceRow, false);
+	assert.equal(state.sameSourceTrigger, false);
+	currentOwner = owned;
+	owned.trigger.isConnected = false;
+	assert.equal(contextMenuState(document, retained).sameSourceTrigger, false);
 });
 
 test("open oracle rejects stale menus, duplicate owners, hover leakage and wrong actions", () => {
@@ -218,10 +349,14 @@ test("probe uses real right mouse and Escape input without synthetic or destruct
 	const source = await readFile(new URL("./context-menu.mjs", import.meta.url), "utf8");
 	assert.match(source, /Input\.dispatchMouseEvent/);
 	assert.match(source, /button: "right"/);
+	assert.match(source, /button: "left"/);
+	assert.doesNotMatch(source, /\bclick\s*\(/);
+	assert.match(source, /retainedTargetPoint\.toString\(\)/);
 	assert.match(source, /Input\.dispatchKeyEvent/);
 	assert.doesNotMatch(
 		source,
-		/dispatchEvent|new (?:MouseEvent|PointerEvent|KeyboardEvent)|\.focus\(|\.value\s*=|no-sandbox|Input\.insertText/,
+		/dispatchEvent|new (?:MouseEvent|PointerEvent|KeyboardEvent)|\.focus\(|\.value\s*=|no-sandbox|Input\.insertText|scrollIntoView/,
 	);
+	assert.match(source, /await revealRecentConversation\(cdp, scope, revealEvidence\)/);
 	assert.match(source, /keyboardContextMenu:.*verified: false/s);
 });

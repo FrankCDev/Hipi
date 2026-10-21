@@ -39,6 +39,8 @@ try {
     }
     Write-Phase 'capture-identity'
     if ($request.mode -ne 'capture' -or $start.Ticks.ToString() -ne $request.startTicks -or $session -ne $request.session) { throw 'identity' }
+    Write-Phase 'uia-apartment'
+    if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.ApartmentState]::MTA) { throw 'apartment' }
     Write-Phase 'native-compile'
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
     $references = @(
@@ -174,7 +176,15 @@ public static class HipiOwnedDialogReader {
                     !codes.Contains("IDENTITY_CHANGED") && !codes.Contains("ENUMERATION_UNAVAILABLE")) {
                     try {
                         if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
+                        if (clock.ElapsedMilliseconds >= 2000) { codes.Add("UIA_TIME_LIMIT"); limited = true; return false; }
+                        Console.Out.WriteLine("{\"phase\":\"uia-root-bind\"}"); Console.Out.Flush();
                         var dialog = AutomationElement.FromHandle(hwnd);
+                        // Root binding can incur cold provider initialization. It shares the original deadline.
+                        if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
+                        if (clock.ElapsedMilliseconds >= 2000) {
+                            codes.Add("UIA_TIME_LIMIT"); codes.Add("UIA_ROOT_BIND_TIME_LIMIT"); limited = true; return false;
+                        }
+                        Console.Out.WriteLine("{\"phase\":\"uia-read\"}"); Console.Out.Flush();
                         if (!ReadAccessible(dialog, hwnd, process.Id, 0, clock, codes, ref controls, ref readable, ref limited)) return false;
                         if (!Owned(hwnd, process.Id)) { codes.Add("IDENTITY_CHANGED"); return false; }
                     } catch { codes.Add("ENUMERATION_UNAVAILABLE"); return false; }

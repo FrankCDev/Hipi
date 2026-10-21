@@ -12,6 +12,42 @@ const seed = {
 	defaultWorkspaceId: "sidebar-chats",
 	handshake: { protocolVersion: 9, storeId: "fixture-store" },
 };
+test("first-start reload failure captures diagnostics and lifecycle without entering the journey", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-startup-reload-"));
+	const original = new Error("Reload rejected");
+	const calls = [];
+	try {
+		const cdp = {
+			request: async (method, params = {}) => {
+				calls.push(method);
+				if (method === "Page.enable" || method === "Page.removeScriptToEvaluateOnNewDocument") return {};
+				if (method === "Page.getFrameTree")
+					return { frameTree: { frame: { id: "owned", loaderId: "old", url: "hipi-work://app/index.html" } } };
+				if (method === "Page.addScriptToEvaluateOnNewDocument") return { identifier: "initializer" };
+				if (method === "Page.reload") throw original;
+				assert.equal(method, "Runtime.evaluate", "Failed setup must never send native input");
+				if (params.expression.includes("sidebarStartupDiagnostic"))
+					return { result: { value: { status: "verified_fixture_store" } } };
+				if (params.expression.includes('"method":"handshake"'))
+					return { result: { value: { ok: true, result: seed.handshake } } };
+				assert.equal(params.expression, "!!document.querySelector('.navigation-list')");
+				return { result: { value: true } };
+			},
+		};
+		await assert.rejects(exerciseSidebar({ cdp, directory, reopened: false, seed }), (error) => error === original);
+		assert.equal(calls.filter((method) => method === "Page.reload").length, 1);
+		assert.equal(calls.at(-2), "Page.removeScriptToEvaluateOnNewDocument");
+		const lifecycle = JSON.parse(await readFile(join(directory, "sidebar-startup-lifecycle.json"), "utf8"));
+		assert.equal(lifecycle.initializerRemoved, true);
+		assert.equal(lifecycle.expectedSidebarReady, undefined);
+		assert.equal(
+			JSON.parse(await readFile(join(directory, "sidebar-startup-diagnostic.json"), "utf8")).status,
+			"verified_fixture_store",
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 test("startup capture preserves the original failure even if capture or writing fails", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-startup-diagnostic-"));
 	try {

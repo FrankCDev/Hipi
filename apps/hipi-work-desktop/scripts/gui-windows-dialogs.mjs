@@ -21,6 +21,7 @@ const codes = new Set([
 	"UIA_WINDOW_OBSERVED",
 	"UIA_OTHER_OBSERVED",
 	"UIA_TIME_LIMIT",
+	"UIA_ROOT_BIND_TIME_LIMIT",
 	"UIA_CONTROL_LIMIT",
 	"UIA_DEPTH_LIMIT",
 	"NATIVE_TIME_LIMIT",
@@ -55,6 +56,9 @@ const reasons = new Set([
 	"process-exited",
 	"spawn-window",
 	"capture-identity",
+	"uia-apartment",
+	"uia-root-bind",
+	"uia-read",
 	"native-compile",
 	"native-query",
 	"post-query-identity",
@@ -106,7 +110,8 @@ function finalResult(stdout) {
 
 async function query(request, run) {
 	try {
-		const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-File", script], {
+		// UI Automation runs in a window-free MTA helper, not PowerShell's default STA.
+		const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Mta", "-File", script], {
 			env: {
 				...Object.fromEntries(
 					Object.entries(process.env).filter(([name]) => /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP)$/i.test(name)),

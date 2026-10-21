@@ -72,15 +72,15 @@ test("inactive prior filters and active preview caches cannot suppress current i
 		?.setState({ status: "error", error: new Error("old failure") });
 	assert.equal(isSidebarInitialLoading(cache), true, "Inactive prior errors are not current inventory");
 	const preview = new QueryObserver(cache, {
-		queryKey: ["sidebar-navigation", "project-preview", "old", "all"],
+		queryKey: ["sidebar-navigation", "project-summary", "old", "all"],
 		queryFn: () => new Promise(() => {}),
-		initialData: { pages: [{ items: [{ conversation: {} }] }] },
+		initialData: { count: 3, partial: false, state: "ready" },
 	});
 	const releasePreview = preview.subscribe(() => {});
 	assert.equal(isSidebarInitialLoading(cache), true, "Preview data never counts as a sidebar inventory row");
 	cache
 		.getQueryCache()
-		.find({ queryKey: ["sidebar-navigation", "project-preview"] })
+		.find({ queryKey: ["sidebar-navigation", "project-summary"] })
 		?.setState({ status: "error", error: new Error("preview failure") });
 	assert.equal(isSidebarInitialLoading(cache), true, "Preview errors never replace initial inventory loading");
 	releasePreview();

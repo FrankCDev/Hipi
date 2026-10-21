@@ -35,5 +35,9 @@ export const DEFAULT_APP_KEYBINDINGS = {
 	moveSidebarUp: "Alt-ArrowUp",
 	moveSidebarDown: "Alt-ArrowDown",
 	cancelSidebarMove: "Escape",
+	previousSidebarItem: "Mod-Alt-[",
+	previousSidebarItemAlternate: "Mod-Alt-ArrowLeft",
+	nextSidebarItem: "Mod-Alt-]",
+	nextSidebarItemAlternate: "Mod-Alt-ArrowRight",
 } as const;
 export type AppKeybindings = { [K in keyof typeof DEFAULT_APP_KEYBINDINGS]: string };

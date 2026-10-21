@@ -137,7 +137,11 @@ test("current conversation and its containing project retain distinct SSR surfac
 	);
 	assert.doesNotMatch(html, /aria-current=/);
 	assert.match(html, /class="project-toggle" aria-expanded="true"/);
-	assert.match(html, /class="project-open" aria-labelledby="[^"]+" title="打开项目"/);
+	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>/)?.[0];
+	assert.ok(open);
+	assert.match(open, /aria-labelledby="[^"]+"/);
+	assert.match(open, /title="打开项目"/);
+	assert.match(open, /data-sidebar-cycle-item=""/);
 	assert.match(html, />收起项目<\/span>/);
 	assert.match(html, />打开项目<\/span>/);
 	assert.match(html, /aria-label="新聊天: My project 0"/);
@@ -157,7 +161,10 @@ test("project overview alone marks the project as current", () => {
 		html,
 		/class="sidebar-preview-row project-row" data-selected="true" data-current="true" data-contains-current="false"/,
 	);
-	assert.match(html, /class="project-open" aria-current="page"/);
+	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>/)?.[0];
+	assert.ok(open);
+	assert.match(open, /aria-current="page"/);
+	assert.match(open, /data-sidebar-cycle-item=""/);
 	assert.match(html, /class="sidebar-preview-row conversation-preview-row" data-selected="false"/);
 	assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
 });

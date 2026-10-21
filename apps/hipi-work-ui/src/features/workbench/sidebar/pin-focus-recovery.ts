@@ -1,6 +1,7 @@
 import type { Scope } from "@hipi/work-runtime/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 import type { NavigationWindow } from "./navigation-query.ts";
+import { isNavigationWindowKey } from "./query-keys.ts";
 import type { RecentWindow } from "./window-query.ts";
 
 function usable(element: HTMLElement) {
@@ -21,7 +22,7 @@ export function navigationFocusSettled(root: HTMLElement, cache: QueryClient, sc
 	return cache
 		.getQueryCache()
 		.findAll({
-			predicate: (query) => query.queryKey[0] === "sidebar-navigation" || query.queryKey[0] === "sidebar-window",
+			predicate: (query) => isNavigationWindowKey(query.queryKey),
 		})
 		.every((query) => {
 			const view = query.queryKey[1];

@@ -112,6 +112,7 @@ export function ConversationPreview({
 					ref={alias.ref}
 					type="button"
 					className="conversation-link"
+					data-sidebar-cycle-item=""
 					data-workspace-id={conversation.workspaceId}
 					data-conversation-id={conversation.conversationId}
 					data-sidebar-location={location.kind}

@@ -73,7 +73,10 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-hover.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-geometry.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/journey.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/native-key.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/new-chat-navigation.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/item-navigation.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/startup-diagnostic.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/startup-lifecycle.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/virtualization.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/virtualization-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/fixture.test.mjs");
@@ -171,6 +174,7 @@ const uiTests = [
 	"workbench/sidebar/startup-publication",
 	"workbench/sidebar/recent-conversations",
 	"workbench/sidebar/selection-provider",
+	"workbench/sidebar/item-navigation",
 	"workbench/sidebar/selection-hooks",
 	"workbench/sidebar/use-navigation",
 	"workbench/sidebar/pinned-focus-lifecycle",

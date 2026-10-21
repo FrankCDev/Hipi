@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nativeKeyEvents } from "./native-key.mjs";
+import { nativeKeyEvents, sidebarTraversalKeyEvents } from "./native-key.mjs";
 
 test("macOS Meta+A supplies selectAll only on raw keydown", () => {
 	assert.deepEqual(nativeKeyEvents("a", 4, "darwin"), [
@@ -83,4 +83,40 @@ test("navigation and ordering keys preserve modifiers without editing commands",
 
 test("unsupported native fixture keys fail before dispatch", () => {
 	assert.throws(() => nativeKeyEvents("Unknown", 0, "darwin"), /Unsupported native fixture key/);
+});
+
+test("sidebar chords hold modifiers through repeats then explicitly release every modifier", () => {
+	for (const platform of ["darwin", "linux", "win32"]) {
+		for (const [key, code, virtual] of [
+			["[", "BracketLeft", 219],
+			["]", "BracketRight", 221],
+			["ArrowLeft", "ArrowLeft", 37],
+			["ArrowRight", "ArrowRight", 39],
+		]) {
+			const events = sidebarTraversalKeyEvents(key, 1, platform);
+			const primary = platform === "darwin" ? 4 : 2;
+			assert.equal(events.length, 7);
+			assert.deepEqual(
+				events.map((event) => event.modifiers),
+				[primary, primary | 1, primary | 1, primary | 1, primary | 1, primary, 0],
+			);
+			assert.deepEqual(
+				events.slice(2, 4).map((event) => event.autoRepeat),
+				[false, true],
+			);
+			assert.ok(
+				events
+					.slice(2, 5)
+					.every((event) => event.key === key && event.code === code && event.windowsVirtualKeyCode === virtual),
+			);
+			assert.ok(events.every((event) => !Object.hasOwn(event, "commands") && !Object.hasOwn(event, "text")));
+			assert.equal(events.at(-1).type, "keyUp");
+			assert.equal(events.at(-1).key, platform === "darwin" ? "Meta" : "Control");
+		}
+	}
+});
+
+test("sidebar chords reject invalid repeat counts and unsupported shortcuts", () => {
+	for (const count of [-1, 1.5, 5, NaN]) assert.throws(() => sidebarTraversalKeyEvents("]", count));
+	assert.throws(() => sidebarTraversalKeyEvents("Enter"));
 });

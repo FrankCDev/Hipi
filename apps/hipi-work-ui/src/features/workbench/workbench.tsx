@@ -55,6 +55,7 @@ import { ConversationSearch } from "./search/search.tsx";
 import { SidebarDisclosureSession } from "./sidebar/disclosure-session.ts";
 import { SidebarDragProvider, type SidebarOrderAction } from "./sidebar/drag-provider.tsx";
 import { SidebarInitialLoading } from "./sidebar/initial-loading.tsx";
+import { SidebarItemNavigationCommands } from "./sidebar/item-navigation.tsx";
 import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar/layout-session.ts";
 import { useNavigationRefresh } from "./sidebar/navigation-refresh.ts";
 import { sidebarOrderLabels } from "./sidebar/order-labels.ts";
@@ -918,6 +919,19 @@ export function Workbench({
 				inert={settingsOpen || (narrow ? !navigationOpen : navigationCollapsed)}
 			>
 				<div className="sidebar-brand-row">
+					<SidebarItemNavigationCommands
+						rootRef={navigationRoot}
+						keybindings={keybindings}
+						enabled={
+							connectionLease.active &&
+							!settingsOpen &&
+							!detailsOpen &&
+							!searchOpen &&
+							!folderProject &&
+							!leave &&
+							(narrow ? navigationOpen : !navigationCollapsed)
+						}
+					/>
 					<button
 						type="button"
 						className="brand brand-home"

@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { capture, click, evaluate, hover, until } from "../../gui-flow.mjs";
+import { capture, evaluate, hover, until } from "../../gui-flow.mjs";
+import { revealRecentConversation } from "./new-chat-navigation.mjs";
+
+/** Read only: never scroll or replace the retained native input target. */
+export function retainedTargetPoint(document, node) {
+	if (!node?.isConnected) return null;
+	const rect = node.getBoundingClientRect();
+	const x = rect.x + rect.width / 2;
+	const y = rect.y + rect.height / 2;
+	return rect.width > 0 && rect.height > 0 && node.contains(document.elementFromPoint(x, y)) ? { x, y } : null;
+}
 
 /** Read-only DOM evidence. Retained references never drive application state. */
 export function contextMenuState(document, retained) {
@@ -15,6 +25,8 @@ export function contextMenuState(document, retained) {
 	const messages = all("[data-message-id]");
 	const rows = all(".sidebar-preview-row");
 	const triggers = all(".conversation-actions-trigger");
+	const staticRows = rows.filter((node) => !node.closest("[data-window-row]"));
+	const staticTriggers = triggers.filter((node) => !node.closest("[data-window-row]"));
 	// Reading computed style flushes the hover style before inspecting its CSS transitions.
 	const rowBackground = sourceRow && document.defaultView.getComputedStyle(sourceRow).backgroundColor;
 	if (sourceRow && typeof sourceRow.getAnimations !== "function")
@@ -40,6 +52,23 @@ export function contextMenuState(document, retained) {
 		sameRows: rows.length === retained.rows.length && rows.every((node, i) => node === retained.rows[i]),
 		sameTriggers:
 			triggers.length === retained.triggers.length && triggers.every((node, i) => node === retained.triggers[i]),
+		// The virtual window may change while scrolling. Its actual interaction owner may not.
+		sameStaticRows:
+			staticRows.length === retained.staticRows.length &&
+			staticRows.every((node, i) => node === retained.staticRows[i]),
+		sameStaticTriggers:
+			staticTriggers.length === retained.staticTriggers.length &&
+			staticTriggers.every((node, i) => node === retained.staticTriggers[i]),
+		sameSourceRow: retained.sourceRow?.isConnected === true && sourceRow === retained.sourceRow,
+		sameSourceTrigger:
+			retained.trigger?.isConnected === true &&
+			sourceRow?.querySelector(".conversation-actions-trigger") === retained.trigger,
+		uniqueSource:
+			all(retained.sourceSelector).length === 1 && document.querySelector(retained.sourceSelector) === retained.source,
+		virtualRows: rows.flatMap((node) => {
+			const item = node.closest("[data-window-row]");
+			return item ? [{ workspaceId: item.dataset.workspaceId, conversationId: item.dataset.conversationId }] : [];
+		}),
 		sourceConnected: retained.source?.isConnected === true,
 		menuCount: menus.length,
 		menuOpen: menu?.dataset.state === "open",
@@ -108,8 +137,11 @@ export function assertContextContinuity(value, baseline) {
 		"sameComposer",
 		"sameHistory",
 		"sameMessages",
-		"sameRows",
-		"sameTriggers",
+		"sameStaticRows",
+		"sameStaticTriggers",
+		"sameSourceRow",
+		"sameSourceTrigger",
+		"uniqueSource",
 		"sourceConnected",
 	])
 		assert.equal(value[field], true, `Context menu lost retained owner: ${field}`);
@@ -168,6 +200,7 @@ async function pressEscape(cdp) {
 /** Run only in the real sandboxed Electron runner, after its selected pin/history/draft baseline. */
 export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 	const evidence = [];
+	const revealEvidence = [];
 	let failure;
 	let lastObservation;
 	try {
@@ -178,7 +211,6 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 			assert.ok(scope, "Context menu fixture needs a noncurrent pin and an unpinned alias");
 			assert.notDeepEqual(scope, seed.pins[0]);
 			const selector = `.${location === "pinned" ? "pinned" : "recent"}-conversations .conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]`;
-			const trigger = `.${location === "pinned" ? "pinned" : "recent"}-conversations .sidebar-preview-row:has(.conversation-link[data-workspace-id="${scope.workspaceId}"][data-conversation-id="${scope.conversationId}"]) .conversation-actions-trigger`;
 			const conversation = seed.snapshot.conversations.find(
 				({ conversation: item }) =>
 					item.workspaceId === scope.workspaceId && item.conversationId === scope.conversationId,
@@ -189,11 +221,20 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 			await evaluate(
 				cdp,
 				`(()=>{
+				const rows=[...document.querySelectorAll('.sidebar-preview-row')],triggers=[...document.querySelectorAll('.conversation-actions-trigger')];
+				window.__sidebarContext={panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),messages:[...document.querySelectorAll('[data-message-id]')],rows,triggers,staticRows:rows.filter(node=>!node.closest('[data-window-row]')),staticTriggers:triggers.filter(node=>!node.closest('[data-window-row]'))};
+				return true;
+			})()`,
+			);
+			if (location === "recent") await revealRecentConversation(cdp, scope, revealEvidence);
+			await evaluate(
+				cdp,
+				`(()=>{
 				const sources=[...document.querySelectorAll(${JSON.stringify(selector)})];
 				if(sources.length!==1)throw Error('Context source must be unique');
 				const source=sources[0],trigger=source.closest('.sidebar-preview-row').querySelector('.conversation-actions-trigger');
 				if(!trigger)throw Error('Missing source ellipsis');
-				window.__sidebarContext={source,trigger,panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),messages:[...document.querySelectorAll('[data-message-id]')],rows:[...document.querySelectorAll('.sidebar-preview-row')],triggers:[...document.querySelectorAll('.conversation-actions-trigger')]};
+				Object.assign(window.__sidebarContext,{source,sourceSelector:${JSON.stringify(selector)},sourceRow:source.closest('.sidebar-preview-row'),trigger});
 				return true;
 			})()`,
 			);
@@ -230,7 +271,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 						evaluate(
 							cdp,
 							`(()=>{
-						const node=window.__sidebarContext.source;node.scrollIntoView({block:'center'});
+						const node=window.__sidebarContext.source;
 						const r=node.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
 						return r.width>0&&r.height>0&&node.contains(document.elementFromPoint(x,y))?{x,y}:null;
 					})()`,
@@ -251,7 +292,19 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 					expected.hoverSurface = hoverSample.rowBackground;
 					for (const type of ["mousePressed", "mouseReleased"])
 						await cdp.request("Input.dispatchMouseEvent", { type, ...settledPoint, button: "right", clickCount: 1 });
-				} else await click(cdp, trigger);
+				} else {
+					const pointFor = (target) =>
+						evaluate(cdp, `(${retainedTargetPoint.toString()})(document,window.__sidebarContext.${target})`);
+					const sourcePoint = await until(() => pointFor("source"), "retained source remains visible after Escape");
+					await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...sourcePoint });
+					const triggerPoint = await until(() => pointFor("trigger"), "unobstructed exact retained ellipsis");
+					assertContextContinuity(await read(), baseline);
+					await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...triggerPoint });
+					const settledPoint = await until(() => pointFor("trigger"), "retained ellipsis after native hover");
+					assertContextContinuity(await read(), baseline);
+					for (const type of ["mousePressed", "mouseReleased"])
+						await cdp.request("Input.dispatchMouseEvent", { type, ...settledPoint, button: "left", clickCount: 1 });
+				}
 				await until(async () => {
 					const value = await read();
 					return (
@@ -294,6 +347,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 		return {
 			nativeInput: true,
 			evidence,
+			revealEvidence,
 			keyboardContextMenu: {
 				verified: false,
 				reason: "Shift+F10 requires platform-specific native validation; no synthetic fallback is used.",
@@ -305,7 +359,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 	} finally {
 		await writeFile(
 			join(directory, "sidebar-context-menus.json"),
-			`${JSON.stringify({ evidence, failure, lastObservation }, null, 2)}\n`,
+			`${JSON.stringify({ evidence, revealEvidence, failure, lastObservation }, null, 2)}\n`,
 		);
 		await evaluate(cdp, "delete window.__sidebarContext");
 	}

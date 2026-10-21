@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { type AppClient, AppError, type SidebarPage } from "@hipi/work-runtime/contracts";
+import {
+	type AppClient,
+	AppError,
+	type ProjectConversationSummary,
+	type SidebarPage,
+} from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { test, vi } from "vitest";
 import {
@@ -14,6 +19,12 @@ import {
 	sameNavigationPublication,
 	watchNavigationSignals,
 } from "../../../src/features/workbench/sidebar/navigation-refresh.ts";
+import { readProjectSummary } from "../../../src/features/workbench/sidebar/project-summary-query.ts";
+import {
+	isNavigationWindowKey,
+	isProjectSummaryKey,
+	projectSummaryKey,
+} from "../../../src/features/workbench/sidebar/query-keys.ts";
 
 const view = { kind: "recent" } as const;
 const page = (
@@ -74,6 +85,151 @@ function reader(read: (cursor?: string, signal?: AbortSignal) => Promise<Sidebar
 	return { call, observe: vi.fn() };
 }
 const signal = () => new AbortController().signal;
+
+test("project hover summary and active navigation windows coexist during background publication", async () => {
+	const cache = new QueryClient();
+	let generation = "one";
+	const call = vi.fn(async (method: string) =>
+		method === "getProjectConversationSummary"
+			? {
+					matchedAtLeast: generation === "one" ? 3 : 4,
+					complete: true,
+					coverage: { generation, projectMembershipGeneration: 0, state: "ready", completedAt: 1 },
+				}
+			: {
+					...page(generation, null, generation),
+					coverage: {
+						...page(generation, null, generation).coverage,
+						projectMembershipGeneration: 0,
+						projectOrderGeneration: 3,
+					},
+				},
+	);
+	const client = { call: call as AppClient["call"], observe: vi.fn() };
+	const navigation = new QueryObserver(cache, navigationOptions(cache, client, view, "active"));
+	const summaryRead = vi.fn(({ signal }: { signal: AbortSignal }) => readProjectSummary(client, "project-a", signal));
+	const summary = new QueryObserver(cache, {
+		queryKey: projectSummaryKey("project-a"),
+		queryFn: summaryRead,
+		retry: false,
+	});
+	const stopNavigation = navigation.subscribe(() => {});
+	const stopSummary = summary.subscribe(() => {});
+	try {
+		await Promise.all([navigation.refetch({ cancelRefetch: false }), summary.refetch({ cancelRefetch: false })]);
+		const originalCalls = call.mock.calls.length;
+		await reconcileNavigationPublication(cache, {
+			...page("one").coverage,
+			projectMembershipGeneration: 0,
+			projectOrderGeneration: 3,
+		});
+		assert.equal(call.mock.calls.length, originalCalls, "unchanged publication does not reread an open hover card");
+		generation = "two";
+		await reconcileNavigationPublication(cache, {
+			...page("two", null, "two").coverage,
+			projectMembershipGeneration: 0,
+			projectOrderGeneration: 3,
+		});
+		assert.equal(navigation.getCurrentResult().data?.pages[0]?.coverage.generation, "two");
+		assert.equal(summary.getCurrentResult().data?.count, 4, "hover count follows the newly published membership");
+		assert.equal(summary.getCurrentResult().data?.coverage.generation, "two");
+		const updatedCalls = call.mock.calls.length;
+		await reconcileNavigationPublication(cache, {
+			...page("two", null, "two").coverage,
+			projectMembershipGeneration: 0,
+			projectOrderGeneration: 3,
+		});
+		assert.equal(call.mock.calls.length, updatedCalls);
+		const stopSignals = watchNavigationSignals(cache);
+		cache.setQueryData(["receipt", "workspace", "request"], { state: "accepted" });
+		await summary.refetch({ cancelRefetch: false });
+		assert.equal(summaryRead.mock.calls.length, 3, "existing activity signals still invalidate summary reads");
+		stopSignals();
+	} finally {
+		stopSummary();
+		stopNavigation();
+		cache.clear();
+	}
+});
+
+test("window readers reject summaries and unrelated keys under the shared invalidation prefix", () => {
+	for (const key of [
+		projectSummaryKey("project-a"),
+		["sidebar-navigation", "preview", "project-a", "all"],
+		["sidebar-navigation", { kind: "project" }, "active"],
+		["sidebar-window", { kind: "workspace" }, "active"],
+		["sidebar-window", { kind: "recent" }, "other"],
+	])
+		assert.equal(isNavigationWindowKey(key), false);
+	for (const owner of ["sidebar-navigation", "sidebar-window"])
+		for (const candidate of [
+			{ kind: "recent" },
+			{ kind: "project_recent" },
+			{ kind: "workspace", workspaceId: "w" },
+			{ kind: "project", projectId: "p" },
+		])
+			assert.equal(isNavigationWindowKey([owner, candidate, "active"]), true);
+	assert.equal(isProjectSummaryKey(projectSummaryKey("project-a")), true);
+	assert.equal(isProjectSummaryKey(navigationKey(view, "active")), false);
+});
+
+test("hover summary settles its own publication and keeps bounded retry and inactive ownership", async () => {
+	for (const initialState of ["building", "refreshing"] as const) {
+		const cache = new QueryClient();
+		let failure: Error | undefined;
+		const value: ProjectConversationSummary = {
+			matchedAtLeast: 2,
+			complete: true,
+			coverage: { generation: "one", projectMembershipGeneration: 1, state: initialState, completedAt: 1 },
+		};
+		const call = vi.fn(async () => {
+			if (failure) throw failure;
+			return structuredClone(value);
+		});
+		const client = { call: call as AppClient["call"], observe: vi.fn() };
+		const options = {
+			queryKey: projectSummaryKey("project-a"),
+			queryFn: ({ signal }: { signal: AbortSignal }) => readProjectSummary(client, "project-a", signal),
+			retry: false,
+		};
+		const observer = new QueryObserver(cache, options);
+		const stop = observer.subscribe(() => {});
+		const probe = { ...page("one").coverage, projectMembershipGeneration: 1, projectOrderGeneration: 2 };
+		try {
+			await observer.refetch({ cancelRefetch: false });
+			value.coverage.state = "ready";
+			await reconcileNavigationPublication(cache, probe);
+			assert.equal(observer.getCurrentResult().data?.partial, false);
+			assert.equal(call.mock.calls.length, 2, "same generation still requires one completed summary read");
+			await reconcileNavigationPublication(cache, { ...probe, projectOrderGeneration: 3, membershipGeneration: 4 });
+			assert.equal(call.mock.calls.length, 2, "pin order and nonproject membership do not invalidate a count");
+			value.coverage.projectMembershipGeneration = 2;
+			value.matchedAtLeast = 3;
+			await reconcileNavigationPublication(cache, { ...probe, projectMembershipGeneration: 2 });
+			assert.equal(observer.getCurrentResult().data?.count, 3);
+			failure = new Error("OFFLINE");
+			await reconcileNavigationPublication(cache, { ...probe, projectMembershipGeneration: 3 });
+			const failedCalls = call.mock.calls.length;
+			await reconcileNavigationPublication(cache, { ...probe, projectMembershipGeneration: 3 });
+			assert.equal(call.mock.calls.length, failedCalls, "failed summary obeys the shared backoff");
+			failure = undefined;
+			value.coverage.projectMembershipGeneration = 3;
+			await reconcileNavigationPublication(cache, { ...probe, projectMembershipGeneration: 3 }, Date.now() + 10001);
+			assert.equal(observer.getCurrentResult().isError, false);
+			failure = new AppError("STORE_MISMATCH");
+			await observer.refetch();
+			const mismatchCalls = call.mock.calls.length;
+			await reconcileNavigationPublication(cache, probe, Date.now() + 20001);
+			assert.equal(call.mock.calls.length, mismatchCalls, "store mismatch never automatically retries");
+			stop();
+			await reconcileNavigationPublication(cache, probe, Date.now() + 30001);
+			assert.equal(call.mock.calls.length, mismatchCalls, "unmounted hover card does not poll");
+		} finally {
+			stop();
+			cache.clear();
+		}
+	}
+});
 
 test("stale continuation atomically recovers and never combines generations or pin memberships", async () => {
 	for (const membershipOnly of [false, true]) {

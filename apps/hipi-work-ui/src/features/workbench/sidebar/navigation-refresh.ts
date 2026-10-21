@@ -3,6 +3,8 @@ import { type QueryClient, queryOptions, useQuery, useQueryClient } from "@tanst
 import { useEffect, useState } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import type { NavigationWindow } from "./navigation-query.ts";
+import type { ProjectSummaryCount } from "./project-summary-query.ts";
+import { isNavigationWindowKey, isProjectSummaryKey } from "./query-keys.ts";
 import type { RecentWindow } from "./window-query.ts";
 
 export const navigationProbeOptions = (client: AppClient, logical = false) =>
@@ -30,12 +32,23 @@ export function reconcileNavigationPublication(cache: QueryClient, coverage: Sid
 	return cache.invalidateQueries(
 		{
 			predicate: (query) => {
-				if (query.queryKey[0] !== "sidebar-navigation" && query.queryKey[0] !== "sidebar-window") return false;
+				const summary = isProjectSummaryKey(query.queryKey);
+				if (!summary && !isNavigationWindowKey(query.queryKey)) return false;
 				if (!query.isActive() || query.state.fetchStatus === "fetching") return false;
 				if (query.state.error instanceof AppError && query.state.error.code === "STORE_MISMATCH") return false;
+				if (query.state.error && now - query.state.errorUpdatedAt < 10000) return false;
+				if (summary) {
+					const published = cache.getQueryData<ProjectSummaryCount>(query.queryKey)?.coverage;
+					return (
+						!!query.state.error ||
+						(!!published &&
+							((published.state !== "ready" && coverage.state === "ready") ||
+								published.generation !== coverage.generation ||
+								published.projectMembershipGeneration !== coverage.projectMembershipGeneration))
+					);
+				}
 				const window = cache.getQueryData<NavigationWindow | RecentWindow>(query.queryKey);
 				const published = window?.pages[0]?.coverage;
-				if (query.state.error && now - query.state.errorUpdatedAt < 10000) return false;
 				return (
 					!!query.state.error ||
 					// A first building page has no rows, but publication retains its generation.

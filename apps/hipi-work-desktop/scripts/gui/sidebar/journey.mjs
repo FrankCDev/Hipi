@@ -5,9 +5,11 @@ import { capture, click, evaluate, hover, until } from "../../gui-flow.mjs";
 import { assertSidebarShellGeometry, sidebarShellGeometry } from "../../gui-sidebar-geometry.mjs";
 import { assertSidebarHoverTrace, startSidebarHoverTrace } from "../../gui-sidebar-hover.mjs";
 import { exerciseSidebarContextMenus } from "./context-menu.mjs";
-import { defaultRoleEntry } from "./manifest.mjs";
+import { exerciseSidebarKeyboard } from "./item-navigation.mjs";
 import { nativeKeyEvents } from "./native-key.mjs";
+import { openRecentConversation } from "./new-chat-navigation.mjs";
 import { sidebarStartupDiagnostic } from "./startup-diagnostic.mjs";
+import { seedSidebarDocument } from "./startup-lifecycle.mjs";
 
 const heading = (id) => `[data-sidebar-section="${id}"] .sidebar-section-toggle`;
 const project = (id) => `.workspace-branch[data-workspace-id="${id}"] .project-open`;
@@ -238,10 +240,7 @@ async function exerciseNewChatContext(cdp, seed, directory, observeGeometry) {
 			({ conversation }) => conversation.workspaceId === seed.defaultWorkspaceId,
 		)?.conversation;
 		assert.ok(ordinary);
-		await click(
-			cdp,
-			`.recent-conversations .conversation-link[data-workspace-id="${ordinary.workspaceId}"][data-conversation-id="${ordinary.conversationId}"]`,
-		);
+		await openRecentConversation(cdp, ordinary, evidence);
 		await until(
 			() => evaluate(cdp, "!!document.querySelector('.conversation-panel .composer textarea')"),
 			"ordinary default conversation opens",
@@ -249,8 +248,7 @@ async function exerciseNewChatContext(cdp, seed, directory, observeGeometry) {
 		await click(cdp, ".new-conversation-trigger");
 		await inputFocused();
 		await verify("New chat from default conversation", null, false);
-		const alias = `.recent-conversations .conversation-link[data-workspace-id="${seed.alias.workspaceId}"][data-conversation-id="${seed.alias.conversationId}"]`;
-		await click(cdp, alias);
+		await openRecentConversation(cdp, seed.alias, evidence);
 		await until(
 			() => evaluate(cdp, `document.querySelector('.composer textarea')?.value===${JSON.stringify(aliasDraft)}`),
 			"existing conversation draft remains separate from home draft",
@@ -441,15 +439,9 @@ async function warmHover(cdp, directory, seed) {
 
 export async function exerciseSidebar({ cdp, directory, reopened, seed, previous, record }) {
 	await until(() => evaluate(cdp, "!!document.querySelector('.navigation-list')"), "sidebar ready");
-	if (!reopened) {
-		// Only the completed default-role record is fixture setup. Never inject ordering or disclosure state.
-		const entry = defaultRoleEntry(seed);
-		await evaluate(
-			cdp,
-			`localStorage.setItem(${JSON.stringify(`hipi.work.local.v1.${seed.handshake.storeId}.value.default-chat-workspace`)},${JSON.stringify(JSON.stringify(entry))});location.reload();true`,
-		);
-	}
+	const startup = { reopened };
 	try {
+		if (!reopened) await seedSidebarDocument(cdp, seed, startup);
 		await until(
 			() =>
 				evaluate(
@@ -458,6 +450,7 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 				),
 			"three sections and two real projects",
 		);
+		startup.expectedSidebarReady = true;
 	} catch (error) {
 		// Observe the failed startup before any repair; never click Retry or mutate runtime state.
 		let diagnostic;
@@ -475,6 +468,12 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			// A diagnostic write failure must not replace the original startup failure.
 		}
 		throw error;
+	} finally {
+		try {
+			await writeFile(join(directory, "sidebar-startup-lifecycle.json"), `${JSON.stringify(startup, null, 2)}\n`);
+		} catch {
+			// Retaining lifecycle evidence must not replace the original startup failure.
+		}
 	}
 	const actions = [];
 	const geometry = [];
@@ -542,6 +541,9 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		);
 		await click(cdp, ".composer textarea");
 		await cdp.request("Input.insertText", { text: seed.draft });
+		const keyboardNavigation = await exerciseSidebarKeyboard({ cdp, seed, directory });
+		actions.push({ name: "CDP sidebar keyboard traversal and ownership", keyboardNavigation });
+		record({ sidebarAction: "CDP sidebar keyboard traversal and ownership" });
 		await evaluate(
 			cdp,
 			`void(window.__sidebarContinuity={panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll')})`,

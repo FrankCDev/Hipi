@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useSyncExternalStore } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
+import { isNavigationWindowKey } from "./query-keys.ts";
 import "./initial-loading.css";
 
 /** Observe the existing query owners; this shell never starts or remounts an inventory query. */
@@ -11,17 +12,9 @@ export function isSidebarInitialLoading(cache: QueryClient) {
 		.getAll()
 		.filter((query) => {
 			if (!query.isActive()) return false;
-			const [owner, view, filter] = query.queryKey;
+			const [owner, view] = query.queryKey;
 			if (owner === "projects" || owner === "sidebar-pins") return query.queryKey.length === 2 && view === "pages";
-			return (
-				(owner === "sidebar-navigation" || owner === "sidebar-window") &&
-				query.queryKey.length === 3 &&
-				view !== null &&
-				typeof view === "object" &&
-				"kind" in view &&
-				["recent", "project_recent", "workspace", "project"].includes(String(view.kind)) &&
-				(filter === "active" || filter === "archived" || filter === "all")
-			);
+			return isNavigationWindowKey(query.queryKey);
 		});
 	if (queries.some((query) => query.state.status === "error")) return false;
 	for (const query of queries) {

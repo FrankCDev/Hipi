@@ -12,6 +12,8 @@ import { projectLabels } from "../projects/labels.ts";
 import { ProjectEditableTitle } from "../projects/rename.tsx";
 import { useProjectFolder } from "../projects/use-folder.ts";
 import { projectConversationCount } from "./preview-metadata.ts";
+import { type ProjectPreviewCount, readProjectSummary } from "./project-summary-query.ts";
+import { projectSummaryKey } from "./query-keys.ts";
 
 /** Mounted on demand by the preview, never reads execution or grants model access. */
 export function ProjectPreviewCard({
@@ -36,19 +38,11 @@ export function ProjectPreviewCard({
 	const actions =
 		logical && logicalReady && mode === "card" && owner?.projectId === project.projectId ? owner : undefined;
 	const folder = useProjectFolder(workspaceId);
-	const count = useQuery<{ count: number; partial: boolean; state: "building" | "refreshing" | "ready" }>({
-		queryKey: logical
-			? ["sidebar-navigation", "project-summary", project.projectId, "all"]
-			: ["conversations", workspaceId, "all", "preview"],
+	const count = useQuery<ProjectPreviewCount>({
+		queryKey: logical ? projectSummaryKey(project.projectId) : ["conversations", workspaceId, "all", "preview"],
 		queryFn: ({ signal }) =>
 			logical
-				? client
-						.call("getProjectConversationSummary", { projectId: project.projectId, filter: "all" }, signal)
-						.then((summary) => ({
-							count: summary.matchedAtLeast,
-							partial: !summary.complete || summary.coverage.state !== "ready",
-							state: summary.coverage.state,
-						}))
+				? readProjectSummary(client, project.projectId, signal)
 				: client
 						.call("listConversations", { workspaceId, filter: "all" }, signal)
 						.then((page) => ({ count: page.items.length, partial: page.nextCursor !== null, state: "ready" as const })),

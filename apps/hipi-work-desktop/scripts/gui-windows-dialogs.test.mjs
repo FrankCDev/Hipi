@@ -188,6 +188,8 @@ test("bounded JSONL progress survives timeout without leaking output or proving 
 		['{"phase":"request"}\n{"phase":"process-image"}\n', "process-image"],
 		['{"phase":"process-handle"}\n{"phase":"private-path"}\nsecret\n{"phase":"process-image"}', "process-handle"],
 		['{"phase":"process-image","secret":"private"}\n', "helper-start"],
+		['{"phase":"uia-root-bind"}\n', "uia-root-bind"],
+		['{"phase":"uia-root-bind"}\n{"phase":"uia-read"}\n', "uia-read"],
 		["x".repeat(17000), "helper-start"],
 	]) {
 		const identity = await captureWindowsIdentity(input, {
@@ -286,6 +288,7 @@ test("task-dialog accessibility stays under an owned HWND with bounded, read-onl
 		"UIA_WINDOW_OBSERVED",
 		"UIA_OTHER_OBSERVED",
 		"UIA_TIME_LIMIT",
+		"UIA_ROOT_BIND_TIME_LIMIT",
 		"UIA_CONTROL_LIMIT",
 		"UIA_DEPTH_LIMIT",
 		"NATIVE_TIME_LIMIT",
@@ -327,6 +330,46 @@ test("owned DirectUI detection selects accessibility before exhausting the share
 	assert.doesNotMatch(accessibility, /controls\s*=|Stopwatch.StartNew|RootElement/);
 });
 
+test("UIA requires MTA and retains ownership and the original deadline around cold root binding", async () => {
+	const script = await readFile(new URL("./gui-windows-dialogs.ps1", import.meta.url), "utf8");
+	const apartment = script.indexOf("Write-Phase 'uia-apartment'");
+	assert.ok(apartment > script.indexOf("Write-Phase 'capture-identity'"));
+	assert.ok(apartment < script.indexOf("Add-Type -AssemblyName UIAutomationClient"));
+	assert.match(script, /CurrentThread\.GetApartmentState\(\) -ne \[Threading\.ApartmentState\]::MTA/);
+	const binding = script.slice(script.indexOf("// Different representation"), script.indexOf("if (readable == 0)"));
+	const call = binding.indexOf("AutomationElement.FromHandle(hwnd)");
+	const before = binding.slice(0, call);
+	const after = binding.slice(call, binding.indexOf("if (!ReadAccessible"));
+	for (const side of [before, after]) {
+		assert.match(side, /if \(!Owned\(hwnd, process.Id\)\)/);
+		assert.match(side, /clock.ElapsedMilliseconds >= 2000/);
+	}
+	assert.match(after, /codes.Add\("UIA_ROOT_BIND_TIME_LIMIT"\); limited = true; return false/);
+	assert.doesNotMatch(binding, /Stopwatch.StartNew|\.Restart\(|\.Reset\(/);
+	assert.equal((script.match(/Stopwatch.StartNew\(\)/g) ?? []).length, 1);
+	const denied = await readWindowsDialogs(confirmed, {
+		platform: "win32",
+		run: async () => ({ stdout: '{"phase":"uia-apartment"}\n{"status":"unknown","reason":"uia-apartment"}' }),
+	});
+	assert.deepEqual(denied, { status: "unknown", reason: "uia-apartment" });
+	const limitedCodes = [
+		"OWNED_ERROR_DIALOG",
+		"DIRECTUI_CONTROL_OBSERVED",
+		"UIA_ROOT_BIND_TIME_LIMIT",
+		"UIA_TIME_LIMIT",
+		"LIMIT_REACHED",
+	];
+	const limited = await readWindowsDialogs(confirmed, {
+		platform: "win32",
+		run: async () => ({
+			stdout: `{"phase":"uia-root-bind"}\n${JSON.stringify({ status: "observed", codes: limitedCodes })}`,
+		}),
+	});
+	assert.deepEqual(limited, { status: "observed", codes: [...limitedCodes].sort() });
+	assert.ok(!limited.codes.includes("TASK_DIALOG_TEXT_OBSERVED"));
+	assert.ok(!limited.codes.includes("ERR_MODULE_NOT_FOUND"));
+});
+
 test("owned-window query binds PID and fixed script, strips raw fields, and never falls back after refusal", async () => {
 	const calls = [];
 	const run = async (command, args, options) => {
@@ -336,6 +379,7 @@ test("owned-window query binds PID and fixed script, strips raw fields, and neve
 	const identity = await captureWindowsIdentity(input, { platform: "win32", run });
 	assert.deepEqual(identity, { ...confirmed, binary: input.binary });
 	assert.equal(calls[0].command, "powershell.exe");
+	assert.deepEqual(calls[0].args.slice(0, 4), ["-NoProfile", "-NonInteractive", "-Mta", "-File"]);
 	assert.ok(calls[0].args.includes("-File"));
 	assert.ok(!calls[0].args.includes("-ExecutionPolicy"));
 	assert.equal(JSON.parse(calls[0].options.env.HIPI_WINDOW_REQUEST).pid, 123);
