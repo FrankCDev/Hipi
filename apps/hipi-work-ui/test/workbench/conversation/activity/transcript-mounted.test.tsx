@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import type { AppClient, Snapshot } from "@hipi/work-runtime/contracts";
+import { type AppClient, parseHistoryPage, type Snapshot } from "@hipi/work-runtime/contracts";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -8,6 +8,7 @@ import { AppClientProvider } from "../../../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../../../src/app/preferences.tsx";
 import { ThemeProvider } from "../../../../src/app/theme/provider.tsx";
 import { ActivityTranscriptProvider } from "../../../../src/features/tool-activities/activity-transcript.tsx";
+import { ConversationHistoryController } from "../../../../src/features/workbench/conversation/history-controller.ts";
 import { ConversationMessages } from "../../../../src/features/workbench/conversation/messages.tsx";
 
 type LayoutOptions = {
@@ -177,6 +178,53 @@ test("initial waiting and pure text/final have no extra elapsed header; real pro
 	await render(initial, true);
 	assert.ok(host.querySelector(".run-activity-header"));
 });
+
+test("parsed partial-history facts reach the real turn header; conflicts survive later refreshes", async () => {
+	const page = parseHistoryPage({
+		...scope,
+		messages: [],
+		nextCursor: null,
+		runResults: { ...completed.runResults, omitted: true },
+	});
+	const owner = new ConversationHistoryController(
+		scope,
+		async () => page,
+		() => {},
+	);
+	try {
+		owner.update({ ...completed, historyCursor: "older", runResults: undefined });
+		owner.setNearTop(true);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const observed = owner.state.snapshot;
+		assert.ok(observed);
+		await render(observed);
+		const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+		assert.ok(header);
+		assert.match(header.textContent ?? "", /4s/);
+		assert.equal(header.getAttribute("aria-expanded"), "false");
+		assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+		assert.ok(host.querySelector('[data-message-id="8_0"]'));
+		await act(async () => header.click());
+		assert.ok(host.querySelector('[data-message-id="2_0"]'));
+		// This provider intentionally persists choices for the same client/scope.
+		// Restore collapsed before the following fixtures reuse that scope.
+		await act(async () => header.click());
+		const terminal = completed.runResults?.items[0];
+		assert.ok(terminal);
+		owner.update({
+			...completed,
+			runResults: { items: [{ ...terminal, settledAtMs: 6000 }], omitted: false },
+		});
+		owner.update(completed);
+		assert.ok(owner.state.snapshot);
+		await render(owner.state.snapshot);
+		assert.equal(host.querySelector(".run-activity-header"), null);
+		assert.ok(host.querySelector('[data-message-id="2_0"]'));
+		assert.ok(host.querySelector('[data-message-id="8_0"]'));
+	} finally {
+		owner.dispose();
+	}
+});
 afterEach(async () => {
 	await act(async () => renderer.unmount());
 	document.getSelection()?.removeAllRanges();
@@ -196,12 +244,20 @@ test("completion never removes a selected process body; release applies default 
 		document.dispatchEvent(new Event("selectionchange"));
 	});
 	await render(completed);
-	assert.equal(host.querySelector('[data-message-id="2_0"] .markdown-body p'), text);
+	assert.ok(
+		host.querySelector('[data-message-id="2_0"] .markdown-body p') === text,
+		"selected process retains its DOM node",
+	);
 	await act(async () => {
 		document.getSelection()?.removeAllRanges();
 		document.dispatchEvent(new Event("selectionchange"));
 	});
-	assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+	assert.equal(host.querySelector(".run-activity-toggle")?.getAttribute("aria-expanded"), "false");
+	const closing = host.querySelector('[data-message-id="2_0"]');
+	assert.ok(
+		!closing || closing.closest('.conversation-turn-body[aria-hidden="true"][inert]'),
+		"the default fold removes process content or makes its retained exit subtree inert and hidden",
+	);
 	assert.ok(host.querySelector('[data-message-id="8_0"]'));
 });
 
@@ -211,7 +267,7 @@ test("focused process action blocks automatic folding; manual disclosure keeps f
 	assert.ok(copy);
 	await act(async () => copy.focus());
 	await render(completed);
-	assert.equal(document.activeElement, copy);
+	assert.ok(document.activeElement === copy, "focused process action retains its DOM node");
 	assert.ok(host.querySelector('[data-message-id="2_0"]'));
 	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
 	assert.ok(header);
@@ -219,7 +275,7 @@ test("focused process action blocks automatic folding; manual disclosure keeps f
 		header.focus();
 		header.click();
 	});
-	assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+	assert.equal(host.querySelector('[data-message-id="2_0"]') === null, true);
 	await act(async () => header.click());
 	assert.ok(host.querySelector('[data-message-id="2_0"]'));
 	await render({ ...completed, messages: [...completed.messages] });

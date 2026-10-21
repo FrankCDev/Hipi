@@ -15,10 +15,12 @@ import type { ToolActivityArtifact } from "./activity-card.tsx";
 import { ActivityContinuation } from "./activity-continuation.tsx";
 import { ActivityHistoryWindow } from "./activity-history-window.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
+import { settledToolGroup, type ToolGroupPresentation } from "./group-presentation.ts";
 import { InlineActivityCard } from "./inline-activity-card.tsx";
 import { activityLabels, toolLabel } from "./labels.ts";
 import type { LiveActivityRead, LiveTool } from "./live-activity.ts";
 import { useMessageActivityOwner } from "./message-activity-owner.tsx";
+import { SingletonFileActivity } from "./singleton-file-activity.tsx";
 import { ActivityDisclosure, ActivitySummaryCoverage } from "./turn-activity-presentation.tsx";
 
 type Props = { scope: Scope; connected: boolean; onOpenArtifact?: (artifact: ToolActivityArtifact) => void };
@@ -33,6 +35,7 @@ export function HistoricalTurnActivities({
 	contentIndexes,
 	manualChoice,
 	onExpandedChange,
+	presentation = settledToolGroup,
 	...props
 }: Props & {
 	messageId: string;
@@ -45,6 +48,7 @@ export function HistoricalTurnActivities({
 	contentIndexes?: readonly number[];
 	manualChoice?: boolean;
 	onExpandedChange?: (expanded: boolean) => void;
+	presentation?: ToolGroupPresentation;
 }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
@@ -53,75 +57,84 @@ export function HistoricalTurnActivities({
 		owner?.live?.session === live?.session && owner?.live?.session ? ActivityDetailsContent : ActivityDetailsView;
 	const selector = useMemo<ToolActivitySelector>(() => ({ kind: "message", messageId }), [messageId]);
 	const [manualExpanded, setManualExpanded] = useState<boolean>();
-	const current = live?.active
-		? liveItems?.find((item) => item.phase !== "terminal" && item.phase !== "unavailable")
-		: undefined;
-	const currentSlot = live?.active ? liveTools?.find((item) => item.status !== "done") : undefined;
-	const liveActive = !!current || !!currentSlot;
-	const shownExpanded = manualChoice ?? manualExpanded ?? (!!liveTools?.length || !!liveItems?.length || expanded);
+	const liveActive = presentation.kind === "active";
+	const shownExpanded = manualChoice ?? manualExpanded ?? expanded;
+	const uniformName =
+		toolCalls.items.length === toolCalls.total &&
+		toolCalls.items.every((item) => item.name === toolCalls.items[0]?.name)
+			? toolCalls.items[0]?.name
+			: undefined;
+	const summaryName = presentation.kind === "active" ? presentation.toolName : uniformName;
 	if (!toolCalls.total) return null;
 	return (
-		<ActivityDisclosure
-			bodyVariant="grouped"
-			toolName={
-				toolCalls.items.every((item) => item.name === toolCalls.items[0]?.name) ? toolCalls.items[0]?.name : undefined
-			}
-			title={toolCalls.items[0] ? toolLabel(toolCalls.items[0].name, locale) : l["activity.title"]}
-			count={toolCalls.total}
+		<SingletonFileActivity
+			messageId={messageId}
+			toolCalls={toolCalls}
+			contentIndexes={contentIndexes}
+			live={live}
+			liveTools={liveTools}
 			expanded={shownExpanded}
+			manualChoice={manualChoice ?? manualExpanded}
 			active={liveActive}
-			status={
-				current
-					? l[`activity.phase.${current.phase}`]
-					: currentSlot
-						? l[currentSlot.status === "running" ? "activity.phase.running" : "activity.phase.pending"]
+			locale={locale}
+			onOpenArtifact={props.onOpenArtifact}
+		>
+			<ActivityDisclosure
+				bodyVariant="grouped"
+				toolName={summaryName}
+				title={summaryName ? toolLabel(summaryName, locale) : l["activity.title"]}
+				summaryKey={presentation.key}
+				summaryTransition={presentation.kind === "active" ? "deferred" : "immediate"}
+				count={toolCalls.total}
+				expanded={shownExpanded}
+				active={liveActive}
+				status={
+					presentation.kind === "active"
+						? l[presentation.status === "running" ? "activity.phase.running" : "activity.phase.pending"]
 						: (liveTools?.length || liveItems?.length) && !live?.active
 							? l["activity.snapshot"]
 							: undefined
-			}
-			onToggle={() => {
-				const next = !shownExpanded;
-				setManualExpanded(next);
-				if (onExpandedChange) onExpandedChange(next);
-				else if (expanded !== next) onToggle();
-			}}
-			messageId={messageId}
-		>
-			{shownExpanded && (
-				<>
-					<ActivitySummaryCoverage shown={toolCalls.items.length} total={toolCalls.total} />
-					<PendingSlots
-						tools={
-							liveTools?.filter(
-								(tool) => !liveItems?.some((item) => item.taskId === tool.taskId && item.callId === tool.callId),
-							) ?? []
+				}
+				onToggle={() => {
+					const next = !shownExpanded;
+					setManualExpanded(next);
+					if (onExpandedChange) onExpandedChange(next);
+					else if (expanded !== next) onToggle();
+				}}
+				messageId={messageId}
+			>
+				<ActivitySummaryCoverage shown={toolCalls.items.length} total={toolCalls.total} />
+				<PendingSlots
+					tools={
+						liveTools?.filter(
+							(tool) => !liveItems?.some((item) => item.taskId === tool.taskId && item.callId === tool.callId),
+						) ?? []
+					}
+					active={live?.active ?? false}
+				/>
+				{liveTools?.length && !live?.session ? null : live?.session && (liveTools?.length || liveItems?.length) ? (
+					<Details
+						{...props}
+						state={owner?.live?.session === live.session ? owner.live.state : live.state}
+						session={live.session}
+						items={liveItems ?? []}
+						showUnavailable={
+							!!liveTools?.some((tool) => !!tool.taskId && live.state.page?.unavailableTaskIds?.includes(tool.taskId))
 						}
-						active={live?.active ?? false}
 					/>
-					{liveTools?.length && !live?.session ? null : live?.session && (liveTools?.length || liveItems?.length) ? (
-						<Details
-							{...props}
-							state={owner?.live?.session === live.session ? owner.live.state : live.state}
-							session={live.session}
-							items={liveItems ?? []}
-							showUnavailable={
-								!!liveTools?.some((tool) => !!tool.taskId && live.state.page?.unavailableTaskIds?.includes(tool.taskId))
-							}
-						/>
-					) : (
-						<HistoricalActivityDetails
-							{...props}
-							selector={selector}
-							messageId={messageId}
-							contentIndexes={contentIndexes}
-							windowed={
-								contentIndexes === undefined && (toolCalls.total > 16 || toolCalls.items.length < toolCalls.total)
-							}
-						/>
-					)}
-				</>
-			)}
-		</ActivityDisclosure>
+				) : (
+					<HistoricalActivityDetails
+						{...props}
+						selector={selector}
+						messageId={messageId}
+						contentIndexes={contentIndexes}
+						windowed={
+							contentIndexes === undefined && (toolCalls.total > 16 || toolCalls.items.length < toolCalls.total)
+						}
+					/>
+				)}
+			</ActivityDisclosure>
+		</SingletonFileActivity>
 	);
 }
 function HistoricalActivityDetails(
@@ -176,7 +189,7 @@ export function LiveTurnActivities({
 }: Props & { execution: ConversationExecution; active: boolean; live?: LiveActivityRead }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
-	const [collapsed, setCollapsed] = useState(false);
+	const [collapsed, setCollapsed] = useState(true);
 	const identity = JSON.stringify(
 		execution.tools.items.flatMap((item) => (item.taskId ? [[item.taskId, item.callId]] : [])),
 	);
@@ -195,56 +208,52 @@ export function LiveTurnActivities({
 			bodyVariant="grouped"
 			title={l["activity.title"]}
 			count={execution.tools.total}
-			active={active && execution.tools.active > 0}
+			active={false}
 			expanded={expanded}
 			onToggle={() => setCollapsed(!collapsed)}
 		>
-			{expanded && (
-				<>
-					<ul className="activity-live-slots">
-						{execution.tools.items.map((item, index) => (
-							<li key={JSON.stringify([item.taskId, item.callId, index])}>
-								<span>{toolLabel(item.name, locale)}</span>
-								<span>
-									{active
-										? l[
-												item.status === "done"
-													? "activity.phase.terminal"
-													: item.status === "running"
-														? "activity.phase.running"
-														: "activity.phase.pending"
-											]
-										: l["activity.snapshot"]}
-								</span>
-							</li>
-						))}
-					</ul>
-					<ActivitySummaryCoverage shown={execution.tools.items.length} total={execution.tools.total} />
-					{live
-						? live.session && (
-								<ActivityDetailsView
-									{...props}
-									state={live.state}
-									session={live.session}
-									items={
-										live.state.page?.items.filter((item) =>
-											execution.tools.items.some((tool) => tool.taskId === item.taskId && tool.callId === item.callId),
-										) ?? []
-									}
-								/>
-							)
-						: selector.kind === "tasks" &&
-							selector.taskIds.length > 0 && (
-								<ScopedActivityDetails
-									key={identity}
-									{...props}
-									selector={selector}
-									expectedCalls={expectedCalls}
-									running={active}
-								/>
-							)}
-				</>
-			)}
+			<ul className="activity-live-slots">
+				{execution.tools.items.map((item, index) => (
+					<li key={JSON.stringify([item.taskId, item.callId, index])}>
+						<span>{toolLabel(item.name, locale)}</span>
+						<span>
+							{active
+								? l[
+										item.status === "done"
+											? "activity.phase.terminal"
+											: item.status === "running"
+												? "activity.phase.running"
+												: "activity.phase.pending"
+									]
+								: l["activity.snapshot"]}
+						</span>
+					</li>
+				))}
+			</ul>
+			<ActivitySummaryCoverage shown={execution.tools.items.length} total={execution.tools.total} />
+			{live
+				? live.session && (
+						<ActivityDetailsView
+							{...props}
+							state={live.state}
+							session={live.session}
+							items={
+								live.state.page?.items.filter((item) =>
+									execution.tools.items.some((tool) => tool.taskId === item.taskId && tool.callId === item.callId),
+								) ?? []
+							}
+						/>
+					)
+				: selector.kind === "tasks" &&
+					selector.taskIds.length > 0 && (
+						<ScopedActivityDetails
+							key={identity}
+							{...props}
+							selector={selector}
+							expectedCalls={expectedCalls}
+							running={active}
+						/>
+					)}
 		</ActivityDisclosure>
 	);
 }

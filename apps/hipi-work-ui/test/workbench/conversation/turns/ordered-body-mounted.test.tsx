@@ -83,6 +83,44 @@ test("committed canonical text and duplicate-call tools retain actual contentInd
 	assert.doesNotMatch(copy.plain, /Tool/);
 	assert.doesNotMatch(copy.html ?? "", /Tool/);
 });
+
+test("empty public text adds no spacer and does not split adjacent tool groups", async () => {
+	const tools: Message = {
+		...message,
+		text: "",
+		textLength: 0,
+		publicBlocks: {
+			total: 5,
+			omitted: false,
+			items: [
+				{ kind: "text", contentIndex: 0, start: 0, end: 0 },
+				{ kind: "tool", contentIndex: 1 },
+				{ kind: "text", contentIndex: 2, start: 0, end: 0 },
+				{ kind: "tool", contentIndex: 3 },
+				{ kind: "text", contentIndex: 4, start: 0, end: 0 },
+			],
+		},
+	};
+	await act(async () =>
+		root.render(
+			<PreferencesProvider>
+				<ThemeProvider>
+					<OrderedAssistantBody
+						message={tools}
+						source=""
+						canonical
+						renderActivities={(indexes) => <span data-tool={indexes?.join(",")}>Tool</span>}
+					/>
+				</ThemeProvider>
+			</PreferencesProvider>,
+		),
+	);
+	const body = host.querySelector("[data-assistant-public-body]");
+	assert.ok(body);
+	assert.equal(body.children.length, 1);
+	assert.equal(body.querySelector(".markdown-body"), null);
+	assert.ok(body.querySelector('[data-tool="1,3"]'));
+});
 test("unknown, omitted, incomplete or invalid ordering retains canonical Markdown and one fallback tool group", async () => {
 	for (const value of [
 		{ ...message, publicBlocks: undefined },

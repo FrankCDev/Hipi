@@ -11,6 +11,7 @@ import {
 	DialogTrigger,
 } from "../../components/ui/dialog.tsx";
 import { ActivityCard } from "./activity-card.tsx";
+import { ActivityContinuation } from "./activity-continuation.tsx";
 import { inlineActivityLabels } from "./inline-activity-labels.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
 
@@ -62,10 +63,14 @@ export function matchesCompactFileSummary(activity: ToolActivity, summary: Compa
 export function CompactFileActivity({
 	presentation,
 	rootRef,
+	onDetailsOpenChange,
+	unresolvedMetadata,
 	...props
 }: ComponentProps<typeof ActivityCard> & {
 	presentation: CompactFileSummary;
 	rootRef?: RefObject<HTMLElement | null>;
+	onDetailsOpenChange?: (open: boolean) => void;
+	unresolvedMetadata?: { connected: boolean };
 }) {
 	const { activity, locale, disabled, onOpenArtifact, state, session } = props;
 	const [open, setOpen] = useState(false);
@@ -82,7 +87,13 @@ export function CompactFileActivity({
 	const slot = state.outputs?.get(activity.activityId);
 	return (
 		<section ref={rootRef} className="inline-tool-result inline-file-activity">
-			<Dialog open={open} onOpenChange={setOpen}>
+			<Dialog
+				open={open}
+				onOpenChange={(value) => {
+					setOpen(value);
+					onDetailsOpenChange?.(value);
+				}}
+			>
 				<div className="inline-file-activity-row">
 					<Icon aria-hidden="true" />
 					<DialogTrigger asChild>
@@ -112,10 +123,39 @@ export function CompactFileActivity({
 					<DialogTitle>{inline["inline.details"]}</DialogTitle>
 					<DialogDescription>{inline["inline.description"]}</DialogDescription>
 					<DialogBody>
-						{slot?.busy && <output>{l["activity.loading"]}</output>}
-						{slot?.failed && <p role="alert">{l["activity.failed"]}</p>}
-						{partial && <p>{l["activity.partial.description"]}</p>}
-						<ActivityCard {...props} sharedOutput />
+						{unresolvedMetadata ? (
+							<>
+								{!unresolvedMetadata.connected && <output>{l["activity.offline"]}</output>}
+								{state.busy && <output>{l["activity.loading"]}</output>}
+								{state.failed && (
+									<>
+										<p role="alert">{l["activity.failed"]}</p>
+										<Button
+											variant="ghost"
+											size="sm"
+											disabled={!unresolvedMetadata.connected || state.busy}
+											onClick={() => void session.retry()}
+										>
+											{l["activity.retry"]}
+										</Button>
+									</>
+								)}
+								{!state.page && !state.busy && !state.failed && <p>{l["activity.phase.unavailable"]}</p>}
+								<ActivityContinuation
+									session={session}
+									state={state}
+									enabled={unresolvedMetadata.connected}
+									locale={locale}
+								/>
+							</>
+						) : (
+							<>
+								{slot?.busy && <output>{l["activity.loading"]}</output>}
+								{slot?.failed && <p role="alert">{l["activity.failed"]}</p>}
+								{partial && <p>{l["activity.partial.description"]}</p>}
+								<ActivityCard {...props} sharedOutput />
+							</>
+						)}
 					</DialogBody>
 				</DialogContent>
 			</Dialog>

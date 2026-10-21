@@ -1,6 +1,14 @@
 import { validateRelativePath } from "../files/contracts.ts";
+import type { ToolActivity } from "./contracts.ts";
 
 export const FILE_PRESENTATION_BYTES = 65536;
+/** Relative paths need at most three UTF-8 bytes per code unit; identifiers are ASCII.
+ * The 2048-unit path, two 128-unit IDs and JSON framing fit below this independent cap. */
+export const FILE_SUMMARY_BYTES = 8192;
+export type FileSummary = { version: 1; target: { rootId: string; path: string } } & (
+	| { kind: "read" | "directory"; partial: boolean }
+	| { kind: "save"; partial: false; operationId: string }
+);
 export type FilePresentation = {
 	version: 1;
 	target: { rootId: string; path: string };
@@ -38,6 +46,86 @@ function revision(value: unknown): string {
 	const result = string(value, 64);
 	if (!/^[a-f0-9]{64}$/.test(result)) throw new Error("Invalid presentation revision");
 	return result;
+}
+function identifier(value: unknown): string {
+	const result = string(value, 128);
+	if (!/^[a-zA-Z0-9_-]+$/.test(result)) throw new Error("Invalid file summary identifier");
+	return result;
+}
+/** Header facts have a separate strict schema and never contain retained result bodies. */
+export function parseFileSummary(value: unknown): FileSummary {
+	if (bytes(JSON.stringify(value) ?? "") > FILE_SUMMARY_BYTES) throw new Error("Oversized file summary");
+	const summary = record(value, ["version", "target", "kind", "partial", "operationId"]);
+	if (summary.version !== 1 || typeof summary.partial !== "boolean") throw new Error("Invalid file summary");
+	const rawTarget = record(summary.target, ["rootId", "path"]);
+	const target = {
+		rootId: identifier(rawTarget.rootId),
+		path: validateRelativePath(rawTarget.path, summary.kind === "directory"),
+	};
+	if (summary.kind === "save") {
+		if (summary.partial) throw new Error("Invalid save summary");
+		return { version: 1, target, kind: "save", partial: false, operationId: identifier(summary.operationId) };
+	}
+	record(summary, ["version", "target", "kind", "partial"]);
+	if (summary.kind !== "read" && summary.kind !== "directory") throw new Error("Unknown file summary kind");
+	return { version: 1, target, kind: summary.kind, partial: summary.partial };
+}
+
+/** Shared producer/client invariant: an optional header must not contradict execution or effect facts. */
+export function fileSummaryMatchesActivity(summary: FileSummary, activity: ToolActivity): boolean {
+	const toolName =
+		summary.kind === "directory"
+			? "hipi_files_list"
+			: summary.kind === "read"
+				? "hipi_files_read"
+				: "hipi_files_save";
+	if (
+		activity.source !== "task" ||
+		activity.inherited ||
+		!activity.taskId ||
+		!activity.anchor ||
+		!activity.resultEntryId ||
+		activity.parentTaskId !== undefined ||
+		activity.phase !== "terminal" ||
+		activity.outcome !== "completed" ||
+		activity.toolResult !== "success" ||
+		activity.toolName !== toolName ||
+		(activity.effect !== undefined && activity.effect.status !== "confirmed") ||
+		(activity.artifact !== undefined &&
+			(activity.artifact.status !== "confirmed" ||
+				activity.artifact.rootId !== summary.target.rootId ||
+				activity.artifact.path !== summary.target.path))
+	)
+		return false;
+	return (
+		summary.kind !== "save" ||
+		(activity.effect?.status === "confirmed" &&
+			activity.effect.operationId === summary.operationId &&
+			activity.artifact?.status === "confirmed" &&
+			activity.artifact.operationId === summary.operationId)
+	);
+}
+
+export function summarizeFilePresentation(
+	presentation: FilePresentation,
+	activity: ToolActivity,
+): FileSummary | undefined {
+	const result = presentation.result;
+	try {
+		const summary = parseFileSummary({
+			version: 1,
+			target: presentation.target,
+			kind: result.kind,
+			partial:
+				result.kind === "read"
+					? result.offset > 0 || result.nextOffset !== null
+					: result.kind === "directory" && result.hasMore,
+			...(result.kind === "save" ? { operationId: result.operationId } : {}),
+		});
+		return fileSummaryMatchesActivity(summary, activity) ? summary : undefined;
+	} catch {
+		return undefined;
+	}
 }
 /** Strict browser-safe schema; never forwards unknown details, raw arguments or diagnostics. */
 export function parseFilePresentation(value: unknown): FilePresentation {

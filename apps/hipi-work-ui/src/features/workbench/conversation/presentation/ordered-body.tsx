@@ -50,6 +50,9 @@ export function OrderedAssistantBody({
 		| { kind: "tools"; contentIndexes: number[] }
 	)[] = [];
 	for (const block of blocks.items) {
+		// Empty public text is a valid ordering fact, not a visual item or a
+		// boundary between tools. Preserve canonical offsets without a gap node.
+		if (block.kind === "text" && block.start === block.end) continue;
 		if (block.kind === "text") groups.push(block);
 		else {
 			const previous = groups.at(-1);

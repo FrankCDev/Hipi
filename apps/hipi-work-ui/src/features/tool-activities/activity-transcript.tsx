@@ -20,6 +20,7 @@ import { Icon } from "../../components/ui/icon.tsx";
 import { selectionIntersects } from "../workbench/conversation/message-projection.ts";
 import { ActivityCard, type ToolActivityArtifact } from "./activity-card.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
+import { projectToolGroupPresentation } from "./group-presentation.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
 import {
 	anchoredLiveActivities,
@@ -323,9 +324,14 @@ export function InlineMessageActivities({
 						liveItems?.find((item) => item.taskId === tool.taskId && item.callId === tool.callId)?.anchor;
 					return !!anchor && contentIndexes.includes(anchor.contentIndex);
 				});
-	useToolPresentationLease(
-		!!toolCalls?.total && !!context?.live.active && !!selectedTools?.some((tool) => tool.status !== "done"),
+	const presentation = projectToolGroupPresentation(
+		context?.transcript,
+		messageId,
+		contentIndexes,
+		context?.live.active ?? false,
+		context?.live.state.page?.items,
 	);
+	useToolPresentationLease(!!toolCalls?.total && presentation.kind === "active");
 	if (!context) return null;
 	if (toolCalls)
 		return (
@@ -337,6 +343,7 @@ export function InlineMessageActivities({
 				live={context.live}
 				liveItems={selectedItems}
 				liveTools={selectedTools}
+				presentation={presentation}
 				contentIndexes={contentIndexes}
 				manualChoice={context.groupChoices.get(groupKey)}
 				expanded={context.expandedGroups.has(groupKey)}
@@ -401,7 +408,8 @@ export function InlineLiveActivities({ snapshot, active }: { snapshot: Snapshot;
 	const bound = new Set([...anchored.values()].flat());
 	const items = snapshot.execution?.tools.items.filter((item) => !bound.has(item)) ?? [];
 	const total = (snapshot.execution?.tools.total ?? 0) - bound.size;
-	useToolPresentationLease(active && !!snapshot.running && total > 0 && items.some((item) => item.status !== "done"));
+	// Unanchored slots remain readable, but cannot claim a latest semantic unit.
+	useToolPresentationLease(false);
 	if (!context || !snapshot.execution || !snapshot.running) return null;
 	if (total <= 0) return null;
 	return (

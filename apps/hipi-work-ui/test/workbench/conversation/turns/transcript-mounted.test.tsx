@@ -245,14 +245,14 @@ test("long turn keeps its measured outer DOM when admission pages in and metadat
 	assert.equal(host.querySelector(".run-activity-header"), null);
 });
 
-test("omitted run metadata stops its header without reparenting a focused process action", async () => {
+test("omitted history preserves the authoritative live header and a focused process action", async () => {
 	await render(admitted(initial), true);
 	const button = host.querySelector<HTMLButtonElement>('[data-message-id="2_0"] .message-copy');
 	assert.ok(button);
 	await act(async () => button.focus());
 	await render({ ...admitted(initial), runResults: { items: [], omitted: true } }, true);
 	assert.ok(document.activeElement === button, "metadata omission must retain focused action identity");
-	assert.equal(host.querySelector(".run-activity-header"), null);
+	assert.ok(host.querySelector(".run-activity-header"));
 	assert.equal(host.querySelectorAll(".virtual-message-row").length, 1);
 });
 

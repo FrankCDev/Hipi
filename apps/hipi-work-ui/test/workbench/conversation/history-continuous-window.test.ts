@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { HistoryPage, Message, SearchHistoryWindow, Snapshot } from "@hipi/work-runtime/contracts";
+import {
+	type HistoryPage,
+	type Message,
+	parseHistoryPage,
+	type RunResultObservation,
+	type SearchHistoryWindow,
+	type Snapshot,
+} from "@hipi/work-runtime/contracts";
+import { hasRunResultConflict } from "../../../src/features/workbench/conversation/activity/results.ts";
 import {
 	fitHistoryWindow,
 	fitsHistory,
@@ -95,6 +103,80 @@ test("bounded older eviction remains reachable in both directions by fenced repl
 		await settle(owner);
 	}
 	assert.equal(owner.state.snapshot?.messages[0]?.id, "m0");
+	owner.dispose();
+});
+
+test("both replay directions retain model-less and extra boundary sidecars before reaching the live fence", async () => {
+	const fact: RunResultObservation = {
+		id: "9000",
+		terminalEntryId: "9002",
+		responseMessageId: "9001_0",
+		admittedAtMs: 1000,
+		settledAtMs: 5000,
+		terminalCause: "response",
+		settlement: { status: "done" },
+	};
+	const boundaryFact = { ...fact, id: "9010", terminalEntryId: "9012", responseMessageId: "9011_0" };
+	let inject: "none" | "newer" | "older" = "none";
+	let boundaryCursor: string | undefined;
+	const owner = new ConversationHistoryController(
+		scope,
+		async (cursor) => {
+			const end = Number(cursor.replace("metadata:", ""));
+			if (inject !== "none" && !cursor.startsWith("metadata:")) {
+				const changed = inject === "older";
+				inject = "none";
+				return parseHistoryPage({
+					...scope,
+					messages: [],
+					nextCursor: `metadata:${end}`,
+					runResults: { items: [{ ...fact, settledAtMs: changed ? 6000 : 5000 }], omitted: true },
+				});
+			}
+			return parseHistoryPage({
+				...scope,
+				messages: all.slice(Math.max(0, end - 32), end),
+				nextCursor: end > 32 ? String(end - 32) : null,
+				...(cursor === boundaryCursor ? { runResults: { items: [boundaryFact], omitted: true } } : {}),
+			});
+		},
+		() => {},
+	);
+	owner.update(latest);
+	for (let index = 0; index < 70 && owner.state.snapshot?.historyCursor; index++) {
+		owner.setViewport(viewport("older"));
+		await settle(owner);
+	}
+	assert.equal(owner.state.snapshot?.messages[0]?.id, "m0");
+	inject = "newer";
+	owner.setViewport(viewport("newer"));
+	await settle(owner);
+	assert.equal(owner.state.newer, true, "sidecar must survive an intermediate replay, not only the final live fence");
+	assert.deepEqual(owner.state.snapshot?.runResults?.items, [fact]);
+	for (let index = 0; index < 20 && owner.state.newer; index++) {
+		owner.setViewport(viewport("newer"));
+		await settle(owner);
+	}
+	assert.equal(owner.state.newer, false);
+	const first = owner.state.snapshot?.messages[0]?.id;
+	assert.ok(first);
+	assert.notEqual(first, "m0");
+	boundaryCursor = first.slice(1);
+	inject = "older";
+	owner.setViewport(viewport("older"));
+	await settle(owner);
+	assert.ok(owner.state.snapshot?.runResults?.items.some((item) => item.id === boundaryFact.id));
+	assert.equal(hasRunResultConflict(owner.state.snapshot?.runResults, fact.id), true);
+	owner.update({ ...latest, runResults: { items: [fact], omitted: false } });
+	owner.setViewport(viewport("newer"));
+	await settle(owner);
+	assert.equal(hasRunResultConflict(owner.state.snapshot?.runResults, fact.id), true);
+	owner.resetToLatest();
+	assert.equal(
+		hasRunResultConflict(owner.state.snapshot?.runResults, fact.id),
+		false,
+		"an explicit reset starts an independent retained view rather than persisting local evidence forever",
+	);
 	owner.dispose();
 });
 

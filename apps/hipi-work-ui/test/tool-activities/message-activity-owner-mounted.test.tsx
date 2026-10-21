@@ -86,6 +86,13 @@ let host: HTMLDivElement;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	vi.stubGlobal(
 		"IntersectionObserver",
 		class {
 			observe() {}
@@ -136,6 +143,13 @@ async function render(conversationId = "c", indexes = [1, 2], connected = true) 
 			</ThemeProvider>,
 		),
 	);
+	await openResults();
+}
+async function openResults() {
+	await act(async () => {
+		for (const toggle of host.querySelectorAll<HTMLButtonElement>('.inline-tool-result-toggle[aria-expanded="false"]'))
+			toggle.click();
+	});
 }
 const reads = (method: Method) => calls.filter((call) => call.method === method);
 async function resolveActiveOutputs() {
@@ -173,12 +187,17 @@ test("interleaved slices share one page and output reader, even with duplicate m
 	const first = groups[0]?.querySelector<HTMLButtonElement>(".activity-disclosure-toggle");
 	assert.ok(first);
 	await act(async () => first.click());
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 3, "closing retains the sole painted subtree");
+	assert.equal(groups[0]?.querySelector(".activity-disclosure-body")?.hasAttribute("inert"), true);
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	assert.equal(reads("getToolActivities").length, 1, "closing one slice does not cancel/requery siblings");
 	await render("c", [1, 2]);
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 1);
 	assert.equal(reads("getToolActivityText").length, 2);
 	await act(async () => first.click());
+	assert.equal(reads("getToolActivityText").length, 2, "remounted individual remains closed until requested");
+	await openResults();
 	assert.equal(reads("getToolActivityText").length, 3, "only released activity is read again");
 	assert.equal(reads("getToolActivities").length, 1);
 });
@@ -195,13 +214,30 @@ test("scope replacement without remount aborts pending output and rejects the la
 	assert.match(host.textContent ?? "", /new:task:2/);
 	assert.equal(reads("getToolActivities").length, 2);
 });
-test("all slices collapsing aborts pending output; reopening restarts the single page lane", async () => {
+test("completed slice collapse aborts pending output; reversal retains it and reopening restarts one page lane", async () => {
 	deferred = true;
 	await render();
 	const toggles = [...host.querySelectorAll<HTMLButtonElement>(".activity-disclosure-toggle")];
+	const bodies = [...host.querySelectorAll(".activity-disclosure-body")];
 	await act(async () => {
 		for (const toggle of toggles) toggle.click();
 	});
+	assert.equal(pending[0]?.signal?.aborted, false, "closing has not released the shared reader");
+	for (const body of bodies) assert.equal(body.hasAttribute("inert"), true);
+	await act(async () => {
+		for (const toggle of toggles) toggle.click();
+	});
+	for (const [index, body] of bodies.entries()) {
+		assert.ok(host.querySelectorAll(".activity-disclosure-body")[index] === body);
+		assert.equal(body.hasAttribute("inert"), false);
+	}
+	assert.equal(pending[0]?.signal?.aborted, false);
+	assert.equal(reads("getToolActivities").length, 1);
+	assert.equal(reads("getToolActivityText").length, 1, "reversal does not create another pending output read");
+	await act(async () => {
+		for (const toggle of toggles) toggle.click();
+	});
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 	assert.equal(pending[0]?.signal?.aborted, true);
 	await act(async () => pending[0]?.resolve(pending[0].result));
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 0);
@@ -209,6 +245,7 @@ test("all slices collapsing aborts pending output; reopening restarts the single
 		for (const toggle of toggles) toggle.click();
 	});
 	assert.equal(reads("getToolActivities").length, 2);
+	await openResults();
 	await resolveActiveOutputs();
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 });
@@ -283,6 +320,7 @@ test("public slices share the message reader and keep independent cached manual 
 		toggles[0]?.click();
 		toggles[1]?.click();
 	});
+	await openResults();
 	assert.equal(calls.filter((call) => call.method === "getToolActivities" && "selector" in call.params).length, 1);
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	await act(async () => toggles[0]?.click());
@@ -291,6 +329,8 @@ test("public slices share the message reader and keep independent cached manual 
 	const restored = [...host.querySelectorAll<HTMLButtonElement>(".activity-disclosure-toggle")];
 	assert.equal(restored[0]?.getAttribute("aria-expanded"), "false");
 	assert.equal(restored[1]?.getAttribute("aria-expanded"), "true");
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 0, "individual choice is mount-local");
+	await openResults();
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 1);
 });
 
@@ -303,6 +343,8 @@ test("late metadata from a replaced scope never creates leases or output reads",
 	await act(async () => metadataPending[0]?.resolve());
 	assert.equal(reads("getToolActivityText").length, 0);
 	await act(async () => metadataPending[1]?.resolve());
+	assert.equal(reads("getToolActivityText").length, 0, "late metadata alone does not demand output");
+	await openResults();
 	assert.equal(reads("getToolActivityText").length, 2);
 	assert.doesNotMatch(host.textContent ?? "", /old:task/);
 	assert.match(host.textContent ?? "", /new:task:1/);
@@ -384,16 +426,34 @@ test("live interleaved slices reuse the exact task owner, not same-call IDs in a
 		).length,
 		0,
 	);
+	const current = [
+		...host.querySelectorAll<HTMLButtonElement>('[data-activity-message-id="1_0"] button.activity-disclosure-toggle'),
+	];
+	assert.equal(current.length, 2);
+	assert.equal(reads("getToolActivityText").length, 0, "default-closed groups do not acquire output leases");
+	for (const button of current) assert.equal(button.getAttribute("aria-expanded"), "false");
+	await act(async () => {
+		for (const button of current) button.click();
+	});
+	assert.equal(reads("getToolActivityText").length, 0);
+	await openResults();
 	assert.equal(reads("getToolActivityText").length, 2);
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	const other = [...host.querySelectorAll('[data-activity-message-id="1_1"] button.activity-disclosure-toggle')];
 	assert.equal(other.length, 2);
 	for (const button of other) assert.equal(button.getAttribute("aria-expanded"), "false");
+	// Explicit expansion opens the matching slices after mount. Flush their opening RAF,
+	// then Motion, so this exercises closing rather than pre-frame cancellation.
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 25)));
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
 	const first = host.querySelector<HTMLButtonElement>(
 		'[data-activity-message-id="1_0"] button.activity-disclosure-toggle',
 	);
 	assert.ok(first);
 	await act(async () => first.click());
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
+	assert.equal(first.parentElement?.querySelector(".activity-disclosure-body")?.hasAttribute("inert"), true);
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 1);
 	assert.equal(reads("getToolActivityText").length, 2);
 });
@@ -447,6 +507,7 @@ test("one message owner switches an omitted scrolling fallback back to complete 
 	assert.equal(reads("getToolActivities").length, 2);
 	assert.equal(host.querySelectorAll("[data-history-record]").length, 17);
 	await act(async () => root.render(<Frame omitted={false} />));
+	await openResults();
 	assert.equal(reads("getToolActivities").length, 3);
 	assert.equal(host.querySelector("[data-activity-history-window]"), null);
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);

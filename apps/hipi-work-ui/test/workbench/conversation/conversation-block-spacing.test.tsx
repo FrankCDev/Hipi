@@ -69,6 +69,7 @@ test("tool-only rows have no extra boundary; text and status introduce exactly o
 	const tool = content.lastElementChild;
 	assert.ok(tool);
 	try {
+		assert.equal(getComputedStyle(tool).getPropertyValue("--activity-chevron-size"), "14px");
 		assert.equal(getComputedStyle(tool).marginBlock, "0px");
 		assert.equal(Number.parseFloat(getComputedStyle(tool).marginBlockStart), 0);
 		article.setAttribute("data-has-message-text", "true");
@@ -83,6 +84,36 @@ test("tool-only rows have no extra boundary; text and status introduce exactly o
 		status.remove();
 		article.setAttribute("data-has-message-text", "false");
 		assert.equal(Number.parseFloat(getComputedStyle(tool).marginBlockStart), 0);
+	} finally {
+		host.remove();
+		style.remove();
+	}
+});
+
+test("compact file rows use the source icon gap without widening summary words", () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		new NodeURL("../../../src/features/tool-activities/inline-activity-card.css", import.meta.url),
+		"utf8",
+	);
+	document.head.append(style);
+	const host = document.createElement("div");
+	host.innerHTML =
+		'<div class="inline-file-activity-row"><svg></svg><button>Read</button><button>example.txt</button></div>';
+	document.body.append(host);
+	try {
+		const row = host.firstElementChild;
+		const icon = row?.firstElementChild;
+		assert.ok(row && icon);
+		assert.equal(getComputedStyle(row).gap, "var(--ui-conversation-grouped-gap)");
+		assert.equal(
+			getComputedStyle(row).getPropertyValue("--file-activity-icon-gap").replace(/\s/g, ""),
+			"calc(var(--spacing)*1.5)",
+		);
+		assert.equal(
+			getComputedStyle(icon).marginInlineEnd,
+			"calc(var(--file-activity-icon-gap) - var(--ui-conversation-grouped-gap))",
+		);
 	} finally {
 		host.remove();
 		style.remove();

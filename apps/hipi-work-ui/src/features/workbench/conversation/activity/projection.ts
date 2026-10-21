@@ -2,6 +2,7 @@ import type { RunResultObservation, Snapshot } from "@hipi/work-runtime/contract
 import type { TranscriptRow } from "../transcript.ts";
 
 import type { RunActivity } from "./contracts.ts";
+import { hasRunResultConflict } from "./results.ts";
 
 /** Group only a contiguous, observed run. Unknown or conflicting facts never hide content. */
 export function projectRunActivities(
@@ -12,14 +13,15 @@ export function projectRunActivities(
 	active: boolean,
 	retainCollapsedMembers = false,
 ): TranscriptRow[] {
-	if (!snapshot || snapshot.runResults?.omitted) return [...rows];
+	if (!snapshot) return [...rows];
 	const results = new Map<string, RunResultObservation[]>();
-	if (!snapshot.runResults?.omitted)
-		for (const result of snapshot.runResults?.items ?? []) {
-			const found = results.get(result.id) ?? [];
-			found.push(result);
-			results.set(result.id, found);
-		}
+	// Partial sidecar coverage does not invalidate individually verified facts.
+	// Unknown runs stay unknown; conflicting observations are excluded per run.
+	for (const result of snapshot.runResults?.items ?? []) {
+		const found = results.get(result.id) ?? [];
+		found.push(result);
+		results.set(result.id, found);
+	}
 	const runs = new Map<string, { row: TranscriptRow; index: number }[]>();
 	rows.forEach((row, index) => {
 		if (row.message?.role !== "assistant" || !row.message.runId) return;
@@ -32,6 +34,7 @@ export function projectRunActivities(
 	const headers = new Map<number, TranscriptRow>();
 	const hidden = new Set<string>();
 	for (const [id, entries] of runs) {
+		if (hasRunResultConflict(snapshot.runResults, id)) continue;
 		// A user/unknown/different-run boundary is not evidence of one continuous body.
 		if (entries.some((entry, index) => index > 0 && entry.index !== (entries[index - 1]?.index ?? -2) + 1)) continue;
 		const observations = results.get(id) ?? [];

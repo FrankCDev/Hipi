@@ -9,11 +9,12 @@
 	--activity-header-gap: 0.25rem;
 	--activity-summary-gap: 0.375rem;
 	--activity-summary-icon-size: 1rem;
-	--activity-chevron-size: 0.75rem;
+	--activity-chevron-size: 14px;
 	--activity-body-gap: 0.5rem;
 	--activity-body-indent: 1.5rem;
 	--activity-body-padding-start: 0.5rem;
 	--activity-body-padding-end: 0.25rem;
+	--activity-body-gutter: calc(var(--spacing) * 2);
 	--activity-disclosure-duration: 0.3s;
 	/* Work nk caps the expanded tool subgroup at max-h-56, independently of the turn. */
 	--activity-group-max-height: 14rem;
@@ -113,10 +114,11 @@
 	}
 }
 .activity-disclosure-body {
+	/* The tool primitive stays clipped even after opening. Expanded intent is
+	   not completed geometry: children must not paint over following messages. */
 	overflow: hidden;
-}
-.activity-disclosure-body[data-expanded="true"] {
-	overflow: visible;
+	margin-inline-start: calc(-1 * var(--activity-body-gutter));
+	padding-inline-start: var(--activity-body-gutter);
 }
 .activity-live-slots {
 	display: grid;

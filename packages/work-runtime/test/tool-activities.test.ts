@@ -12,7 +12,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { ACTIVITY_LIMITS, type ActivityReadScope } from "../src/activities/contracts.ts";
 import { resultEvidence, type StoredTask } from "../src/activities/projection.ts";
 import { readToolActivities, readToolActivityText } from "../src/activities/storage.ts";
-import type { FileOperation, ToolApproval } from "../src/contracts.ts";
+import { type FileOperation, type FilePresentation, parseResult, type ToolApproval } from "../src/contracts.ts";
 
 const scope: ActivityReadScope = {
 	storeId: "store",
@@ -82,6 +82,223 @@ async function fixture(run: (storage: Storage) => Promise<void>) {
 		await rm(directory, { recursive: true, force: true });
 	}
 }
+
+test("save metadata requires confirmed matching artifact and operation, never retained proposals", async () =>
+	fixture(async (storage) => {
+		const target = { rootId: "root", path: "note.txt" };
+		const text = "PRIVATE_REPLACEMENT";
+		const digest = "a".repeat(64);
+		const approvalId = createHash("sha256")
+			.update(JSON.stringify([1, 20, "call"]))
+			.digest("hex");
+		const approval: ToolApproval = {
+			workspaceId: scope.workspaceId,
+			conversationId: scope.conversationId,
+			approvalId,
+			taskId: "20",
+			callId: "call",
+			submissionIds: [],
+			receiptIds: [],
+			toolName: "hipi_files_save",
+			model: { provider: "faux", modelId: "faux" },
+			...target,
+			ifMatch: digest,
+			text,
+			beforeText: "PRIVATE_BEFORE",
+			beforeTextTruncated: false,
+			argumentsDigest: digest,
+			contentDigest: digest,
+			grantId: "grant",
+			grantRevision: 1,
+			expiresAt: 1,
+			createdAt: 0,
+			revision: 1,
+			status: "consumed",
+			operationId: "operation",
+		};
+		const operation: FileOperation = {
+			workspaceId: scope.workspaceId,
+			conversationId: scope.conversationId,
+			operationId: "operation",
+			approvalId,
+			taskId: "20",
+			callId: "call",
+			...target,
+			argumentsDigest: digest,
+			contentDigest: digest,
+			status: "unknown",
+			revision: 1,
+		};
+		const presentation: FilePresentation = {
+			version: 1,
+			target,
+			result: { kind: "save", operationId: "operation", revision: digest, bytes: text.length },
+		};
+		const result: EntryRecord = {
+			...entry(),
+			model: [
+				{
+					role: "toolResult",
+					toolCallId: "call",
+					toolName: "hipi_files_save",
+					isError: false,
+					timestamp: 0,
+					content: [{ type: "text", text: "PRIVATE_RETAINED_OUTPUT" }],
+					details: { hipiFiles: presentation },
+				},
+			],
+		};
+		await storage.commit(
+			[
+				{ type: "task", value: task(20, 11) },
+				{
+					type: "entry",
+					value: {
+						id: 11 as EntryId,
+						conversationId,
+						kind: "pi.assistant",
+						model: [
+							fauxAssistantMessage([
+								fauxToolCall("hipi_files_save", { ...target, text, ifMatch: digest }, { id: "call" }),
+							]),
+						],
+					},
+				},
+				{ type: "entry", value: result },
+				{
+					type: "document.create",
+					record: {
+						id: 100 as DocumentId,
+						kind: "hipi.tool-approval",
+						key: approvalId,
+						scope: { kind: "session" },
+					},
+					content: { kind: "base", version: 1, value: { value: approval } },
+				},
+				{
+					type: "document.create",
+					record: { id: 101 as DocumentId, kind: "hipi.agent-grant", key: "grant", scope: { kind: "session" } },
+					content: {
+						kind: "base",
+						version: 1,
+						value: {
+							conversationId: 1,
+							value: { workspaceId: scope.workspaceId, conversationId: scope.conversationId, grantId: "grant" },
+						},
+					},
+				},
+				{
+					type: "document.create",
+					record: {
+						id: 102 as DocumentId,
+						kind: "hipi.file-operation",
+						key: "operation",
+						scope: { kind: "session" },
+					},
+					content: { kind: "base", version: 1, value: { value: operation } },
+				},
+			],
+			context,
+		);
+		for (const status of ["prepared", "executing", "conflict", "unknown", "observed_match", "confirmed"] as const) {
+			await storage.commit(
+				[
+					{
+						type: "document.change",
+						id: 102 as DocumentId,
+						content: { kind: "base", version: 1, value: { value: { ...operation, status } } },
+					},
+				],
+				context,
+			);
+			const page = await readToolActivities(storage, scope);
+			assert.deepEqual(parseResult("getToolActivities", page), page);
+			assert.equal(JSON.stringify(page).includes("PRIVATE_"), false);
+			assert.deepEqual(
+				page.items[0]?.fileSummary,
+				status === "confirmed"
+					? {
+							version: 1,
+							target,
+							kind: "save",
+							partial: false,
+							operationId: "operation",
+						}
+					: undefined,
+			);
+		}
+		for (const patch of [{ rootId: "other" }, { path: "other.txt" }]) {
+			await storage.commit(
+				[
+					{
+						type: "document.change",
+						id: 102 as DocumentId,
+						content: {
+							kind: "base",
+							version: 1,
+							value: { value: { ...operation, status: "confirmed", ...patch } },
+						},
+					},
+				],
+				context,
+			);
+			assert.equal((await readToolActivities(storage, scope)).items[0]?.fileSummary, undefined);
+		}
+		await storage.commit(
+			[
+				{
+					type: "document.change",
+					id: 102 as DocumentId,
+					content: { kind: "base", version: 1, value: { value: { ...operation, status: "confirmed" } } },
+				},
+			],
+			context,
+		);
+		const message = result.model?.[0];
+		if (message?.role !== "toolResult") throw new Error("fixture");
+		await storage.commit(
+			[
+				{ type: "task", value: task(20, 11, 31) },
+				{
+					type: "entry",
+					value: {
+						...result,
+						id: 31 as EntryId,
+						model: [
+							{
+								...message,
+								details: {
+									hipiFiles: { ...presentation, result: { ...presentation.result, operationId: "other" } },
+								},
+							},
+						],
+					},
+				},
+			],
+			context,
+		);
+		assert.equal((await readToolActivities(storage, scope)).items[0]?.fileSummary, undefined);
+		await storage.commit(
+			[
+				{
+					type: "task",
+					value: {
+						...task(20, 11),
+						state: {
+							status: "terminal",
+							outcome: {
+								status: "failed",
+								error: { message: "failure" },
+								result: { kind: "model", entryId: 30 },
+							},
+						},
+					},
+				},
+			],
+			context,
+		);
+		assert.equal((await readToolActivities(storage, scope)).items[0]?.fileSummary, undefined);
+	}));
 
 test("SQLite activity reads separate task completion from tool errors without writes or arguments", async () =>
 	fixture(async (storage) => {

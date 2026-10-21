@@ -1,9 +1,17 @@
 import { motion } from "framer-motion";
 import { ChevronRight, File, Folder, Pencil, Puzzle } from "lucide-react";
-import { type ReactNode, useId } from "react";
+import { type ReactNode, useId, useLayoutEffect, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { useReducedMotionPreference } from "../../app/theme/use-reduced-motion.ts";
+import { disclosureTransition } from "../../components/ui/disclosure-motion.ts";
 import { CadencedText } from "../workbench/conversation/presentation/cadenced-text.tsx";
+import { useGroupSummary } from "./group-summary.tsx";
+
+type DisclosurePhase = "collapsed" | "opening" | "expanded" | "closing";
+const disclosureVariants = {
+	expanded: { height: "auto", opacity: 1 },
+	collapsed: { height: 0, opacity: 0 },
+};
 export function ActivitySummaryCoverage({ shown, total }: { shown: number; total: number }) {
 	const { locale } = usePreferences();
 	return total > shown ? (
@@ -25,6 +33,8 @@ export function ActivityDisclosure({
 	bodyVariant = "default",
 	children,
 	toolName,
+	summaryKey = "summary",
+	summaryTransition = "immediate",
 }: {
 	title: string;
 	count: number;
@@ -36,19 +46,41 @@ export function ActivityDisclosure({
 	bodyVariant?: "default" | "grouped";
 	children: ReactNode;
 	toolName?: string;
+	summaryKey?: string;
+	summaryTransition?: "immediate" | "deferred";
 }) {
+	const summary = useGroupSummary({ title, toolName, status, active }, summaryKey, summaryTransition);
 	const reducedMotion = useReducedMotionPreference();
 	const bodyId = useId();
+	const [phase, setPhase] = useState<DisclosurePhase>(expanded ? "expanded" : "collapsed");
+	useLayoutEffect(() => {
+		setPhase((current) => {
+			if (reducedMotion) return expanded ? "expanded" : "collapsed";
+			if (expanded) return current === "collapsed" ? "opening" : current === "closing" ? "expanded" : current;
+			// An opening cancelled before its frame has never acquired visible height.
+			return current === "expanded" ? "closing" : "collapsed";
+		});
+	}, [expanded, reducedMotion]);
+	useLayoutEffect(() => {
+		if (phase !== "opening") return;
+		const frame = requestAnimationFrame(() => setPhase((current) => (current === "opening" ? "expanded" : current)));
+		return () => cancelAnimationFrame(frame);
+	}, [phase]);
 	const ToolIcon =
-		toolName === "hipi_files_save"
+		summary.toolName === "hipi_files_save"
 			? Pencil
-			: toolName === "hipi_files_list"
+			: summary.toolName === "hipi_files_list"
 				? Folder
-				: toolName === "hipi_files_read"
+				: summary.toolName === "hipi_files_read"
 					? File
 					: Puzzle;
 	return (
-		<div className="inline-activity" data-activity-message-id={messageId} data-preserve-turn-viewport="">
+		<div
+			className="inline-activity"
+			data-activity-message-id={messageId}
+			data-disclosure-phase={phase}
+			data-preserve-turn-viewport=""
+		>
 			<button
 				type="button"
 				className="inline-activity-toggle activity-disclosure-toggle"
@@ -59,28 +91,34 @@ export function ActivityDisclosure({
 				<span className="activity-disclosure-heading">
 					<ToolIcon aria-hidden="true" />
 					<span className="activity-disclosure-summary">
-						<CadencedText active={active}>{title}</CadencedText>
+						<CadencedText active={summary.active}>{summary.title}</CadencedText>
 					</span>
 				</span>
 				{count > 1 && ToolIcon === Puzzle && <span className="inline-activity-count">{count}</span>}
-				{status && <span className="inline-activity-phase">{status}</span>}
+				{summary.status && <span className="inline-activity-phase">{summary.status}</span>}
 				<ChevronRight className="activity-disclosure-chevron" aria-hidden="true" />
 			</button>
-			<motion.div
-				id={bodyId}
-				data-expanded={expanded}
-				initial={false}
-				transition={reducedMotion ? { duration: 0 } : undefined}
-				animate={{ height: expanded ? "auto" : 0, opacity: expanded ? 1 : 0 }}
-				aria-hidden={!expanded}
-				inert={!expanded}
-				className="activity-disclosure-body"
-				style={{ pointerEvents: expanded ? "auto" : "none" }}
-			>
-				<div className="inline-activity-details" data-variant={bodyVariant}>
-					{children}
-				</div>
-			</motion.div>
+			{phase !== "collapsed" && (
+				<motion.div
+					id={bodyId}
+					data-expanded={expanded}
+					initial={false}
+					transition={reducedMotion ? { duration: 0 } : disclosureTransition}
+					variants={disclosureVariants}
+					animate={phase === "expanded" ? "expanded" : "collapsed"}
+					aria-hidden={!expanded || phase === "opening"}
+					inert={!expanded || phase === "opening"}
+					className="activity-disclosure-body"
+					style={{ pointerEvents: phase === "expanded" ? "auto" : "none" }}
+					onAnimationComplete={(target) => {
+						if (target === "collapsed") setPhase((current) => (current === "closing" ? "collapsed" : current));
+					}}
+				>
+					<div className="inline-activity-details" data-variant={bodyVariant}>
+						{children}
+					</div>
+				</motion.div>
+			)}
 		</div>
 	);
 }

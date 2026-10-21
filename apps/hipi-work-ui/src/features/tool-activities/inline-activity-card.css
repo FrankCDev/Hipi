@@ -1,4 +1,5 @@
 .inline-file-activity-row {
+	--file-activity-icon-gap: calc(var(--spacing) * 1.5);
 	display: flex;
 	align-items: center;
 	min-width: 0;
@@ -9,6 +10,8 @@
 	width: var(--ui-icon-size);
 	height: var(--ui-icon-size);
 	flex-shrink: 0;
+	/* GL uses gap-1.5 between the icon and summary; summary words use gap-1. */
+	margin-inline-end: calc(var(--file-activity-icon-gap) - var(--ui-conversation-grouped-gap));
 }
 .inline-file-action,
 .inline-file-target {
@@ -70,6 +73,68 @@
 	margin-inline-start: auto;
 	font-size: 0.875em;
 }
+.inline-tool-generic {
+	--tool-result-body-gap: var(--ui-conversation-grouped-gap);
+	--tool-result-chevron-size: calc(var(--spacing) * 3.5);
+	gap: 0;
+}
+.inline-tool-result-toggle {
+	display: inline-flex;
+	align-items: center;
+	min-width: 0;
+	max-width: 100%;
+	gap: var(--tool-result-body-gap);
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: start;
+	cursor: pointer;
+}
+.inline-tool-result-toggle:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: -2px;
+}
+.inline-tool-result-chevron {
+	width: var(--tool-result-chevron-size);
+	height: var(--tool-result-chevron-size);
+	flex-shrink: 0;
+	opacity: 0;
+	transition: transform var(--activity-disclosure-duration, 0.3s);
+}
+.inline-tool-result-toggle[aria-expanded="true"] > .inline-tool-result-chevron {
+	transform: rotate(90deg);
+	opacity: 1;
+}
+.inline-tool-result-toggle:focus-visible > .inline-tool-result-chevron {
+	opacity: 1;
+}
+.inline-tool-result-shell,
+.inline-tool-result-measure {
+	min-width: 0;
+}
+.inline-tool-result-body {
+	display: grid;
+	gap: var(--tool-result-body-gap);
+	padding-block-start: var(--tool-result-body-gap);
+}
+@media (hover: hover) {
+	.inline-tool-result-toggle:hover {
+		color: var(--text);
+	}
+	.inline-tool-result-toggle:hover > .inline-tool-result-chevron {
+		opacity: 1;
+	}
+}
+:root[data-reduced-motion="on"] .inline-tool-result-chevron {
+	transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	:root:not([data-reduced-motion="off"]) .inline-tool-result-chevron {
+		transition: none;
+	}
+}
 .inline-tool-details-trigger {
 	flex-shrink: 0;
 	color: var(--muted);
@@ -114,4 +179,12 @@
 	.inline-tool-details-trigger[data-state="open"] {
 		opacity: 1;
 	}
+}
+.inline-tool-generic > .inline-tool-notice,
+.inline-tool-generic > .inline-tool-note,
+.inline-tool-generic > .inline-tool-artifact {
+	margin-block-start: var(--tool-result-body-gap);
+}
+.inline-tool-result-body > .inline-tool-details-trigger {
+	justify-self: start;
 }

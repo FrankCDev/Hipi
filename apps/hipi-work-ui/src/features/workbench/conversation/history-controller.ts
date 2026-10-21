@@ -662,6 +662,10 @@ export class ConversationHistoryController {
 				runResults: fence.runResults,
 			};
 			let previous: HistoryPage | undefined;
+			// Replay retains bounded sideband evidence independently of the two
+			// message pages. A model-less terminal page must not disappear merely
+			// because the requested boundary is several pages older or newer.
+			let replayResults = mergeRunResults(fence.runResults);
 			let scanned = 0;
 			const seen = new Set<string>();
 			const progress = new HistoryCursorProgress();
@@ -681,6 +685,7 @@ export class ConversationHistoryController {
 							throw new AppError("INVALID_REQUEST");
 						added = page.messages;
 						olderCursor = page.nextCursor;
+						replayResults = mergeRunResults(replayResults, page.runResults);
 					}
 					if (this.disposed || this.request !== request || request.signal.aborted) return;
 					const held = this.snapshot;
@@ -693,10 +698,16 @@ export class ConversationHistoryController {
 						this.capacity = true;
 						return;
 					}
+					const runResults = mergeRunResults(held.runResults, replayResults);
 					if (direction === "older") {
 						this.recoverOlder = false;
 						if (messages.length !== combined.length) this.detached = true;
-						this.snapshot = { ...(this.detached ? historyOnly(held) : held), messages, historyCursor: olderCursor };
+						this.snapshot = {
+							...(this.detached ? historyOnly(held) : held),
+							messages,
+							historyCursor: olderCursor,
+							runResults,
+						};
 						this.olderSeen.clear();
 						this.olderProgress = new HistoryCursorProgress();
 					} else {
@@ -704,6 +715,7 @@ export class ConversationHistoryController {
 						this.snapshot = {
 							...held,
 							messages,
+							runResults,
 							historyCursor: this.recoverOlder ? (held.historyCursor ?? fence.historyCursor) : held.historyCursor,
 						};
 						if (messages.at(-1)?.id === fence.messages.at(-1)?.id) {
@@ -712,12 +724,7 @@ export class ConversationHistoryController {
 								...fence,
 								messages,
 								historyCursor: this.recoverOlder ? (held.historyCursor ?? fence.historyCursor) : held.historyCursor,
-								runResults: mergeRunResults(
-									held.runResults,
-									current.runResults,
-									previous?.runResults,
-									fence.runResults,
-								),
+								runResults,
 							};
 							if (this.latest && this.latest !== fence) this.acceptLive(this.latest);
 						}
@@ -732,6 +739,7 @@ export class ConversationHistoryController {
 				previous = current;
 				current = await this.read(cursor, request.signal);
 				this.validateScope(current);
+				replayResults = mergeRunResults(replayResults, current.runResults);
 				if (!progress.advance(cursor, current.nextCursor)) throw new AppError("INVALID_REQUEST");
 				if (++scanned % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			}

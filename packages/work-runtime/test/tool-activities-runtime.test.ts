@@ -143,6 +143,7 @@ test("real faux save projects approval and artifact then cold read does not resu
 		});
 		assert.equal(pending.toolResult, "unavailable");
 		assert.equal(pending.effect, undefined);
+		assert.equal(pending.fileSummary, undefined);
 		const liveSnapshot = await runtime.call("snapshot", scope);
 		const slot = liveSnapshot.execution?.tools.items.find((item) => item.taskId === pending.taskId);
 		assert.equal(slot?.callId, pending.callId);
@@ -184,6 +185,13 @@ test("real faux save projects approval and artifact then cold read does not resu
 		assert.equal(completed.effect?.status, "confirmed");
 		assert.equal(completed.artifact?.path, "note.txt");
 		assert.equal(completed.artifact?.rootId, root.rootId);
+		assert.deepEqual(completed.fileSummary, {
+			version: 1,
+			target: { rootId: root.rootId, path: "note.txt" },
+			kind: "save",
+			partial: false,
+			operationId: completed.effect?.operationId,
+		});
 		assert.equal(
 			completed.artifact?.expectedRevision,
 			(await files.readText({ ...root, path: "note.txt" })).revision,
@@ -235,6 +243,7 @@ test("real faux save projects approval and artifact then cold read does not resu
 		assert.equal(cold.activityId, completed.activityId);
 		assert.equal(cold.effect?.status, "confirmed");
 		assert.equal(cold.outputTruncated, false);
+		assert.deepEqual(cold.fileSummary, completed.fileSummary);
 		const coldSnapshot = await runtime.call("snapshot", scope);
 		assert.equal(coldSnapshot.execution, undefined);
 		assert.equal(
@@ -250,6 +259,7 @@ test("real faux save projects approval and artifact then cold read does not resu
 			[cancelledActivity.taskId],
 		);
 		assert.notEqual(cancelledPage.items[0]?.toolResult, "success");
+		assert.equal(cancelledPage.items[0]?.fileSummary, undefined);
 		assert.deepEqual(coldSnapshot.messages.find((item) => item.id === messageId)?.toolCalls, toolMessage?.toolCalls);
 		const historical = await runtime.call("getToolActivities", {
 			...scope,
@@ -271,6 +281,12 @@ test("real faux save projects approval and artifact then cold read does not resu
 		] as const) {
 			const activity = activities.items.find((item) => item.toolName === name);
 			assert.ok(activity);
+			assert.deepEqual(activity.fileSummary, {
+				version: 1,
+				target: { rootId: root.rootId, path: kind === "directory" ? "" : "note.txt" },
+				kind,
+				partial: false,
+			});
 			const page = parseResult(
 				"getToolActivityText",
 				await runtime.call("getToolActivityText", { ...scope, activityId: activity.activityId }),
@@ -292,6 +308,17 @@ test("real faux save projects approval and artifact then cold read does not resu
 			await session.page();
 			assert.equal(session.snapshot().failed, false);
 			assert.ok(session.snapshot().page?.items.some((item) => item.activityId === cold.activityId));
+			assert.deepEqual(
+				session.snapshot().page?.items.find((item) => item.activityId === cold.activityId)?.fileSummary,
+				completed.fileSummary,
+			);
+			assert.ok(cold.taskId);
+			const exact = await connection.client.call("getToolActivities", {
+				...scope,
+				selector: { kind: "tasks", taskIds: [cold.taskId] },
+			});
+			assert.deepEqual(exact.items[0]?.fileSummary, completed.fileSummary);
+			assert.equal(session.snapshot().text, undefined);
 			await session.text(cold.activityId);
 			assert.equal(session.snapshot().failed, false);
 			assert.deepEqual(session.snapshot().text, output);

@@ -198,7 +198,7 @@ test("real pane shares one column role without padding the absolute virtual rows
 	assert.equal(host.querySelectorAll(".conversation-column").length, 2);
 	assert.equal(query(".markdown-body h2").textContent, "Heading");
 	assert.equal(query(".markdown-body strong").textContent, "rendered");
-	assert.ok(query(".virtual-message-row").style.transform.includes("translateY"));
+	assert.ok(query(".virtual-message-row").style.transform.includes("translate3d"));
 	assert.equal(layoutOptions.paddingEnd, 152);
 	assert.equal(query(".message-stage").style.getPropertyValue("--thread-scroll-padding-bottom"), "136px");
 });

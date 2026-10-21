@@ -114,7 +114,7 @@ test("unknown saved wire versions are not silently upgraded into replayable comm
 	assert.equal(local.read("command.catalog"), raw);
 });
 
-test.each([8, 9, 10, 11, 12])(
+test.each([8, 9, 10, 11, 12, 13])(
 	"only verified protocol %i local commands normalize; old envelopes remain invalid on the wire",
 	(version) => {
 		const legacy = { ...request, version };
@@ -157,7 +157,7 @@ test.each([8, 9, 10, 11, 12])(
 	},
 );
 
-test.each([8, 9, 10, 11, 12])(
+test.each([8, 9, 10, 11, 12, 13])(
 	"protocol %i recovery preserves approval identities and digest bytes and rejects malformed fields",
 	(version) => {
 		const params = {
@@ -193,7 +193,7 @@ test.each([8, 9, 10, 11, 12])(
 	},
 );
 
-test.each([8, 9, 10, 11, 12])(
+test.each([8, 9, 10, 11, 12, 13])(
 	"protocol %i unknown outcome remains receipt-only after reload without rewriting or resending",
 	async (version) => {
 		const storage = new MemoryStorage();

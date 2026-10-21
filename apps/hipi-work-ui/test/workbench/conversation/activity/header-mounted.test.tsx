@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import type { AppClient, Scope } from "@hipi/work-runtime/contracts";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -69,6 +71,47 @@ test("running elapsed updates once per second; settlement fixes inclusive wall t
 	assert.equal(vi.getTimerCount(), 0);
 	await act(async () => vi.advanceTimersByTime(5000));
 	assert.match(host.textContent ?? "", /3/);
+});
+
+test("presented live process uses the standalone divider gap; settled disclosure retains its compact divider", async () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		new NodeURL("../../../../src/features/workbench/conversation/activity/header.css", import.meta.url),
+		"utf8",
+	);
+	document.head.append(style);
+	try {
+		await render(base);
+		const live = host.querySelector<HTMLElement>(".run-activity-header");
+		assert.ok(live);
+		assert.equal(live.dataset.runCollapsible, "false");
+		assert.equal(live.querySelector("button") === null, true);
+		assert.equal(
+			getComputedStyle(live).getPropertyValue("--run-divider-gap").replace(/\s/g, ""),
+			"calc(var(--spacing)*2)",
+		);
+		await render({ ...base, running: false, members: ["message:2_0"] });
+		const settled = host.querySelector<HTMLElement>(".run-activity-header");
+		assert.ok(settled);
+		assert.equal(settled.dataset.runCollapsible, "true");
+		const button = settled.querySelector("button");
+		assert.ok(button);
+		await act(async () => button.focus());
+		assert.equal(button.matches(":focus-visible"), true);
+		assert.equal(getComputedStyle(button).outlineOffset, "0px");
+		assert.equal(getComputedStyle(button).outline, "2px solid var(--ring)");
+		assert.equal(getComputedStyle(settled).getPropertyValue("--run-divider-gap"), "var(--ui-conversation-grouped-gap)");
+		const divider = Array.from(style.sheet?.cssRules ?? []).find(
+			(rule) => rule instanceof CSSStyleRule && rule.selectorText === ".run-activity-header::after",
+		);
+		assert.ok(divider instanceof CSSStyleRule);
+		assert.equal(divider.style.getPropertyValue("margin-block-start"), "var(--run-divider-gap)");
+		assert.equal(divider.style.getPropertyValue("border-block-start"), "1px solid var(--line)");
+		// JSDOM schedules selectionchange when focus moves; drain that DOM task.
+		await act(async () => vi.advanceTimersByTime(0));
+	} finally {
+		style.remove();
+	}
 });
 
 test("source duration thresholds use narrow compound units and subsecond running says Working", async () => {

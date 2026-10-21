@@ -123,6 +123,7 @@ export function ConversationMessages({
 	const restorationFrames = useRef<number[]>([]);
 	const searchPositionPending = useRef(!!searchAnchor);
 	const scheduleSearchPosition = useRef<() => void>(() => {});
+	const scheduleViewportReport = useRef<() => void>(() => {});
 	const interruptReading = useRef<(direction: number) => void>(() => {});
 	const projection = useRef<MessageProjection<DisplaySnapshot | undefined> | null>(null);
 	const [nearEnd, setNearEnd] = useState(true);
@@ -194,6 +195,10 @@ export function ConversationMessages({
 	const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
 		count: rows.length,
 		getScrollElement: () => messages.current,
+		// The same measurement owner commits row positions and total extent in
+		// its resize callback. React must not leave the next row at an old offset
+		// while a disclosure's real height has already advanced for this paint.
+		directDomUpdates: true,
 		estimateSize: (index) =>
 			savedPosition?.heights.get(rows[index]?.key ?? "") ??
 			(rows[index]?.kind === "turn"
@@ -216,6 +221,7 @@ export function ConversationMessages({
 		paddingEnd: footerHeight + 32,
 		onChange: (instance) => {
 			setNearEnd(instance.isAtEnd(CONVERSATION_END_THRESHOLD));
+			scheduleViewportReport.current();
 		},
 	});
 	const renderedIndexes = useRef<number[]>([]);
@@ -226,6 +232,12 @@ export function ConversationMessages({
 		searchPositionPending,
 		onHistoryViewport,
 	);
+	useLayoutEffect(() => {
+		scheduleViewportReport.current = scheduleHistoryViewport;
+		return () => {
+			scheduleViewportReport.current = () => {};
+		};
+	}, [scheduleHistoryViewport]);
 	useLayoutEffect(() => {
 		measurementPolicy.synchronize(virtualizer);
 	});
@@ -624,7 +636,7 @@ export function ConversationMessages({
 							<p>{t("work.readyBody")}</p>
 						</div>
 					)}
-					<div className="message-stack virtual-message-stack" style={{ height: virtualizer.getTotalSize() }}>
+					<div className="message-stack virtual-message-stack" ref={virtualizer.containerRef}>
 						{snapshot &&
 							virtualizer.getVirtualItems().map((item) => {
 								const row = rows[item.index];
@@ -656,7 +668,6 @@ export function ConversationMessages({
 										data-transcript-kind={row.kind}
 										data-transcript-last={item.index === rows.length - 1}
 										className="virtual-message-row"
-										style={{ transform: `translateY(${item.start}px)` }}
 									>
 										{row.kind === "turn" ? (
 											<ConversationTurnRow

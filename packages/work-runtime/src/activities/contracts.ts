@@ -1,5 +1,5 @@
 import type { FileOperationStatus, Scope, ToolApprovalStatus } from "../contracts.ts";
-import { FILE_PRESENTATION_BYTES, type FilePresentation } from "./file-presentation.ts";
+import { FILE_PRESENTATION_BYTES, type FilePresentation, type FileSummary } from "./file-presentation.ts";
 
 /** Serialized JSON only, not JS heap: framing85 + two2048-unit IDs/cursors +8KiB text,
  * at worst6 escaped bytes per unit, plus the independently measured presentation envelope. */
@@ -51,6 +51,8 @@ export type ToolActivity = {
 		status: FileOperationStatus;
 		expectedRevision?: string;
 	};
+	/** Proven retained file result metadata only; does not authorize current filesystem access. */
+	fileSummary?: FileSummary;
 	textAvailable: boolean;
 	outputTruncated: boolean;
 };

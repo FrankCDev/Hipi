@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { Message, RunResultObservation, Snapshot } from "@hipi/work-runtime/contracts";
 import { projectRunActivities } from "../../../../src/features/workbench/conversation/activity/projection.ts";
 import {
+	hasRunResultConflict,
 	mergeRunResults,
 	RETAINED_RUN_LIMITS,
 } from "../../../../src/features/workbench/conversation/activity/results.ts";
@@ -78,12 +79,11 @@ test("pure final, off-page final, empty process and non-response termination can
 	}
 });
 
-test("unknown membership boundary, conflicting terminals and omitted metadata never hide content", () => {
+test("unknown membership boundary and conflicting terminals never hide content", () => {
 	const foreign = message("5_0", "Unknown", "2");
 	for (const value of [
 		snapshot([message("2_0"), foreign, message("8_0")]),
 		{ ...snapshot(), runResults: { items: [result, { ...result, terminalEntryId: "10" }], omitted: false } },
-		{ ...snapshot(), runResults: { items: [result], omitted: true } },
 	]) {
 		assert.equal(project(value).filter((row) => row.message).length, value.messages.length);
 		assert.equal(
@@ -91,6 +91,76 @@ test("unknown membership boundary, conflicting terminals and omitted metadata ne
 			false,
 		);
 	}
+});
+
+test("partial history keeps verified elapsed groups while unknown runs remain visible", () => {
+	const value = {
+		...snapshot([message("2_0"), message("8_0", "Final"), message("12_0", "Unknown run", "11")]),
+		runResults: { items: [result], omitted: true },
+	};
+	assert.deepEqual(
+		project(value).map((row) => row.key),
+		["run:1", "message:8_0", "message:12_0"],
+	);
+});
+
+test("same-terminal conflicts invalidate both runs, survive ordinary copies and do not poison another run", () => {
+	const other = { ...result, id: "11", terminalEntryId: "19", responseMessageId: "18_0" };
+	const merged = mergeRunResults(
+		{ items: [result, other], omitted: false },
+		{ items: [{ ...result, id: "20" }], omitted: true },
+	);
+	assert.ok(merged);
+	const copied = mergeRunResults({ ...merged }, { items: [result], omitted: false });
+	assert.equal(hasRunResultConflict(copied, "1"), true);
+	assert.equal(hasRunResultConflict(copied, "20"), true);
+	assert.equal(hasRunResultConflict(copied, "11"), false);
+	const value = {
+		...snapshot([message("2_0"), message("8_0"), message("12_0", "Process", "11"), message("18_0", "Final", "11")]),
+		runResults: copied,
+	};
+	assert.deepEqual(
+		project(value).map((row) => row.key),
+		["message:2_0", "message:8_0", "run:11", "message:18_0"],
+	);
+});
+
+test("a full observation budget retains duplicate-terminal conflicts; actual evidence loss fails closed", () => {
+	const full = mergeRunResults({
+		items: Array.from({ length: RETAINED_RUN_LIMITS.items }, (_, index) => ({
+			...result,
+			id: String(index + 1),
+			terminalEntryId: String(index + 10),
+		})),
+		omitted: false,
+	});
+	const conflicted = mergeRunResults(full, {
+		items: [{ ...result, terminalEntryId: "10", settledAtMs: 6000 }],
+		omitted: false,
+	});
+	assert.equal(hasRunResultConflict(conflicted, "1"), true);
+	assert.equal(hasRunResultConflict(conflicted, "2"), false);
+	const lost = mergeRunResults(full, {
+		items: [
+			{ ...result, id: "9000", terminalEntryId: "9001" },
+			{ ...result, id: "9002", terminalEntryId: "9001" },
+		],
+		omitted: false,
+	});
+	assert.equal(lost?.retainedEvidence?.overflow, true);
+	assert.equal(hasRunResultConflict(lost, "2"), true);
+	const overflow = mergeRunResults({
+		items: [result],
+		omitted: true,
+		retainedEvidence: {
+			invalidRunIds: Array.from({ length: RETAINED_RUN_LIMITS.conflicts + 1 }, (_, index) => String(index + 1)),
+			overflow: false,
+		},
+	});
+	assert.ok(overflow);
+	assert.equal(overflow.retainedEvidence?.invalidRunIds.length, RETAINED_RUN_LIMITS.conflicts);
+	assert.equal(hasRunResultConflict(overflow, "9000"), true);
+	assert.ok(new TextEncoder().encode(JSON.stringify(overflow)).byteLength < RETAINED_RUN_LIMITS.bytes);
 });
 
 test("active partial and its pending permission surface remain outside any fold", () => {

@@ -2,6 +2,8 @@
 	--run-disclosure-icon-size: 14px;
 	--run-disclosure-duration: 150ms;
 	--run-disclosure-radius: 0.5rem;
+	/* Standalone worked-for uses gap-2; the collapsible divider uses pt-1. */
+	--run-divider-gap: calc(var(--spacing) * 2);
 	width: min(100%, var(--reading-width));
 	margin-inline: auto;
 	color: var(--muted);
@@ -22,10 +24,13 @@
 	white-space: nowrap;
 	cursor: pointer;
 }
-.run-activity-header[data-run-collapsible="true"]::after {
+.run-activity-header[data-run-collapsible="true"] {
+	--run-divider-gap: var(--ui-conversation-grouped-gap);
+}
+.run-activity-header::after {
 	content: "";
 	display: block;
-	margin-block-start: var(--ui-conversation-grouped-gap);
+	margin-block-start: var(--run-divider-gap);
 	border-block-start: 1px solid var(--line);
 }
 .run-activity-toggle > svg {
@@ -47,7 +52,7 @@
 }
 .run-activity-toggle:focus-visible {
 	outline: 2px solid var(--ring);
-	outline-offset: 2px;
+	outline-offset: 0;
 }
 @media (hover: hover) {
 	.run-activity-toggle:hover {

@@ -146,6 +146,7 @@ nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/history.t
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/turns/projection.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/history-continuous-window.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/composer/inline-collapse.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/tool-activities/group-presentation.test.ts");
 const storageTests = [
 	"packages/durable/test/harness-compaction.test.ts",
 	"packages/durable/test/harness-generation.test.ts",
@@ -220,6 +221,7 @@ const uiTests = [
 	"workbench/conversation/conversation-turn-failure",
 	"workbench/conversation/conversation-block-spacing",
 	"workbench/conversation/disclosure-scroll-anchor-mounted",
+	"workbench/conversation/disclosure-layout-mounted",
 	"workbench/conversation/header-mounted",
 	"workbench/conversation/history-initial-anchor-mounted",
 	"workbench/conversation/history-viewport-mounted",
@@ -290,6 +292,9 @@ const uiTests = [
 	"tool-activities/retained-output-view",
 	"tool-activities/turn-activities-mounted",
 	"tool-activities/turn-activity-presentation",
+	"tool-activities/group-summary-mounted",
+	"tool-activities/singleton-file-activity-mounted",
+	"tool-activities/tool-result-disclosure-mounted",
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-geometry-cascade.test.ts");

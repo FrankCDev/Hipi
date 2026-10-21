@@ -8,6 +8,8 @@ import { AppClientProvider } from "../../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../../src/app/preferences.tsx";
 import {
 	ActivityTranscriptProvider,
+	InlineMessageActivities,
+	MessageActivitiesProvider,
 	useActivityTranscriptProjection,
 } from "../../../src/features/tool-activities/activity-transcript.tsx";
 import { StreamingMessage } from "../../../src/features/workbench/conversation/messages.tsx";
@@ -183,7 +185,7 @@ test("actual waits replace Thinking and completion removes the placeholder inste
 	assert.equal(host.querySelector(".response-status"), null);
 });
 
-test("a mounted current tool summary replaces generic progress; missing surface and next generation retain waiting", async () => {
+test("unproven tool slots retain generic progress; canonical mounted headers replace it until the next generation", async () => {
 	const client: AppClient = {
 		call: async (method, params) =>
 			parseResult(method, {
@@ -209,7 +211,16 @@ test("a mounted current tool summary replaces generic progress; missing surface 
 	};
 	function View({ value }: { value: Snapshot }) {
 		useActivityTranscriptProjection(value, true);
-		return <StreamingMessage snapshot={value} />;
+		return (
+			<>
+				{value.messages.map((message) => (
+					<MessageActivitiesProvider key={message.id} messageId={message.id} toolCalls={message.toolCalls}>
+						<InlineMessageActivities messageId={message.id} toolCalls={message.toolCalls} />
+					</MessageActivitiesProvider>
+				))}
+				<StreamingMessage snapshot={value} />
+			</>
+		);
 	}
 	async function show(value: Snapshot) {
 		await render(
@@ -231,8 +242,47 @@ test("a mounted current tool summary replaces generic progress; missing surface 
 		host.querySelector(".inline-activity"),
 		"unavailable exact detail still has a truthful mounted slot summary",
 	);
-	assert.equal(host.querySelector(".response-status"), null);
+	assert.equal(
+		host.querySelector(".response-status") !== null,
+		true,
+		"an unproven live slot cannot claim the latest canonical tool group",
+	);
+	assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, "tools");
 	assert.ok(toolSnapshot.execution);
+	await show({
+		...toolSnapshot,
+		messages: [
+			{
+				id: "2_0",
+				role: "assistant",
+				text: "",
+				textLength: 0,
+				truncated: false,
+				toolCalls: { items: [{ callId: "call", name: "read", contentIndex: 1 }], total: 1 },
+				publicBlocks: { items: [{ kind: "tool", contentIndex: 1 }], total: 1, omitted: false },
+			},
+		],
+		execution: {
+			...toolSnapshot.execution,
+			tools: {
+				...toolSnapshot.execution.tools,
+				items: toolSnapshot.execution.tools.items.map((tool) => ({
+					...tool,
+					anchor: { assistantEntryId: "2", modelIndex: 0, contentIndex: 1 },
+				})),
+			},
+		},
+	});
+	assert.equal(
+		host.querySelector('[data-activity-message-id="2_0"] > button')?.getAttribute("aria-expanded"),
+		"false",
+		"the canonical group owns a mounted folded header without requiring detail expansion",
+	);
+	assert.equal(
+		host.querySelector(".response-status") !== null,
+		false,
+		"a mounted active header for the latest canonical tool group replaces generic progress",
+	);
 	await show({
 		...snapshot,
 		execution: {

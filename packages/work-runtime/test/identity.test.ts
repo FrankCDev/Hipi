@@ -32,7 +32,7 @@ test("HTTP and IPC reject obsolete and future requests before runtime admission"
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
 	});
 	try {
-		for (const version of [7, 8, PROTOCOL_VERSION + 1, PROTOCOL_VERSION]) {
+		for (const version of [7, 8, 13, PROTOCOL_VERSION + 1, PROTOCOL_VERSION]) {
 			for (const method of ["handshake", "createWorkspace"]) {
 				const request = {
 					version,

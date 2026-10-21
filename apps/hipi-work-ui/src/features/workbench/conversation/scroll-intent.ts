@@ -225,7 +225,9 @@ export function bindDisclosureAnchoring(
 	const cancel = () => controller.cancelHeader();
 	const click = (event: MouseEvent) => {
 		if (event.defaultPrevented || blocked() || !(event.target instanceof Element)) return;
-		const header = event.target.closest<HTMLElement>(".activity-disclosure-toggle, .inline-activity-toggle");
+		const header = event.target.closest<HTMLElement>(
+			".activity-disclosure-toggle, .inline-activity-toggle, .inline-tool-result-toggle",
+		);
 		if (!header || !node.contains(header) || !header.closest("[data-preserve-turn-viewport]")) return;
 		const focused = document.activeElement;
 		const scale = node.offsetHeight > 0 ? node.getBoundingClientRect().height / node.offsetHeight : 1;

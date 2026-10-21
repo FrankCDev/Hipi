@@ -72,6 +72,7 @@ const snapshot: Snapshot = {
 			textLength: 0,
 			truncated: false,
 			toolCalls: { items: [{ callId: "same", name: "hipi_files_read", contentIndex: 1 }], total: 1 },
+			publicBlocks: { items: [{ kind: "tool", contentIndex: 1 }], total: 1, omitted: false },
 		},
 		{
 			id: "2_0",
@@ -80,6 +81,7 @@ const snapshot: Snapshot = {
 			textLength: 0,
 			truncated: false,
 			toolCalls: { items: [{ callId: "same", name: "hipi_files_read", contentIndex: 1 }], total: 1 },
+			publicBlocks: { items: [{ kind: "tool", contentIndex: 1 }], total: 1, omitted: false },
 		},
 	],
 	partial: "",
@@ -171,21 +173,47 @@ test("one exact live owner attaches only the current anchored row, then hands ov
 	);
 	assert.equal(host.querySelector(".activity-live-slots"), null, "no duplicate tail after anchored association");
 	assert.equal(host.querySelector('[data-activity-message-id="1_0"] button')?.getAttribute("aria-expanded"), "false");
-	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "true");
+	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] button');
+	assert.ok(toggle);
+	assert.equal(toggle.getAttribute("aria-expanded"), "false", "live metadata must not open the group");
+	assert.equal(host.querySelectorAll(".inline-tool-result").length, 0);
+	await act(async () => toggle.click());
 	assert.equal(host.querySelectorAll(".inline-tool-result").length, 1);
+	// Explicit expansion opens this row after mount. Flush its opening RAF, then
+	// Motion, so completion exercises closing rather than unopened cancellation.
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 25)));
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
 	await render({ ...snapshot, running: false, execution: undefined });
 	assert.equal(host.querySelectorAll("[data-activity-message-id]").length, 2);
+	assert.equal(toggle.getAttribute("aria-expanded"), "true", "completion retains the explicit choice");
+	await act(async () => toggle.click());
 	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "false");
+	const closing = host.querySelector('[data-activity-message-id="2_0"] .activity-disclosure-body');
+	assert.ok(closing);
+	assert.equal(closing.hasAttribute("inert"), true);
+	assert.equal(closing.getAttribute("aria-hidden"), "true");
+	assert.equal(host.querySelectorAll(".inline-tool-result").length, 1, "closing retains its single detail subtree");
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] .activity-disclosure-body'), null);
 	assert.equal(host.querySelectorAll(".inline-tool-result").length, 0);
 });
 test("off-page and unavailable exact records stay in the tail rather than matching an old same-callId row", async () => {
 	await render({ ...snapshot, messages: snapshot.messages.filter((message) => message.id !== "2_0") });
+	const tail = host.querySelector<HTMLButtonElement>(".inline-activity:not([data-activity-message-id]) > button");
+	assert.ok(tail);
+	assert.equal(tail.getAttribute("aria-expanded"), "false");
+	await act(async () => tail.click());
 	assert.ok(host.querySelector(".activity-live-slots"));
 	assert.equal(host.querySelector('[data-activity-message-id="1_0"] button')?.getAttribute("aria-expanded"), "false");
 	await render({ ...snapshot, running: false, execution: undefined });
 	unavailable = true;
 	assert.ok(snapshot.execution);
 	await render({ ...snapshot, execution: { ...snapshot.execution, ownerTaskId: "new" } });
+	const unavailableTail = host.querySelector<HTMLButtonElement>(
+		".inline-activity:not([data-activity-message-id]) > button",
+	);
+	assert.ok(unavailableTail);
+	await act(async () => unavailableTail.click());
 	assert.ok(host.querySelector(".activity-live-slots"));
 	assert.match(host.textContent ?? "", /Execution state unavailable/);
 });
@@ -193,7 +221,6 @@ test("explicit disclosure intent survives completion and transfers to one select
 	await render(snapshot);
 	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] > button');
 	assert.ok(toggle);
-	await act(async () => toggle.click());
 	assert.equal(toggle.getAttribute("aria-expanded"), "false");
 	await act(async () => toggle.click());
 	assert.equal(toggle.getAttribute("aria-expanded"), "true");
@@ -207,6 +234,9 @@ test("explicit disclosure intent survives completion and transfers to one select
 test("late exact metadata waits for selection release before moving a live tool into its historical row", async () => {
 	deferExact = true;
 	await render(snapshot);
+	const tail = host.querySelector<HTMLButtonElement>(".inline-activity:not([data-activity-message-id]) > button");
+	assert.ok(tail);
+	await act(async () => tail.click());
 	const selected = host.querySelector(".activity-live-slots span");
 	assert.ok(selected);
 	const range = document.createRange();
@@ -222,10 +252,13 @@ test("late exact metadata waits for selection release before moving a live tool 
 		document.dispatchEvent(new Event("selectionchange"));
 	});
 	assert.equal(host.querySelector(".activity-live-slots"), null);
-	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "true");
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] button')?.getAttribute("aria-expanded"), "false");
 });
 test("transient disconnect stops live decoration but retains the exact same readable tool evidence", async () => {
 	await render(snapshot);
+	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] button');
+	assert.ok(toggle);
+	await act(async () => toggle.click());
 	const article = host.querySelector(".inline-tool-result");
 	assert.ok(article);
 	await render(snapshot, false);
@@ -250,6 +283,10 @@ test("round anchor places a not-yet-instantiated tool once, without a speculativ
 	await render(value);
 	const current = host.querySelector('[data-activity-message-id="2_0"]');
 	assert.ok(current);
+	const toggle = current.querySelector<HTMLButtonElement>("button");
+	assert.ok(toggle);
+	assert.equal(toggle.getAttribute("aria-expanded"), "false");
+	await act(async () => toggle.click());
 	assert.ok(current.querySelector(".activity-live-slots"));
 	assert.equal(host.querySelectorAll(".activity-live-slots").length, 1);
 	assert.equal(calls.filter((call) => !!call.selector).length, 0);
@@ -271,6 +308,9 @@ test("authoritative round anchor retains unavailable exact detail in the committ
 	});
 	const current = host.querySelector('[data-activity-message-id="2_0"]');
 	assert.ok(current);
+	const toggle = current.querySelector<HTMLButtonElement>("button");
+	assert.ok(toggle);
+	await act(async () => toggle.click());
 	assert.ok(current.querySelector(".activity-live-slots"));
 	assert.equal(host.querySelectorAll(".activity-live-slots").length, 1);
 	assert.equal(calls.filter((call) => call.selector?.kind === "message").length, 0);
@@ -313,4 +353,45 @@ test("mounted tool presentation leases survive folded summaries but not unmount,
 	assert.equal(presented(), "false");
 	await render({ ...snapshot, running: false, execution: undefined });
 	assert.equal(presented(), "false");
+});
+
+test("following text or incomplete ordering removes the current tool claim even while its task is running", async () => {
+	const presented = () => host.querySelector("[data-tool-presented]")?.getAttribute("data-tool-presented");
+	await render(snapshot);
+	assert.equal(presented(), "true");
+	await render({ ...snapshot, partial: "Following text", partialLength: 14 });
+	assert.equal(presented(), "false");
+	assert.equal(host.querySelector('[data-activity-message-id="2_0"] .inline-activity-phase'), null);
+	await render(snapshot);
+	assert.equal(presented(), "true");
+	await render({
+		...snapshot,
+		messages: [...snapshot.messages, { id: "3_0", role: "assistant", text: "Final", textLength: 5, truncated: false }],
+	});
+	assert.equal(presented(), "false");
+	await render({
+		...snapshot,
+		messages: snapshot.messages.map((message) => ({ ...message, publicBlocks: undefined })),
+	});
+	assert.equal(presented(), "false");
+});
+
+test("an explicit expansion choice survives active remount and completion without reopening a closed group", async () => {
+	await render(snapshot);
+	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] button');
+	assert.ok(toggle);
+	assert.equal(toggle.getAttribute("aria-expanded"), "false");
+	await act(async () => toggle.click());
+	mountTools = false;
+	await render(snapshot);
+	mountTools = true;
+	await render(snapshot);
+	const restored = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] button');
+	assert.ok(restored);
+	assert.equal(restored.getAttribute("aria-expanded"), "true");
+	await act(async () => restored.click());
+	await render({ ...snapshot, running: false, execution: undefined });
+	assert.equal(restored.getAttribute("aria-expanded"), "false");
+	await render(snapshot);
+	assert.equal(restored.getAttribute("aria-expanded"), "false");
 });

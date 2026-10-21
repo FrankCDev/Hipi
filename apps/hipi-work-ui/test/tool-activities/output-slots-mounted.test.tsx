@@ -64,6 +64,13 @@ let host: HTMLDivElement;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	vi.stubGlobal(
 		"IntersectionObserver",
 		class {
 			observe() {}
@@ -107,8 +114,17 @@ async function render(conversationId = "c", connected = true) {
 		),
 	);
 }
-test("expanding a real group shows both retained outputs without a second toggle and dialog shares its reader", async () => {
+async function openResults() {
+	await act(async () => {
+		for (const toggle of host.querySelectorAll<HTMLButtonElement>('.inline-tool-result-toggle[aria-expanded="false"]'))
+			toggle.click();
+	});
+}
+test("group expansion does not read individual results; explicit results and dialog share one reader", async () => {
 	await render();
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 0);
+	assert.equal(calls.filter((call) => call.method === "getToolActivityText").length, 0);
+	await openResults();
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	assert.doesNotMatch(host.textContent ?? "", /Read retained output/);
 	assert.equal(calls.filter((call) => call.method === "getToolActivityText").length, 2);
@@ -125,14 +141,32 @@ test("expanding a real group shows both retained outputs without a second toggle
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	const toggle = host.querySelector<HTMLButtonElement>(".activity-disclosure-toggle");
 	assert.ok(toggle);
+	const outputs = [...host.querySelectorAll("pre.inline-tool-text")];
+	const body = host.querySelector(".activity-disclosure-body");
+	assert.ok(body);
 	await act(async () => toggle.click());
+	assert.equal(body.hasAttribute("inert"), true);
+	assert.equal(body.getAttribute("aria-hidden"), "true");
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2, "closing retains both output leases");
+	await act(async () => toggle.click());
+	for (const [index, output] of outputs.entries()) {
+		assert.ok(host.querySelectorAll("pre.inline-tool-text")[index] === output);
+	}
+	assert.equal(body.hasAttribute("inert"), false);
+	assert.equal(calls.filter((call) => call.method === "getToolActivityText").length, 2, "reversal reuses its readers");
+	await act(async () => toggle.click());
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+	assert.equal(host.querySelector(".activity-disclosure-body"), null);
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 0);
 	await act(async () => toggle.click());
+	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 0, "newly mounted individuals start closed");
+	await openResults();
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	assert.equal(calls.filter((call) => call.method === "getToolActivityText").length, 4);
 });
 test("disconnect retains both readable chunks; scope replacement aborts old pending output", async () => {
 	await render();
+	await openResults();
 	const text = host.querySelector("pre.inline-tool-text");
 	assert.ok(text);
 	await render("c", false);
@@ -141,8 +175,10 @@ test("disconnect retains both readable chunks; scope replacement aborts old pend
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 2);
 	deferred = true;
 	await render("old");
+	await openResults();
 	assert.equal(pending.length, 1);
 	await render("new");
+	await openResults();
 	assert.equal(pending[0]?.signal?.aborted, true);
 	await act(async () => pending[0]?.resolve(pending[0].result));
 	assert.doesNotMatch(host.textContent ?? "", /old:task/);
@@ -154,6 +190,7 @@ test("disconnect retains both readable chunks; scope replacement aborts old pend
 test("late auto-read output waits for conversation selection release", async () => {
 	deferred = true;
 	await render();
+	await openResults();
 	const name = host.querySelector(".inline-tool-result-name");
 	assert.ok(name);
 	const range = document.createRange();
@@ -168,4 +205,25 @@ test("late auto-read output waits for conversation selection release", async () 
 		document.dispatchEvent(new Event("selectionchange"));
 	});
 	assert.match(host.querySelector("pre.inline-tool-text")?.textContent ?? "", /c:task:1/);
+});
+
+test("individual close immediately releases its pending read while the sibling uses the same FIFO", async () => {
+	deferred = true;
+	await render();
+	await openResults();
+	assert.equal(pending.length, 1);
+	const first = host.querySelector<HTMLButtonElement>(".inline-tool-result-toggle");
+	assert.ok(first);
+	await act(async () => first.click());
+	assert.equal(pending[0]?.signal?.aborted, true, "individual closing does not retain the group's reader lifetime");
+	assert.equal(pending.length, 2, "the existing FIFO advances to the sibling, not another output lane");
+	await act(async () => pending[0]?.resolve(pending[0].result));
+	assert.equal(host.querySelector("pre") === null, true, "late closed output is rejected");
+	await act(async () => pending[1]?.resolve(pending[1].result));
+	assert.match(host.querySelector("pre")?.textContent ?? "", /c:task:2/);
+	await act(async () => first.click());
+	assert.equal(pending.length, 3);
+	await act(async () => pending[2]?.resolve(pending[2].result));
+	assert.equal(host.querySelectorAll("pre").length, 2);
+	assert.equal(calls.filter((call) => call.method === "getToolActivities").length, 1);
 });

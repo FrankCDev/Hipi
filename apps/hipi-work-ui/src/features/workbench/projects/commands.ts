@@ -3,7 +3,7 @@ import type { CatalogCommand, ProjectCatalogCommand } from "../command-recovery.
 import type { LocalState } from "../local-state.ts";
 import { defaultRoleEvidence } from "./identity.ts";
 
-/** Protocols 9 through 12 logical journals retain identical commands in 13; protocol 8 had none. */
+/** Protocols 9 through 13 logical journals retain identical commands in 14; protocol 8 had none. */
 export function parseProjectCommand(value: unknown): ProjectCatalogCommand {
 	if (
 		!value ||
@@ -12,8 +12,12 @@ export function parseProjectCommand(value: unknown): ProjectCatalogCommand {
 		!("version" in value) ||
 		(value.version !== PROTOCOL_VERSION &&
 			!(
-				PROTOCOL_VERSION === 13 &&
-				(value.version === 9 || value.version === 10 || value.version === 11 || value.version === 12)
+				PROTOCOL_VERSION === 14 &&
+				(value.version === 9 ||
+					value.version === 10 ||
+					value.version === 11 ||
+					value.version === 12 ||
+					value.version === 13)
 			)) ||
 		Object.keys(value).some((key) => !["version", "method", "params"].includes(key))
 	)

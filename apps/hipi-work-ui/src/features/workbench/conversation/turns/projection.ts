@@ -1,4 +1,5 @@
 import type { RunInputRefs, Snapshot } from "@hipi/work-runtime/contracts";
+import { hasRunResultConflict } from "../activity/results.ts";
 import type { TranscriptRow } from "../transcript.ts";
 import type { ConversationRow, TurnRow } from "./contracts.ts";
 /** Identity is independent of page coverage. Unknown chronological barriers are never crossed. */
@@ -40,7 +41,7 @@ export function projectAuthoritativeTurns(
 	const groups = new Map<number, TurnRow>(),
 		consumed = new Set<number>();
 	for (const [runId, inputs] of refs) {
-		if (invalid.has(runId)) continue;
+		if (invalid.has(runId) || hasRunResultConflict(snapshot.runResults, runId)) continue;
 		const ids = new Set(inputs?.entryIds.map((id) => `${id}_0`) ?? []),
 			found = new Set<string>();
 		const members: { row: TranscriptRow; index: number }[] = [];

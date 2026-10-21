@@ -58,6 +58,7 @@ beforeEach(() => {
 afterEach(async () => {
 	await act(async () => root.unmount());
 	host.remove();
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 function render(node: ReactNode) {
@@ -74,6 +75,12 @@ const execution: ConversationExecution = {
 test("live summary survives unavailable task evidence and completion becomes an immutable historical summary", async () => {
 	page = { ...page, unavailableTaskIds: ["2"] };
 	await act(async () => render(<LiveTurnActivities scope={scope} connected active execution={execution} />));
+	const toggle = host.querySelector<HTMLButtonElement>(".inline-activity-toggle");
+	assert.ok(toggle);
+	assert.equal(toggle.getAttribute("aria-expanded"), "false");
+	assert.equal(calls.length, 0, "unopened standalone details do not acquire a reader");
+	assert.match(host.textContent ?? "", /Tool activity/);
+	await act(async () => toggle.click());
 	assert.match(host.textContent ?? "", /Read file/);
 	assert.match(host.textContent ?? "", /Execution state unavailable/);
 	assert.deepEqual(calls[0]?.selector, { kind: "tasks", taskIds: ["2"] });
@@ -93,6 +100,46 @@ test("live summary survives unavailable task evidence and completion becomes an 
 	assert.match(host.textContent ?? "", /Read file/);
 	assert.equal(host.querySelector("button")?.getAttribute("aria-expanded"), "false");
 	assert.equal(calls.length, 1, "collapsed historical summary requires no activity query");
+});
+
+test("mixed groups use the capability fallback unless a proven active item supplies the summary", async () => {
+	const toolCalls = {
+		items: [
+			{ callId: "read", name: "hipi_files_read", contentIndex: 1 },
+			{ callId: "list", name: "hipi_files_list", contentIndex: 2 },
+		],
+		total: 2,
+	};
+	const show = (active: boolean, total = 2) =>
+		act(async () =>
+			render(
+				<HistoricalTurnActivities
+					scope={scope}
+					connected
+					messageId="5_0"
+					toolCalls={{ ...toolCalls, total }}
+					expanded={false}
+					onToggle={() => {}}
+					presentation={
+						active ? { kind: "active", key: "list", toolName: "hipi_files_list", status: "pending" } : undefined
+					}
+				/>,
+			),
+		);
+	await show(true);
+	const heading = host.querySelector(".activity-disclosure-summary");
+	assert.equal(heading?.querySelector(".cadenced-text")?.firstChild?.textContent, "List files");
+	assert.ok(host.querySelector(".lucide-folder"));
+	assert.match(host.querySelector(".inline-activity-phase")?.textContent ?? "", /Pending/);
+	assert.equal(host.querySelector("button")?.getAttribute("aria-expanded"), "false");
+	await show(false);
+	assert.equal(heading?.textContent, "Tool activity");
+	assert.equal(host.querySelector(".inline-activity-count")?.textContent, "2");
+	assert.equal(host.querySelector(".inline-activity-phase"), null);
+	assert.ok(host.querySelector(".lucide-puzzle"));
+	await show(false, 3);
+	assert.equal(heading?.textContent, "Tool activity");
+	assert.equal(calls.length, 0);
 });
 
 const matching: ToolActivityPage = {
@@ -477,4 +524,75 @@ test("a completed history response waits behind selection and cancellation disca
 	session.dispose();
 	await cancelled;
 	assert.equal(session.snapshot().window, undefined);
+});
+
+test("historical disclosure retains one reader through closing reversal and releases it only after completed collapse", async () => {
+	page = matching;
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+	const dispose = vi.spyOn(ActivitySession.prototype, "dispose");
+	const show = async (expanded: boolean) =>
+		act(async () =>
+			render(
+				<HistoricalTurnActivities
+					scope={scope}
+					connected
+					messageId="5_0"
+					toolCalls={{ items: [{ callId: "call", name: "hipi_files_read", contentIndex: 1 }], total: 1 }}
+					expanded={expanded}
+					onToggle={() => {}}
+				/>,
+			),
+		);
+	const wait = async (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
+	await show(false);
+	assert.equal(calls.length, 0, "closed content must not acquire a metadata reader");
+	await show(true);
+	await wait(80);
+	const body = host.querySelector<HTMLElement>(".activity-disclosure-body");
+	const record = host.querySelector(".inline-tool-result");
+	assert.ok(body && record);
+	assert.equal(calls.length, 1);
+	await show(false);
+	assert.equal(body.hasAttribute("inert"), true);
+	assert.equal(host.querySelector(".inline-tool-result"), record);
+	await wait(35);
+	await show(true);
+	await wait(400);
+	assert.equal(host.querySelector(".activity-disclosure-body"), body);
+	assert.equal(host.querySelector(".inline-tool-result"), record);
+	assert.equal(dispose.mock.calls.length, 0);
+	assert.equal(calls.length, 1, "reversal must reuse the active reader instead of fetching a duplicate");
+	await show(false);
+	assert.equal(host.querySelector(".inline-tool-result"), record);
+	await wait(400);
+	assert.equal(host.querySelector(".activity-disclosure-body"), null);
+	assert.equal(dispose.mock.calls.length, 1);
+	await show(true);
+	assert.equal(calls.length, 2, "a completed collapse releases the reader before a later fresh expansion");
+});
+
+test("live disclosure keeps its existing task reader while closing and releases it on completed collapse", async () => {
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+	const dispose = vi.spyOn(ActivitySession.prototype, "dispose");
+	await act(async () => render(<LiveTurnActivities scope={scope} connected active execution={execution} />));
+	const header = host.querySelector<HTMLButtonElement>(".inline-activity-toggle");
+	assert.ok(header);
+	assert.equal(calls.length, 0);
+	await act(async () => header.click());
+	assert.equal(calls.length, 1);
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 40)));
+	const details = host.querySelector(".inline-activity-details");
+	assert.ok(header && details);
+	await act(async () => header.click());
+	assert.equal(host.querySelector(".inline-activity-details"), details);
+	assert.equal(dispose.mock.calls.length, 0);
+	await act(async () => header.click());
+	assert.equal(host.querySelector(".inline-activity-details"), details);
+	assert.equal(calls.length, 1);
+	await act(async () => header.click());
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+	assert.equal(host.querySelector(".inline-activity-details"), null);
+	assert.equal(dispose.mock.calls.length, 1);
 });

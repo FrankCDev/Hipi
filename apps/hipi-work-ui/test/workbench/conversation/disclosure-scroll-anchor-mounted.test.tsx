@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
+import type { AppClient, ToolActivity } from "@hipi/work-runtime/contracts";
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { ThemeProvider } from "../../../src/app/theme/provider.tsx";
+import { ActivitySession } from "../../../src/features/tool-activities/activity-session.ts";
+import { InlineActivityCard } from "../../../src/features/tool-activities/inline-activity-card.tsx";
 import { ActivityDisclosure } from "../../../src/features/tool-activities/turn-activity-presentation.tsx";
 import {
 	bindDisclosureAnchoring,
@@ -52,11 +55,33 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });
-async function mount({ reduced = false, near = false, previous = true } = {}) {
+async function mount({ reduced = false, near = false, previous = true, individual = false } = {}) {
 	vi.stubGlobal("matchMedia", () => ({ matches: reduced, addEventListener() {}, removeEventListener() {} }));
 	const host = document.createElement("div");
 	document.body.append(host);
 	const root = createRoot(host);
+	const client: AppClient = {
+		call: async () => {
+			throw new Error("No output is available in this metadata-only fixture");
+		},
+		observe: async () => ({ dispose: async () => {} }),
+	};
+	const session = new ActivitySession(client, { workspaceId: "w", conversationId: "c" });
+	const activity: ToolActivity = {
+		activityId: "task:1",
+		taskId: "1",
+		callId: "call",
+		toolName: "generic_tool",
+		source: "task",
+		inherited: false,
+		phase: "terminal",
+		outcome: "completed",
+		toolResult: "unavailable",
+		abortRequested: false,
+		receiptIds: [],
+		textAvailable: false,
+		outputTruncated: false,
+	};
 	let docTop = 400.125;
 	let offset = near ? 990 : 100;
 	let end = 1000;
@@ -94,24 +119,40 @@ async function mount({ reduced = false, near = false, previous = true } = {}) {
 		return (
 			<ThemeProvider>
 				<div data-turn-key="turn">
-					<ActivityDisclosure
-						title="Read file"
-						count={1}
-						expanded={expanded}
-						onToggle={() => {
-							docTop += expanded ? -12.125 : 20.25;
-							setExpanded(!expanded);
-						}}
-					>
-						<div>Retained output</div>
-					</ActivityDisclosure>
+					{individual ? (
+						<InlineActivityCard
+							activity={activity}
+							session={session}
+							state={session.snapshot()}
+							locale="en"
+							disabled={false}
+						/>
+					) : (
+						<ActivityDisclosure
+							title="Read file"
+							count={1}
+							expanded={expanded}
+							onToggle={() => {
+								docTop += expanded ? -12.125 : 20.25;
+								setExpanded(!expanded);
+							}}
+						>
+							<div>Retained output</div>
+						</ActivityDisclosure>
+					)}
 				</div>
 			</ThemeProvider>
 		);
 	}
 	await act(async () => root.render(<Disclosure />));
-	const header = host.querySelector<HTMLButtonElement>(".activity-disclosure-toggle");
+	const header = host.querySelector<HTMLButtonElement>(
+		individual ? ".inline-tool-result-toggle" : ".activity-disclosure-toggle",
+	);
 	assert.ok(header);
+	const moveIndividual = () => {
+		docTop += header.getAttribute("aria-expanded") === "true" ? -12.125 : 20.25;
+	};
+	if (individual) header.addEventListener("click", moveIndividual);
 	Object.defineProperty(host, "offsetHeight", { value: 500 });
 	vi.spyOn(host, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, 1000, 1000));
 	vi.spyOn(header, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, (docTop - offset) * 2, 100, 40));
@@ -121,6 +162,8 @@ async function mount({ reduced = false, near = false, previous = true } = {}) {
 		unbind();
 		controller.dispose();
 		await act(async () => root.unmount());
+		header.removeEventListener("click", moveIndividual);
+		session.dispose();
 		host.remove();
 	});
 	return {
@@ -166,27 +209,28 @@ async function mount({ reduced = false, near = false, previous = true } = {}) {
 	};
 }
 test("real disclosure preserves fractional zoom-adjusted header across click, async resize and collapse, including reduced motion", async () => {
-	for (const reduced of [false, true]) {
-		const view = await mount({ reduced });
-		await view.click();
-		assert.equal(view.header.getAttribute("aria-expanded"), "true");
-		await view.resize();
-		assert.equal(view.offset, 120.25);
-		await view.frame(16);
-		assert.equal(view.moves, 1, "frame must not double the ResizeObserver compensation");
-		view.grow(7.125);
-		await view.frame(220);
-		assert.equal(view.offset, 127.375, "reduced motion still retains late passive stability");
-		assert.equal(document.activeElement, view.header);
-		await view.frame(350);
-		assert.equal(view.controller.holdingHeader, false);
-		await view.click();
-		assert.equal(view.header.getAttribute("aria-expanded"), "false");
-		await view.resize();
-		assert.equal(view.offset, 115.25);
-		view.unbind();
-		assert.equal(view.pending, 0);
-	}
+	for (const individual of [false, true])
+		for (const reduced of [false, true]) {
+			const view = await mount({ reduced, individual });
+			await view.click();
+			assert.equal(view.header.getAttribute("aria-expanded"), "true");
+			await view.resize();
+			assert.equal(view.offset, 120.25);
+			await view.frame(16);
+			assert.equal(view.moves, 1, "frame must not double the ResizeObserver compensation");
+			view.grow(7.125);
+			await view.frame(220);
+			assert.equal(view.offset, 127.375, "reduced motion still retains late passive stability");
+			assert.equal(document.activeElement, view.header);
+			await view.frame(350);
+			assert.equal(view.controller.holdingHeader, false);
+			await view.click();
+			assert.equal(view.header.getAttribute("aria-expanded"), "false");
+			await view.resize();
+			assert.equal(view.offset, 115.25);
+			view.unbind();
+			assert.equal(view.pending, 0);
+		}
 });
 test("real disclosure releases ownership for explicit input, selection, removal and scope cleanup", async () => {
 	for (const kind of [

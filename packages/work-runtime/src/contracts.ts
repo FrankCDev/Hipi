@@ -33,12 +33,17 @@ import {
 	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
-import { type FilePresentation, parseFilePresentation } from "./activities/file-presentation.ts";
+import {
+	type FilePresentation,
+	fileSummaryMatchesActivity,
+	parseFilePresentation,
+	parseFileSummary,
+} from "./activities/file-presentation.ts";
 import { type ConversationExecution, parseExecution } from "./execution/contracts.ts";
 import { type MessagePublicBlocks, parseMessagePublicBlocks } from "./messages/public-blocks.ts";
 import { parseRunIdentifier, parseRunResults, type RunResults } from "./runs/contracts.ts";
 
-export type { FilePresentation } from "./activities/file-presentation.ts";
+export type { FilePresentation, FileSummary } from "./activities/file-presentation.ts";
 export {
 	type MessagePublicBlock,
 	type MessagePublicBlocks,
@@ -155,7 +160,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -1402,6 +1407,7 @@ function parseToolActivity(value: unknown): ToolActivity {
 		"approval",
 		"effect",
 		"artifact",
+		"fileSummary",
 		"textAvailable",
 		"outputTruncated",
 	]);
@@ -1513,6 +1519,15 @@ function parseToolActivity(value: unknown): ToolActivity {
 			status: result.effect.status,
 			...(artifact.expectedRevision === undefined ? {} : { expectedRevision: digest(artifact.expectedRevision) }),
 		};
+	}
+	if (p.fileSummary !== undefined) {
+		try {
+			const summary = parseFileSummary(p.fileSummary);
+			if (!fileSummaryMatchesActivity(summary, result)) throw new AppError("INVALID_REQUEST");
+			result.fileSummary = summary;
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
 	}
 	return result;
 }
