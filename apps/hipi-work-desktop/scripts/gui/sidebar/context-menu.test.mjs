@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { assertContextContinuity, assertContextMenuClosed, assertContextMenuOpen } from "./context-menu.mjs";
+import {
+	assertContextContinuity,
+	assertContextMenuClosed,
+	assertContextMenuOpen,
+	contextHoverReady,
+	contextMenuState,
+	contextRowSurfaceSettled,
+} from "./context-menu.mjs";
 
 // These synthetic observations test only the oracle, never native browser behavior.
 const baseline = {
@@ -36,6 +43,7 @@ const opened = (entry = "context") => ({
 	menuWidth: 320,
 	previewPadding: ["8px", "8px", "8px", "8px"],
 	rowBackground: expected.hoverSurface,
+	rowAnimations: [],
 	sourceHovered: false,
 	railVisible: true,
 	menuSlot: `${entry === "context" ? "context" : "dropdown"}-menu-content`,
@@ -51,6 +59,79 @@ const opened = (entry = "context") => ({
 	labels: [...expected.labels],
 	titles: [expected.title],
 	created: [expected.created],
+});
+
+test("surface observation flushes the genuine row style and reads its animations without altering them", () => {
+	const reads = [];
+	const animation = Object.freeze({ pending: true, playState: "running" });
+	const row = {
+		dataset: {},
+		querySelector: () => null,
+		matches: (selector) => selector === ":hover",
+		getAnimations() {
+			reads.push("animations");
+			return [animation];
+		},
+	};
+	const source = { isConnected: true, closest: () => row };
+	const document = {
+		querySelector: () => null,
+		querySelectorAll: (selector) => (selector === ".sidebar-preview-row" ? [row] : []),
+		defaultView: {
+			location: { href: baseline.route },
+			getComputedStyle(node) {
+				assert.equal(node, row, "Sample the retained source's row, never a clone");
+				reads.push("style");
+				return { backgroundColor: expected.hoverSurface };
+			},
+		},
+	};
+	const retained = { source, messages: [], rows: [row], triggers: [] };
+	const value = contextMenuState(document, retained);
+	assert.deepEqual(reads, ["style", "animations"]);
+	assert.equal(value.rowBackground, expected.hoverSurface);
+	assert.deepEqual(value.rowAnimations, [animation]);
+	assert.equal(contextRowSurfaceSettled(value), false);
+	row.getAnimations = undefined;
+	assert.throws(() => contextMenuState(document, retained), /requires Element.getAnimations/);
+});
+
+test("hover sampling waits for actual animation settlement, not repeated matching colors", () => {
+	const hovered = {
+		...opened(),
+		sourceHovered: true,
+		menuCount: 0,
+		contextOwners: 0,
+		ellipsisOwners: 0,
+	};
+	assert.equal(contextHoverReady(hovered), true);
+	for (const rowAnimations of [
+		undefined,
+		[{ pending: true, playState: "running" }],
+		[{ pending: false, playState: "running" }],
+		[{ pending: false, playState: "paused" }],
+		[{ pending: true, playState: "finished" }],
+		[{ pending: true, playState: "idle" }],
+		[{ playState: "finished" }],
+	]) {
+		// The sampled color already equals the expected color; it must still be rejected.
+		const value = { ...hovered, rowAnimations };
+		assert.equal(contextHoverReady(value), false);
+		assert.equal(contextHoverReady(value), false);
+		assert.equal(contextRowSurfaceSettled(value), false);
+	}
+	for (const playState of ["finished", "idle"])
+		assert.equal(contextHoverReady({ ...hovered, rowAnimations: [{ pending: false, playState }] }), true);
+	for (const [field, value] of [
+		["sourceConnected", false],
+		["sourceHovered", false],
+		["railVisible", false],
+		["menuCount", 1],
+		["contextOwners", 1],
+		["ellipsisOwners", 1],
+		["rowBackground", ""],
+	])
+		assert.equal(contextHoverReady({ ...hovered, [field]: value }), false, field);
 });
 
 test("native menu oracle accepts distinct context and ellipsis observations", () => {
@@ -81,6 +162,9 @@ test("open oracle rejects stale menus, duplicate owners, hover leakage and wrong
 		["menuWidth", 160],
 		["previewPadding", ["5px", "8px", "5px", "8px"]],
 		["rowBackground", "transparent"],
+		["rowBackground", "oklab(0.928879 -0.0000321567 -0.000340641 / 0.162903)"],
+		["rowAnimations", [{ pending: false, playState: "running" }]],
+		["rowAnimations", undefined],
 		["sourceHovered", true],
 		["railVisible", false],
 		["menuSlot", "dropdown-menu-content"],

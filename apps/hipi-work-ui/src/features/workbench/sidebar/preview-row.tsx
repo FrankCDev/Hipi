@@ -426,6 +426,11 @@ export function SidebarPreviewRow({
 					</ActionMenuContextTrigger>
 				</PopoverAnchor>
 				<PopoverContent
+					onEscapeKeyDown={(event) => {
+						// Radix handles Escape at document capture, before the inline editor.
+						if (event.target instanceof Element && event.target.closest("[data-project-inline-rename]"))
+							event.preventDefault();
+					}}
 					onContextMenu={(event) => event.stopPropagation()}
 					ref={card}
 					className="conversation-preview-card"

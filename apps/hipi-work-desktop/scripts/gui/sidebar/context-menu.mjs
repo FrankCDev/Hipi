@@ -15,6 +15,14 @@ export function contextMenuState(document, retained) {
 	const messages = all("[data-message-id]");
 	const rows = all(".sidebar-preview-row");
 	const triggers = all(".conversation-actions-trigger");
+	// Reading computed style flushes the hover style before inspecting its CSS transitions.
+	const rowBackground = sourceRow && document.defaultView.getComputedStyle(sourceRow).backgroundColor;
+	if (sourceRow && typeof sourceRow.getAnimations !== "function")
+		throw new Error("Context surface probe requires Element.getAnimations");
+	const rowAnimations = sourceRow?.getAnimations().map((animation) => ({
+		pending: animation.pending,
+		playState: animation.playState,
+	}));
 	return {
 		route: document.defaultView.location.href,
 		selected: all('.conversation-link[aria-current="page"]').map((node) => ({
@@ -41,7 +49,8 @@ export function contextMenuState(document, retained) {
 		previewPadding: previewStyle
 			? [previewStyle.paddingTop, previewStyle.paddingRight, previewStyle.paddingBottom, previewStyle.paddingLeft]
 			: [],
-		rowBackground: sourceRow && document.defaultView.getComputedStyle(sourceRow).backgroundColor,
+		rowBackground,
+		rowAnimations,
 		sourceHovered: sourceRow?.matches(":hover") === true,
 		railVisible:
 			!!rail?.getClientRects().length &&
@@ -65,6 +74,30 @@ export function contextMenuState(document, retained) {
 		previousMenuConnected: retained.previousMenu?.isConnected === true,
 		freshMenu: !!menu && menu !== retained.previousMenu,
 	};
+}
+
+/** A matching color alone is not settlement: delayed, pending and paused transitions must fail. */
+export function contextRowSurfaceSettled(value) {
+	return (
+		typeof value.rowBackground === "string" &&
+		value.rowBackground.length > 0 &&
+		Array.isArray(value.rowAnimations) &&
+		value.rowAnimations.every(
+			(animation) => animation.pending === false && ["finished", "idle"].includes(animation.playState),
+		)
+	);
+}
+
+export function contextHoverReady(value) {
+	return (
+		value.sourceConnected === true &&
+		value.sourceHovered === true &&
+		value.railVisible === true &&
+		value.menuCount === 0 &&
+		value.contextOwners === 0 &&
+		value.ellipsisOwners === 0 &&
+		contextRowSurfaceSettled(value)
+	);
 }
 
 export function assertContextContinuity(value, baseline) {
@@ -95,6 +128,7 @@ export function assertContextMenuOpen(value, baseline, expected, entry) {
 	);
 	assert.deepEqual(value.previewPadding, ["8px", "8px", "8px", "8px"]);
 	assert.equal(value.sourceHovered, false, "Measure persistent menu state after leaving the row");
+	assert.equal(contextRowSurfaceSettled(value), true, "Menu-open row surface must finish transitioning");
 	assert.equal(value.rowBackground, expected.hoverSurface, "Menu-open row must retain the hover surface");
 	assert.equal(value.railVisible, true, "Menu-open row must retain its action rail");
 	assert.equal(value.menuSlot, `${entry === "context" ? "context" : "dropdown"}-menu-content`);
@@ -189,6 +223,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 					: [location === "pinned" ? "取消固定会话" : "固定会话", "重命名会话", "归档会话"],
 			};
 			let contextLabels;
+			let hoverSample;
 			for (const entry of ["context", "ellipsis"]) {
 				if (entry === "context") {
 					const sourcePoint = () =>
@@ -207,10 +242,13 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 						"new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))",
 					);
 					const settledPoint = await until(sourcePoint, "context source after hover actions reveal");
-					expected.hoverSurface = await evaluate(
-						cdp,
-						"getComputedStyle(window.__sidebarContext.source.closest('.sidebar-preview-row')).backgroundColor",
-					);
+					// Two frames reveal layout, but do not finish the row's 120ms background transition.
+					hoverSample = await until(async () => {
+						const value = await read();
+						assertContextContinuity(value, baseline);
+						return contextHoverReady(value) && value;
+					}, "native hovered source surface finishes transitioning");
+					expected.hoverSurface = hoverSample.rowBackground;
 					for (const type of ["mousePressed", "mouseReleased"])
 						await cdp.request("Input.dispatchMouseEvent", { type, ...settledPoint, button: "right", clickCount: 1 });
 				} else await click(cdp, trigger);
@@ -228,10 +266,15 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 				await hover(cdp, '[role="menu"]');
 				await until(async () => {
 					const value = await read();
-					return !value.sourceHovered && value.railVisible && Math.abs(value.menuWidth - expected.menuWidth) <= 1;
+					return (
+						!value.sourceHovered &&
+						value.railVisible &&
+						contextRowSurfaceSettled(value) &&
+						Math.abs(value.menuWidth - expected.menuWidth) <= 1
+					);
 				}, `${entry} menu geometry and retained rail settle`);
 				const opened = await read();
-				const observation = { location, scope, entry, opened };
+				const observation = { location, scope, entry, hoverSample, opened };
 				evidence.push(observation);
 				assertContextMenuOpen(opened, baseline, expected, entry);
 				if (entry === "context") contextLabels = opened.labels;

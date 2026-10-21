@@ -2194,3 +2194,32 @@ test("search uses one configurable unbound desktop command and returns focus to 
 	assert.deepEqual(opener.focus.mock.calls, [[{ preventScroll: true }]]);
 	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 });
+
+test("unadmitted project pin notice survives branch changes without replacing catalog recovery", () => {
+	const initial = drive();
+	const notice = initial.tree.onProjectPinNotice;
+	assert.ok(notice);
+	notice({ projectId: "other", projectName: "Other project", reason: "rename_unconfirmed" });
+	initial.tree.onToggle("other");
+	const current = drive();
+	const alert = elements(current.content, "section").find(
+		(node) => node.props.role === "alert" && JSON.stringify(node.props.children).includes("pin change was not applied"),
+	);
+	assert.ok(alert);
+	assert.equal(current.tree.catalog, initial.tree.catalog);
+	assert.deepEqual(current.tree.catalog.getSnapshot().pending, catalogCommand);
+	notice({ projectId: "current", projectName: "Current project", reason: null });
+	assert.ok(JSON.stringify(drive().content).includes("pin change was not applied"));
+	notice({ projectId: "other", projectName: "Other project", reason: null });
+	assert.equal(JSON.stringify(drive().content).includes("pin change was not applied"), false);
+	notice({ projectId: "other", projectName: "Other project", reason: "pin_not_applied" });
+	const shown = elements(drive().content, "section").find(
+		(node) => node.props.role === "alert" && JSON.stringify(node.props.children).includes("pin change was not applied"),
+	);
+	assert.ok(shown);
+	press(element(shown, Button));
+	assert.equal(JSON.stringify(drive().content).includes("pin change was not applied"), false);
+	for (const cell of hooks.cells) cell?.cleanup?.();
+	notice({ projectId: "other", projectName: "Other project", reason: "rename_unconfirmed" });
+	assert.equal(JSON.stringify(drive().content).includes("pin change was not applied"), false);
+});

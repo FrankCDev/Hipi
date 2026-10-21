@@ -188,8 +188,10 @@ test("project disclosure and navigation have distinct names and only disclosure 
 	assert.match(open, /class="sidebar-title-content">My project 0<\/span>/);
 	assert.match(disclosure, /收起项目/);
 	assert.match(open, /打开项目/);
-	assert.doesNotMatch(disclosure, /project-icon|project-name|project-page-count/);
-	assert.doesNotMatch(open, /aria-expanded|aria-controls|project-chevron/);
+	assert.match(disclosure, /class="project-icon" aria-hidden="true"/);
+	assert.match(disclosure, /class="project-chevron" data-expanded="true" aria-hidden="true"/);
+	assert.doesNotMatch(disclosure, /project-name|project-page-count/);
+	assert.doesNotMatch(open, /aria-expanded|aria-controls|project-chevron|project-icon/);
 	const region = disclosure.match(/aria-controls="([^"]+)"/)?.[1];
 	assert.ok(region);
 	assert.ok(html.includes(`<section id="${region}" aria-labelledby="${openLabels?.[1]}"`));

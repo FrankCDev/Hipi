@@ -497,7 +497,7 @@ test.each([11, 16])("terminal %i-row remainder avoids an extra single-row intera
 		await ui.more();
 	}
 	assert.equal(fixture.virtualizer?.options.count, length);
-	assert.equal(ui.rows.size, Math.min(length, 15));
+	assert.equal(ui.rows.size, Math.min(length, 17));
 	fixture.scrollOffset = 144;
 	ui.render();
 	assert.ok(ui.rows.has(scopeKey({ workspaceId: "physical", conversationId: String(length - 1) })));
@@ -652,12 +652,12 @@ test("ordinary focus permits 600 loaded rows, bounds mounted nodes and retains t
 	assert.equal(fixture.query.data?.pages.flatMap((page) => page.items).length, 600);
 	assert.equal(fixture.query.data?.pages[0]?.items[0]?.conversation.conversationId, "0");
 	assert.equal(fixture.virtualizer?.options.count, 600);
-	fixture.scrollOffset = 550 * 36;
+	fixture.scrollOffset = 550 * 31;
 	ui.render();
 	assert.equal(ui.rows.get(scopeKey(focused)), original.row);
 	assert.equal(documentStub.activeElement, original.link);
 	assert.equal(original.link.isConnected, true);
-	assert.equal(ui.rows.size, 22, "The first focused row also retains its next keyboard neighbor");
+	assert.equal(ui.rows.size, 24, "The first focused row also retains its next keyboard neighbor");
 	assert.ok(ui.rows.has(scopeKey({ workspaceId: "physical", conversationId: "1" })));
 	assert.deepEqual(call.mock.calls.at(-1)?.[1].retainedScopes, [focused]);
 	assert.equal(fixture.query.refetch.mock.calls.length, 0);
@@ -811,8 +811,8 @@ test("scrolling 600 revealed rows keeps only viewport, overscan and exact menu/d
 	);
 	for (let index = 0; index < 118; index++) await ui.more();
 	assert.equal(fixture.virtualizer?.options.count, 600);
-	assert.equal(fixture.virtualizer?.getTotalSize(), 21600);
-	assert.equal(ui.rows.size, 15);
+	assert.equal(fixture.virtualizer?.getTotalSize(), 18599);
+	assert.equal(ui.rows.size, 17);
 	const menuScope = { workspaceId: "physical", conversationId: "0" };
 	const dialogScope = { workspaceId: "physical", conversationId: "1" };
 	const menuRow = ui.rows.get(scopeKey(menuScope));
@@ -820,18 +820,18 @@ test("scrolling 600 revealed rows keeps only viewport, overscan and exact menu/d
 	assert.ok(menuRow && dialogRow);
 	ui.hold("row:menu", true, menuRow.children[0]);
 	ui.hold("row:dialog", true, dialogRow.children[0]);
-	fixture.scrollOffset = 500 * 36;
+	fixture.scrollOffset = 500 * 31;
 	ui.render();
-	assert.equal(ui.rows.size, 22);
+	assert.equal(ui.rows.size, 24);
 	assert.equal(ui.rows.get(scopeKey(menuScope)), menuRow);
 	assert.equal(ui.rows.get(scopeKey(dialogScope)), dialogRow);
-	assert.equal(fixture.virtualizer?.getTotalSize(), 21600, "Protected nodes cannot alter the measured list extent");
+	assert.equal(fixture.virtualizer?.getTotalSize(), 18599, "Protected nodes cannot alter the measured list extent");
 	ui.hold("row:menu", false);
-	assert.equal(ui.rows.size, 21);
+	assert.equal(ui.rows.size, 23);
 	assert.equal(ui.rows.has(scopeKey(menuScope)), false);
 	assert.equal(ui.rows.get(scopeKey(dialogScope)), dialogRow);
 	ui.hold("row:dialog", false);
-	assert.equal(ui.rows.size, 20);
+	assert.equal(ui.rows.size, 22);
 	assert.equal(ui.rows.has(scopeKey(dialogScope)), false);
 	assert.ok(fixture.client);
 	assert.equal(
@@ -845,29 +845,41 @@ test("virtual rows expose canonical measurement keys and measured extent without
 	const ui = harness();
 	ui.publish(snapshot([page()]));
 	assert.ok(fixture.virtualizer);
+	assert.equal(fixture.virtualizer.options.estimateSize(0), 30);
+	assert.equal(fixture.virtualizer.options.gap, 1);
 	assert.equal(
 		fixture.virtualizer.getTotalSize(),
-		360,
+		309,
 		"Unrevealed metadata does not become a global scrollbar estimate",
 	);
 	const initialList = only(ui.output, "ul");
-	assert.equal(initialList.props.style?.height, 392);
+	assert.equal(initialList.props.style?.height, 341);
 	for (const row of elements(initialList.props.children, "li").filter(
 		(item) => item.props.className === "conversation-nav-item",
 	)) {
 		const index = Number(Reflect.get(row.props, "data-index"));
 		assert.equal(row.key, scopeKey({ workspaceId: "physical", conversationId: String(index) }));
 		assert.equal(row.props.ref, fixture.virtualizer.measureElement);
-		assert.deepEqual(row.props.style, { position: "absolute", top: index * 36, width: "100%" });
+		assert.deepEqual(row.props.style, { position: "absolute", top: index * 31, width: "100%" });
 	}
 	fixture.virtualizer.resizeItem(0, 48);
 	ui.render();
-	assert.equal(fixture.virtualizer.getTotalSize(), 372);
-	assert.equal(only(ui.output, "ul").props.style?.height, 404);
+	assert.equal(fixture.virtualizer.getTotalSize(), 327);
+	assert.equal(only(ui.output, "ul").props.style?.height, 359);
 	await ui.more();
 	assert.equal(fixture.virtualizer.options.count, 15);
-	assert.equal(fixture.virtualizer.getTotalSize(), 552);
-	assert.equal(only(ui.output, "ul").props.style?.height, 584);
+	assert.equal(fixture.virtualizer.getTotalSize(), 482);
+	assert.equal(only(ui.output, "ul").props.style?.height, 514);
+	fixture.virtualizer.resizeItem(1, 62);
+	ui.render();
+	assert.equal(fixture.virtualizer.getTotalSize(), 514, "Larger configured font rows remain measured, not fixed-pitch");
+	const measured = fixture.virtualizer.getVirtualItems();
+	for (let index = 1; index < measured.length; index++) {
+		const previous = measured[index - 1];
+		const current = measured[index];
+		assert.ok(previous && current);
+		assert.equal(current.start - previous.end, 1, "Each measured pair receives exactly one gap");
+	}
 });
 
 function pausedWindow(previous: RecentWindow, reason: "budget" | "publication" = "budget"): RecentWindow {

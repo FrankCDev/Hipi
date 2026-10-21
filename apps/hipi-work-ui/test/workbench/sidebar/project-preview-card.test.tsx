@@ -3,6 +3,9 @@ import type { ProjectFolder } from "@hipi/work-runtime/files";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
+import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
+import { LocalState } from "../../../src/features/workbench/local-state.ts";
+import type { ProjectActionOwner } from "../../../src/features/workbench/projects/action-owner.ts";
 import { ProjectPreviewCard } from "../../../src/features/workbench/sidebar/project-preview-card.tsx";
 
 const state = vi.hoisted(() => ({
@@ -58,6 +61,54 @@ beforeEach(() => {
 		root: { workspaceId: "project", rootId: "private-root", writable: false },
 	};
 	vi.clearAllMocks();
+});
+
+test("only a ready logical hover card exposes title editing and authoritative pin actions; menus remain static", () => {
+	const session = new CatalogSession({ call: vi.fn(), observe: vi.fn() }, new LocalState());
+	const project = { projectId: "logical", name: "Logical", revision: 4, homeWorkspaceId: "project" };
+	const owner: ProjectActionOwner = {
+		state: session.getSnapshot(),
+		projectId: "logical",
+		disabled: false,
+		canAct: () => true,
+		isBusy: () => false,
+		projectPinEnabled: true,
+		pinned: false,
+		pinDisabled: false,
+		inline: null,
+		inlineFailed: false,
+		renameProject: () => null,
+		togglePin: vi.fn(),
+		beginInlineRename: vi.fn(),
+		changeInlineName: vi.fn(),
+		commitInlineRename: vi.fn(),
+		cancelInlineRename: vi.fn(),
+	};
+	const html = renderToStaticMarkup(ProjectPreviewCard({ project, owner }));
+	assert.match(html, /Rename project/);
+	assert.match(html, /Pin project/);
+	owner.pinned = true;
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project, owner })), /Unpin project/);
+	owner.inline = { target: project, draft: "Unsaved", editing: true, request: null };
+	assert.match(renderToStaticMarkup(ProjectPreviewCard({ project, owner })), /data-project-inline-rename/);
+	assert.doesNotMatch(
+		renderToStaticMarkup(ProjectPreviewCard({ project, owner, logicalReady: false })),
+		/<input|Rename project|Pin project|Unpin project/,
+	);
+	assert.doesNotMatch(
+		renderToStaticMarkup(ProjectPreviewCard({ workspace: { workspaceId: "project", name: "Legacy" }, owner })),
+		/<input|Rename project|Pin project|Unpin project/,
+	);
+	assert.doesNotMatch(
+		renderToStaticMarkup(ProjectPreviewCard({ project, owner, mode: "menu", onManageFolder: vi.fn() })),
+		/<input|<button/,
+	);
+	owner.projectId = "other";
+	assert.doesNotMatch(
+		renderToStaticMarkup(ProjectPreviewCard({ project, owner })),
+		/<input|Rename project|Pin project|Unpin project/,
+	);
+	session.dispose();
 });
 
 function card(onManageFolder?: () => void): ReactNode {

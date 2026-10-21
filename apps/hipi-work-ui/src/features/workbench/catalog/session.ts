@@ -541,7 +541,55 @@ export class CatalogSession {
 			});
 		});
 	}
-	execute = (command: CatalogCommand, options?: { preparedDraft?: string }) => {
+	/** One explicit pin activation may follow its already-running rename, only within this live session. */
+	continueProjectPin = async (
+		rename: Extract<ProjectCatalogCommand, { method: "renameProject" }>,
+		pin: Extract<ProjectCatalogCommand, { method: "setProjectPinned" }>,
+		renamed: Promise<void>,
+	): Promise<"rename_unconfirmed" | "pin_not_applied" | "admitted" | "disposed"> => {
+		const lifecycle = this.lifecycle;
+		const wasDisposed = this.disposed;
+		const capturedRename = structuredClone(rename);
+		const capturedPin = structuredClone(pin);
+		try {
+			await renamed;
+		} catch {
+			return wasDisposed || this.disposed || lifecycle !== this.lifecycle ? "disposed" : "rename_unconfirmed";
+		}
+		if (wasDisposed || this.disposed || lifecycle !== this.lifecycle) return "disposed";
+		const completed = this.state.projectResult;
+		if (
+			this.state.pending ||
+			this.state.failed ||
+			this.state.initialSend ||
+			this.state.incompatible ||
+			this.state.busy ||
+			!completed ||
+			completed.method !== "renameProject" ||
+			!matchesProjectCommand(capturedRename, completed) ||
+			capturedPin.params.projectId !== capturedRename.params.projectId
+		)
+			return "rename_unconfirmed";
+		let admitted = false;
+		await this.executeCommand(capturedPin, undefined, {
+			confirmedRename: completed,
+			onAdmitted: () => {
+				admitted = true;
+			},
+		});
+		if (this.disposed || lifecycle !== this.lifecycle) return "disposed";
+		return admitted ? "admitted" : "pin_not_applied";
+	};
+	execute = (command: CatalogCommand, options?: { preparedDraft?: string }): Promise<void> =>
+		this.executeCommand(command, options);
+	private executeCommand(
+		command: CatalogCommand,
+		options?: { preparedDraft?: string },
+		pinContinuation?: {
+			confirmedRename: Extract<ProjectCompletedCommand, { method: "renameProject" }>;
+			onAdmitted: () => void;
+		},
+	): Promise<void> {
 		if (this.state.pending || this.state.initialSend || this.state.incompatible || this.state.busy)
 			return Promise.resolve();
 		const captured = structuredClone(command);
@@ -553,11 +601,37 @@ export class CatalogSession {
 			if (isProjectCatalogCommand(captured)) {
 				if (preparedDraft !== undefined) throw new Error("INVALID_PREPARED_TASK");
 				if (captured.method === "setProjectPinned") {
+					if (pinContinuation) {
+						// Reserve the session run across fresh reads and admission; no other command may slip between them.
+						const catalog = await this.client.call("getProjectCatalogState", {}, signal);
+						signal.throwIfAborted();
+						if (catalog.state !== "ready") throw new Error("PROJECT_DESTINATION_UNVERIFIED");
+						const project = await this.client.call("getProject", { projectId: captured.params.projectId }, signal);
+						signal.throwIfAborted();
+						if (
+							project.projectId !== captured.params.projectId ||
+							project.projectId !== pinContinuation.confirmedRename.result.projectId ||
+							project.homeWorkspaceId !== pinContinuation.confirmedRename.result.homeWorkspaceId
+						)
+							throw new Error("SCOPE_MISMATCH");
+						const presentation = await this.client.call(
+							"getProjectPresentation",
+							{ projectId: captured.params.projectId },
+							signal,
+						);
+						signal.throwIfAborted();
+						if (
+							presentation.projectId !== captured.params.projectId ||
+							presentation.revision !== captured.params.expectedPresentationRevision
+						)
+							throw new Error("REVISION_MISMATCH");
+					}
 					initiated = true;
 					this.projectPinEvent({ phase: "initiated", input: Object.freeze({ ...captured.params }) });
 				}
 				const pending = await admitProjectCommand(this.local, captured, signal);
 				admitted = true;
+				pinContinuation?.onAdmitted();
 				if (captured.method === "setProjectPinned")
 					this.projectPinEvent({ phase: "admitted", input: Object.freeze({ ...captured.params }) });
 				this.publish({
@@ -585,7 +659,7 @@ export class CatalogSession {
 			if (lifecycle === this.lifecycle && initiated && !admitted && captured.method === "setProjectPinned")
 				this.projectPinEvent({ phase: "retired", input: Object.freeze({ ...captured.params }) });
 		});
-	};
+	}
 	/** Explicit user retry only, after an exact lookup. Never a new identity or edited payload. */
 	retry = () => {
 		if (this.state.initialSend) {

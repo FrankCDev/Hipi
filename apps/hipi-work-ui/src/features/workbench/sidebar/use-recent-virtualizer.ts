@@ -34,8 +34,9 @@ export function useRecentVirtualizer(
 		getScrollElement: viewport,
 		getItemKey,
 		rangeExtractor,
-		// Current row CSS has an explicit 36px height; every mounted row is still measured.
-		estimateSize: () => 36,
+		// Match layout.css's base box and gap; mounted rows may grow with configured fonts.
+		estimateSize: () => 30,
+		gap: 1,
 		overscan: 5,
 		scrollMargin: margin,
 		paddingStart,

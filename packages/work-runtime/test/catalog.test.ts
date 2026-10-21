@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
+import { fork } from "node:child_process";
+import { once } from "node:events";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +12,109 @@ import { openRuntime as openNodeRuntime } from "../src/node.ts";
 import { PROJECT_SCHEMA } from "../src/projects/schema.ts";
 import { SIDEBAR_PIN_SCHEMA } from "../src/sidebar-pins/schema.ts";
 import { openTestRuntime } from "../src/testing.ts";
+
+async function interruptCatalogTransaction(directory: string, signal: AbortSignal): Promise<void> {
+	const child = fork(new URL("./catalog/fixtures/hot-journal-child.ts", import.meta.url), [directory], {
+		stdio: ["ignore", "ignore", "inherit", "ipc"],
+	});
+	try {
+		const readinessSignal = AbortSignal.any([signal, AbortSignal.timeout(10000)]);
+		const [ready] = await Promise.race([
+			once(child, "message", { signal: readinessSignal }),
+			once(child, "exit", { signal: readinessSignal }).then(([code, signal]) => {
+				throw new Error(`Catalog writer exited before spill: ${code}/${signal}`);
+			}),
+		]);
+		assert.deepEqual(ready, { phase: "spilled", journalMode: "delete" });
+		await assert.rejects(openTestRuntime(directory), { code: "WORKSPACE_BUSY" });
+	} finally {
+		if (child.exitCode === null && child.signalCode === null) {
+			// Cleanup must finish even when the readiness deadline or test signal already aborted.
+			const exited = once(child, "exit");
+			assert.equal(child.kill("SIGKILL"), true);
+			await exited;
+		}
+	}
+	const journal = await readFile(join(directory, "catalog.sqlite-journal"));
+	assert.ok(journal.length > 512);
+	assert.equal(journal.subarray(0, 8).toString("hex"), "d9d505f920a163d7", "a real hot journal must survive");
+}
+
+for (const state of ["healthy", "future", "archive-version", "recovery-state"] as const) {
+	test(
+		`owner-held catalog preflight rolls back an interrupted transaction and preserves ${state} fences`,
+		{ timeout: 15000 },
+		async (t) => {
+			const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-journal-"));
+			const runtime = await openTestRuntime(directory);
+			try {
+				await runtime.call("createWorkspace", { workspaceId: "committed", name: "Committed workspace" });
+				const identity = await runtime.call("handshake", {});
+				await runtime.close();
+				const catalogPath = join(directory, "catalog.sqlite");
+				const database = new DatabaseSync(catalogPath);
+				try {
+					if (state === "future") database.exec("UPDATE identity SET version=999");
+					if (state === "archive-version") database.exec("UPDATE identity SET version=4");
+					if (state === "recovery-state") database.exec("CREATE TABLE recovery_state (marker TEXT)");
+				} finally {
+					database.close();
+				}
+				const committedCatalog = await readFile(catalogPath);
+				const workspacePath = join(directory, "committed", "workspace.sqlite");
+				const committedWorkspace = await readFile(workspacePath);
+				await interruptCatalogTransaction(directory, t.signal);
+				if (state === "healthy") {
+					const reopened = await openTestRuntime(directory);
+					try {
+						assert.deepEqual(await reopened.call("handshake", {}), identity);
+						assert.deepEqual(await reopened.call("listWorkspaces", {}), {
+							items: [{ workspaceId: "committed", name: "Committed workspace" }],
+							nextCursor: null,
+						});
+					} finally {
+						await reopened.close();
+					}
+				} else {
+					await assert.rejects(openTestRuntime(directory), { code: "STORE_MISMATCH" });
+					// Physical rollback restores committed bytes; rejection must not migrate or reset them.
+					assert.deepEqual(await readFile(catalogPath), committedCatalog);
+				}
+				const inspected = new DatabaseSync(catalogPath, { readOnly: true });
+				try {
+					assert.equal(inspected.prepare("SELECT store_id FROM identity").get()?.store_id, identity.storeId);
+					assert.equal(inspected.prepare("SELECT count(*) AS count FROM workspaces").get()?.count, 1);
+				} finally {
+					inspected.close();
+				}
+				assert.deepEqual(await readFile(workspacePath), committedWorkspace);
+			} finally {
+				await runtime.close();
+				await rm(directory, { recursive: true, force: true });
+			}
+		},
+	);
+}
+
+test("corrupt catalog preflight fails closed without replacing catalog or committed workspace bytes", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-catalog-corrupt-"));
+	const runtime = await openTestRuntime(directory);
+	try {
+		await runtime.call("createWorkspace", { workspaceId: "committed", name: "Committed workspace" });
+		await runtime.close();
+		const catalogPath = join(directory, "catalog.sqlite");
+		const corrupt = Buffer.from("Not a SQLite catalog");
+		await writeFile(catalogPath, corrupt);
+		const workspacePath = join(directory, "committed", "workspace.sqlite");
+		const committedWorkspace = await readFile(workspacePath);
+		await assert.rejects(openTestRuntime(directory), { code: "ERR_SQLITE_ERROR", errcode: 26 });
+		assert.deepEqual(await readFile(catalogPath), corrupt);
+		assert.deepEqual(await readFile(workspacePath), committedWorkspace);
+	} finally {
+		await runtime.close();
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 for (const point of ["after_reserve", "after_directory", "after_storage", "before_ready"] as const) {
 	test(`catalog recovers interrupted creation at ${point} without deleting original data`, async () => {

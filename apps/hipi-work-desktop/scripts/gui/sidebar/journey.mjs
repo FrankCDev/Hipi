@@ -7,6 +7,7 @@ import { assertSidebarHoverTrace, startSidebarHoverTrace } from "../../gui-sideb
 import { exerciseSidebarContextMenus } from "./context-menu.mjs";
 import { defaultRoleEntry } from "./manifest.mjs";
 import { nativeKeyEvents } from "./native-key.mjs";
+import { sidebarStartupDiagnostic } from "./startup-diagnostic.mjs";
 
 const heading = (id) => `[data-sidebar-section="${id}"] .sidebar-section-toggle`;
 const project = (id) => `.workspace-branch[data-workspace-id="${id}"] .project-open`;
@@ -448,14 +449,33 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			`localStorage.setItem(${JSON.stringify(`hipi.work.local.v1.${seed.handshake.storeId}.value.default-chat-workspace`)},${JSON.stringify(JSON.stringify(entry))});location.reload();true`,
 		);
 	}
-	await until(
-		() =>
-			evaluate(
+	try {
+		await until(
+			() =>
+				evaluate(
+					cdp,
+					`document.querySelectorAll('[data-sidebar-section]').length===3 && document.querySelectorAll('.workspace-branch:not(.recent-conversations)').length===2`,
+				),
+			"three sections and two real projects",
+		);
+	} catch (error) {
+		// Observe the failed startup before any repair; never click Retry or mutate runtime state.
+		let diagnostic;
+		try {
+			diagnostic = await evaluate(
 				cdp,
-				`document.querySelectorAll('[data-sidebar-section]').length===3 && document.querySelectorAll('.workspace-branch:not(.recent-conversations)').length===2`,
-			),
-		"three sections and two real projects",
-	);
+				`(${sidebarStartupDiagnostic.toString()})(${JSON.stringify({ workspaceIds: seed.workspaceIds, defaultWorkspaceId: seed.defaultWorkspaceId, handshake: seed.handshake })},window.hipiWorkDesktop,window.localStorage)`,
+			);
+		} catch {
+			diagnostic = { status: "capture_unavailable" };
+		}
+		try {
+			await writeFile(join(directory, "sidebar-startup-diagnostic.json"), `${JSON.stringify(diagnostic, null, 2)}\n`);
+		} catch {
+			// A diagnostic write failure must not replace the original startup failure.
+		}
+		throw error;
+	}
 	const actions = [];
 	const geometry = [];
 	const observeGeometry = async (stage, qualify = true) => {

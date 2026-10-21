@@ -1,12 +1,15 @@
 import type { Project, Workspace } from "@hipi/work-runtime/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { Folder, MessageCircle, Pencil } from "lucide-react";
+import { Folder, MessageCircle, Pencil, Pin, PinOff } from "lucide-react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { PopoverHeader, PopoverTitle } from "../../../components/ui/popover.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
+import type { ProjectActionOwner } from "../projects/action-owner.ts";
 import { projectFolderLabels } from "../projects/folder-labels.ts";
+import { projectLabels } from "../projects/labels.ts";
+import { ProjectEditableTitle } from "../projects/rename.tsx";
 import { useProjectFolder } from "../projects/use-folder.ts";
 import { projectConversationCount } from "./preview-metadata.ts";
 
@@ -17,7 +20,9 @@ export function ProjectPreviewCard({
 	logicalReady = true,
 	onManageFolder,
 	mode = "card",
+	owner,
 }: {
+	owner?: ProjectActionOwner;
 	logicalReady?: boolean;
 	onManageFolder?: () => void;
 	mode?: "card" | "menu";
@@ -28,6 +33,8 @@ export function ProjectPreviewCard({
 	const folders = projectFolderLabels(locale);
 	const workspaceId = project ? project.homeWorkspaceId : workspace.workspaceId;
 	const logical = project !== undefined;
+	const actions =
+		logical && logicalReady && mode === "card" && owner?.projectId === project.projectId ? owner : undefined;
 	const folder = useProjectFolder(workspaceId);
 	const count = useQuery<{ count: number; partial: boolean; state: "building" | "refreshing" | "ready" }>({
 		queryKey: logical
@@ -54,9 +61,28 @@ export function ProjectPreviewCard({
 			<PopoverHeader>
 				<PopoverTitle className="project-preview-title">
 					<Folder size={16} aria-hidden="true" />
-					{project ? project.name : workspace.name}
+					{actions ? (
+						<ProjectEditableTitle name={project?.name ?? ""} owner={actions} />
+					) : project ? (
+						project.name
+					) : (
+						workspace.name
+					)}
+					{actions?.projectPinEnabled && (
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							className="project-preview-pin"
+							disabled={actions.pinDisabled}
+							aria-label={actions.pinned ? projectLabels(locale).unpin : projectLabels(locale).pin}
+							onClick={actions.togglePin}
+						>
+							{actions.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+						</Button>
+					)}
 				</PopoverTitle>
 			</PopoverHeader>
+			{actions?.inlineFailed && <p role="alert">{l.failed}</p>}
 			{(!logical || logicalReady) &&
 				count.data &&
 				!count.isError &&
@@ -100,7 +126,7 @@ export function ProjectPreviewCard({
 					{folders.check}
 				</Button>
 			)}
-			{onManageFolder && (
+			{onManageFolder && mode === "card" && (
 				<Button className="project-preview-edit" variant="ghost" size="sm" onClick={onManageFolder}>
 					<Pencil size={16} aria-hidden="true" />
 					{folders.title}

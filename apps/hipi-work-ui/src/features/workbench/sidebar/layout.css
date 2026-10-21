@@ -1,4 +1,11 @@
 /* Original sidebar construction; layout tokens follow the desktop reference. */
+.sidebar {
+	--sidebar-row-base-height: 30px;
+	--sidebar-row-height: max(var(--sidebar-row-base-height), calc(var(--font-ui-size) * 1.5 + 4px));
+	--sidebar-row-gap: 1px;
+	--sidebar-leading-slot: 24px;
+}
+
 .sidebar .sidebar-brand-row {
 	gap: 4px;
 }
@@ -9,7 +16,7 @@
 
 .pinned-conversations .conversation-link {
 	padding: 0;
-	min-height: 36px;
+	min-height: var(--sidebar-row-height);
 	font: inherit;
 }
 
@@ -35,8 +42,8 @@
 }
 
 .sidebar .nav-section-heading {
-	font-size: calc(var(--font-ui-size) - 1px);
-	font-weight: inherit;
+	font-size: var(--font-ui-size);
+	font-weight: 500;
 	letter-spacing: 0;
 }
 
@@ -65,8 +72,8 @@
 }
 
 .workspace-tree .sidebar-preview-row {
-	height: 36px;
-	min-height: 36px;
+	height: auto;
+	min-height: var(--sidebar-row-height);
 	padding-inline: 8px;
 	gap: 8px;
 	border-radius: 10px;
@@ -83,20 +90,44 @@
 
 .workspace-tree .project-row {
 	gap: 0;
-	padding-inline: 4px 8px;
+	padding-inline: 8px;
 }
 
 .workspace-tree .project-toggle,
 .workspace-tree .project-open {
-	height: 36px;
-	min-height: 36px;
+	height: auto;
+	min-height: var(--sidebar-row-height);
 	font: inherit;
+	line-height: 1.5;
 	color: inherit;
 }
 
 .workspace-tree .project-toggle {
-	flex: 0 0 16px;
+	position: relative;
+	flex: 0 0 var(--sidebar-leading-slot);
+	align-self: stretch;
 	padding: 0;
+}
+
+.workspace-tree .project-toggle :is(.project-icon, .project-chevron) {
+	position: absolute;
+	inset-inline-start: 0;
+	width: 16px;
+	justify-content: center;
+}
+
+.workspace-tree .project-toggle .project-chevron {
+	opacity: 0;
+}
+
+.workspace-tree .project-row:hover .project-chevron,
+.workspace-tree .project-row:focus-within .project-chevron {
+	opacity: 1;
+}
+
+.workspace-tree .project-row:hover .project-toggle .project-icon,
+.workspace-tree .project-row:focus-within .project-toggle .project-icon {
+	opacity: 0;
 }
 
 .workspace-tree .project-open {
@@ -116,14 +147,29 @@
 
 .workspace-tree .conversation-list {
 	display: grid;
+	gap: var(--sidebar-row-gap);
+}
+
+.sidebar .workspace-tree.conversation-list {
+	gap: var(--sidebar-row-gap);
+}
+
+.workspace-tree .conversation-list.recent-virtual-list {
+	/* Absolute rows receive their one gap from the virtualizer, not CSS grid. */
 	gap: 0;
 }
 
-.workspace-tree .project-conversations .conversation-link {
-	min-height: 36px;
-	height: 36px;
-	padding: 0 0 0 36px;
+.workspace-tree .conversation-link {
+	height: auto;
+	min-height: var(--sidebar-row-height);
+	padding-block: 0;
 	font: inherit;
+	line-height: 1.5;
+}
+
+.workspace-tree .project-conversations .conversation-link {
+	padding-inline: calc(var(--sidebar-leading-slot) - 1px) 0;
+	/* The link's transparent 1px border is inside the shared title anchor. */
 }
 
 .workspace-tree .sidebar-row-actions {
@@ -131,7 +177,7 @@
 	align-items: center;
 	flex: 0 0 auto;
 	gap: 0;
-	height: 36px;
+	min-height: var(--sidebar-row-height);
 }
 
 .workspace-tree .conversation-hover-actions {
@@ -139,7 +185,7 @@
 	align-items: center;
 	flex: 0 0 auto;
 	gap: 0;
-	height: 36px;
+	min-height: var(--sidebar-row-height);
 }
 
 .workspace-tree .project-actions-trigger,
@@ -190,7 +236,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	min-height: 36px;
+	min-height: var(--sidebar-row-height);
 	padding-inline: 0;
 }
 
@@ -290,6 +336,7 @@
 }
 
 .project-preview-content {
+	min-width: 0;
 	display: grid;
 	gap: 6px;
 	padding-block: 2px;
@@ -314,6 +361,37 @@
 
 .project-preview-meta svg {
 	flex-shrink: 0;
+}
+
+.project-preview-title > svg,
+.project-preview-pin {
+	flex-shrink: 0;
+}
+
+.project-preview-name,
+.project-preview-name-input {
+	min-width: 0;
+	flex: 1;
+	font: inherit;
+}
+
+.project-preview-name {
+	justify-content: flex-start;
+	height: auto;
+	padding: 2px 4px;
+	text-align: start;
+}
+
+.project-preview-name-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.project-preview-name-input {
+	height: 28px;
+	padding: 2px 4px;
 }
 
 .project-preview-path-label {
@@ -540,6 +618,14 @@
 }
 
 @media (any-pointer: coarse) {
+	.workspace-tree .project-toggle .project-chevron {
+		opacity: 1;
+	}
+
+	.workspace-tree .project-toggle .project-icon {
+		opacity: 0;
+	}
+
 	.workspace-tree .sidebar-row-actions,
 	.workspace-tree .conversation-hover-actions,
 	.workspace-tree .recent-actions-trigger,

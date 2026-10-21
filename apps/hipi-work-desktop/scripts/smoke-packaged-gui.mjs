@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Cdp, endpoint, pageTarget } from "./cdp.mjs";
 import { sidebarWorkspaceIds } from "./gui/sidebar/manifest.mjs";
+import { virtualizationWorkspaceIds } from "./gui/sidebar/virtualization-manifest.mjs";
 import { runBetweenGuiSessions } from "./gui-between-runs.mjs";
 import { fileFixture } from "./gui-file-fixture-data.mjs";
 import { captureFailure, evaluate, exercise, until } from "./gui-flow.mjs";
@@ -24,8 +25,26 @@ import { createSidebarPolicy } from "./linux-sidebar-policy.mjs";
 import { assertSourceSnapshot } from "./release-policy.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+/** Existing void validators pass; incomplete host evidence must never become passed. */
+export function guiAcceptanceResult(result) {
+	if (result === undefined) return { status: "passed" };
+	assert.ok(result && typeof result === "object", "Invalid GUI acceptance result");
+	assert.ok(["passed", "unqualified"].includes(result.status), "Invalid GUI acceptance status");
+	if (result.status === "passed") return { status: "passed" };
+	assert.ok(typeof result.reason === "string" && result.reason.trim(), "Unqualified acceptance needs a reason");
+	assert.ok(
+		Array.isArray(result.missing) &&
+			result.missing.length > 0 &&
+			result.missing.every((item) => typeof item === "string" && item.trim()),
+		"Unqualified acceptance needs missing evidence",
+	);
+	return { status: "unqualified", reason: result.reason, missing: [...result.missing] };
+}
 export function baselineResponseArguments(scenario) {
-	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario), "Unknown fixed GUI scenario");
+	assert.ok(
+		["baseline", "long-history", "file-workbench", "sidebar", "sidebar-virtualization"].includes(scenario),
+		"Unknown fixed GUI scenario",
+	);
 	return scenario === "baseline" ? ["--smoke-response=baseline-stream", "--smoke-scenario=baseline"] : [];
 }
 export async function createGuiProfile(temporaryParent = realpathSync(tmpdir())) {
@@ -38,13 +57,25 @@ export function sourceProvenanceEvidence(provenance) {
 	return { sourceSnapshotSha256: provenance.sourceSnapshotSha256, sourceSnapshot };
 }
 export async function assertScenarioWorkspaceDatabases(storeRoot, scenario, bindingWorkspaceId) {
-	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario));
+	assert.ok(["baseline", "long-history", "file-workbench", "sidebar", "sidebar-virtualization"].includes(scenario));
 	const workspaces = (await readdir(storeRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
 	assert.equal(
 		workspaces.length,
-		scenario === "long-history" ? 1 : ["file-workbench", "sidebar"].includes(scenario) ? 3 : 2,
+		scenario === "sidebar-virtualization"
+			? 7
+			: scenario === "long-history"
+				? 1
+				: ["file-workbench", "sidebar"].includes(scenario)
+					? 3
+					: 2,
 		"Unexpected exact scenario workspace count",
 	);
+	if (scenario === "sidebar-virtualization")
+		assert.deepEqual(
+			workspaces.map((workspace) => workspace.name).sort(),
+			[...virtualizationWorkspaceIds].sort(),
+			"Virtual Recent must retain all seven exact fixture database identities",
+		);
 	if (scenario === "sidebar")
 		assert.deepEqual(
 			workspaces.map((workspace) => workspace.name).sort(),
@@ -72,7 +103,10 @@ export async function assertScenarioWorkspaceDatabases(storeRoot, scenario, bind
 }
 /** One lifecycle owns launch, evidence and cleanup for each independent private profile. */
 export async function runPackagedGui({ scenario = "baseline", prepare, run, verify, validate, betweenRuns } = {}) {
-	assert.ok(["baseline", "long-history", "file-workbench", "sidebar"].includes(scenario), "Unknown fixed GUI scenario");
+	assert.ok(
+		["baseline", "long-history", "file-workbench", "sidebar", "sidebar-virtualization"].includes(scenario),
+		"Unknown fixed GUI scenario",
+	);
 	assert.ok(betweenRuns === undefined || typeof betweenRuns === "function", "Invalid between-runs callback");
 	assert.ok(!betweenRuns || scenario === "baseline", "Maintenance hook requires the unchanged baseline GUI flow");
 	const reportScenario = betweenRuns ? "maintenance" : scenario;
@@ -371,12 +405,14 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 			});
 			scenarioResourcesClosed = true;
 		}
-		validate?.({ first: firstFlow, reopened: reopenedFlow });
+		const acceptance = guiAcceptanceResult(validate?.({ first: firstFlow, reopened: reopenedFlow }));
 		await xvfb?.terminate();
 		xvfb = undefined;
 		safeCleanup = true;
 		await assertSourceSnapshot(root, provenance.sourceSnapshot);
-		evidence.status = "passed";
+		evidence.acceptance = acceptance;
+		evidence.status = acceptance.status;
+		if (acceptance.status === "unqualified") process.exitCode = 1;
 	} catch (error) {
 		evidence.status = "failed";
 		if (native) evidence.nativeProcessAtFailure = { exited: native.exited, closed: native.closed };

@@ -21,6 +21,7 @@ import { ConversationActions } from "../../../src/features/workbench/catalog/con
 import { CatalogPagination } from "../../../src/features/workbench/catalog/pagination.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
+import { useProjectActionOwner } from "../../../src/features/workbench/projects/action-owner.ts";
 import { ProjectActions } from "../../../src/features/workbench/projects/actions.tsx";
 import { ProjectRenameDialog } from "../../../src/features/workbench/projects/rename.tsx";
 import { PresentationSession } from "../../../src/features/workbench/sidebar/presentation-session.ts";
@@ -126,7 +127,7 @@ vi.mock("../../../src/app/theme/index.ts", () => ({
 vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => cache,
 }));
-const cache = { setQueryData: vi.fn(), invalidateQueries: vi.fn() };
+const cache = { getQueryData: vi.fn(), setQueryData: vi.fn(), invalidateQueries: vi.fn() };
 let previewCoordinator: SidebarPreviewCoordinator;
 vi.mock("../../../src/features/workbench/sidebar/preview-provider.tsx", () => ({
 	useSidebarPreviewCoordinator: () => previewCoordinator,
@@ -283,6 +284,7 @@ beforeEach(() => {
 	hooks.stores = [];
 	previewCoordinator = new SidebarPreviewCoordinator();
 	vi.clearAllMocks();
+	cache.getQueryData.mockReset();
 	vi.useFakeTimers();
 });
 
@@ -1582,18 +1584,23 @@ function logicalActions(client: AppClient, projectPinEnabled = true) {
 		inlineActions: true,
 		hidden: false,
 	};
-	const render = () =>
-		drive("logical-actions", () =>
+	const notices = vi.fn();
+	const owner = () =>
+		drive("logical-owner", () =>
+			useProjectActionOwner(item, session, (action) => action(), projectPinEnabled, true, notices),
+		);
+	const render = () => {
+		const shared = owner();
+		return drive("logical-actions", () =>
 			ProjectActions({
-				projectPinEnabled,
+				owner: shared,
 				item,
-				session,
 				controls,
-				guard: (action) => action(),
 				filter: "active",
 				onFilterChange: vi.fn(),
 			}),
 		);
+	};
 	const select = (label: string) => {
 		const entry = elements(render(), ActionMenuItem).find((entry) =>
 			JSON.stringify(entry.props.children).includes(label),
@@ -1601,7 +1608,7 @@ function logicalActions(client: AppClient, projectPinEnabled = true) {
 		assert.ok(entry?.props.onSelect);
 		entry.props.onSelect(new Event("select"));
 	};
-	return { local, session, item, controls, render, select };
+	return { local, session, item, controls, render, select, owner, notices };
 }
 
 test("logical project menu exposes only supported mutations and opening rename captures its original revision", async () => {
@@ -1665,41 +1672,395 @@ test("mismatched project presentation cannot dispatch a pin through a stale call
 	ui.session.dispose();
 });
 
-test("verified logical rename receipt alone closes the dialog and refreshes project caches", async () => {
-	let command: unknown;
-	const renamed = { projectId: "logical", name: "Confirmed", revision: 8, homeWorkspaceId: "home-only" };
-	const ui = logicalActions({
-		call: async (method, params) => {
-			if (method === "renameProject") {
-				command = params;
-				return parseResult(method, renamed);
-			}
-			if (method === "getProjectCommandResult")
-				return parseResult(method, { status: "completed", method: "renameProject", params: command, result: renamed });
-			throw new Error(`Unexpected ${method}`);
-		},
-		observe: vi.fn(),
-	});
-	ui.select("Rename project");
-	const settled = catalogSettled(ui.session);
-	element(ui.render(), ProjectRenameDialog).props.onSave("Confirmed");
-	await settled;
-	await Promise.resolve();
-	ui.render();
-	assert.equal(elements(ui.render(), ProjectRenameDialog).length, 0);
-	assert.equal(ui.session.getSnapshot().pending, null);
-	assert.deepEqual(cache.setQueryData.mock.calls, [[["project", "logical"], renamed]]);
-	assert.deepEqual(
-		cache.invalidateQueries.mock.calls.map((call) => call[0].queryKey),
-		[["projects"], ["project", "logical"], ["project-catalog"], ["sidebar-navigation"], ["sidebar-pins"]],
-	);
-	ui.session.dispose();
-});
+test.each([false, true])(
+	"verified logical rename refreshes caches without overwriting a newer project (newer=%s)",
+	async (newer) => {
+		let command: unknown;
+		const renamed = { projectId: "logical", name: "Confirmed", revision: 8, homeWorkspaceId: "home-only" };
+		if (newer) cache.getQueryData.mockReturnValue({ ...renamed, name: "Newer", revision: 99 });
+		const ui = logicalActions({
+			call: async (method, params) => {
+				if (method === "renameProject") {
+					command = params;
+					return parseResult(method, renamed);
+				}
+				if (method === "getProjectCommandResult")
+					return parseResult(method, {
+						status: "completed",
+						method: "renameProject",
+						params: command,
+						result: renamed,
+					});
+				throw new Error(`Unexpected ${method}`);
+			},
+			observe: vi.fn(),
+		});
+		ui.select("Rename project");
+		const settled = catalogSettled(ui.session);
+		element(ui.render(), ProjectRenameDialog).props.onSave("Confirmed");
+		await settled;
+		await Promise.resolve();
+		ui.render();
+		assert.equal(elements(ui.render(), ProjectRenameDialog).length, 0);
+		assert.equal(ui.session.getSnapshot().pending, null);
+		assert.deepEqual(cache.setQueryData.mock.calls, newer ? [] : [[["project", "logical"], renamed]]);
+		assert.deepEqual(
+			cache.invalidateQueries.mock.calls.map((call) => call[0].queryKey),
+			[["projects"], ["project", "logical"], ["project-catalog"], ["sidebar-navigation"], ["sidebar-pins"]],
+		);
+		ui.session.dispose();
+	},
+);
 
 test("project pin stays absent until authoritative mixed composition is available, independently of rename", () => {
 	const ui = logicalActions({ call: vi.fn(), observe: vi.fn() }, false);
 	assert.equal(elements(ui.render(), ActionMenuItem).length, 1);
 	ui.select("Rename project");
 	assert.equal(element(ui.render(), ProjectRenameDialog).props.name, "Original");
+	ui.session.dispose();
+});
+
+for (const name of ["", "  ", "Original", "  Original  "]) {
+	test(`inline rename exits without mutation for ${JSON.stringify(name)}`, () => {
+		const call = vi.fn();
+		const ui = logicalActions({ call, observe: vi.fn() });
+		ui.owner().beginInlineRename();
+		ui.owner().changeInlineName(name);
+		ui.owner().commitInlineRename();
+		assert.equal(ui.owner().inline, null);
+		assert.equal(call.mock.calls.length, 0);
+		ui.session.dispose();
+	});
+}
+
+test("inline draft survives refresh, enforces length and preserves captured revision through unknown recovery", async () => {
+	let known = false;
+	let command: unknown;
+	const renamed = { projectId: "logical", homeWorkspaceId: "home-only", name: "Confirmed", revision: 8 };
+	const calls: Method[] = [];
+	const ui = logicalActions({
+		call: async (method, params) => {
+			calls.push(method);
+			if (method === "renameProject") {
+				command = params;
+				throw new Error("Lost response");
+			}
+			if (method === "getProjectCommandResult")
+				return parseResult(
+					method,
+					known ? { status: "completed", method: "renameProject", params: command, result: renamed } : null,
+				);
+			throw new Error(`Unexpected ${method}`);
+		},
+		observe: vi.fn(),
+	});
+	ui.owner().beginInlineRename();
+	ui.owner().changeInlineName("x".repeat(129));
+	ui.owner().commitInlineRename();
+	assert.equal(ui.owner().inline?.editing, true);
+	assert.deepEqual(calls, []);
+	ui.owner().changeInlineName("  Confirmed  ");
+	ui.item.project = { ...ui.item.project, name: "Remote", revision: 99 };
+	assert.equal(ui.owner().inline?.draft, "  Confirmed  ");
+	const settled = catalogSettled(ui.session);
+	const stale = ui.owner();
+	stale.commitInlineRename();
+	assert.equal(ui.owner().inline?.editing, false, "Editor closes before an async outcome is known");
+	await settled;
+	const pending = ui.session.getSnapshot().pending;
+	assert.equal(pending?.method, "renameProject");
+	if (pending?.method !== "renameProject") throw new Error("Missing rename");
+	assert.equal(pending.params.expectedRevision, 7);
+	assert.equal(pending.params.name, "Confirmed");
+	stale.commitInlineRename();
+	stale.togglePin();
+	assert.deepEqual(calls, ["renameProject", "getProjectCommandResult"]);
+	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
+	known = true;
+	await ui.session.check();
+	ui.owner();
+	assert.equal(ui.owner().inline, null);
+	assert.deepEqual(cache.setQueryData.mock.calls, [[["project", "logical"], renamed]]);
+	assert.ok(
+		cache.invalidateQueries.mock.calls.some(([input]) => JSON.stringify(input.queryKey) === '["project","logical"]'),
+	);
+	assert.deepEqual(calls, ["renameProject", "getProjectCommandResult", "getProjectCommandResult"]);
+	ui.session.dispose();
+});
+
+test("inline Escape cancellation makes a subsequent blur callback inert", () => {
+	const call = vi.fn();
+	const ui = logicalActions({ call, observe: vi.fn() });
+	ui.owner().beginInlineRename();
+	ui.owner().changeInlineName("Cancel me");
+	const stale = ui.owner();
+	stale.cancelInlineRename();
+	stale.commitInlineRename();
+	assert.equal(ui.owner().inline, null);
+	assert.equal(call.mock.calls.length, 0);
+	ui.session.dispose();
+});
+
+test("the row's document-capture Escape guard reserves inline cancellation, not ordinary card dismissal", () => {
+	vi.stubGlobal("Element", Object);
+	const ui = rowAndActions();
+	ui.focus();
+	const view = element(ui.renderRow(), PopoverContent);
+	const editor = new Event("keydown", { cancelable: true });
+	Object.defineProperty(editor, "target", { value: { closest: () => ({}) } });
+	invoke(view.props.onEscapeKeyDown, [editor]);
+	assert.equal(editor.defaultPrevented, true);
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	const ordinary = new Event("keydown", { cancelable: true });
+	Object.defineProperty(ordinary, "target", { value: { closest: () => null } });
+	invoke(view.props.onEscapeKeyDown, [ordinary]);
+	assert.equal(ordinary.defaultPrevented, false);
+	ui.session.dispose();
+});
+
+test.each(["busy", "incompatible"] as const)("stale project callbacks re-read %s before dispatch", (flag) => {
+	const call = vi.fn();
+	const ui = logicalActions({ call, observe: vi.fn() });
+	const stale = ui.owner();
+	const snapshot = ui.session.getSnapshot();
+	const read = vi.spyOn(ui.session, "getSnapshot").mockReturnValue({ ...snapshot, [flag]: true });
+	stale.togglePin();
+	stale.renameProject(ui.item.project, "Changed");
+	stale.beginInlineRename();
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.owner().inline, null);
+	read.mockRestore();
+	ui.session.dispose();
+});
+
+test("delayed project guards respect a newer logical fence and mixed-pin capability withdrawal", () => {
+	const call = vi.fn();
+	const session = new CatalogSession({ call, observe: vi.fn() }, new LocalState());
+	const item = {
+		project: { projectId: "logical", homeWorkspaceId: "home", name: "Name", revision: 1 },
+		presentation: { projectId: "logical", pinned: false, revision: 2 },
+	};
+	let enabled = true;
+	let pinEnabled = true;
+	let continuation: (() => void) | undefined;
+	const render = () =>
+		drive("deferred-project", () =>
+			useProjectActionOwner(
+				item,
+				session,
+				(action) => {
+					continuation = action;
+				},
+				pinEnabled,
+				enabled,
+			),
+		);
+	render().renameProject(item.project, "Changed");
+	enabled = false;
+	render();
+	continuation?.();
+	assert.equal(call.mock.calls.length, 0);
+	enabled = true;
+	render().togglePin();
+	pinEnabled = false;
+	render();
+	continuation?.();
+	assert.equal(call.mock.calls.length, 0);
+	session.dispose();
+});
+
+test.each(["renameProject", "setProjectPinned"] as const)(
+	"%s recovery outlives an evicted or collapsed project branch",
+	async (mutation) => {
+		let known = false;
+		let captured: unknown;
+		const result =
+			mutation === "renameProject"
+				? { projectId: "logical", homeWorkspaceId: "home-only", name: "Confirmed", revision: 8 }
+				: { projectId: "logical", pinned: true, revision: 5 };
+		const calls: Method[] = [];
+		const ui = logicalActions({
+			call: async (method, params) => {
+				calls.push(method);
+				if (method === mutation) {
+					captured = params;
+					throw new Error("Lost reply");
+				}
+				if (method === "getProjectPresentation") return parseResult(method, result);
+				if (method === "getProjectCommandResult")
+					return parseResult(
+						method,
+						known ? { status: "completed", method: mutation, params: captured, result } : null,
+					);
+				throw new Error(`Unexpected ${method}`);
+			},
+			observe: vi.fn(),
+		});
+		const settled = catalogSettled(ui.session);
+		if (mutation === "renameProject") {
+			ui.owner().beginInlineRename();
+			ui.owner().changeInlineName("Confirmed");
+			ui.owner().commitInlineRename();
+		} else ui.owner().togglePin();
+		await settled;
+		const saved = ui.local.read("command.catalog");
+		assert.ok(saved);
+		for (const cell of hooks.cells.get("logical-owner") ?? []) cell.cleanup?.();
+		hooks.cells.delete("logical-owner");
+		assert.equal(ui.local.read("command.catalog"), saved);
+		assert.equal(ui.session.getSnapshot().pending?.method, mutation);
+		known = true;
+		await ui.session.check();
+		assert.equal(ui.session.getSnapshot().pending, null);
+		assert.equal(ui.session.getSnapshot().projectResult?.method, mutation);
+		assert.deepEqual(calls, [
+			mutation,
+			"getProjectCommandResult",
+			"getProjectCommandResult",
+			...(mutation === "setProjectPinned" ? ["getProjectPresentation"] : []),
+		]);
+		assert.equal(ui.owner().inline, null, "A remounted row never recreates the retired editor or replays its request");
+		ui.session.dispose();
+	},
+);
+
+test.each([false, true])(
+	"inline rename then actual pin activation survives branch disappearance=%s",
+	async (unmount) => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let mutation: "renameProject" | "setProjectPinned" = "renameProject";
+		let captured: unknown;
+		const calls: Method[] = [];
+		const renamed = { projectId: "logical", homeWorkspaceId: "home-only", name: "Changed", revision: 8 };
+		const ui = logicalActions({
+			call: async (method, params) => {
+				calls.push(method);
+				if (method === "renameProject") {
+					captured = params;
+					await gate;
+					return parseResult(method, renamed);
+				}
+				if (method === "getProjectCatalogState")
+					return parseResult(method, { state: "ready", generation: 1, defaultWorkspaceId: null });
+				if (method === "getProject") return parseResult(method, renamed);
+				if (method === "getProjectPresentation")
+					return parseResult(method, {
+						projectId: "logical",
+						pinned: mutation === "setProjectPinned",
+						revision: mutation === "setProjectPinned" ? 5 : 4,
+					});
+				if (method === "setProjectPinned") {
+					mutation = method;
+					captured = params;
+					return parseResult(method, { projectId: "logical", pinned: true, revision: 5 });
+				}
+				if (method === "getProjectCommandResult")
+					return parseResult(method, {
+						status: "completed",
+						method: mutation,
+						params: captured,
+						result: mutation === "renameProject" ? renamed : { projectId: "logical", pinned: true, revision: 5 },
+					});
+				throw new Error(method);
+			},
+			observe: vi.fn(),
+		});
+		ui.owner().beginInlineRename();
+		ui.owner().changeInlineName("Changed");
+		ui.owner().commitInlineRename();
+		assert.equal(ui.owner().pinDisabled, false, "Blur-admitted own rename cannot swallow the following click");
+		ui.owner().togglePin();
+		assert.equal(ui.owner().pinDisabled, true, "Only one actual continuation activation is retained");
+		ui.owner().togglePin();
+		if (unmount) {
+			for (const cell of hooks.cells.get("logical-owner") ?? []) cell.cleanup?.();
+			hooks.cells.delete("logical-owner");
+		}
+		release();
+		await vi.waitFor(() => assert.equal(ui.session.getSnapshot().projectResult?.method, "setProjectPinned"));
+		assert.equal(calls.filter((method) => method === "renameProject").length, 1);
+		assert.equal(calls.filter((method) => method === "setProjectPinned").length, 1);
+		assert.deepEqual(
+			ui.notices.mock.calls.map(([notice]) => notice.reason),
+			[null],
+		);
+		ui.session.dispose();
+	},
+);
+
+test("invalid inline name retains draft and rejects pin activation without admission", () => {
+	const call = vi.fn();
+	const ui = logicalActions({ call, observe: vi.fn() });
+	ui.owner().beginInlineRename();
+	ui.owner().changeInlineName("x".repeat(129));
+	ui.owner().commitInlineRename();
+	ui.owner().togglePin();
+	assert.equal(ui.owner().inline?.editing, true);
+	assert.equal(ui.owner().inline?.draft.length, 129);
+	assert.ok(ui.owner().inline?.validationAttempt);
+	assert.equal(call.mock.calls.length, 0);
+	assert.equal(ui.local.read("command.catalog"), null);
+	ui.session.dispose();
+});
+
+test("unknown inline rename reports unadmitted pin without replay after recovery", async () => {
+	const calls: Method[] = [];
+	let known = false;
+	let captured: unknown;
+	const ui = logicalActions({
+		call: async (method, params) => {
+			calls.push(method);
+			if (method === "renameProject") {
+				captured = params;
+				throw new Error("Lost reply");
+			}
+			if (method === "getProjectCommandResult")
+				return parseResult(
+					method,
+					known
+						? {
+								status: "completed",
+								method: "renameProject",
+								params: captured,
+								result: { projectId: "logical", homeWorkspaceId: "home-only", name: "Changed", revision: 8 },
+							}
+						: null,
+				);
+			throw new Error(method);
+		},
+		observe: vi.fn(),
+	});
+	ui.owner().beginInlineRename();
+	ui.owner().changeInlineName("Changed");
+	ui.owner().commitInlineRename();
+	ui.owner().togglePin();
+	hooks.cells.delete("logical-owner");
+	await vi.waitFor(() => assert.equal(ui.notices.mock.calls.at(-1)?.[0].reason, "rename_unconfirmed"));
+	assert.equal(ui.session.getSnapshot().pending?.method, "renameProject");
+	known = true;
+	await ui.session.check();
+	assert.equal(calls.includes("setProjectPinned"), false);
+	ui.session.dispose();
+});
+
+test.each(["   ", " Original "])("inline no-op %j closes and pins without a rename", async (draft) => {
+	const calls: Method[] = [];
+	const ui = logicalActions({
+		call: async (method) => {
+			calls.push(method);
+			throw new Error("Unknown pin");
+		},
+		observe: vi.fn(),
+	});
+	ui.owner().beginInlineRename();
+	ui.owner().changeInlineName(draft);
+	const settled = catalogSettled(ui.session);
+	ui.owner().togglePin();
+	await settled;
+	assert.equal(ui.owner().inline, null);
+	assert.deepEqual(calls, ["setProjectPinned", "getProjectCommandResult"]);
 	ui.session.dispose();
 });

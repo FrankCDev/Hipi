@@ -31,6 +31,15 @@ test("bindings can replace defaults without changing input safety", () => {
 	assert.equal(DEFAULT_EDITOR_KEYBINDINGS.submit.length, 4);
 });
 
+test("native select-all and deletion remain browser-owned on macOS, Windows and Linux", () => {
+	const keyboard = new ComposerKeyboard();
+	for (const modifiers of [{ metaKey: true }, { ctrlKey: true }]) {
+		assert.equal(keyboard.keyDown({ ...enter, ...modifiers, key: "a", keyCode: 65 }), "native");
+		keyboard.keyUp();
+	}
+	assert.equal(keyboard.keyDown({ ...enter, key: "Backspace", keyCode: 8 }), "native");
+});
+
 test("composition and keyCode 229 remain entirely owned by the IME", () => {
 	const keyboard = new ComposerKeyboard();
 	assert.equal(keyboard.keyDown({ ...enter, isComposing: true }), "native");

@@ -24,6 +24,7 @@ import { ConversationActions } from "../catalog/controls.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
 import { CatalogPagination } from "../catalog/pagination.tsx";
 import type { CatalogSession } from "../catalog/session.ts";
+import { type ProjectPinNotice, useProjectActionOwner } from "../projects/action-owner.ts";
 import { ProjectActions } from "../projects/actions.tsx";
 import { projectFolderLabels } from "../projects/folder-labels.ts";
 import { projectLabels } from "../projects/labels.ts";
@@ -40,6 +41,7 @@ import { useNavigation } from "./use-navigation.ts";
 import "./layout.css";
 
 type TreeProps = {
+	onProjectPinNotice?: (notice: ProjectPinNotice) => void;
 	recentWindow?: boolean;
 	navigationVisible?: boolean;
 	recentLast?: boolean;
@@ -136,6 +138,14 @@ export function WorkspaceBranch({
 	const openId = useId();
 	const recent = workspace === undefined && projectItem === undefined;
 	const logicalReady = props.projects !== undefined && props.logicalReady !== false;
+	const projectOwner = useProjectActionOwner(
+		projectItem,
+		props.catalog,
+		props.guard,
+		props.projectPinEnabled,
+		logicalReady,
+		props.onProjectPinNotice,
+	);
 	const fenced = !!projectItem && !logicalReady;
 	const branchId = projectItem?.project.projectId ?? workspace?.workspaceId ?? "";
 	const branchName = projectItem?.project.name ?? workspace?.name ?? "";
@@ -322,6 +332,7 @@ export function WorkspaceBranch({
 					preview={(preview) =>
 						!fenced && metadata ? (
 							<ProjectPreviewCard
+								owner={projectOwner}
 								logicalReady={logicalReady}
 								{...metadata}
 								onManageFolder={
@@ -344,9 +355,7 @@ export function WorkspaceBranch({
 										{projectItem ? (
 											<ProjectActions
 												item={projectItem}
-												projectPinEnabled={props.projectPinEnabled}
-												session={props.catalog}
-												guard={props.guard}
+												owner={projectOwner}
 												controls={controls}
 												filter={filter}
 												onFilterChange={(value) => {
@@ -416,7 +425,10 @@ export function WorkspaceBranch({
 								<span id={disclosureId} className="sr-only">
 									{expanded ? cl.collapseProject : cl.expandProject}
 								</span>
-								<span className="project-chevron" data-expanded={expanded}>
+								<span className="project-icon" aria-hidden="true">
+									<Icon name="folder" size={16} />
+								</span>
+								<span className="project-chevron" data-expanded={expanded} aria-hidden="true">
 									<Icon name="chevron" size={12} />
 								</span>
 							</button>
@@ -434,9 +446,6 @@ export function WorkspaceBranch({
 							>
 								<span id={openId} className="sr-only">
 									{cl.openProject}
-								</span>
-								<span className="project-icon">
-									<Icon name="folder" size={16} />
 								</span>
 								<SidebarTitle id={headingId} className="project-name" text={branchName} hovered={hovered} />
 							</button>

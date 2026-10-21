@@ -9,11 +9,13 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { smokeProfile } from "../src/smoke-profile.ts";
 import { sidebarWorkspaceIds } from "./gui/sidebar/manifest.mjs";
+import { virtualizationWorkspaceIds } from "./gui/sidebar/virtualization-manifest.mjs";
 import { fileFixture } from "./gui-file-fixture-data.mjs";
 import {
 	assertScenarioWorkspaceDatabases,
 	baselineResponseArguments,
 	createGuiProfile,
+	guiAcceptanceResult,
 	sourceProvenanceEvidence,
 } from "./smoke-packaged-gui.mjs";
 
@@ -37,10 +39,108 @@ test("known stream response is opt-in only for the isolated baseline scenario", 
 		"--smoke-response=baseline-stream",
 		"--smoke-scenario=baseline",
 	]);
-	for (const scenario of ["long-history", "file-workbench", "sidebar"])
+	for (const scenario of ["long-history", "file-workbench", "sidebar", "sidebar-virtualization"])
 		assert.deepEqual(baselineResponseArguments(scenario), []);
 	for (const scenario of [undefined, "normal", "production", "baseline-other"])
 		assert.throws(() => baselineResponseArguments(scenario), /Unknown fixed GUI scenario/);
+});
+
+test("GUI acceptance preserves void validators and requires explicit incomplete evidence", () => {
+	assert.deepEqual(guiAcceptanceResult(undefined), { status: "passed" });
+	assert.deepEqual(guiAcceptanceResult({ status: "passed" }), { status: "passed" });
+	const unqualified = { status: "unqualified", reason: "Overlay thumb unavailable", missing: ["native-thumb-drag"] };
+	assert.deepEqual(guiAcceptanceResult(unqualified), unqualified);
+	assert.notEqual(guiAcceptanceResult(unqualified).missing, unqualified.missing);
+	for (const invalid of [
+		null,
+		true,
+		"passed",
+		{},
+		{ status: "failed" },
+		{ status: "unqualified" },
+		{ ...unqualified, reason: " " },
+		{ ...unqualified, missing: [] },
+		{ ...unqualified, missing: [null] },
+	])
+		assert.throws(() => guiAcceptanceResult(invalid));
+});
+
+test("lifecycle retains partial evidence but never reports unavailable qualification as passed", async () => {
+	const source = await readFile(new URL("./smoke-packaged-gui.mjs", import.meta.url), "utf8");
+	const start = source.indexOf("\t\tconst acceptance = guiAcceptanceResult(");
+	const end = source.indexOf("\n\t} catch (error)", start);
+	assert.ok(start >= 0 && end > start);
+	for (const result of [
+		undefined,
+		{ status: "passed" },
+		{ status: "unqualified", reason: "Overlay thumb unavailable", missing: ["native-thumb-drag"] },
+	]) {
+		const evidence = { checks: [{ wheel: true, keyboard: true }] };
+		const process = {};
+		const firstFlow = { rawFrames: 200 },
+			reopenedFlow = { rawFrames: 300 };
+		let stopped = false,
+			snapshotChecked = false;
+		const context = {
+			evidence,
+			process,
+			firstFlow,
+			reopenedFlow,
+			guiAcceptanceResult,
+			validate(input) {
+				assert.equal(input.first, firstFlow);
+				assert.equal(input.reopened, reopenedFlow);
+				return result;
+			},
+			xvfb: {
+				async terminate() {
+					stopped = true;
+				},
+			},
+			safeCleanup: false,
+			root: "unused",
+			provenance: { sourceSnapshot: [] },
+			async assertSourceSnapshot() {
+				snapshotChecked = true;
+			},
+		};
+		await runInNewContext(`(async()=>{${source.slice(start, end)}})()`, context);
+		assert.equal(evidence.status, result?.status ?? "passed");
+		assert.deepEqual(evidence.acceptance, guiAcceptanceResult(result));
+		assert.deepEqual(evidence.checks, [{ wheel: true, keyboard: true }]);
+		assert.equal(process.exitCode, result?.status === "unqualified" ? 1 : undefined);
+		assert.equal(stopped && snapshotChecked && context.safeCleanup, true);
+	}
+});
+
+test("large sidebar requires seven exact workspace identities and both databases", async () => {
+	const root = await createGuiProfile();
+	try {
+		for (const workspace of virtualizationWorkspaceIds) {
+			await mkdir(join(root, workspace));
+			for (const file of ["owner.sqlite", "workspace.sqlite"]) await writeFile(join(root, workspace, file), "fixture");
+		}
+		await assertScenarioWorkspaceDatabases(root, "sidebar-virtualization");
+		await rename(join(root, virtualizationWorkspaceIds[0]), join(root, "wrong-identity"));
+		await assert.rejects(
+			assertScenarioWorkspaceDatabases(root, "sidebar-virtualization"),
+			/exact fixture database identities/,
+		);
+		await rename(join(root, "wrong-identity"), join(root, virtualizationWorkspaceIds[0]));
+		await mkdir(join(root, "unexpected"));
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar-virtualization"), /workspace count/);
+		await rm(join(root, "unexpected"), { recursive: true });
+		for (const file of ["owner.sqlite", "workspace.sqlite"]) {
+			const path = join(root, virtualizationWorkspaceIds[6], file);
+			await rm(path);
+			await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar-virtualization"), /ENOENT/);
+			await writeFile(path, "fixture");
+		}
+		await rm(join(root, virtualizationWorkspaceIds[6]), { recursive: true });
+		await assert.rejects(assertScenarioWorkspaceDatabases(root, "sidebar-virtualization"), /workspace count/);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("sidebar accepts only exact default Chats and two project database identities", async () => {

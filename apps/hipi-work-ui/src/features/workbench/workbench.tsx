@@ -45,8 +45,11 @@ import { FilePanel, useWorkAreaWidth } from "./files/panel.tsx";
 import { FILE_PANEL, FilePanelController, panelLayout } from "./files/panel-controller.ts";
 import { filePanelLabels } from "./files/panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
+import type { ProjectPinNotice } from "./projects/action-owner.ts";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./projects/folder.tsx";
 import { canCreateProjectless, legacyAdoptionInput } from "./projects/identity.ts";
+import { invalidateProjectCatalog } from "./projects/invalidation.ts";
+import { projectLabels } from "./projects/labels.ts";
 import { projectRecoveryLabels } from "./projects/recovery-labels.ts";
 import { ConversationSearch } from "./search/search.tsx";
 import { SidebarDisclosureSession } from "./sidebar/disclosure-session.ts";
@@ -262,6 +265,9 @@ export function Workbench({
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [reopenFailure, setReopenFailure] = useState<"failed" | "limit" | null>(null);
 	const [pinLookupFailed, setPinLookupFailed] = useState(false);
+	const [projectPinNotice, setProjectPinNotice] = useState<
+		(ProjectPinNotice & { connection: typeof connectionLease }) | null
+	>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	useNavigationRefresh(
 		!settingsOpen && (narrow ? navigationOpen : !navigationCollapsed),
@@ -351,9 +357,11 @@ export function Workbench({
 			.execute({ version: PROTOCOL_VERSION, method: "adoptLegacyDefaultWorkspace", params: input })
 			.then(() => {
 				if (!connectionLease.active) return;
-				void cache.invalidateQueries({ queryKey: ["project-catalog"] });
-				void cache.invalidateQueries({ queryKey: ["projects"] });
-				void cache.invalidateQueries({ queryKey: ["sidebar-navigation"] });
+				const completed = catalog.getSnapshot();
+				invalidateProjectCatalog(
+					cache,
+					!completed.pending && completed.projectResult?.method === "adoptLegacyDefaultWorkspace",
+				);
 			});
 	}, [projectCatalog.data, catalogBlocked, local, catalog, cache, connectionLease]);
 	const workspaces = useCatalogPages({
@@ -713,10 +721,7 @@ export function Workbench({
 		if (state.projectResult && !state.pending) {
 			if (state.projectResult.method === "renameProject")
 				void cache.invalidateQueries({ queryKey: ["project", state.projectResult.result.projectId] });
-			void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
-			void cache.invalidateQueries({ queryKey: ["projects"] });
-			void cache.invalidateQueries({ queryKey: ["project-catalog"] });
-			void cache.invalidateQueries({ queryKey: ["sidebar-navigation"] });
+			invalidateProjectCatalog(cache);
 		}
 		// A consent-bearing first Send retains its recovery owner until delivery is confirmed.
 		if (state.initialSend?.context) return;
@@ -853,6 +858,16 @@ export function Workbench({
 			throw new Error("UNCONFIRMED");
 	};
 	const workspaceTreeProps = {
+		onProjectPinNotice: (notice: ProjectPinNotice) => {
+			if (!connectionLease.active || currentConnection.current !== connectionLease) return;
+			setProjectPinNotice((current) =>
+				notice.reason
+					? { ...notice, connection: connectionLease }
+					: current?.connection === connectionLease && current.projectId === notice.projectId
+						? null
+						: current,
+			);
+		},
 		recentWindow: true,
 		navigationVisible: !settingsOpen && (narrow ? navigationOpen : !navigationCollapsed),
 		recentLast: visibleSections.at(-1) === "recent",
@@ -1159,6 +1174,16 @@ export function Workbench({
 							</section>
 						)}
 						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
+						{projectPinNotice?.connection === connectionLease && projectPinNotice.reason && (
+							<section className="nav-feedback" role="alert">
+								<p>
+									{projectPinNotice.projectName}: {projectLabels(locale)[projectPinNotice.reason]}
+								</p>
+								<Button variant="ghost" size="sm" onClick={() => setProjectPinNotice(null)}>
+									{catalogLabels(locale).close}
+								</Button>
+							</section>
+						)}
 						{projectCatalog.data &&
 							!canCreateProjectless(local, projectCatalog.data) &&
 							!catalogState.pending &&

@@ -115,6 +115,23 @@ jobs:
             .artifacts/hipi-work/packages/gui-sidebar/*.log
           if-no-files-found: error
           retention-days: 7
+      - name: Verify separate real packaged 600-row sidebar virtualization
+        id: sidebar_virtualization
+        if: ${{ success() && steps.sidebar.outcome == 'success' }}
+        # This separate large fixture has no small-sidebar sandbox allowance.
+        # Unqualified host evidence remains a nonzero, non-qualified result.
+        run: node --conditions=source apps/hipi-work-desktop/scripts/smoke-packaged-sidebar-virtualization.mjs
+      - name: Retain sidebar virtualization evidence even when validation fails
+        if: ${{ always() && steps.sidebar_virtualization.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, repository baseline
+        with:
+          name: hipi-work-sidebar-virtualization-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            .artifacts/hipi-work/packages/gui-sidebar-virtualization/*.json
+            .artifacts/hipi-work/packages/gui-sidebar-virtualization/*.png
+            .artifacts/hipi-work/packages/gui-sidebar-virtualization/*.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify real packaged desktop deterministic UI and restart
         id: gui_smoke
         run: node apps/hipi-work-desktop/scripts/smoke-packaged-gui.mjs

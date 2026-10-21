@@ -7,7 +7,9 @@ import { ActionMenuContent, ActionMenuItem, ActionMenuRadioGroup } from "../../.
 import { Button } from "../../../src/components/ui/button.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
+import { ProjectActions } from "../../../src/features/workbench/projects/actions.tsx";
 import { SidebarPreviewRow } from "../../../src/features/workbench/sidebar/preview-row.tsx";
+import { ProjectPreviewCard } from "../../../src/features/workbench/sidebar/project-preview-card.tsx";
 import { WorkspaceTree } from "../../../src/features/workbench/sidebar/workspace-tree.tsx";
 
 type ListOptions = {
@@ -16,7 +18,9 @@ type ListOptions = {
 	enabled: boolean;
 };
 const fixture = vi.hoisted(() => ({
-	filter: "active",
+	states: [] as unknown[],
+	stateIndex: 0,
+	cache: { getQueryData: vi.fn(), setQueryData: vi.fn(), invalidateQueries: vi.fn() },
 	options: undefined as ListOptions | undefined,
 	call: vi.fn(),
 	refs: [] as { current: unknown }[],
@@ -37,14 +41,23 @@ vi.mock("react", async () => {
 			return fixture.refs[index];
 		},
 		useLayoutEffect: (effect: () => void) => fixture.effects.push(effect),
-		useState: () => [
-			fixture.filter,
-			(value: string) => {
-				fixture.filter = value;
-			},
-		],
+		useEffect: (effect: () => void) => fixture.effects.push(effect),
+		useSyncExternalStore: (_subscribe: (changed: () => void) => () => void, read: () => unknown) => read(),
+		useState: <T,>(initial: T | (() => T)) => {
+			const index = fixture.stateIndex++;
+			if (!(index in fixture.states))
+				fixture.states[index] = typeof initial === "function" ? (initial as () => T)() : initial;
+			return [
+				fixture.states[index],
+				(value: React.SetStateAction<T>) => {
+					fixture.states[index] =
+						typeof value === "function" ? (value as (previous: T) => T)(fixture.states[index] as T) : value;
+				},
+			];
+		},
 	};
 });
+vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => fixture.cache }));
 vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
@@ -102,6 +115,7 @@ function fixtureTree(defaultWorkspaceId?: string, extra: Partial<React.Component
 		const children = only(WorkspaceTree(props), "ul").props.children;
 		assert.ok(Array.isArray(children));
 		fixture.refIndex = 0;
+		fixture.stateIndex = 0;
 		const result = invoke(children.flat().filter(isValidElement)[index]);
 		for (const effect of fixture.effects.splice(0)) effect();
 		return result;
@@ -109,7 +123,8 @@ function fixtureTree(defaultWorkspaceId?: string, extra: Partial<React.Component
 	return { render, toggle, open, draft, manage, session };
 }
 beforeEach(() => {
-	fixture.filter = "active";
+	fixture.states = [];
+	fixture.stateIndex = 0;
 	fixture.options = undefined;
 	fixture.refs = [];
 	fixture.effects = [];
@@ -176,6 +191,44 @@ test("disclosure, project navigation and direct draft entry are three independen
 	assert.deepEqual(ui.toggle.mock.calls, [["project"]]);
 	assert.equal(fixture.call.mock.calls.length, 0);
 	assert.equal(ui.session.getSnapshot().pending, null, "Navigation cannot create a backing object");
+});
+
+test.each([false, true])("shared folder/disclosure slot retains native keyboard semantics, expanded=%s", (expanded) => {
+	const ui = fixtureTree(undefined, { isExpanded: () => expanded });
+	const tree = ui.render();
+	const row = only(tree, SidebarPreviewRow);
+	const children =
+		typeof row.props.children === "function" ? row.props.children({ hovered: false }) : row.props.children;
+	const buttons = elements(children, "button");
+	const disclosure = buttons.find((entry) => entry.props.className === "project-toggle");
+	const project = buttons.find((entry) => entry.props.className === "project-open");
+	assert.ok(disclosure && project);
+	assert.equal(disclosure.props.type, "button");
+	assert.equal(project.props.type, "button");
+	assert.equal(disclosure.props.tabIndex, undefined, "Native buttons remain in keyboard order");
+	assert.equal(
+		disclosure.props.onKeyDown,
+		undefined,
+		"Enter/Space activation remains native, without duplicate dispatch",
+	);
+	assert.equal(disclosure.props["aria-expanded"], expanded);
+	assert.equal(disclosure.props["aria-controls"], only(tree, "section").props.id);
+	assert.equal(only(tree, "section").props.hidden, !expanded);
+	const icons = elements(disclosure, "span").filter((entry) => entry.props.className !== "sr-only");
+	assert.deepEqual(
+		icons.map((entry) => entry.props.className),
+		["project-icon", "project-chevron"],
+	);
+	assert.ok(icons.every((entry) => entry.props["aria-hidden"] === "true"));
+	assert.equal(Reflect.get(icons[1]?.props ?? {}, "data-expanded"), expanded);
+	assert.equal(elements(project, "span").filter((entry) => entry.props.className === "project-icon").length, 0);
+	assert.ok(disclosure.props.onClick && project.props.onClick);
+	Reflect.apply(disclosure.props.onClick, undefined, []);
+	assert.deepEqual(ui.toggle.mock.calls, [["project"]]);
+	assert.equal(ui.open.mock.calls.length, 0);
+	Reflect.apply(project.props.onClick, undefined, []);
+	assert.deepEqual(ui.open.mock.calls, [["project"]]);
+	ui.session.dispose();
 });
 
 test("archive visibility is changed by the project menu and opens only that collapsed branch", async () => {
@@ -282,4 +335,34 @@ test("logical catalog recovery fences project membership and retains only legacy
 	assert.equal(row.props.preview({ close: vi.fn(), returnFocus: vi.fn() }), null);
 	ui.render(1);
 	assert.deepEqual(fixture.options?.view, { kind: "recent" });
+});
+
+test("logical preview and menu share the branch owner while inline draft survives branch rerender", () => {
+	const ui = fixtureTree(undefined, { projects: [logicalItem] });
+	const row = only(ui.render(), SidebarPreviewRow);
+	const card = only(row.props.preview({ close: vi.fn(), returnFocus: vi.fn() }), ProjectPreviewCard);
+	const actions = row.props.renderActions?.({
+		previewContent: null,
+		menuPosition: { sideOffset: 0, alignOffset: 0 },
+		triggerRef: { current: null },
+		onMenuOpen: vi.fn(),
+		onOverlayChange: vi.fn(),
+		onReturnFocus: vi.fn(),
+		active: false,
+		inlineActions: true,
+		hidden: false,
+	});
+	const owner = only(actions, ProjectActions).props.owner;
+	assert.equal(card.props.owner, owner);
+	assert.equal(owner.inline, null);
+	owner.beginInlineRename();
+	owner.changeInlineName("Retained draft");
+	const refreshed = only(ui.render(), SidebarPreviewRow);
+	const refreshedCard = only(refreshed.props.preview({ close: vi.fn(), returnFocus: vi.fn() }), ProjectPreviewCard);
+	assert.equal(refreshedCard.props.owner?.inline?.draft, "Retained draft");
+	assert.equal(refreshedCard.props.owner?.inline?.target.projectId, "logical");
+	assert.equal(fixture.options?.filter, "active", "Inline state must not replace the independent branch filter");
+	assert.equal(fixture.call.mock.calls.length, 0);
+	assert.equal(ui.session.getSnapshot().pending, null);
+	ui.session.dispose();
 });

@@ -224,7 +224,7 @@ export class StoreCatalog {
 		let connectionCloseFailed = false;
 		try {
 			// Recovery markers are a one-way execution fence, even when identity was lost.
-			// Inspect existing data read-only before CREATE, migration or directory recovery.
+			// Inspect existing data without application writes before CREATE, migration or directory recovery.
 			const recoveryMarker = await lstat(join(root, "recovery-manifest.json")).catch((error) => {
 				if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
 				throw error;
@@ -235,7 +235,10 @@ export class StoreCatalog {
 				throw error;
 			});
 			if (existing) {
-				database = new DatabaseSync(catalogPath, { readOnly: true, allowExtension: false });
+				// The exclusive root owner permits SQLite to roll back a hot journal after process death.
+				// A read-only handle would reject even SELECT with SQLITE_READONLY_ROLLBACK (776).
+				// query_only still forbids application writes until every preflight fence has passed.
+				database = new DatabaseSync(catalogPath, { allowExtension: false });
 				database.exec("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON");
 				if (database.prepare("SELECT 1 FROM sqlite_schema WHERE name='recovery_state'").get())
 					throw new AppError("STORE_MISMATCH");
