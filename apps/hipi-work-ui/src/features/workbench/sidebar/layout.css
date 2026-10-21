@@ -1,13 +1,28 @@
 /* Original sidebar construction; layout tokens follow the desktop reference. */
 .sidebar {
-	--sidebar-row-base-height: 30px;
-	--sidebar-row-height: max(var(--sidebar-row-base-height), calc(var(--font-ui-size) * 1.5 + 4px));
+	--sidebar-row-base-height: var(--ui-navigation-row-size);
+	--sidebar-row-height: max(var(--sidebar-row-base-height), calc(var(--font-ui-size) * 1.5 + var(--spacing)));
 	--sidebar-row-gap: 1px;
-	--sidebar-leading-slot: 24px;
+	--sidebar-leading-slot: calc(var(--sidebar-icon-size) + var(--sidebar-content-gap));
+	--sidebar-icon-size: var(--ui-icon-size);
+	--sidebar-cell-inset: calc(var(--spacing) * 2);
+	--sidebar-content-gap: var(--sidebar-cell-inset);
+	--sidebar-section-gap: calc(var(--spacing) * 4);
+	--sidebar-section-content-gap: var(--spacing);
+	--sidebar-corner-scale: 1;
+	--sidebar-row-radius: calc(var(--ui-row-radius) * var(--sidebar-corner-scale));
+	--sidebar-action-size: var(--ui-control-compact-size);
+	--sidebar-toolbar-size: var(--ui-control-toolbar-size);
+	--sidebar-disclosure-inset: calc((var(--sidebar-toolbar-size) - var(--sidebar-icon-size)) / 2);
+	--sidebar-row-hover-surface: color-mix(
+		in oklab,
+		var(--region-foreground, var(--ui-hover-foreground)) var(--ui-hover-opacity),
+		transparent
+	);
 }
 
 .sidebar .sidebar-brand-row {
-	gap: 4px;
+	gap: var(--spacing);
 }
 
 .pinned-conversations {
@@ -42,9 +57,31 @@
 }
 
 .sidebar .nav-section-heading {
+	min-height: var(--sidebar-row-height);
+	margin-top: 0;
+	padding-inline: var(--sidebar-cell-inset) calc(var(--sidebar-cell-inset) - var(--spacing) / 2);
 	font-size: var(--font-ui-size);
 	font-weight: 500;
 	letter-spacing: 0;
+}
+
+.sidebar .new-conversation-trigger {
+	height: auto;
+	min-height: var(--sidebar-row-height);
+	gap: var(--sidebar-content-gap);
+	padding: 0 var(--sidebar-cell-inset);
+	border: 0;
+	font: inherit;
+	line-height: 1.5;
+	border-radius: var(--sidebar-row-radius);
+}
+
+.sidebar .new-conversation-trigger:not(:disabled):hover {
+	background: var(--sidebar-row-hover-surface);
+}
+
+.sidebar .navigation-list {
+	padding-top: var(--sidebar-section-gap);
 }
 
 .sidebar .sidebar-search-panel[hidden] {
@@ -67,22 +104,27 @@
 }
 
 .sidebar .workspace-tree {
-	gap: 4px;
+	gap: var(--sidebar-row-gap);
+	margin-block: 0;
 	font-size: var(--font-ui-size);
 }
 
 .workspace-tree .sidebar-preview-row {
 	height: auto;
 	min-height: var(--sidebar-row-height);
-	padding-inline: 8px;
-	gap: 8px;
-	border-radius: 10px;
+	padding-inline: var(--sidebar-cell-inset);
+	gap: var(--sidebar-content-gap);
+	border-radius: var(--sidebar-row-radius);
 }
 
 /* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: Unsupported engines retain the ordinary rounded rectangle. */
 @supports (corner-shape: superellipse(1.5)) {
+	.sidebar {
+		--sidebar-corner-scale: 1.25;
+	}
+
+	.sidebar .new-conversation-trigger,
 	.workspace-tree .sidebar-preview-row {
-		border-radius: 12.5px;
 		/* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: Guarded by the feature query. */
 		corner-shape: superellipse(1.5);
 	}
@@ -90,7 +132,7 @@
 
 .workspace-tree .project-row {
 	gap: 0;
-	padding-inline: 8px;
+	padding-inline: var(--sidebar-cell-inset);
 }
 
 .workspace-tree .project-toggle,
@@ -104,15 +146,20 @@
 
 .workspace-tree .project-toggle {
 	position: relative;
-	flex: 0 0 var(--sidebar-leading-slot);
-	align-self: stretch;
+	flex: 0 0 var(--sidebar-toolbar-size);
+	height: var(--sidebar-toolbar-size);
+	min-height: var(--sidebar-toolbar-size);
+	align-self: center;
+	/* Keep the folder center and title anchor stable around the wider hit target. */
+	margin-inline-start: calc(-1 * var(--sidebar-disclosure-inset));
+	margin-inline-end: calc(var(--sidebar-leading-slot) - var(--sidebar-toolbar-size) + var(--sidebar-disclosure-inset));
 	padding: 0;
 }
 
 .workspace-tree .project-toggle :is(.project-icon, .project-chevron) {
 	position: absolute;
-	inset-inline-start: 0;
-	width: 16px;
+	inset-inline-start: var(--sidebar-disclosure-inset);
+	width: var(--sidebar-icon-size);
 	justify-content: center;
 }
 
@@ -131,8 +178,9 @@
 }
 
 .workspace-tree .project-open {
-	gap: 8px;
-	padding: 0 8px 0 0;
+	gap: var(--sidebar-content-gap);
+	padding: 0;
+	padding-inline-end: var(--sidebar-cell-inset);
 }
 
 .workspace-tree .project-name {
@@ -145,29 +193,31 @@
 	border: 0;
 }
 
-.workspace-tree .conversation-list {
+.sidebar .workspace-tree .conversation-list {
 	display: grid;
 	gap: var(--sidebar-row-gap);
+	margin-top: 0;
 }
 
 .sidebar .workspace-tree.conversation-list {
 	gap: var(--sidebar-row-gap);
 }
 
-.workspace-tree .conversation-list.recent-virtual-list {
+.sidebar .workspace-tree .conversation-list.recent-virtual-list {
 	/* Absolute rows receive their one gap from the virtualizer, not CSS grid. */
+	display: block;
 	gap: 0;
 }
 
-.workspace-tree .conversation-link {
+.sidebar .workspace-tree .conversation-link {
 	height: auto;
 	min-height: var(--sidebar-row-height);
-	padding-block: 0;
+	padding: 0;
 	font: inherit;
 	line-height: 1.5;
 }
 
-.workspace-tree .project-conversations .conversation-link {
+.sidebar .workspace-tree .project-conversations .conversation-link {
 	padding-inline: calc(var(--sidebar-leading-slot) - 1px) 0;
 	/* The link's transparent 1px border is inside the shared title anchor. */
 }
@@ -193,14 +243,14 @@
 .workspace-tree .recent-actions-trigger,
 .workspace-tree .conversation-actions-trigger,
 .workspace-tree .conversation-quick-action {
-	flex: 0 0 28px;
-	width: 28px;
-	height: 28px;
-	min-height: 28px;
+	flex: 0 0 var(--sidebar-action-size);
+	width: var(--sidebar-action-size);
+	height: var(--sidebar-action-size);
+	min-height: var(--sidebar-action-size);
 	margin: 0;
 	padding: 0;
 	color: var(--muted);
-	border-radius: 10px;
+	border-radius: var(--sidebar-row-radius);
 	transition:
 		opacity 150ms,
 		color 150ms;
@@ -211,7 +261,7 @@
 .sidebar .workspace-tree .sidebar-preview-row[data-state="open"],
 .sidebar .workspace-tree .sidebar-preview-row:has([data-state="open"]),
 .sidebar .workspace-tree .sidebar-preview-row[data-selected="true"] {
-	background: color-mix(in srgb, var(--text) 8%, var(--sidebar));
+	background: var(--sidebar-row-hover-surface);
 }
 
 .workspace-tree .sidebar-row-actions > button:hover,
@@ -229,7 +279,7 @@
 }
 
 .workspace-tree .recent-conversations {
-	margin-top: 16px;
+	margin-top: var(--sidebar-section-gap);
 }
 
 .workspace-tree .recent-conversations-heading {
@@ -246,7 +296,7 @@
 	color: var(--muted);
 }
 
-.workspace-tree .recent-conversations .conversation-link {
+.sidebar .workspace-tree .recent-conversations .conversation-link {
 	padding-inline-start: 0;
 }
 
@@ -462,8 +512,8 @@
 	.workspace-tree .sidebar-preview-row:focus-within .conversation-actions-trigger,
 	.workspace-tree .sidebar-preview-row[data-state="open"] .conversation-actions-trigger,
 	.workspace-tree .conversation-actions-trigger[data-state="open"] {
-		flex-basis: 28px;
-		width: 28px;
+		flex-basis: var(--sidebar-action-size);
+		width: var(--sidebar-action-size);
 		overflow: visible;
 	}
 
@@ -557,7 +607,13 @@
 }
 
 .sidebar-order-section + .sidebar-order-section {
-	margin-top: 12px;
+	margin-top: var(--sidebar-section-gap);
+}
+
+.sidebar-section-content > div > .workspace-tree,
+.sidebar-section-content > div > .pinned-conversations,
+.sidebar-section-content > div > .project-conversations {
+	padding-top: var(--sidebar-section-content-gap);
 }
 
 .sidebar-order-section .pinned-conversations {
@@ -618,6 +674,17 @@
 }
 
 @media (any-pointer: coarse) {
+	.sidebar {
+		--sidebar-action-size: var(--ui-control-touch-size);
+		--sidebar-toolbar-size: var(--ui-control-touch-size);
+		--sidebar-row-base-height: var(--ui-control-touch-size);
+		--sidebar-leading-slot: var(--sidebar-toolbar-size);
+	}
+
+	.workspace-tree .project-toggle {
+		margin-inline: 0;
+	}
+
 	.workspace-tree .project-toggle .project-chevron {
 		opacity: 1;
 	}
@@ -640,8 +707,64 @@
 	}
 
 	.workspace-tree .conversation-actions-trigger {
-		flex-basis: 28px;
-		width: 28px;
+		flex-basis: var(--sidebar-action-size);
+		width: var(--sidebar-action-size);
 		overflow: visible;
 	}
+}
+
+/* Pinned desktop collapse reserves space without unmounting navigation state. */
+.sidebar-surface {
+	--sidebar-content-travel: calc(var(--spacing) * -4);
+	display: flex;
+	flex-shrink: 0;
+	min-width: 0;
+	overflow: hidden;
+}
+.sidebar-surface:dir(rtl) {
+	--sidebar-content-travel: calc(var(--spacing) * 4);
+}
+@media (min-width: 721px) {
+	.work-shell[data-navigation-mode="desktop"] .sidebar-surface > .sidebar {
+		display: flex;
+		width: var(--sidebar-width);
+		height: 100%;
+		opacity: var(--sidebar-progress);
+		transform: translateX(calc(var(--sidebar-content-travel) * (1 - var(--sidebar-progress))));
+	}
+}
+@media (max-width: 720px) {
+	.sidebar-surface {
+		display: contents;
+	}
+}
+
+/* Header/disclosure controls and row actions have distinct density roles. */
+.sidebar :is(.sidebar-search-trigger, .sidebar-collapse) {
+	width: var(--sidebar-toolbar-size);
+	height: var(--sidebar-toolbar-size);
+	min-height: var(--sidebar-toolbar-size);
+	padding: 0;
+}
+.sidebar :is(.sidebar-search-trigger, .sidebar-collapse):not(:disabled):hover {
+	background: var(--sidebar-row-hover-surface);
+}
+.sidebar-icon {
+	width: var(--ui-icon-size);
+	height: var(--ui-icon-size);
+	stroke-width: var(--ui-icon-stroke-width);
+}
+.sidebar-icon[data-sidebar-icon="disclosure"] {
+	width: calc(var(--spacing) * 3);
+	height: calc(var(--spacing) * 3);
+}
+
+.sidebar .nav-section-heading > [data-slot="button"] {
+	width: var(--sidebar-action-size);
+	height: var(--sidebar-action-size);
+	min-height: var(--sidebar-action-size);
+	padding: 0;
+}
+.sidebar :is(.sidebar-row-actions, .conversation-hover-actions, .nav-section-heading) .lucide {
+	stroke-width: var(--ui-icon-stroke-width);
 }

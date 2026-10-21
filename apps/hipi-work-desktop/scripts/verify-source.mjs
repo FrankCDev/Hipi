@@ -49,6 +49,7 @@ nodeTests.push("apps/hipi-work-desktop/scripts/dev/server.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/dev/bundle.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/test/development/launch.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/development/control.test.ts");
+nodeTests.push("apps/hipi-work-desktop/test/development/navigation.test.ts");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/project-hover-publication.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/production-policy.test.mjs");
@@ -173,6 +174,9 @@ const uiTests = [
 	"conversation-capabilities-interaction",
 	"workbench/sidebar/conversation-preview-card",
 	"workbench/sidebar/project-preview-card",
+	"workbench/sidebar/action-tooltip-mounted",
+	"workbench/sidebar/sidebar-surface-mounted",
+	"workbench/sidebar/recent-virtualizer-geometry-mounted",
 	"workbench/sidebar/sidebar-title",
 	"workbench/sidebar/sidebar-title-lifecycle",
 	"workbench/sidebar/sidebar-drag-provider",
@@ -208,6 +212,7 @@ const uiTests = [
 	"tool-activities",
 	"tool-packs-ui",
 ].map((name) => `apps/hipi-work-ui/test/${name}.test.tsx`);
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/sidebar-geometry-cascade.test.ts");
 uiTests.push("apps/hipi-work-ui/test/agent-permissions.test.ts");
 uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");

@@ -12,7 +12,7 @@ import {
 } from "./virtualization-fixture.mjs";
 import { virtualizationRoleEntry, virtualizationWorkspaceIds } from "./virtualization-manifest.mjs";
 
-test("publication diagnostics distinguish unchanged pass and monotonic time bounds without exposing cursors", async () => {
+test("publication diagnostics distinguish fixed 90s time and unchanged pass bounds without exposing cursors", async () => {
 	for (const timed of [false, true]) {
 		let calls = 0;
 		await assert.rejects(
@@ -26,7 +26,7 @@ test("publication diagnostics distinguish unchanged pass and monotonic time boun
 						return { state: "building", nextCursor: `private-cursor-${calls}` };
 					},
 				},
-				() => (timed && calls >= 3 ? 30000 : 0),
+				() => (timed && calls >= 3 ? 90000 : 0),
 			),
 			(error) => {
 				assert.doesNotMatch(error.message, /private-cursor/);
@@ -38,11 +38,45 @@ test("publication diagnostics distinguish unchanged pass and monotonic time boun
 					restarts: 1,
 					cursorChanges: timed ? 2 : 2403,
 					state: "building",
-					elapsedMs: timed ? 30000 : 0,
+					elapsedMs: timed ? 90000 : 0,
 				});
 				return true;
 			},
 		);
+	}
+});
+
+test("publication progress never restarts the fixed completion clock", async () => {
+	let calls = 0;
+	await assert.rejects(
+		publishVirtualizationProjection(
+			{
+				async call() {
+					calls++;
+					return { state: "building", nextCursor: `cursor-${calls}` };
+				},
+			},
+			() => calls * 30000,
+		),
+		/"timeLimitReached":true,"pass":3/,
+	);
+	assert.equal(calls, 3);
+});
+
+test("publication rejects a ready result returned at or after the fixed deadline", async () => {
+	for (const completion of [89999, 90000, 90001]) {
+		let elapsed = 0;
+		const result = publishVirtualizationProjection(
+			{
+				async call() {
+					elapsed = completion;
+					return { state: "ready", nextCursor: null };
+				},
+			},
+			() => elapsed,
+		);
+		if (completion < 90000) await result;
+		else await assert.rejects(result, /"timeLimitReached":true,"pass":1/);
 	}
 });
 

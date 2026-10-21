@@ -6,6 +6,7 @@ import {
 	type ActionMenuState,
 } from "../../../components/ui/action-menu.tsx";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover.tsx";
+import { SidebarTooltipBoundary } from "./action-tooltip.tsx";
 import {
 	ConversationPreviewInteraction,
 	inPreviewCorridor,
@@ -245,263 +246,275 @@ export function SidebarPreviewRow({
 		returnFocus: returnPreviewFocus,
 	});
 	return (
-		<ActionMenuBoundary state={rowMenu}>
-			<Popover
-				open={!hidden && mode !== "closed"}
-				onOpenChange={(open) => {
-					if (!open) interaction.close();
-				}}
-			>
-				<PopoverAnchor asChild>
-					<ActionMenuContextTrigger asChild disabled={!renderActions || hidden || dragging || dialogOpen}>
-						{/* biome-ignore lint/a11y/useSemanticElements: This navigation row groups independent controls, not form fields. */}
-						<div
-							ref={row}
-							className={`sidebar-preview-row ${className}`}
-							data-selected={selected}
-							data-current={selected}
-							data-contains-current={containsCurrent}
-							data-preview-open={mode !== "closed"}
-							data-drag-source={sortable["data-drag-source"]}
-							data-drag-edge={sortable["data-drag-edge"]}
-							data-sidebar-sortable={!!orderAction && !orderAction.item.disabled}
-							onPointerDown={(event) => {
-								if (event.target instanceof Element && event.target.closest(".project-open, .conversation-link"))
-									sortable.onPointerDown(event);
-							}}
-							role="group"
-							aria-labelledby={titleId}
-							onContextMenu={(event) => {
-								if (
-									ownedDialog.current ||
-									!(event.target instanceof Element) ||
-									!event.currentTarget.contains(event.target)
-								) {
-									event.preventDefault();
-									return;
-								}
-								menuSource.current =
-									event.target.closest<HTMLElement>(focusableSelector) ??
-									event.currentTarget.querySelector<HTMLElement>(".project-open, .conversation-link");
-								const anchor =
-									menuSource.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-								// Native keyboard contextmenu events may carry no pointer coordinates.
-								// Position with public Content offsets, never a synthetic click or private anchor.
-								contextPosition.current =
-									event.clientX === 0 && event.clientY === 0
-										? { sideOffset: anchor.left, alignOffset: anchor.bottom }
-										: undefined;
-							}}
-							onPointerEnter={(event) => {
-								if (event.pointerType !== "mouse" && event.currentTarget.contains(event.target as Node))
-									setFocused(true);
-								if (
-									!dragging &&
-									!hidden &&
-									!dialogOpen &&
-									event.pointerType === "mouse" &&
-									event.target instanceof Node &&
-									event.currentTarget.contains(event.target)
-								) {
-									setHovered(true);
-									corridor.current = null;
-									interaction.holdCorridor(false);
-									interaction.enter(
-										event.target instanceof Element && !!event.target.closest("[data-preview-immediate]"),
-									);
-								}
-							}}
-							onPointerMove={(event) => {
-								if (
-									!dragging &&
-									!hidden &&
-									!dialogOpen &&
-									event.pointerType === "mouse" &&
-									event.target instanceof Element &&
-									event.currentTarget.contains(event.target)
-								)
-									interaction.enter(!!event.target.closest("[data-preview-immediate]"));
-							}}
-							onPointerLeave={(event) => {
-								if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
-								setHovered(false);
-								if (interaction.mode === "hover") {
-									corridor.current = { x: event.clientX, y: event.clientY, target: "card" };
-									interaction.holdCorridor(true);
-								}
-								if (!row.current?.querySelector(":focus-visible")) interaction.leave();
-							}}
-							onFocusCapture={(event) => {
-								focusOwner.current = event.target;
-								if (event.currentTarget.contains(event.target)) setFocused(true);
-								if (
-									!dragging &&
-									!hidden &&
-									!dialogOpen &&
-									!restoringFocus.current &&
-									event.currentTarget.contains(event.target) &&
-									event.target.matches(":focus-visible")
-								) {
-									source.current = event.target;
-									setFocused(true);
-									interaction.enter(true, true);
-								}
-							}}
-							onBlurCapture={(event) => {
-								if (
-									event.currentTarget.contains(event.target) &&
-									!event.currentTarget.contains(event.relatedTarget) &&
-									!card.current?.contains(event.relatedTarget)
-								) {
-									setFocused(false);
-									interaction.leave();
-								}
-							}}
-							onClickCapture={(event) => {
-								// Portalled dialog events bubble through React; only row actions dismiss the preview.
-								if (
-									event.target instanceof Node &&
-									event.currentTarget.contains(event.target) &&
-									!trigger.current?.contains(event.target)
-								)
-									interaction.close("navigate");
-							}}
-							onKeyDown={(event) => {
-								if (event.target instanceof Element && event.target.matches(".project-open, .conversation-link")) {
-									sortable.onKeyDown(event);
-									if (event.defaultPrevented) return;
-								}
-								if (
-									event.key !== "Tab" ||
-									event.shiftKey ||
-									event.altKey ||
-									event.ctrlKey ||
-									event.metaKey ||
-									event.nativeEvent.isComposing ||
-									event.nativeEvent.keyCode === 229 ||
-									mode === "closed" ||
-									!(event.target instanceof HTMLElement) ||
-									!event.currentTarget.contains(event.target) ||
-									!event.target.matches(".project-open, .conversation-link")
-								)
-									return;
-								const first = card.current && visibleControls(card.current)[0];
-								if (!first) return;
-								event.preventDefault();
-								source.current = event.target;
-								interaction.pin();
-								first.focus();
-							}}
-						>
-							{typeof children === "function"
-								? children({ hovered: hovered && !dragging && !hidden, describedBy: sortable.describedBy })
-								: children}
-							{renderActions?.({
-								previewContent: menuPreview ?? previewContent,
-								menuPosition,
-								rowMenu,
-								triggerRef: trigger,
-								inlineActions: true,
-								active: hovered || focused || mode !== "closed",
-								hidden,
-								onMenuOpen: () => {
-									if (row.current && trigger.current) {
-										const anchor = row.current.getBoundingClientRect();
-										const button = trigger.current.getBoundingClientRect();
-										setMenuPosition({
-											sideOffset: anchor.right - button.right + 2,
-											alignOffset: anchor.top - button.top,
-										});
-									}
-									interaction.close("navigate");
-								},
-								onOverlayChange: (owner, open) => {
-									if (owner === "dialog") ownedDialog.current = open;
-									if (owner === "dialog") protectWindow?.(`${windowOwner}:dialog`, open, row.current);
-									interaction.setOverlayOpen(owner, open);
-								},
-								onReturnFocus: returnFocus,
-							})}
-						</div>
-					</ActionMenuContextTrigger>
-				</PopoverAnchor>
-				<PopoverContent
-					onEscapeKeyDown={(event) => {
-						// Radix handles Escape at document capture, before the inline editor.
-						if (event.target instanceof Element && event.target.closest("[data-project-inline-rename]"))
-							event.preventDefault();
-					}}
-					onContextMenu={(event) => event.stopPropagation()}
-					ref={card}
-					className="conversation-preview-card"
-					data-sidebar-row-portal=""
-					side="right"
-					align="start"
-					sideOffset={2}
-					collisionPadding={12}
-					aria-labelledby={titleId}
-					tabIndex={-1}
-					onPointerEnter={() => {
-						corridor.current = null;
-						interaction.holdCorridor(false);
-						interaction.cancelPending();
-					}}
-					onPointerLeave={(event) => {
-						if (interaction.mode === "hover") {
-							corridor.current = { x: event.clientX, y: event.clientY, target: "row" };
-							interaction.holdCorridor(true);
-						}
-						interaction.leave();
-					}}
-					onFocusCapture={() => {
-						interaction.pin();
-						protectWindow?.(`${windowOwner}:portal`, true, row.current);
-					}}
-					onBlurCapture={(event) => {
-						if (!event.currentTarget.contains(event.relatedTarget)) protectWindow?.(`${windowOwner}:portal`, false);
-					}}
-					onKeyDown={(event) => {
-						if (
-							event.key !== "Tab" ||
-							event.altKey ||
-							event.ctrlKey ||
-							event.metaKey ||
-							event.nativeEvent.isComposing ||
-							event.nativeEvent.keyCode === 229 ||
-							!card.current
-						)
-							return;
-						const controls = visibleControls(card.current);
-						if (event.shiftKey && event.target === controls[0]) {
-							event.preventDefault();
-							returnPreviewFocus();
-						} else if (!event.shiftKey && event.target === controls.at(-1)) {
-							const ordered = visibleControls(document);
-							const index = source.current ? ordered.indexOf(source.current) : -1;
-							const next =
-								index >= 0 ? ordered.slice(index + 1).find((item) => !card.current?.contains(item)) : undefined;
-							event.preventDefault();
-							interaction.close("navigate");
-							restoringFocus.current = true;
-							(next ?? source.current)?.focus();
-							restoringFocus.current = false;
-						}
-					}}
-					onOpenAutoFocus={(event) => {
-						if (interaction.mode === "hover") event.preventDefault();
-					}}
-					onCloseAutoFocus={(event) => {
-						event.preventDefault();
-						if (interaction.consumeFocusReturn()) returnPreviewFocus();
-					}}
-					onInteractOutside={(event) => {
-						if (event.target instanceof Node && row.current?.contains(event.target)) event.preventDefault();
-						else interaction.close("navigate");
+		<SidebarTooltipBoundary disabled={hidden || dragging || dialogOpen || menu.open || ownedDialog.current}>
+			<ActionMenuBoundary state={rowMenu}>
+				<Popover
+					open={!hidden && mode !== "closed"}
+					onOpenChange={(open) => {
+						if (!open) interaction.close();
 					}}
 				>
-					{previewContent}
-				</PopoverContent>
-			</Popover>
-		</ActionMenuBoundary>
+					<PopoverAnchor asChild>
+						<ActionMenuContextTrigger asChild disabled={!renderActions || hidden || dragging || dialogOpen}>
+							{/* biome-ignore lint/a11y/useSemanticElements: This navigation row groups independent controls, not form fields. */}
+							<div
+								ref={row}
+								className={`sidebar-preview-row ${className}`}
+								data-selected={selected}
+								data-current={selected}
+								data-contains-current={containsCurrent}
+								data-preview-open={mode !== "closed"}
+								data-drag-source={sortable["data-drag-source"]}
+								data-drag-edge={sortable["data-drag-edge"]}
+								data-sidebar-sortable={!!orderAction && !orderAction.item.disabled}
+								onPointerDown={(event) => {
+									if (event.target instanceof Element && event.target.closest(".project-open, .conversation-link"))
+										sortable.onPointerDown(event);
+								}}
+								role="group"
+								aria-labelledby={titleId}
+								onContextMenu={(event) => {
+									if (
+										ownedDialog.current ||
+										!(event.target instanceof Element) ||
+										!event.currentTarget.contains(event.target)
+									) {
+										event.preventDefault();
+										return;
+									}
+									menuSource.current =
+										event.target.closest<HTMLElement>(focusableSelector) ??
+										event.currentTarget.querySelector<HTMLElement>(".project-open, .conversation-link");
+									const anchor =
+										menuSource.current?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+									// Native keyboard contextmenu events may carry no pointer coordinates.
+									// Position with public Content offsets, never a synthetic click or private anchor.
+									contextPosition.current =
+										event.clientX === 0 && event.clientY === 0
+											? { sideOffset: anchor.left, alignOffset: anchor.bottom }
+											: undefined;
+								}}
+								onPointerEnter={(event) => {
+									if (event.pointerType !== "mouse" && event.currentTarget.contains(event.target as Node))
+										setFocused(true);
+									if (
+										!dragging &&
+										!hidden &&
+										!dialogOpen &&
+										event.pointerType === "mouse" &&
+										event.target instanceof Node &&
+										event.currentTarget.contains(event.target)
+									) {
+										setHovered(true);
+										corridor.current = null;
+										interaction.holdCorridor(false);
+										if (event.target instanceof Element && event.target.closest("[data-action-tooltip-trigger]")) {
+											interaction.close("navigate");
+											return;
+										}
+										interaction.enter(
+											event.target instanceof Element && !!event.target.closest("[data-preview-immediate]"),
+										);
+									}
+								}}
+								onPointerMove={(event) => {
+									if (
+										!dragging &&
+										!hidden &&
+										!dialogOpen &&
+										event.pointerType === "mouse" &&
+										event.target instanceof Element &&
+										event.currentTarget.contains(event.target)
+									) {
+										if (event.target.closest("[data-action-tooltip-trigger]")) interaction.close("navigate");
+										else interaction.enter(!!event.target.closest("[data-preview-immediate]"));
+									}
+								}}
+								onPointerLeave={(event) => {
+									if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
+									setHovered(false);
+									if (interaction.mode === "hover") {
+										corridor.current = { x: event.clientX, y: event.clientY, target: "card" };
+										interaction.holdCorridor(true);
+									}
+									if (!row.current?.querySelector(":focus-visible")) interaction.leave();
+								}}
+								onFocusCapture={(event) => {
+									focusOwner.current = event.target;
+									if (event.currentTarget.contains(event.target)) setFocused(true);
+									if (
+										!dragging &&
+										!hidden &&
+										!dialogOpen &&
+										!restoringFocus.current &&
+										event.currentTarget.contains(event.target) &&
+										event.target.matches(":focus-visible")
+									) {
+										if (event.target.closest("[data-action-tooltip-trigger]")) {
+											interaction.close("navigate");
+											return;
+										}
+										source.current = event.target;
+										setFocused(true);
+										interaction.enter(true, true);
+									}
+								}}
+								onBlurCapture={(event) => {
+									if (
+										event.currentTarget.contains(event.target) &&
+										!event.currentTarget.contains(event.relatedTarget) &&
+										!card.current?.contains(event.relatedTarget)
+									) {
+										setFocused(false);
+										interaction.leave();
+									}
+								}}
+								onClickCapture={(event) => {
+									// Portalled dialog events bubble through React; only row actions dismiss the preview.
+									if (
+										event.target instanceof Node &&
+										event.currentTarget.contains(event.target) &&
+										!trigger.current?.contains(event.target)
+									)
+										interaction.close("navigate");
+								}}
+								onKeyDown={(event) => {
+									if (event.target instanceof Element && event.target.matches(".project-open, .conversation-link")) {
+										sortable.onKeyDown(event);
+										if (event.defaultPrevented) return;
+									}
+									if (
+										event.key !== "Tab" ||
+										event.shiftKey ||
+										event.altKey ||
+										event.ctrlKey ||
+										event.metaKey ||
+										event.nativeEvent.isComposing ||
+										event.nativeEvent.keyCode === 229 ||
+										mode === "closed" ||
+										!(event.target instanceof HTMLElement) ||
+										!event.currentTarget.contains(event.target) ||
+										!event.target.matches(".project-open, .conversation-link")
+									)
+										return;
+									const first = card.current && visibleControls(card.current)[0];
+									if (!first) return;
+									event.preventDefault();
+									source.current = event.target;
+									interaction.pin();
+									first.focus();
+								}}
+							>
+								{typeof children === "function"
+									? children({ hovered: hovered && !dragging && !hidden, describedBy: sortable.describedBy })
+									: children}
+								{renderActions?.({
+									previewContent: menuPreview ?? previewContent,
+									menuPosition,
+									rowMenu,
+									triggerRef: trigger,
+									inlineActions: true,
+									active: hovered || focused || mode !== "closed",
+									hidden,
+									onMenuOpen: () => {
+										if (row.current && trigger.current) {
+											const anchor = row.current.getBoundingClientRect();
+											const button = trigger.current.getBoundingClientRect();
+											setMenuPosition({
+												sideOffset: anchor.right - button.right + 2,
+												alignOffset: anchor.top - button.top,
+											});
+										}
+										interaction.close("navigate");
+									},
+									onOverlayChange: (owner, open) => {
+										if (owner === "dialog") ownedDialog.current = open;
+										if (owner === "dialog") protectWindow?.(`${windowOwner}:dialog`, open, row.current);
+										interaction.setOverlayOpen(owner, open);
+									},
+									onReturnFocus: returnFocus,
+								})}
+							</div>
+						</ActionMenuContextTrigger>
+					</PopoverAnchor>
+					<PopoverContent
+						onEscapeKeyDown={(event) => {
+							// Radix handles Escape at document capture, before the inline editor.
+							if (event.target instanceof Element && event.target.closest("[data-project-inline-rename]"))
+								event.preventDefault();
+						}}
+						onContextMenu={(event) => event.stopPropagation()}
+						ref={card}
+						className="conversation-preview-card"
+						data-sidebar-row-portal=""
+						side="right"
+						align="start"
+						sideOffset={2}
+						collisionPadding={12}
+						aria-labelledby={titleId}
+						tabIndex={-1}
+						onPointerEnter={() => {
+							corridor.current = null;
+							interaction.holdCorridor(false);
+							interaction.cancelPending();
+						}}
+						onPointerLeave={(event) => {
+							if (interaction.mode === "hover") {
+								corridor.current = { x: event.clientX, y: event.clientY, target: "row" };
+								interaction.holdCorridor(true);
+							}
+							interaction.leave();
+						}}
+						onFocusCapture={() => {
+							interaction.pin();
+							protectWindow?.(`${windowOwner}:portal`, true, row.current);
+						}}
+						onBlurCapture={(event) => {
+							if (!event.currentTarget.contains(event.relatedTarget)) protectWindow?.(`${windowOwner}:portal`, false);
+						}}
+						onKeyDown={(event) => {
+							if (
+								event.key !== "Tab" ||
+								event.altKey ||
+								event.ctrlKey ||
+								event.metaKey ||
+								event.nativeEvent.isComposing ||
+								event.nativeEvent.keyCode === 229 ||
+								!card.current
+							)
+								return;
+							const controls = visibleControls(card.current);
+							if (event.shiftKey && event.target === controls[0]) {
+								event.preventDefault();
+								returnPreviewFocus();
+							} else if (!event.shiftKey && event.target === controls.at(-1)) {
+								const ordered = visibleControls(document);
+								const index = source.current ? ordered.indexOf(source.current) : -1;
+								const next =
+									index >= 0 ? ordered.slice(index + 1).find((item) => !card.current?.contains(item)) : undefined;
+								event.preventDefault();
+								interaction.close("navigate");
+								restoringFocus.current = true;
+								(next ?? source.current)?.focus();
+								restoringFocus.current = false;
+							}
+						}}
+						onOpenAutoFocus={(event) => {
+							if (interaction.mode === "hover") event.preventDefault();
+						}}
+						onCloseAutoFocus={(event) => {
+							event.preventDefault();
+							if (interaction.consumeFocusReturn()) returnPreviewFocus();
+						}}
+						onInteractOutside={(event) => {
+							if (event.target instanceof Node && row.current?.contains(event.target)) event.preventDefault();
+							else interaction.close("navigate");
+						}}
+					>
+						{previewContent}
+					</PopoverContent>
+				</Popover>
+			</ActionMenuBoundary>
+		</SidebarTooltipBoundary>
 	);
 }

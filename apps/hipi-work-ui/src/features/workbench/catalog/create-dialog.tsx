@@ -15,9 +15,9 @@ import {
 } from "../../../components/ui/dialog.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
 import { Input } from "../../../components/ui/input.tsx";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip.tsx";
 import { ComposerKeyboard } from "../composer/keyboard.ts";
 import { projectFolderLabels } from "../projects/folder-labels.ts";
+import { SidebarActionTooltip } from "../sidebar/action-tooltip.tsx";
 import "./create-dialog.css";
 
 export function CreateDialog({
@@ -157,12 +157,9 @@ export function CreateDialog({
 			}}
 		>
 			{compact ? (
-				<TooltipProvider>
-					<Tooltip>
-						<TooltipTrigger asChild>{trigger}</TooltipTrigger>
-						<TooltipContent>{title}</TooltipContent>
-					</Tooltip>
-				</TooltipProvider>
+				<SidebarActionTooltip label={title} disabled={open}>
+					{trigger}
+				</SidebarActionTooltip>
 			) : (
 				trigger
 			)}

@@ -174,11 +174,14 @@ test("header search exposes a named closed dialog trigger without a loaded-title
 	assert.equal(triggers.length, 1);
 	const trigger = triggers[0];
 	assert.match(trigger, /aria-label="搜索聊天"/);
-	assert.match(trigger, /title="搜索聊天"/);
+	// Real hover/focus behavior is covered by sidebar/action-tooltip-mounted.test.tsx.
+	assert.match(trigger, /data-action-tooltip-trigger=""/);
+	assert.doesNotMatch(trigger, /\stitle=/);
+	assert.match(trigger, /data-slot="tooltip-trigger"/);
 	assert.match(trigger, /aria-expanded="false"/);
 	assert.match(trigger, /data-size="icon-sm"/);
 	assert.match(trigger, /focus-visible:outline-2/);
-	assert.match(trigger, /<svg aria-hidden="true"/);
+	assert.match(trigger, /<svg\b[^>]*aria-hidden="true"/);
 	assert.doesNotMatch(html, /role="dialog"|role="combobox"|conversation-search-input/);
 	assert.doesNotMatch(html, /sidebar-search-panel|class="search-scope"|仅搜索已展开项目中已加载并显示的会话/);
 });

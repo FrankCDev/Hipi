@@ -144,6 +144,70 @@ test("keyboard selection requires exact canonical location, not title or convers
 	assert.throws(() => assertSidebarKeyboardSelection({ ...baseline(), surface: "project" }, scope));
 });
 
+test("modal isolation blocks traversal without hiding mounted selection or masking route drift", () => {
+	let isolation = null;
+	const row = (current, location) => ({
+		isConnected: true,
+		current,
+		dataset: { workspaceId: scope.workspaceId, conversationId: scope.conversationId, sidebarLocation: location },
+		classList: { contains: () => true },
+		closest: (selector) => {
+			assert.equal(selector, '[hidden],[inert],[aria-hidden="true"]');
+			return isolation;
+		},
+		matches: () => false,
+		getClientRects: () => [{}],
+		getAttribute(name) {
+			assert.equal(name, "aria-current");
+			return this.current ? "page" : null;
+		},
+	});
+	const selected = row(true, "pinned"),
+		alias = row(false, "recent");
+	const menu = { contains: (node) => node === "menu-focus" };
+	const document = {
+		activeElement: "menu-focus",
+		defaultView: { getComputedStyle: () => ({ visibility: "visible" }), CSS: { escape: (value) => value } },
+		querySelectorAll: (selector) => {
+			if (selector === ".sidebar .project-open,.sidebar .conversation-link") return [selected, alias];
+			if (selector === "[data-message-id]")
+				return [{ dataset: { messageId: "message-one" }, textContent: "Persisted answer" }];
+			assert.equal(selector, '[role="menu"]');
+			return isolation ? [menu] : [];
+		},
+		querySelector: (selector) => {
+			if (selector === '[role="menu"]') return isolation ? menu : null;
+			if ([".composer textarea", ".conversation-panel .composer textarea"].includes(selector))
+				return { value: "Unsent 中文" };
+			return null;
+		},
+	};
+	const before = sidebarKeyboardState(document);
+	assert.equal(before.rows.length, 2);
+	assertSidebarKeyboardRestored(before, baseline());
+	for (const marker of [{ "aria-hidden": "true" }, { inert: true }]) {
+		isolation = marker;
+		const blocked = sidebarKeyboardState(document);
+		assert.deepEqual(blocked.rows, []);
+		assertSidebarKeyboardSelection(blocked, scope);
+		assertSidebarKeyboardRestored(blocked, before);
+		assert.equal(blocked.menuCount, 1);
+		assert.equal(blocked.focusInMenu, true);
+		alias.current = true;
+		assert.throws(() => assertSidebarKeyboardSelection(sidebarKeyboardState(document), scope));
+		selected.current = false;
+		assert.throws(() => assertSidebarKeyboardRestored(sidebarKeyboardState(document), before));
+		alias.current = false;
+		assert.throws(() => assertSidebarKeyboardRestored(sidebarKeyboardState(document), before));
+		selected.current = true;
+		selected.isConnected = false;
+		assert.throws(() => assertSidebarKeyboardRestored(sidebarKeyboardState(document), before));
+		selected.isConnected = true;
+	}
+	isolation = null;
+	assert.deepEqual(sidebarKeyboardState(document), before);
+});
+
 test("boundary setup stabilizes newly mounted terminal rows before any measured chord", async () => {
 	const rows = [0, 1, 2].map((index) => ({
 		identity: { ...scope, conversationId: `chat-${index}` },

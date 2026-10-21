@@ -4,15 +4,18 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { type AssistantMessageEvent, normalizeContext } from "@earendil-works/pi-ai";
 import { LiveDoc, type LiveState, type SubmissionId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorageReadOnly } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { AppClient, Frame, Scope } from "../src/contracts.ts";
-import { openTestRuntime } from "../src/testing.ts";
+import { openRuntime } from "../src/node.ts";
 import { serveLoopback } from "../src/transport-http.ts";
 import { createHttpClient } from "../src/transport-http-client.ts";
 import { createNodeIpcClient } from "../src/transport-ipc.ts";
+import { heldAnswer, heldResponse } from "./helpers/held-response.ts";
 
 async function until<T>(check: () => Promise<T | undefined>): Promise<T> {
 	const deadline = Date.now() + 10000;
@@ -38,10 +41,10 @@ async function completed(client: AppClient, requestId: string) {
 		return receipt?.execution === "done" ? receipt : undefined;
 	});
 }
-async function childClient(directory: string, holdPartial = false) {
-	const fixture = holdPartial ? "./transport-runtime-partial-child.ts" : "./transport-runtime-child.ts";
-	const child = fork(new URL(fixture, import.meta.url), [directory], {
-		stdio: ["ignore", "ignore", "inherit", "ipc"],
+async function childClient(directory: string, mode: "normal" | "hold" | "release" = "normal") {
+	const fixture = mode === "normal" ? "./transport-runtime-child.ts" : "./transport-runtime-partial-child.ts";
+	const child = fork(new URL(fixture, import.meta.url), [directory, mode], {
+		stdio: ["ignore", "ignore", "inherit", "ipc", mode === "release" ? "pipe" : "ignore"],
 	});
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -67,7 +70,17 @@ async function childClient(directory: string, holdPartial = false) {
 			child.once("exit", failed);
 			child.once("error", failed);
 		});
-		return { child, client: createNodeIpcClient(child) };
+		return {
+			child,
+			client: createNodeIpcClient(child),
+			releasePartial: async () => {
+				const control = child.stdio[4];
+				assert.ok(mode === "release" && control instanceof Writable);
+				await new Promise<void>((resolve, reject) =>
+					control.write(Buffer.from([1]), (error) => (error ? reject(error) : resolve())),
+				);
+			},
+		};
 	} catch (error) {
 		await kill(child);
 		throw error;
@@ -80,9 +93,98 @@ async function kill(child: ChildProcess) {
 	await exited;
 }
 
+test("held response has an exact fixed 10s abort bound and settles cleanup once", async (context) => {
+	context.mock.timers.enable({ apis: ["setTimeout"] });
+	let settled = 0;
+	const fixture = heldResponse(() => {
+		settled++;
+	});
+	const model = fixture.models.getModel("faux", "faux-1");
+	assert.ok(model);
+	const provider = fixture.models.getProvider("faux");
+	assert.ok(provider);
+	const stream = provider.streamSimple(model, normalizeContext({ messages: [] }));
+	context.mock.timers.tick(9999);
+	assert.equal(settled, 0);
+	context.mock.timers.tick(1);
+	assert.equal((await stream.result()).stopReason, "aborted");
+	assert.equal(settled, 1);
+	assert.throws(() => fixture.release(), /No held response/);
+	fixture.dispose();
+	context.mock.timers.tick(10000);
+	assert.equal(settled, 1);
+});
+
+test("held response preserves pending text lifecycle and exact released answer", async () => {
+	const fixture = heldResponse();
+	try {
+		const model = fixture.models.getModel("faux", "faux-1");
+		const provider = fixture.models.getProvider("faux");
+		assert.ok(model && provider);
+		const stream = provider.streamSimple(model, normalizeContext({ messages: [] }));
+		const iterator = stream[Symbol.asyncIterator]();
+		const events: AssistantMessageEvent[] = [];
+		for (let index = 0; index < 3; index++) {
+			const next = await iterator.next();
+			assert.equal(next.done, false);
+			events.push(next.value);
+		}
+		assert.deepEqual(
+			events.map((event) => event.type),
+			["start", "text_start", "text_delta"],
+		);
+		fixture.release();
+		for await (const event of stream) events.push(event);
+		assert.deepEqual(
+			events.map((event) => event.type),
+			["start", "text_start", "text_delta", "text_delta", "text_end", "done"],
+		);
+		for (const event of events) if ("partial" in event) assert.equal(event.partial.stopReason, "pending");
+		assert.ok(events[0].type === "start" && events[1].type === "text_start");
+		assert.deepEqual(events[0].partial.content, []);
+		assert.deepEqual(events[1].partial.content, [{ type: "text", text: "" }]);
+		assert.equal(
+			events
+				.filter((event) => event.type === "text_delta")
+				.map((event) => event.delta)
+				.join(""),
+			heldAnswer,
+		);
+		assert.equal((await stream.result()).stopReason, "stop");
+		assert.deepEqual((await stream.result()).content, [{ type: "text", text: heldAnswer }]);
+	} finally {
+		fixture.dispose();
+	}
+});
+
+test("held partial fixture releases its control pipe and stream on parent disconnect", { timeout: 15000 }, async () => {
+	const directory = await mkdtemp(join(tmpdir(), "hipi-ipc-held-disconnect-"));
+	const connection = await childClient(directory, "release");
+	try {
+		const scope = await setup(connection.client);
+		await connection.client.call("submit", { ...scope, requestId: "held", text: "Hold until disconnect" });
+		await until(async () => ((await connection.client.call("snapshot", scope)).partial ? true : undefined));
+		connection.client.close();
+		const exited = once(connection.child, "exit");
+		connection.child.disconnect();
+		const [code, signal] = await exited;
+		assert.equal(code, 0);
+		assert.equal(signal, null);
+	} finally {
+		connection.client.close();
+		await kill(connection.child);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("real PI SQLite via HTTP: streamed execution survives cancelWait and reconnect", { timeout: 30000 }, async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-http-runtime-"));
-	const runtime = await openTestRuntime(directory, { tokensPerSecond: 200, resume: true });
+	const fixture = heldResponse();
+	const runtime = await openRuntime(directory, {
+		models: fixture.models,
+		model: { provider: "faux", modelId: "faux-1" },
+		resume: true,
+	});
 	const origin = "http://127.0.0.1:4000";
 	const server = await serveLoopback(runtime, { origin });
 	try {
@@ -103,11 +205,18 @@ test("real PI SQLite via HTTP: streamed execution survives cancelWait and reconn
 			text: "Test the real durable path",
 		});
 		await until(async () => (frames.some((frame) => frame.snapshot.partial.length > 0) ? true : undefined));
+		assert.equal((await client.call("snapshot", scope)).partial, "Hipi Work ");
+		assert.notEqual(
+			(await client.call("getReceipt", { workspaceId: "work", requestId: "http_request" }))?.execution,
+			"done",
+		);
 		wait.abort();
 		await watcher.dispose();
 		const count = frames.length;
 		const reconnected = createHttpClient({ ...server, origin });
+		fixture.release();
 		const final = await completed(reconnected, "http_request");
+		assert.equal(final.answer, heldAnswer);
 		assert.equal(final.receiptId, receipt.receiptId);
 		assert.match(final.answer ?? "", /deterministic test answer/);
 		assert.equal(frames.length, count);
@@ -122,6 +231,7 @@ test("real PI SQLite via HTTP: streamed execution survives cancelWait and reconn
 		assert.deepEqual(resumedFrames[0]?.snapshot, snapshot);
 		await resumed.dispose();
 	} finally {
+		fixture.dispose();
 		await server.close();
 		await runtime.close();
 		await rm(directory, { recursive: true, force: true });
@@ -133,7 +243,7 @@ test(
 	{ timeout: 30000 },
 	async () => {
 		const directory = await mkdtemp(join(tmpdir(), "hipi-ipc-runtime-"));
-		let connection = await childClient(directory);
+		let connection = await childClient(directory, "release");
 		try {
 			const identity = await connection.client.call("handshake", {});
 			const scope = await setup(connection.client);
@@ -152,11 +262,20 @@ test(
 			const input = { ...scope, requestId: "ipc_completed", text: "Complete before process death" };
 			const receipt = await connection.client.call("submit", input);
 			await until(async () => (frames.some((frame) => frame.snapshot.partial.length > 0) ? true : undefined));
+			// The normal committed snapshot must still contain the held partial before release.
+			assert.equal((await connection.client.call("snapshot", scope)).partial, "Hipi Work ");
+			assert.notEqual(
+				(await connection.client.call("getReceipt", { workspaceId: "work", requestId: input.requestId }))
+					?.execution,
+				"done",
+			);
+			await connection.releasePartial();
 			const final = await completed(connection.client, input.requestId);
+			assert.equal(final.answer, "Hipi Work deterministic test answer. No model API or external tool was called.");
 			await watcher.dispose();
 			await kill(connection.child);
 			connection.client.close();
-			connection = await childClient(directory, true);
+			connection = await childClient(directory, "hold");
 			assert.deepEqual(await connection.client.call("handshake", {}), identity);
 			assert.equal(
 				(await connection.client.call("listConversations", { workspaceId: "work" })).items[0]?.conversationId,

@@ -1,0 +1,17 @@
+/* Shared internal roles, calibrated against the desktop UI. Appearance settings
+   still own colors/fonts; these dimensions reuse Tailwind's rem-based spacing. */
+:root {
+	--ui-control-compact-size: calc(var(--spacing) * 5);
+	--ui-control-toolbar-size: calc(var(--spacing) * 7);
+	--ui-control-touch-size: calc(var(--spacing) * 11);
+	--ui-icon-size: calc(var(--spacing) * 4);
+	--ui-icon-stroke-width: 1.6;
+	--ui-navigation-row-size: calc(var(--spacing) * 7.5);
+	--ui-row-radius: calc(var(--spacing) * 2.5);
+	--ui-hover-opacity: 5%;
+	--ui-hover-foreground: var(--text);
+}
+:root[data-theme="dark"] {
+	--ui-hover-opacity: 8%;
+	--ui-hover-foreground: #fff;
+}

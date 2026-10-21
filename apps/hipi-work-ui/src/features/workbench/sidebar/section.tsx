@@ -11,8 +11,8 @@ import {
 } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { useThemeSettings } from "../../../app/theme/index.ts";
-import { Icon } from "../../../components/ui/icon.tsx";
 import { type SidebarOrderAction, useSidebarSortable } from "./drag-provider.tsx";
+import { SidebarIcon } from "./icon.tsx";
 import { sidebarSectionLabels } from "./section-labels.ts";
 
 type SectionContext = {
@@ -144,7 +144,7 @@ export function SidebarSectionHeading({
 				>
 					<span id={titleId}>{children}</span>
 					<span className="sidebar-section-chevron" data-expanded={!section.collapsed}>
-						<Icon name="chevron" size={12} />
+						<SidebarIcon name="disclosure" />
 					</span>
 				</button>
 			</h3>

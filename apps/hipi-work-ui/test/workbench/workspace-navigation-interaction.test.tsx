@@ -48,6 +48,7 @@ import { PinnedConversations } from "../../src/features/workbench/sidebar/pinned
 import { PresentationSession } from "../../src/features/workbench/sidebar/presentation-session.ts";
 import { SidebarSectionHeading } from "../../src/features/workbench/sidebar/section.tsx";
 import { SidebarSelectionProvider } from "../../src/features/workbench/sidebar/selection-provider.tsx";
+import { SidebarNavigationSurface } from "../../src/features/workbench/sidebar/surface.tsx";
 import { WorkspaceTree } from "../../src/features/workbench/sidebar/workspace-tree.tsx";
 import { Workbench } from "../../src/features/workbench/workbench.tsx";
 import { WorkbenchWelcome } from "../../src/features/workbench/workbench-welcome.tsx";
@@ -362,12 +363,18 @@ function drive(keybindings?: AppKeybindings) {
 		if (hooks.changed) continue;
 		const tree = elements(content, WorkspaceTree).find((entry) => entry.props.section === "projects");
 		assert.ok(tree);
+		// Providers are transparent to the shell; inspect the actual DOM host props.
+		const shells = elements(content, "div").filter((node) => node.props.className === "work-shell");
+		assert.equal(shells.length, 1);
+		const shell = shells[0];
+		assert.ok(isValidElement<{ "data-navigation-mode": "narrow" | "desktop"; "data-navigation-open": boolean }>(shell));
 		const file = element(content, FilePanel);
 		const leave = element(content, Dialog);
 		assert.ok(file.props.session instanceof FileWorkspaceSession);
 		assert.ok(tree.props.catalog instanceof CatalogSession);
 		return {
 			content,
+			shell,
 			tree: tree.props,
 			file: file.props,
 			session: file.props.session,
@@ -500,7 +507,7 @@ test("shared search opens without filtering navigation or changing draft/file ow
 	assert.equal(element(closed.content, ConversationSearch).props.open, false);
 	assert.deepEqual(opener.focus.mock.calls, [[{ preventScroll: true }]]);
 	assert.equal(
-		closed.content.props["data-navigation-open"],
+		closed.shell.props["data-navigation-open"],
 		true,
 		"Search cancellation does not close the mobile sidebar",
 	);
@@ -689,7 +696,7 @@ test.each(["open", "new-chat"] as const)(
 
 test("narrow navigation stays open while other and current project branches expand or collapse", () => {
 	const initial = drive();
-	assert.equal(initial.content.props["data-navigation-mode"], "narrow");
+	assert.equal(initial.shell.props["data-navigation-mode"], "narrow");
 	const toggle = elements(initial.content, Button).find((button) => button.props.className === "navigation-toggle");
 	assert.ok(toggle);
 	assert.equal(toggle.props["aria-expanded"], false);
@@ -702,7 +709,8 @@ test("narrow navigation stays open while other and current project branches expa
 			(button) => button.props.className === "navigation-toggle",
 		);
 		assert.equal(navigation?.props["aria-expanded"], true);
-		const sidebar = element(current.content, "aside");
+		// The surface forwards this owner input to its mounted aside (covered separately).
+		const sidebar = element(current.content, SidebarNavigationSurface);
 		assert.equal(sidebar.props.inert, false);
 		const main = elements(current.content, "div").find((node) => node.props.className === "main-shell");
 		assert.equal(main?.props.inert, true);

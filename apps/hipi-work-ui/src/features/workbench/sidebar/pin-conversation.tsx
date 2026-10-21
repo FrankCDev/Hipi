@@ -6,6 +6,7 @@ import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { ActionMenuItem } from "../../../components/ui/action-menu.tsx";
 import { Button } from "../../../components/ui/button.tsx";
+import { SidebarActionTooltip } from "./action-tooltip.tsx";
 import { pinLabels } from "./pin-labels.ts";
 import type { PresentationSession } from "./presentation-session.ts";
 
@@ -97,18 +98,19 @@ export function PinConversationButton(props: PinProps) {
 			? action.l[action.current.pinned ? "unpin" : "pin"]
 			: action.l.loading;
 	return (
-		<Button
-			variant="ghost"
-			size="icon-sm"
-			className="conversation-quick-action"
-			data-action="pin-conversation-direct"
-			aria-label={label}
-			title={label}
-			disabled={action.isError ? action.isFetching : action.disabled}
-			onClick={action.isError ? action.reload : action.toggle}
-		>
-			{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
-		</Button>
+		<SidebarActionTooltip label={label}>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				className="conversation-quick-action"
+				data-action="pin-conversation-direct"
+				aria-label={label}
+				disabled={action.isError ? action.isFetching : action.disabled}
+				onClick={action.isError ? action.reload : action.toggle}
+			>
+				{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+			</Button>
+		</SidebarActionTooltip>
 	);
 }
 

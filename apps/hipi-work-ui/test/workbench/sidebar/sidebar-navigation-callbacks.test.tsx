@@ -348,7 +348,9 @@ function rowAndActions(client: AppClient = { call: vi.fn(), observe: vi.fn() }) 
 	const focus = () => {
 		const row = element(renderRow(), "div");
 		assert.ok(row.props.onFocusCapture);
-		invoke(row.props.onFocusCapture, [{ currentTarget: { contains: () => true }, target: { matches: () => true } }]);
+		invoke(row.props.onFocusCapture, [
+			{ currentTarget: { contains: () => true }, target: { matches: () => true, closest: () => null } },
+		]);
 	};
 	renderRow();
 	assert.ok(controls);
@@ -837,8 +839,8 @@ test("keyboard Tab enters an interactive card and returns through its exact sour
 
 test("active dragging closes an open preview and action hover cannot reopen it or restart the title", () => {
 	class Target {
-		closest() {
-			return this;
+		closest(selector: string) {
+			return selector === "[data-action-tooltip-trigger]" ? null : this;
 		}
 		contains() {
 			return true;
@@ -2062,5 +2064,52 @@ test.each(["   ", " Original "])("inline no-op %j closes and pins without a rena
 	await settled;
 	assert.equal(ui.owner().inline, null);
 	assert.deepEqual(calls, ["setProjectPinned", "getProjectCommandResult"]);
+	ui.session.dispose();
+});
+
+test("icon tooltip triggers retire row previews while label travel keeps the warm handoff", () => {
+	class Target {
+		tooltip = false;
+		closest(selector: string) {
+			return selector === "[data-action-tooltip-trigger]" && this.tooltip ? this : null;
+		}
+		contains() {
+			return true;
+		}
+		matches() {
+			return true;
+		}
+	}
+	vi.stubGlobal("Node", Target);
+	vi.stubGlobal("Element", Target);
+	const ui = rowAndActions();
+	const label = new Target();
+	const icon = new Target();
+	icon.tooltip = true;
+	const event = (target: Target) => ({ pointerType: "mouse", target, currentTarget: label });
+	invoke(element(ui.renderRow(), "div").props.onPointerEnter, [event(icon)]);
+	vi.advanceTimersByTime(400);
+	assert.equal(
+		element(ui.renderRow(), Popover).props.open,
+		false,
+		"Entering an icon must not mount a competing preview",
+	);
+	invoke(element(ui.renderRow(), "div").props.onPointerMove, [event(label)]);
+	vi.advanceTimersByTime(200);
+	assert.equal(element(ui.renderRow(), Popover).props.open, true);
+	invoke(element(ui.renderRow(), "div").props.onPointerMove, [event(icon)]);
+	assert.equal(element(ui.renderRow(), Popover).props.open, false);
+	invoke(element(ui.renderRow(), "div").props.onPointerMove, [event(label)]);
+	assert.equal(
+		element(ui.renderRow(), Popover).props.open,
+		true,
+		"Returning to the label retains the warm preview budget",
+	);
+	invoke(element(ui.renderRow(), "div").props.onFocusCapture, [event(icon)]);
+	assert.equal(
+		element(ui.renderRow(), Popover).props.open,
+		false,
+		"Keyboard icon focus belongs to its Tooltip, not the row card",
+	);
 	ui.session.dispose();
 });

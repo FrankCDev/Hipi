@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../
 import { Input } from "../../../components/ui/input.tsx";
 import type { LegacyCatalogCommand } from "../command-recovery.ts";
 import { ComposerKeyboard } from "../composer/keyboard.ts";
+import { SidebarActionTooltip } from "../sidebar/action-tooltip.tsx";
 import { PinConversationButton, PinConversationItem } from "../sidebar/pin-conversation.tsx";
 import type { PresentationSession } from "../sidebar/presentation-session.ts";
 import type { PreviewActions } from "../sidebar/preview-row.tsx";
@@ -256,24 +257,25 @@ export function ConversationActions({
 					/>
 				)}
 				{inlineActions && (
-					<Button
-						className="conversation-quick-action"
-						data-action={
-							conversation.archivedAt === null ? "archive-conversation-direct" : "restore-conversation-direct"
-						}
-						size="icon-sm"
-						variant="ghost"
-						aria-label={l[conversation.archivedAt === null ? "archive" : "restore"]}
-						title={l[conversation.archivedAt === null ? "archive" : "restore"]}
-						disabled={archiveDisabled}
-						onClick={archive}
-					>
-						{conversation.archivedAt === null ? (
-							<Archive size={15} aria-hidden="true" />
-						) : (
-							<ArchiveRestore size={15} aria-hidden="true" />
-						)}
-					</Button>
+					<SidebarActionTooltip label={l[conversation.archivedAt === null ? "archive" : "restore"]}>
+						<Button
+							className="conversation-quick-action"
+							data-action={
+								conversation.archivedAt === null ? "archive-conversation-direct" : "restore-conversation-direct"
+							}
+							size="icon-sm"
+							variant="ghost"
+							aria-label={l[conversation.archivedAt === null ? "archive" : "restore"]}
+							disabled={archiveDisabled}
+							onClick={archive}
+						>
+							{conversation.archivedAt === null ? (
+								<Archive size={15} aria-hidden="true" />
+							) : (
+								<ArchiveRestore size={15} aria-hidden="true" />
+							)}
+						</Button>
+					</SidebarActionTooltip>
 				)}
 				<ActionMenu
 					boundary={rowMenu}
@@ -284,17 +286,19 @@ export function ConversationActions({
 						if (open) onMenuOpen?.();
 					}}
 				>
-					<ActionMenuTrigger asChild>
-						<Button
-							ref={trigger}
-							className="conversation-actions-trigger"
-							size="icon-sm"
-							variant="ghost"
-							aria-label={`${l.actions}: ${conversation.title}`}
-						>
-							<Ellipsis size={16} aria-hidden="true" />
-						</Button>
-					</ActionMenuTrigger>
+					<SidebarActionTooltip label={l.actions} disabled={menuOpen || renaming || hidden}>
+						<ActionMenuTrigger asChild>
+							<Button
+								ref={trigger}
+								className="conversation-actions-trigger"
+								size="icon-sm"
+								variant="ghost"
+								aria-label={`${l.actions}: ${conversation.title}`}
+							>
+								<Ellipsis size={16} aria-hidden="true" />
+							</Button>
+						</ActionMenuTrigger>
+					</SidebarActionTooltip>
 					<ActionMenuContent
 						side={menuPosition ? "right" : "bottom"}
 						align={menuPosition ? "start" : "end"}

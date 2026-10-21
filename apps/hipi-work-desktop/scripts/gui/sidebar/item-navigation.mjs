@@ -12,8 +12,9 @@ export function sidebarKeyboardState(document) {
 		!node.matches(':disabled,[aria-disabled="true"],[aria-haspopup]:not([aria-haspopup="false"])') &&
 		node.getClientRects().length > 0 &&
 		document.defaultView.getComputedStyle(node).visibility !== "hidden";
-	const rows = [...document.querySelectorAll(".sidebar .project-open,.sidebar .conversation-link")]
-		.filter(visible)
+	// Modal isolation removes traversal eligibility, not the mounted route's selection.
+	const mounted = [...document.querySelectorAll(".sidebar .project-open,.sidebar .conversation-link")]
+		.filter((node) => node.isConnected)
 		.map((node) => {
 			const chat = node.classList.contains("conversation-link");
 			const workspaceId = chat ? node.dataset.workspaceId : node.closest(".workspace-branch").dataset.workspaceId;
@@ -37,11 +38,14 @@ export function sidebarKeyboardState(document) {
 					attr("data-workspace-id", workspaceId) +
 					(identity.projectId ? attr("data-project-id", identity.projectId) : "") +
 					" .project-open";
-			return { identity, selector, current: node.getAttribute("aria-current") === "page" };
+			return {
+				row: { identity, selector, current: node.getAttribute("aria-current") === "page" },
+				eligible: visible(node),
+			};
 		});
 	return {
-		rows,
-		selected: rows.filter((row) => row.current).map((row) => row.identity),
+		rows: mounted.filter((item) => item.eligible).map((item) => item.row),
+		selected: mounted.filter((item) => item.row.current).map((item) => item.row.identity),
 		surface: document.querySelector(".conversation-panel .composer textarea")
 			? "conversation"
 			: document.querySelector(".prepared-task-input")

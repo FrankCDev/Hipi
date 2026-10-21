@@ -43,6 +43,7 @@ function appearanceVariables(colors: AppearanceColors, mode: AppearanceMode): Re
 	return {
 		...surfaces,
 		"--text": foreground,
+		"--ui-hover-foreground": foreground,
 		"--muted": readable(mix(foreground, background, 0.25)),
 		"--line": mix(background, foreground, 0.2),
 		"--brand": accent,

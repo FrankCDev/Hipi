@@ -6,8 +6,19 @@ import type * as React from "react";
 import { cn } from "../../lib/cn.ts";
 import "./control-primitives.css";
 
-function TooltipProvider({ delayDuration = 200, ...props }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
-	return <TooltipPrimitive.Provider data-slot="tooltip-provider" delayDuration={delayDuration} {...props} />;
+function TooltipProvider({
+	delayDuration = 200,
+	skipDelayDuration = 300,
+	...props
+}: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
+	return (
+		<TooltipPrimitive.Provider
+			data-slot="tooltip-provider"
+			delayDuration={delayDuration}
+			skipDelayDuration={skipDelayDuration}
+			{...props}
+		/>
+	);
 }
 
 function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {

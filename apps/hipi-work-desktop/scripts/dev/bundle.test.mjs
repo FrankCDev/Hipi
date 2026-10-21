@@ -23,6 +23,7 @@ test("production bundle eliminates development control, profile and local server
 			"HIPI_DESKTOP_DEVELOPMENT_QUIT",
 			"Hipi Work Development",
 			"http://127.0.0.1:5173",
+			"function developmentSelfNavigation",
 		])
 			assert.equal(source.includes(marker), development, marker);
 		assert.ok(source.includes("sandbox: true"));

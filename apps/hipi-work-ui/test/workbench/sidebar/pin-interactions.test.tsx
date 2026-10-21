@@ -137,7 +137,7 @@ test("closed menus perform no metadata read; loading, refresh and archive states
 
 test("the direct hover action uses the same exact mutation owner as its menu", async () => {
 	const session = new PresentationSession(client, new LocalState());
-	const button = () => PinConversationButton({ conversation, session, open: true });
+	const button = () => PinConversationButton({ conversation, session, open: true })?.props.children;
 	assert.equal(button()?.props["aria-label"], "Pin conversation");
 	button()?.props.onClick?.();
 	await vi.waitFor(() => assert.equal(session.getSnapshot().busy, false));
@@ -161,12 +161,12 @@ test("a stale direct pin callback cannot replace an unknown original request", a
 		},
 		new LocalState(),
 	);
-	const button = PinConversationButton({ conversation, session, open: true });
+	const button = PinConversationButton({ conversation, session, open: true })?.props.children;
 	button?.props.onClick?.();
 	await vi.waitFor(() => assert.equal(session.getSnapshot().busy, false));
 	const request = session.getSnapshot().pending;
 	assert.ok(request);
-	assert.equal(PinConversationButton({ conversation, session, open: true })?.props.disabled, true);
+	assert.equal(PinConversationButton({ conversation, session, open: true })?.props.children?.props.disabled, true);
 	button?.props.onClick?.();
 	await Promise.resolve();
 	assert.deepEqual(session.getSnapshot().pending, request);

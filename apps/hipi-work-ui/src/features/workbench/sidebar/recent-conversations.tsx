@@ -386,7 +386,7 @@ export function RecentConversations({
 		...(selected ? [scopeKey(selected)] : []),
 	];
 	const {
-		list,
+		setList,
 		virtualizer,
 		margin,
 		items: virtualItems,
@@ -561,7 +561,7 @@ export function RecentConversations({
 							</output>
 						)}
 						<ul
-							ref={list}
+							ref={setList}
 							className="conversation-list recent-virtual-list"
 							style={{
 								height: totalSize + (canNext && (!last || !observerAvailable || paused) ? 32 : 1),

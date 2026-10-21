@@ -139,7 +139,7 @@ test("default expanded sections use one native text-and-chevron heading, not a s
 	assert.equal(elements(heading.props.children, "button").length, 0);
 	assert.match(ui.html, /<h3><button[^>]*><span>Projects<\/span><span class="sidebar-section-chevron"/);
 	assert.match(ui.html, /data-expanded="true"/);
-	assert.match(ui.html, /<svg aria-hidden="true"/);
+	assert.match(ui.html, /<svg[^>]*aria-hidden="true"/);
 	assert.doesNotMatch(ui.html, /sidebar-section-grip|Move up|Move down|aria-pressed=/);
 	assert.equal((ui.html.match(/<button\b/g) ?? []).length, 2);
 	assert.match(ui.html, /Visible project/);

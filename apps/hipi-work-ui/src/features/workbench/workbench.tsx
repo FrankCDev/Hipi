@@ -9,14 +9,15 @@ import {
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings, SquarePen } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import type { ProjectFolderSelection } from "../../app/file-client.ts";
-import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, matchesBinding } from "../../app/keybindings.ts";
+import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, formatBinding, matchesBinding } from "../../app/keybindings.ts";
 import { usePreferences } from "../../app/preferences.tsx";
 import { BrandMark } from "../../components/brand-mark.tsx";
+import { ActionTooltip, ActionTooltipProvider } from "../../components/ui/action-tooltip.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
@@ -55,6 +56,7 @@ import { projectRecoveryLabels } from "./projects/recovery-labels.ts";
 import { ConversationSearch } from "./search/search.tsx";
 import { SidebarDisclosureSession } from "./sidebar/disclosure-session.ts";
 import { SidebarDragProvider, type SidebarOrderAction } from "./sidebar/drag-provider.tsx";
+import { SidebarIcon } from "./sidebar/icon.tsx";
 import { SidebarInitialLoading } from "./sidebar/initial-loading.tsx";
 import { SidebarItemNavigationCommands } from "./sidebar/item-navigation.tsx";
 import { mergeOrder, SidebarLayoutSession, type SidebarSection } from "./sidebar/layout-session.ts";
@@ -70,6 +72,7 @@ import { SidebarOrderSection, SidebarSectionContent, SidebarSectionHeading } fro
 import { sidebarSectionLabels } from "./sidebar/section-labels.ts";
 import type { SidebarLocation } from "./sidebar/selection-owner.ts";
 import { SidebarSelectionProvider } from "./sidebar/selection-provider.tsx";
+import { SidebarNavigationSurface } from "./sidebar/surface.tsx";
 import { WorkspaceBranch, WorkspaceTree } from "./sidebar/workspace-tree.tsx";
 import { workbenchLabels } from "./workbench-labels.ts";
 import { WorkbenchWelcome } from "./workbench-welcome.tsx";
@@ -806,659 +809,684 @@ export function Workbench({
 	};
 
 	return (
-		<div
-			className="work-shell"
-			data-navigation-mode={narrow ? "narrow" : "desktop"}
-			data-navigation-open={navigationOpen}
-			data-navigation-collapsed={navigationCollapsed}
-			data-settings-open={settingsOpen}
-		>
-			<aside
-				ref={navigationRoot}
-				className="sidebar"
-				data-sidebar-navigation-root=""
-				id="work-navigation"
-				aria-label={t("nav.workspaces")}
-				inert={settingsOpen || (narrow ? !navigationOpen : navigationCollapsed)}
+		<ActionTooltipProvider disabled={settingsOpen || searchOpen || !!folderProject || !!leave}>
+			<div
+				className="work-shell"
+				data-navigation-mode={narrow ? "narrow" : "desktop"}
+				data-navigation-open={navigationOpen}
+				data-navigation-collapsed={navigationCollapsed}
+				data-settings-open={settingsOpen}
 			>
-				<div className="sidebar-brand-row">
-					<SidebarItemNavigationCommands
-						rootRef={navigationRoot}
-						keybindings={keybindings}
-						enabled={
-							connectionLease.active &&
-							!settingsOpen &&
-							!detailsOpen &&
-							!searchOpen &&
-							!folderProject &&
-							!leave &&
-							(narrow ? navigationOpen : !navigationCollapsed)
-						}
-					/>
-					<button
-						type="button"
-						className="brand brand-home"
-						aria-label={t("nav.home")}
-						onClick={() => selectWorkspace("")}
-					>
-						<BrandMark size={27} className="shrink-0" />
-						<span>
-							Hipi <strong>Work</strong>
-						</span>
-					</button>
-					<Button
-						ref={searchTrigger}
-						className="sidebar-search-trigger"
-						variant="ghost"
-						size="icon-sm"
-						aria-label={t("nav.search")}
-						title={t("nav.search")}
-						aria-expanded={searchOpen}
-						onClick={(event) => openSearch(event.currentTarget)}
-					>
-						<Icon name="search" size={17} />
-					</Button>
-					<Button
-						ref={sidebarCollapse}
-						className="sidebar-collapse"
-						variant="ghost"
-						size="icon-sm"
-						aria-label={wl["workbench.hideNavigation"]}
-						title={wl["workbench.hideNavigation"]}
-						onClick={() => {
-							navigationFocus.current = "header";
-							setNavigationCollapsed(true);
-						}}
-					>
-						<Icon name="panel" size={17} />
-					</Button>
-					<Button
-						ref={navigationClose}
-						className="mobile-close"
-						variant="ghost"
-						size="icon"
-						aria-label={t("common.close")}
-						onClick={() => {
-							setNavigationOpen(false);
-							navigationToggle.current?.focus();
-						}}
-					>
-						<Icon name="panel" />
-					</Button>
-				</div>
-				<section className="conversation-nav">
-					<div className="workspace-create">
-						<Button
-							variant="ghost"
-							className="new-conversation-trigger"
-							aria-busy={newChatLookup?.revision === navigation.store.getState().revision && !newChatLookup.failed}
-							onClick={() => void openNewConversation()}
+				<SidebarNavigationSurface
+					ref={navigationRoot}
+					collapsed={navigationCollapsed}
+					narrow={narrow}
+					id="work-navigation"
+					label={t("nav.workspaces")}
+					inert={settingsOpen || (narrow ? !navigationOpen : navigationCollapsed)}
+				>
+					<div className="sidebar-brand-row">
+						<SidebarItemNavigationCommands
+							rootRef={navigationRoot}
+							keybindings={keybindings}
+							enabled={
+								connectionLease.active &&
+								!settingsOpen &&
+								!detailsOpen &&
+								!searchOpen &&
+								!folderProject &&
+								!leave &&
+								(narrow ? navigationOpen : !navigationCollapsed)
+							}
+						/>
+						<button
+							type="button"
+							className="brand brand-home"
+							aria-label={t("nav.home")}
+							onClick={() => selectWorkspace("")}
 						>
-							<SquarePen size={16} aria-hidden="true" />
-							{t("nav.newConversation")}
-						</Button>
-					</div>
-					{newChatLookup?.revision === navigation.store.getState().revision && newChatLookup.failed && (
-						<p className="nav-feedback" role="alert">
-							{cl.currentFailed}
-						</p>
-					)}
-					<div className="navigation-list" ref={navigationList} tabIndex={-1}>
-						<SidebarInitialLoading>
-							<SidebarDragProvider
-								scrollRef={navigationList}
-								keybindings={keybindings}
-								disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
+							<BrandMark size={27} className="shrink-0" />
+							<span>
+								Hipi <strong>Work</strong>
+							</span>
+						</button>
+						<ActionTooltip
+							label={t("nav.search")}
+							disabled={narrow ? !navigationOpen : navigationCollapsed}
+							side="bottom"
+							shortcut={formatBinding(keybindings.searchConversations)}
+						>
+							<Button
+								ref={searchTrigger}
+								className="sidebar-search-trigger"
+								variant="ghost"
+								size="icon-sm"
+								aria-label={t("nav.search")}
+								aria-expanded={searchOpen}
+								onClick={(event) => openSearch(event.currentTarget)}
 							>
-								<SidebarSelectionProvider
-									scope={{ workspaceId: selectedWorkspace, conversationId: selectedConversation }}
-									preferredLocation={sidebarSelection}
-									rootRef={navigationRoot}
+								<SidebarIcon name="search" />
+							</Button>
+						</ActionTooltip>
+						<ActionTooltip
+							label={wl["workbench.hideNavigation"]}
+							disabled={narrow || navigationCollapsed}
+							side="bottom"
+						>
+							<Button
+								ref={sidebarCollapse}
+								className="sidebar-collapse"
+								variant="ghost"
+								size="icon-sm"
+								aria-label={wl["workbench.hideNavigation"]}
+								onClick={() => {
+									navigationFocus.current = "header";
+									setNavigationCollapsed(true);
+								}}
+							>
+								<SidebarIcon name="panel" />
+							</Button>
+						</ActionTooltip>
+						<ActionTooltip label={t("common.close")} disabled={!narrow || !navigationOpen}>
+							<Button
+								ref={navigationClose}
+								className="mobile-close"
+								variant="ghost"
+								size="icon"
+								aria-label={t("common.close")}
+								onClick={() => {
+									setNavigationOpen(false);
+									navigationToggle.current?.focus();
+								}}
+							>
+								<SidebarIcon name="panel" />
+							</Button>
+						</ActionTooltip>
+					</div>
+					<section className="conversation-nav">
+						<div className="workspace-create">
+							<Button
+								variant="ghost"
+								className="new-conversation-trigger"
+								aria-busy={newChatLookup?.revision === navigation.store.getState().revision && !newChatLookup.failed}
+								onClick={() => void openNewConversation()}
+							>
+								<SidebarIcon name="newChat" />
+								{t("nav.newConversation")}
+							</Button>
+						</div>
+						{newChatLookup?.revision === navigation.store.getState().revision && newChatLookup.failed && (
+							<p className="nav-feedback" role="alert">
+								{cl.currentFailed}
+							</p>
+						)}
+						<div className="navigation-list" ref={navigationList} tabIndex={-1}>
+							<SidebarInitialLoading>
+								<SidebarDragProvider
+									scrollRef={navigationList}
+									keybindings={keybindings}
+									disabled={settingsOpen || searchOpen || (narrow ? !navigationOpen : navigationCollapsed)}
 								>
-									<SidebarPreviewProvider
-										disabled={
-											settingsOpen || searchOpen || !!folderProject || (narrow ? !navigationOpen : navigationCollapsed)
-										}
-										navigationKey={JSON.stringify([selectedWorkspace, selectedConversation])}
+									<SidebarSelectionProvider
+										scope={{ workspaceId: selectedWorkspace, conversationId: selectedConversation }}
+										preferredLocation={sidebarSelection}
+										rootRef={navigationRoot}
 									>
-										{layoutState.sections.map((section) =>
-											section === "pinned" ? (
-												<PinnedConversations
-													key={section}
-													catalog={catalog}
-													presentation={presentation}
-													mixed
-													mixedReady={projectCatalog.data?.state === "ready"}
-													renderProject={(item, orderAction) => (
-														<WorkspaceBranch
-															key={item.project.projectId}
-															{...workspaceTreeProps}
-															projectItem={item}
-															pinnedProject
-															onOpenProject={() => selectKnownProject(item.project)}
-															onNewConversation={() => selectKnownProject(item.project)}
-															logicalProjectOrder={() => orderAction}
-														/>
-													)}
-													navigationRevision={navigation.store.getState().revision}
-													onSelect={(item) => selectConversation(item, undefined, { kind: "pinned" })}
-													sectionAction={sectionAction(section)}
-													onVisibleChange={setPinnedVisible}
-													collapsed={disclosureState.collapsed.pinned}
-													disclosureDisabled={disclosureBlocked}
-													onCollapsedChange={(collapsed) => void disclosure.setCollapsed("pinned", collapsed)}
-												/>
-											) : section === "recent" ? (
-												<SidebarOrderSection
-													key={section}
-													action={sectionAction(section)}
-													{...disclosureProps(section)}
-												>
-													<WorkspaceTree {...workspaceTreeProps} section="recent" />
-												</SidebarOrderSection>
-											) : (
-												<SidebarOrderSection
-													key={section}
-													action={sectionAction(section)}
-													{...disclosureProps(section)}
-												>
-													<SidebarSectionHeading
-														actions={
-															<CreateDialog
-																disabled={catalogBlocked}
-																kind="workspace"
-																compact
-																onCreate={createWorkspace}
-																chooseFolder={fileAuthority?.prepareProject}
-																forgetFolder={fileAuthority?.forgetProjectSelection}
+										<SidebarPreviewProvider
+											disabled={
+												settingsOpen ||
+												searchOpen ||
+												!!folderProject ||
+												(narrow ? !navigationOpen : navigationCollapsed)
+											}
+											navigationKey={JSON.stringify([selectedWorkspace, selectedConversation])}
+										>
+											{layoutState.sections.map((section) =>
+												section === "pinned" ? (
+													<PinnedConversations
+														key={section}
+														catalog={catalog}
+														presentation={presentation}
+														mixed
+														mixedReady={projectCatalog.data?.state === "ready"}
+														renderProject={(item, orderAction) => (
+															<WorkspaceBranch
+																key={item.project.projectId}
+																{...workspaceTreeProps}
+																projectItem={item}
+																pinnedProject
+																onOpenProject={() => selectKnownProject(item.project)}
+																onNewConversation={() => selectKnownProject(item.project)}
+																logicalProjectOrder={() => orderAction}
 															/>
-														}
+														)}
+														navigationRevision={navigation.store.getState().revision}
+														onSelect={(item) => selectConversation(item, undefined, { kind: "pinned" })}
+														sectionAction={sectionAction(section)}
+														onVisibleChange={setPinnedVisible}
+														collapsed={disclosureState.collapsed.pinned}
+														disclosureDisabled={disclosureBlocked}
+														onCollapsedChange={(collapsed) => void disclosure.setCollapsed("pinned", collapsed)}
+													/>
+												) : section === "recent" ? (
+													<SidebarOrderSection
+														key={section}
+														action={sectionAction(section)}
+														{...disclosureProps(section)}
 													>
-														{t("nav.workspaces")}
-													</SidebarSectionHeading>
-													<SidebarSectionContent>
-														{projects.isPending && !projects.hasData && (
-															<output className="nav-feedback">{t("common.loading")}</output>
-														)}
-														{projects.hasData && projects.isFetching && !projects.isLoadingMore && (
-															<output className="catalog-refresh-status">{t("common.loading")}</output>
-														)}
-														{projects.isError && (
-															<div className="nav-feedback" role="alert">
-																<p>
-																	{projects.error instanceof AppError && projects.error.code === "STORE_MISMATCH"
-																		? t("connection.storeMismatch")
-																		: projects.staleCursor
-																			? cl.staleList
-																			: projects.isLoadMoreError
-																				? cl.loadMoreFailed
-																				: projects.hasData
-																					? cl.refreshFailed
-																					: t("nav.loadError")}
-																</p>
-																<Button
-																	variant="outline"
-																	size="sm"
-																	disabled={projects.isFetching}
-																	onClick={() => void projects.retry()}
-																>
-																	<Icon name="refresh" size={14} />
-																	{t("nav.refresh")}
-																</Button>
-															</div>
-														)}
-														{projects.isSuccess &&
-															!projects.isFetching &&
-															!projects.isError &&
-															!projects.hasMore &&
-															projectIds.length === 0 && <p className="nav-feedback">{t("nav.noWorkspaces")}</p>}
-														<WorkspaceTree
-															{...workspaceTreeProps}
-															projects={workspaceTreeProps.projects.filter((item) =>
-																visibleProjects.includes(item.project.projectId),
+														<WorkspaceTree {...workspaceTreeProps} section="recent" />
+													</SidebarOrderSection>
+												) : (
+													<SidebarOrderSection
+														key={section}
+														action={sectionAction(section)}
+														{...disclosureProps(section)}
+													>
+														<SidebarSectionHeading
+															actions={
+																<CreateDialog
+																	disabled={catalogBlocked}
+																	kind="workspace"
+																	compact
+																	onCreate={createWorkspace}
+																	chooseFolder={fileAuthority?.prepareProject}
+																	forgetFolder={fileAuthority?.forgetProjectSelection}
+																/>
+															}
+														>
+															{t("nav.workspaces")}
+														</SidebarSectionHeading>
+														<SidebarSectionContent>
+															{projects.isPending && !projects.hasData && (
+																<output className="nav-feedback">{t("common.loading")}</output>
 															)}
-															section="projects"
-															projectDataUpdatedAt={projects.dataUpdatedAt}
-														/>
-														{!projectListExpanded && orderedProjects.length > visibleProjects.length && (
-															<Button
-																variant="ghost"
-																size="sm"
-																className="sidebar-project-show-more"
-																onClick={() => setProjectListExpanded(true)}
-															>
-																{t("work.showMore")}
-															</Button>
-														)}
-														<CatalogPagination pages={projects} listRef={navigationList} />
-													</SidebarSectionContent>
-												</SidebarOrderSection>
-											),
-										)}
-									</SidebarPreviewProvider>
-								</SidebarSelectionProvider>
-							</SidebarDragProvider>
-						</SidebarInitialLoading>
-						<output className="sr-only" aria-live="polite">
-							{orderAnnouncement}
-						</output>
-						{(disclosureState.failed || disclosureState.stale || disclosureState.incompatible) && (
-							<section className="nav-feedback" aria-live="polite">
-								<p role="alert">
-									{
-										sidebarSectionLabels(locale)[
-											disclosureState.incompatible ? "incompatible" : disclosureState.stale ? "stale" : "failed"
-										]
-									}
-								</p>
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={disclosureState.busy}
-									onClick={() => void disclosure.refresh()}
-								>
-									{sidebarSectionLabels(locale).refresh}
-								</Button>
-								{disclosureState.pending && (
+															{projects.hasData && projects.isFetching && !projects.isLoadingMore && (
+																<output className="catalog-refresh-status">{t("common.loading")}</output>
+															)}
+															{projects.isError && (
+																<div className="nav-feedback" role="alert">
+																	<p>
+																		{projects.error instanceof AppError && projects.error.code === "STORE_MISMATCH"
+																			? t("connection.storeMismatch")
+																			: projects.staleCursor
+																				? cl.staleList
+																				: projects.isLoadMoreError
+																					? cl.loadMoreFailed
+																					: projects.hasData
+																						? cl.refreshFailed
+																						: t("nav.loadError")}
+																	</p>
+																	<Button
+																		variant="outline"
+																		size="sm"
+																		disabled={projects.isFetching}
+																		onClick={() => void projects.retry()}
+																	>
+																		<Icon name="refresh" size={14} />
+																		{t("nav.refresh")}
+																	</Button>
+																</div>
+															)}
+															{projects.isSuccess &&
+																!projects.isFetching &&
+																!projects.isError &&
+																!projects.hasMore &&
+																projectIds.length === 0 && <p className="nav-feedback">{t("nav.noWorkspaces")}</p>}
+															<WorkspaceTree
+																{...workspaceTreeProps}
+																projects={workspaceTreeProps.projects.filter((item) =>
+																	visibleProjects.includes(item.project.projectId),
+																)}
+																section="projects"
+																projectDataUpdatedAt={projects.dataUpdatedAt}
+															/>
+															{!projectListExpanded && orderedProjects.length > visibleProjects.length && (
+																<Button
+																	variant="ghost"
+																	size="sm"
+																	className="sidebar-project-show-more"
+																	onClick={() => setProjectListExpanded(true)}
+																>
+																	{t("work.showMore")}
+																</Button>
+															)}
+															<CatalogPagination pages={projects} listRef={navigationList} />
+														</SidebarSectionContent>
+													</SidebarOrderSection>
+												),
+											)}
+										</SidebarPreviewProvider>
+									</SidebarSelectionProvider>
+								</SidebarDragProvider>
+							</SidebarInitialLoading>
+							<output className="sr-only" aria-live="polite">
+								{orderAnnouncement}
+							</output>
+							{(disclosureState.failed || disclosureState.stale || disclosureState.incompatible) && (
+								<section className="nav-feedback" aria-live="polite">
+									<p role="alert">
+										{
+											sidebarSectionLabels(locale)[
+												disclosureState.incompatible ? "incompatible" : disclosureState.stale ? "stale" : "failed"
+											]
+										}
+									</p>
 									<Button
 										variant="ghost"
 										size="sm"
 										disabled={disclosureState.busy}
-										onClick={() => void disclosure.retry()}
+										onClick={() => void disclosure.refresh()}
 									>
-										{sidebarSectionLabels(locale).retry}
+										{sidebarSectionLabels(locale).refresh}
 									</Button>
-								)}
-							</section>
-						)}
-						{(layoutState.failed || layoutState.stale || layoutState.incompatible) && (
-							<section className="nav-feedback" aria-live="polite">
-								<p role="alert">
-									{
-										sidebarOrderLabels(locale)[
-											layoutState.incompatible ? "incompatible" : layoutState.stale ? "stale" : "failed"
-										]
-									}
-								</p>
-								<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.refresh()}>
-									{sidebarOrderLabels(locale).refresh}
-								</Button>
-								{layoutState.pending && (
-									<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.retry()}>
-										{sidebarOrderLabels(locale).retry}
+									{disclosureState.pending && (
+										<Button
+											variant="ghost"
+											size="sm"
+											disabled={disclosureState.busy}
+											onClick={() => void disclosure.retry()}
+										>
+											{sidebarSectionLabels(locale).retry}
+										</Button>
+									)}
+								</section>
+							)}
+							{(layoutState.failed || layoutState.stale || layoutState.incompatible) && (
+								<section className="nav-feedback" aria-live="polite">
+									<p role="alert">
+										{
+											sidebarOrderLabels(locale)[
+												layoutState.incompatible ? "incompatible" : layoutState.stale ? "stale" : "failed"
+											]
+										}
+									</p>
+									<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.refresh()}>
+										{sidebarOrderLabels(locale).refresh}
 									</Button>
+									{layoutState.pending && (
+										<Button variant="ghost" size="sm" disabled={layoutState.busy} onClick={() => void layout.retry()}>
+											{sidebarOrderLabels(locale).retry}
+										</Button>
+									)}
+								</section>
+							)}
+							<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
+							{projectPinNotice?.connection === connectionLease && projectPinNotice.reason && (
+								<section className="nav-feedback" role="alert">
+									<p>
+										{projectPinNotice.projectName}: {projectLabels(locale)[projectPinNotice.reason]}
+									</p>
+									<Button variant="ghost" size="sm" onClick={() => setProjectPinNotice(null)}>
+										{catalogLabels(locale).close}
+									</Button>
+								</section>
+							)}
+							{projectCatalog.data &&
+								!canCreateProjectless(local, projectCatalog.data) &&
+								!catalogState.pending &&
+								!catalogState.busy && (
+									<output className="nav-feedback">{projectRecoveryLabels(locale).defaultUnverified}</output>
 								)}
-							</section>
-						)}
-						<CatalogRecovery session={catalog} onResolve={resolveCatalog} />
-						{projectPinNotice?.connection === connectionLease && projectPinNotice.reason && (
-							<section className="nav-feedback" role="alert">
-								<p>
-									{projectPinNotice.projectName}: {projectLabels(locale)[projectPinNotice.reason]}
+							<PinRecovery session={presentation} />
+							{pinLookupFailed && (
+								<p className="nav-feedback" role="alert">
+									{pinLabels(locale).loadError}
 								</p>
-								<Button variant="ghost" size="sm" onClick={() => setProjectPinNotice(null)}>
-									{catalogLabels(locale).close}
-								</Button>
-							</section>
-						)}
-						{projectCatalog.data &&
-							!canCreateProjectless(local, projectCatalog.data) &&
-							!catalogState.pending &&
-							!catalogState.busy && (
-								<output className="nav-feedback">{projectRecoveryLabels(locale).defaultUnverified}</output>
-							)}
-						<PinRecovery session={presentation} />
-						{pinLookupFailed && (
-							<p className="nav-feedback" role="alert">
-								{pinLabels(locale).loadError}
-							</p>
-						)}
-					</div>
-				</section>
-				<div className="sidebar-footer">
-					<Button
-						ref={settingsTrigger}
-						variant="ghost"
-						className="sidebar-settings-trigger"
-						aria-label={cl.settings}
-						onClick={(event) => {
-							settingsReturn.current = event.currentTarget;
-							setSettingsCategory("general");
-							setSettingsOpen(true);
-						}}
-					>
-						<Settings size={17} aria-hidden="true" />
-						{wl["workbench.settings"]}
-					</Button>
-				</div>
-			</aside>
-			<div className="main-shell" inert={navigationOpen || settingsOpen}>
-				<header className="app-toolbar">
-					<div className="toolbar-path">
-						<Button
-							ref={navigationToggle}
-							className="navigation-toggle"
-							variant="ghost"
-							size="icon"
-							aria-label={t("nav.toggle")}
-							aria-expanded={narrow ? navigationOpen : !navigationCollapsed}
-							aria-controls="work-navigation"
-							onClick={() => {
-								if (narrow) setNavigationOpen((value) => !value);
-								else {
-									navigationFocus.current = navigationCollapsed ? "sidebar" : "header";
-									setNavigationCollapsed((value) => !value);
-								}
-							}}
-						>
-							<Icon name="panel" />
-						</Button>
-						<div className="toolbar-context">
-							{selected ? (
-								<span className="toolbar-conversation" title={selected.title}>
-									{selected.title}
-								</span>
-							) : (
-								<span className="toolbar-project-title">{currentProject?.name ?? "Hipi Work"}</span>
-							)}
-							{currentProject && selected && (
-								<button
-									type="button"
-									className="toolbar-project-link"
-									aria-label={`${wl["workbench.projectHome"]}: ${currentProject.name}`}
-									onClick={() => selectProject(currentProject.projectId)}
-								>
-									<Icon name="folder" size={12} />
-									<span>{currentProject.name}</span>
-								</button>
 							)}
 						</div>
-					</div>
-					<div className="toolbar-actions">
+					</section>
+					<div className="sidebar-footer">
 						<Button
-							ref={panelTrigger}
-							className="file-panel-toggle"
-							data-active={panelState.open}
-							aria-label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
+							ref={settingsTrigger}
 							variant="ghost"
-							size="sm"
-							aria-expanded={panelState.open}
-							aria-controls={panelState.open ? panelId : undefined}
-							onClick={() => panel.setOpen(!panelState.open)}
+							className="sidebar-settings-trigger"
+							aria-label={cl.settings}
+							onClick={(event) => {
+								settingsReturn.current = event.currentTarget;
+								setSettingsCategory("general");
+								setSettingsOpen(true);
+							}}
 						>
-							<Icon name="folder" size={15} />
-							{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
+							<Settings size={17} aria-hidden="true" />
+							{wl["workbench.settings"]}
 						</Button>
-						{selected && (
-							<ConversationActions
-								conversation={selected}
-								session={catalog}
-								presentation={presentation}
-								guard={(action) => action()}
-							/>
-						)}
-						{selected && (
-							<Button
-								ref={detailsTrigger}
-								variant="ghost"
-								size="icon"
-								aria-label={t("receipt.details")}
-								aria-expanded={detailsOpen}
-								onClick={() => {
-									detailsReturn.current = detailsTrigger.current;
-									setDetailsOpen((value) => !value);
-								}}
-							>
-								<Icon name="info" />
-							</Button>
-						)}
 					</div>
-				</header>
-				<PreparedTaskRecovery session={catalog} onResolve={resolveCatalog} />
-				{!selectedConversation && (
-					<DraftRecovery
-						inventory={homeDraft.inventory}
-						busy={homeDraft.busy}
-						failed={homeDraft.failed}
-						onRecover={(source) => {
-							void homeDraft.recover(source);
-						}}
-						onReload={() => {
-							void homeDraft.reload();
-						}}
-						projectName={(id) => workspaceById.get(id)?.name ?? id}
-					/>
-				)}
-				{reopenFailure && (
-					<p className="file-panel-storage" role="alert">
-						{fileLabels(locale)[reopenFailure === "limit" ? "tabs.limit" : "tabs.reopenFailed"]}
-					</p>
-				)}
-				{panelState.storageFailed && (
-					<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
-				)}
-				<main className="work-area" ref={area} data-file-panel-full-width={filePanelFullWidth}>
-					{(selectedQuery.isError ||
-						workspaceQuery.isError ||
-						currentProjectQuery.isError ||
-						membershipQuery.isError ||
-						projectCatalog.isError) && (
-						<p role="alert">
-							{cl.currentFailed}
-							<Button
-								variant="ghost"
-								onClick={() => {
-									void selectedQuery.refetch();
-									void workspaceQuery.refetch();
-									if (currentProjectId) void currentProjectQuery.refetch();
-									if (selectedConversation) void membershipQuery.refetch();
-									void projectCatalog.refetch();
-								}}
+				</SidebarNavigationSurface>
+				<div className="main-shell" inert={navigationOpen || settingsOpen}>
+					<header className="app-toolbar">
+						<div className="toolbar-path">
+							<ActionTooltip
+								label={t("nav.toggle")}
+								disabled={navigationOpen || (!narrow && !navigationCollapsed)}
+								side="right"
 							>
-								{t("nav.refresh")}
+								<Button
+									ref={navigationToggle}
+									className="navigation-toggle"
+									variant="ghost"
+									size="icon"
+									aria-label={t("nav.toggle")}
+									aria-expanded={narrow ? navigationOpen : !navigationCollapsed}
+									aria-controls="work-navigation"
+									onClick={() => {
+										if (narrow) setNavigationOpen((value) => !value);
+										else {
+											navigationFocus.current = navigationCollapsed ? "sidebar" : "header";
+											setNavigationCollapsed((value) => !value);
+										}
+									}}
+								>
+									<SidebarIcon name="panel" />
+								</Button>
+							</ActionTooltip>
+							<div className="toolbar-context">
+								{selected ? (
+									<span className="toolbar-conversation" title={selected.title}>
+										{selected.title}
+									</span>
+								) : (
+									<span className="toolbar-project-title">{currentProject?.name ?? "Hipi Work"}</span>
+								)}
+								{currentProject && selected && (
+									<button
+										type="button"
+										className="toolbar-project-link"
+										aria-label={`${wl["workbench.projectHome"]}: ${currentProject.name}`}
+										onClick={() => selectProject(currentProject.projectId)}
+									>
+										<Icon name="folder" size={12} />
+										<span>{currentProject.name}</span>
+									</button>
+								)}
+							</div>
+						</div>
+						<div className="toolbar-actions">
+							<Button
+								ref={panelTrigger}
+								className="file-panel-toggle"
+								data-active={panelState.open}
+								aria-label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
+								variant="ghost"
+								size="sm"
+								aria-expanded={panelState.open}
+								aria-controls={panelState.open ? panelId : undefined}
+								onClick={() => panel.setOpen(!panelState.open)}
+							>
+								<Icon name="folder" size={15} />
+								{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
 							</Button>
+							{selected && (
+								<ConversationActions
+									conversation={selected}
+									session={catalog}
+									presentation={presentation}
+									guard={(action) => action()}
+								/>
+							)}
+							{selected && (
+								<Button
+									ref={detailsTrigger}
+									variant="ghost"
+									size="icon"
+									aria-label={t("receipt.details")}
+									aria-expanded={detailsOpen}
+									onClick={() => {
+										detailsReturn.current = detailsTrigger.current;
+										setDetailsOpen((value) => !value);
+									}}
+								>
+									<Icon name="info" />
+								</Button>
+							)}
+						</div>
+					</header>
+					<PreparedTaskRecovery session={catalog} onResolve={resolveCatalog} />
+					{!selectedConversation && (
+						<DraftRecovery
+							inventory={homeDraft.inventory}
+							busy={homeDraft.busy}
+							failed={homeDraft.failed}
+							onRecover={(source) => {
+								void homeDraft.recover(source);
+							}}
+							onReload={() => {
+								void homeDraft.reload();
+							}}
+							projectName={(id) => workspaceById.get(id)?.name ?? id}
+						/>
+					)}
+					{reopenFailure && (
+						<p className="file-panel-storage" role="alert">
+							{fileLabels(locale)[reopenFailure === "limit" ? "tabs.limit" : "tabs.reopenFailed"]}
 						</p>
 					)}
-					<div
-						className="work-conversation-frame"
-						inert={filePanelFullWidth}
-						aria-hidden={filePanelFullWidth || undefined}
-						style={{ width: retainedConversationWidth }}
-					>
-						{selected ? (
-							<ConversationPane
-								key={`${selected.workspaceId}.${selected.conversationId}`}
-								conversation={selected}
-								searchAnchor={searchAnchor}
-								onExitSearchAnchor={() => setSearchAnchor(undefined)}
-								draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
-								onOpenModelSettings={(returnFocus) => {
-									settingsReturn.current = returnFocus;
-									setSettingsCategory("models");
-									setSettingsOpen(true);
-								}}
-								onOpenArtifact={
-									session
-										? artifactNavigation(selected, () => navigation.store.getState().scope, session, panel)
-										: undefined
-								}
-								detailsOpen={detailsOpen}
-								onDetailsClose={() => {
-									setDetailsOpen(false);
-									const target = detailsReturn.current;
-									if (target?.isConnected && target.getClientRects().length) target.focus();
-									else detailsTrigger.current?.focus();
-								}}
-							/>
-						) : (
-							<WorkbenchWelcome
-								workspaceName={currentProject?.name}
-								action={
-									<>
-										{currentProject && (
-											<ProjectFolderSummary
-												workspaceId={currentProject.homeWorkspaceId}
-												failed={folderCreationFailures[currentProject.homeWorkspaceId]}
-												onManage={(trigger) =>
-													manageProjectFolder(
-														{ workspaceId: currentProject.homeWorkspaceId, name: currentProject.name },
-														() => {
-															if (trigger.isConnected) trigger.focus({ preventScroll: true });
-														},
-													)
-												}
-											/>
-										)}
-										<PreparedTaskEntry
-											key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
-											workspaceId={currentProject?.homeWorkspaceId ?? ""}
-											draft={homeDraft.text}
-											onDraftChange={homeDraft.change}
-											readOnly={homeDraft.busy || !homeDraft.inventory?.active}
-											disabled={
-												catalogBlocked ||
-												homeDraft.busy ||
-												homeDraft.failed ||
-												!homeDraft.inventory?.active ||
-												(!!currentProjectId && !currentProject) ||
-												(!currentProjectId && !canCreateProjectless(local, projectCatalog.data))
-											}
-											busy={catalogState.busy}
-											onSend={sendInitial}
-											focusRevision={composerFocusRevision}
-											onManageModels={(returnFocus) => {
-												settingsReturn.current = returnFocus;
-												setSettingsCategory("models");
-												setSettingsOpen(true);
-											}}
-										/>
-									</>
-								}
-							/>
+					{panelState.storageFailed && (
+						<output className="file-panel-storage">{filePanelLabels(locale)["filePanel.storageFailed"]}</output>
+					)}
+					<main className="work-area" ref={area} data-file-panel-full-width={filePanelFullWidth}>
+						{(selectedQuery.isError ||
+							workspaceQuery.isError ||
+							currentProjectQuery.isError ||
+							membershipQuery.isError ||
+							projectCatalog.isError) && (
+							<p role="alert">
+								{cl.currentFailed}
+								<Button
+									variant="ghost"
+									onClick={() => {
+										void selectedQuery.refetch();
+										void workspaceQuery.refetch();
+										if (currentProjectId) void currentProjectQuery.refetch();
+										if (selectedConversation) void membershipQuery.refetch();
+										void projectCatalog.refetch();
+									}}
+								>
+									{t("nav.refresh")}
+								</Button>
+							</p>
 						)}
-					</div>
-					<FilePanel
-						controller={panel}
-						available={areaWidth}
-						workspaceId={selectedWorkspace}
+						<div
+							className="work-conversation-frame"
+							inert={filePanelFullWidth}
+							aria-hidden={filePanelFullWidth || undefined}
+							style={{ width: retainedConversationWidth }}
+						>
+							{selected ? (
+								<ConversationPane
+									key={`${selected.workspaceId}.${selected.conversationId}`}
+									conversation={selected}
+									searchAnchor={searchAnchor}
+									onExitSearchAnchor={() => setSearchAnchor(undefined)}
+									draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
+									onOpenModelSettings={(returnFocus) => {
+										settingsReturn.current = returnFocus;
+										setSettingsCategory("models");
+										setSettingsOpen(true);
+									}}
+									onOpenArtifact={
+										session
+											? artifactNavigation(selected, () => navigation.store.getState().scope, session, panel)
+											: undefined
+									}
+									detailsOpen={detailsOpen}
+									onDetailsClose={() => {
+										setDetailsOpen(false);
+										const target = detailsReturn.current;
+										if (target?.isConnected && target.getClientRects().length) target.focus();
+										else detailsTrigger.current?.focus();
+									}}
+								/>
+							) : (
+								<WorkbenchWelcome
+									workspaceName={currentProject?.name}
+									action={
+										<>
+											{currentProject && (
+												<ProjectFolderSummary
+													workspaceId={currentProject.homeWorkspaceId}
+													failed={folderCreationFailures[currentProject.homeWorkspaceId]}
+													onManage={(trigger) =>
+														manageProjectFolder(
+															{ workspaceId: currentProject.homeWorkspaceId, name: currentProject.name },
+															() => {
+																if (trigger.isConnected) trigger.focus({ preventScroll: true });
+															},
+														)
+													}
+												/>
+											)}
+											<PreparedTaskEntry
+												key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
+												workspaceId={currentProject?.homeWorkspaceId ?? ""}
+												draft={homeDraft.text}
+												onDraftChange={homeDraft.change}
+												readOnly={homeDraft.busy || !homeDraft.inventory?.active}
+												disabled={
+													catalogBlocked ||
+													homeDraft.busy ||
+													homeDraft.failed ||
+													!homeDraft.inventory?.active ||
+													(!!currentProjectId && !currentProject) ||
+													(!currentProjectId && !canCreateProjectless(local, projectCatalog.data))
+												}
+												busy={catalogState.busy}
+												onSend={sendInitial}
+												focusRevision={composerFocusRevision}
+												onManageModels={(returnFocus) => {
+													settingsReturn.current = returnFocus;
+													setSettingsCategory("models");
+													setSettingsOpen(true);
+												}}
+											/>
+										</>
+									}
+								/>
+							)}
+						</div>
+						<FilePanel
+							controller={panel}
+							available={areaWidth}
+							workspaceId={selectedWorkspace}
+							session={session}
+							guard={guard}
+							trigger={panelTrigger}
+							id={panelId}
+						/>
+					</main>
+				</div>
+				{folderProject && (
+					<ProjectFolderDialog
+						key={folderProject.workspaceId}
+						workspaceId={folderProject.workspaceId}
+						name={folderProject.name}
 						session={session}
-						guard={guard}
-						trigger={panelTrigger}
-						id={panelId}
+						initialFailure={folderCreationFailed}
+						onConfirmed={() =>
+							setFolderCreationFailures((current) => ({ ...current, [folderProject.workspaceId]: false }))
+						}
+						onClose={() => setFolderProject(undefined)}
+						onRestoreFocus={() => {
+							if (folderRestoreFocus.current) folderRestoreFocus.current();
+							else navigationToggle.current?.focus({ preventScroll: true });
+						}}
 					/>
-				</main>
-			</div>
-			{folderProject && (
-				<ProjectFolderDialog
-					key={folderProject.workspaceId}
-					workspaceId={folderProject.workspaceId}
-					name={folderProject.name}
-					session={session}
-					initialFailure={folderCreationFailed}
-					onConfirmed={() =>
-						setFolderCreationFailures((current) => ({ ...current, [folderProject.workspaceId]: false }))
-					}
-					onClose={() => setFolderProject(undefined)}
+				)}
+				<ConversationSearch
+					open={searchOpen}
+					onOpenChange={setSearchOpen}
+					onActivate={activateSearch}
 					onRestoreFocus={() => {
-						if (folderRestoreFocus.current) folderRestoreFocus.current();
+						if (searchActivated.current) {
+							document.querySelector<HTMLElement>(".message-scroll")?.focus({ preventScroll: true });
+							return;
+						}
+						const target = searchReturn.current;
+						if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
+						else if (searchTrigger.current?.getClientRects().length)
+							searchTrigger.current.focus({ preventScroll: true });
 						else navigationToggle.current?.focus({ preventScroll: true });
 					}}
 				/>
-			)}
-			<ConversationSearch
-				open={searchOpen}
-				onOpenChange={setSearchOpen}
-				onActivate={activateSearch}
-				onRestoreFocus={() => {
-					if (searchActivated.current) {
-						document.querySelector<HTMLElement>(".message-scroll")?.focus({ preventScroll: true });
-						return;
-					}
-					const target = searchReturn.current;
-					if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
-					else if (searchTrigger.current?.getClientRects().length) searchTrigger.current.focus({ preventScroll: true });
-					else navigationToggle.current?.focus({ preventScroll: true });
-				}}
-			/>
 
-			<SettingsDialog
-				open={settingsOpen}
-				initialCategory={settingsCategory}
-				onOpenChange={setSettingsOpen}
-				workspace={workspace}
-				conversation={selected}
-				onRestoreFocus={() => {
-					const target = settingsReturn.current;
-					if (target?.isConnected && target.getClientRects().length) target.focus();
-					else if (settingsTrigger.current?.getClientRects().length) settingsTrigger.current.focus();
-					else navigationToggle.current?.focus();
-				}}
-				onOpenConversation={() => setSettingsOpen(false)}
-				credentialSettings={<ModelSettings />}
-				workspaceActions={
-					workspace ? <ToolPacksDialog key={workspace.workspaceId} workspaceId={workspace.workspaceId} /> : undefined
-				}
-				runtimeActions={
-					<ConnectionActions
-						disconnect={disconnect}
-						prepareDisconnect={() => {
-							let committed = false;
-							const captured = new Map(
-								(session?.snapshot().tabs ?? []).flatMap((tab) =>
-									tab.kind === "editor" && tab.editor.protected ? [[tab.editor, tab.editor.snapshot()] as const] : [],
-								),
-							);
-							return {
-								warning: captured.size ? fileLabels(locale).leaveNote : undefined,
-								commit: () => {
-									if (committed) return true;
-									if (!connectionLease.active || currentConnection.current !== connectionLease) return false;
-									for (const tab of session?.snapshot().tabs ?? []) {
-										if (
-											tab.kind === "editor" &&
-											tab.editor.protected &&
-											captured.get(tab.editor) !== tab.editor.snapshot()
-										)
-											return false;
-									}
-									committed = true;
-									disconnect();
-									return true;
-								},
-							};
-						}}
-						onOpen={(opened, item) => {
-							cache.setQueryData(["workspace", opened.workspaceId], opened);
-							selectConversation(item, () => setSettingsOpen(false));
-						}}
-					/>
-				}
-			/>
-			<Dialog
-				open={!!leave}
-				onOpenChange={(open) => {
-					if (!open) setLeave(null);
-				}}
-			>
-				<DialogContent closeLabel={t("common.close")}>
-					<DialogTitle>{fileLabels(locale).leave}</DialogTitle>
-					<DialogDescription>{fileLabels(locale).leaveNote}</DialogDescription>
-					<div className="file-actions">
-						<Button variant="outline" onClick={() => setLeave(null)}>
-							{fileLabels(locale).stay}
-						</Button>
-						<Button
-							onClick={() => {
-								const action = leave;
-								setLeave(null);
-								action?.();
+				<SettingsDialog
+					open={settingsOpen}
+					initialCategory={settingsCategory}
+					onOpenChange={setSettingsOpen}
+					workspace={workspace}
+					conversation={selected}
+					onRestoreFocus={() => {
+						const target = settingsReturn.current;
+						if (target?.isConnected && target.getClientRects().length) target.focus();
+						else if (settingsTrigger.current?.getClientRects().length) settingsTrigger.current.focus();
+						else navigationToggle.current?.focus();
+					}}
+					onOpenConversation={() => setSettingsOpen(false)}
+					credentialSettings={<ModelSettings />}
+					workspaceActions={
+						workspace ? <ToolPacksDialog key={workspace.workspaceId} workspaceId={workspace.workspaceId} /> : undefined
+					}
+					runtimeActions={
+						<ConnectionActions
+							disconnect={disconnect}
+							prepareDisconnect={() => {
+								let committed = false;
+								const captured = new Map(
+									(session?.snapshot().tabs ?? []).flatMap((tab) =>
+										tab.kind === "editor" && tab.editor.protected ? [[tab.editor, tab.editor.snapshot()] as const] : [],
+									),
+								);
+								return {
+									warning: captured.size ? fileLabels(locale).leaveNote : undefined,
+									commit: () => {
+										if (committed) return true;
+										if (!connectionLease.active || currentConnection.current !== connectionLease) return false;
+										for (const tab of session?.snapshot().tabs ?? []) {
+											if (
+												tab.kind === "editor" &&
+												tab.editor.protected &&
+												captured.get(tab.editor) !== tab.editor.snapshot()
+											)
+												return false;
+										}
+										committed = true;
+										disconnect();
+										return true;
+									},
+								};
 							}}
-						>
-							{fileLabels(locale).discard}
-						</Button>
-					</div>
-				</DialogContent>
-			</Dialog>
-		</div>
+							onOpen={(opened, item) => {
+								cache.setQueryData(["workspace", opened.workspaceId], opened);
+								selectConversation(item, () => setSettingsOpen(false));
+							}}
+						/>
+					}
+				/>
+				<Dialog
+					open={!!leave}
+					onOpenChange={(open) => {
+						if (!open) setLeave(null);
+					}}
+				>
+					<DialogContent closeLabel={t("common.close")}>
+						<DialogTitle>{fileLabels(locale).leave}</DialogTitle>
+						<DialogDescription>{fileLabels(locale).leaveNote}</DialogDescription>
+						<div className="file-actions">
+							<Button variant="outline" onClick={() => setLeave(null)}>
+								{fileLabels(locale).stay}
+							</Button>
+							<Button
+								onClick={() => {
+									const action = leave;
+									setLeave(null);
+									action?.();
+								}}
+							>
+								{fileLabels(locale).discard}
+							</Button>
+						</div>
+					</DialogContent>
+				</Dialog>
+			</div>
+		</ActionTooltipProvider>
 	);
 }

@@ -11,6 +11,7 @@ import { projectFolderLabels } from "../projects/folder-labels.ts";
 import { projectLabels } from "../projects/labels.ts";
 import { ProjectEditableTitle } from "../projects/rename.tsx";
 import { useProjectFolder } from "../projects/use-folder.ts";
+import { SidebarActionTooltip } from "./action-tooltip.tsx";
 import { projectConversationCount } from "./preview-metadata.ts";
 import { type ProjectPreviewCount, readProjectSummary } from "./project-summary-query.ts";
 import { projectSummaryKey } from "./query-keys.ts";
@@ -63,16 +64,18 @@ export function ProjectPreviewCard({
 						workspace.name
 					)}
 					{actions?.projectPinEnabled && (
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							className="project-preview-pin"
-							disabled={actions.pinDisabled}
-							aria-label={actions.pinned ? projectLabels(locale).unpin : projectLabels(locale).pin}
-							onClick={actions.togglePin}
-						>
-							{actions.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
-						</Button>
+						<SidebarActionTooltip label={actions.pinned ? projectLabels(locale).unpin : projectLabels(locale).pin}>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								className="project-preview-pin"
+								disabled={actions.pinDisabled}
+								aria-label={actions.pinned ? projectLabels(locale).unpin : projectLabels(locale).pin}
+								onClick={actions.togglePin}
+							>
+								{actions.pinned ? <PinOff size={16} aria-hidden="true" /> : <Pin size={16} aria-hidden="true" />}
+							</Button>
+						</SidebarActionTooltip>
 					)}
 				</PopoverTitle>
 			</PopoverHeader>

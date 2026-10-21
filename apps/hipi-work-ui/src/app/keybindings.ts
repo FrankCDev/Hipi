@@ -41,3 +41,28 @@ export const DEFAULT_APP_KEYBINDINGS = {
 	nextSidebarItemAlternate: "Mod-Alt-ArrowRight",
 } as const;
 export type AppKeybindings = { [K in keyof typeof DEFAULT_APP_KEYBINDINGS]: string };
+
+/** Display the configured chord only; an unbound action must not imply a shortcut. */
+export function formatBinding(
+	binding: string,
+	isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform),
+) {
+	const labels: Record<string, string> = {
+		mod: isMac ? "⌘" : "Ctrl",
+		meta: isMac ? "⌘" : "Meta",
+		cmd: "⌘",
+		ctrl: isMac ? "⌃" : "Ctrl",
+		alt: isMac ? "⌥" : "Alt",
+		shift: isMac ? "⇧" : "Shift",
+		arrowleft: "←",
+		arrowright: "→",
+		arrowup: "↑",
+		arrowdown: "↓",
+		escape: "Esc",
+	};
+	return binding
+		.trim()
+		.split("-")
+		.map((part) => labels[part.toLowerCase()] ?? (part.length === 1 ? part.toUpperCase() : part))
+		.join(isMac ? "" : "+");
+}

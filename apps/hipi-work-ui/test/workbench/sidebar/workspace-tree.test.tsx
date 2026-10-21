@@ -140,7 +140,7 @@ test("current conversation and its containing project retain distinct SSR surfac
 	const open = html.match(/<button\b[^>]*class="project-open"[^>]*>/)?.[0];
 	assert.ok(open);
 	assert.match(open, /aria-labelledby="[^"]+"/);
-	assert.match(open, /title="打开项目"/);
+	assert.doesNotMatch(open, /title=|data-action-tooltip-trigger/);
 	assert.match(open, /data-sidebar-cycle-item=""/);
 	assert.match(html, />收起项目<\/span>/);
 	assert.match(html, />打开项目<\/span>/);

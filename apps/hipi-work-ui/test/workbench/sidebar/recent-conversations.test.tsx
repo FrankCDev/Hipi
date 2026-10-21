@@ -149,6 +149,11 @@ vi.mock("../../../src/features/workbench/sidebar/section.tsx", () => ({
 	SidebarSectionHeading: () => null,
 	SidebarSectionContent: () => null,
 }));
+// This reconciliation model has no mounted list/CSS. The separate mounted geometry
+// tests exercise the real probe and React binding instead of this fixed DOM seam.
+vi.mock("../../../src/features/workbench/sidebar/use-recent-row-geometry.ts", () => ({
+	useRecentRowGeometry: () => ({ height: 30, gap: 1 }),
+}));
 const view = { kind: "project_recent" } as const;
 const key = windowKey(view, "active");
 const coverage = {

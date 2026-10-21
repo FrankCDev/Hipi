@@ -13,6 +13,7 @@ import {
 	app,
 	BrowserWindow,
 	dialog,
+	type Event as ElectronEvent,
 	type IpcMainEvent,
 	ipcMain,
 	Menu,
@@ -24,6 +25,7 @@ import {
 	safeStorage,
 	session,
 	utilityProcess,
+	type WebContentsWillNavigateEventParams,
 } from "electron";
 import {
 	APPEARANCE_CHANNEL,
@@ -39,6 +41,7 @@ import { CREDENTIAL_CHANNEL, credentialRequest } from "./credentials/protocol.ts
 import { type CredentialStatusStage, CredentialStore } from "./credentials/store.ts";
 import { DevelopmentLifecycle, developmentControl } from "./development/control.ts";
 import { prepareDevelopment } from "./development/launch.ts";
+import { developmentSelfNavigation } from "./development/navigation.ts";
 import { diagnosticMessages } from "./diagnostics/messages.ts";
 import {
 	DesktopDiagnostics,
@@ -641,8 +644,17 @@ async function start(mode: "production" | "deterministic") {
 		}
 	});
 	owner.setWindowOpenHandler(() => ({ action: "deny" }));
-	owner.on("will-navigate", (event) => event.preventDefault());
-	owner.on("will-frame-navigate", (event) => event.preventDefault());
+	const navigationGuard = (event: ElectronEvent<WebContentsWillNavigateEventParams>) => {
+		if (
+			typeof HIPI_DESKTOP_DEV !== "undefined" &&
+			HIPI_DESKTOP_DEV &&
+			developmentSelfNavigation(event, owner, development?.page, app.isPackaged)
+		)
+			return;
+		event.preventDefault();
+	};
+	owner.on("will-navigate", navigationGuard);
+	owner.on("will-frame-navigate", navigationGuard);
 	owner.on("will-attach-webview", (event) => event.preventDefault());
 	owner.on("did-start-navigation", (_event, _url, _inPlace, isMainFrame) => {
 		if (isMainFrame) clearRenderer();

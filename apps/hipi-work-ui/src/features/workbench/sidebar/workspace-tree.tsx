@@ -5,7 +5,7 @@ import {
 	type ProjectListItem,
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
-import { Archive, Ellipsis, MessageCircle, SquarePen } from "lucide-react";
+import { Archive, MessageCircle } from "lucide-react";
 import { type RefObject, useId, useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import {
@@ -28,8 +28,10 @@ import { type ProjectPinNotice, useProjectActionOwner } from "../projects/action
 import { ProjectActions } from "../projects/actions.tsx";
 import { projectFolderLabels } from "../projects/folder-labels.ts";
 import { projectLabels } from "../projects/labels.ts";
+import { SidebarActionTooltip } from "./action-tooltip.tsx";
 import { ConversationPreview } from "./conversation-preview.tsx";
 import type { SidebarOrderAction } from "./drag-provider.tsx";
+import { SidebarIcon } from "./icon.tsx";
 import type { PresentationSession } from "./presentation-session.ts";
 import { type PreviewActions, SidebarPreviewRow } from "./preview-row.tsx";
 import { ProjectPreviewCard } from "./project-preview-card.tsx";
@@ -397,41 +399,43 @@ export function WorkspaceBranch({
 												}}
 											/>
 										)}
-										<Button
-											variant="ghost"
-											size="icon-sm"
-											className="project-new-conversation"
-											aria-label={`${t("nav.newConversation")}: ${branchName}`}
-											title={t("nav.newConversation")}
-											onClick={() => props.onNewConversation(branchId)}
-										>
-											<SquarePen size={16} aria-hidden="true" />
-										</Button>
+										<SidebarActionTooltip label={t("nav.newConversation")}>
+											<Button
+												variant="ghost"
+												size="icon-sm"
+												className="project-new-conversation"
+												aria-label={`${t("nav.newConversation")}: ${branchName}`}
+												onClick={() => props.onNewConversation(branchId)}
+											>
+												<SidebarIcon name="newChat" />
+											</Button>
+										</SidebarActionTooltip>
 									</div>
 								)
 					}
 				>
 					{({ hovered, describedBy }) => (
 						<>
-							<button
-								type="button"
-								className="project-toggle"
-								aria-expanded={expanded}
-								aria-controls={regionId}
-								aria-labelledby={`${disclosureId} ${headingId}`}
-								title={expanded ? cl.collapseProject : cl.expandProject}
-								onClick={() => props.onToggle(branchId)}
-							>
-								<span id={disclosureId} className="sr-only">
-									{expanded ? cl.collapseProject : cl.expandProject}
-								</span>
-								<span className="project-icon" aria-hidden="true">
-									<Icon name="folder" size={16} />
-								</span>
-								<span className="project-chevron" data-expanded={expanded} aria-hidden="true">
-									<Icon name="chevron" size={12} />
-								</span>
-							</button>
+							<SidebarActionTooltip label={expanded ? cl.collapseProject : cl.expandProject}>
+								<button
+									type="button"
+									className="project-toggle"
+									aria-expanded={expanded}
+									aria-controls={regionId}
+									aria-labelledby={`${disclosureId} ${headingId}`}
+									onClick={() => props.onToggle(branchId)}
+								>
+									<span id={disclosureId} className="sr-only">
+										{expanded ? cl.collapseProject : cl.expandProject}
+									</span>
+									<span className="project-icon" aria-hidden="true">
+										<SidebarIcon name="folder" />
+									</span>
+									<span className="project-chevron" data-expanded={expanded} aria-hidden="true">
+										<SidebarIcon name="disclosure" />
+									</span>
+								</button>
+							</SidebarActionTooltip>
 							<button
 								type="button"
 								className="project-open"
@@ -440,7 +444,6 @@ export function WorkspaceBranch({
 								aria-describedby={describedBy}
 								aria-current={current ? "page" : undefined}
 								aria-labelledby={`${openId} ${headingId}`}
-								title={cl.openProject}
 								onClick={() => {
 									if (!fenced) props.onOpenProject(branchId);
 								}}
@@ -495,17 +498,19 @@ function ProjectConversationMenu({
 				if (open) controls?.onMenuOpen();
 			}}
 		>
-			<ActionMenuTrigger asChild>
-				<Button
-					ref={controls?.triggerRef}
-					variant="ghost"
-					size="icon-sm"
-					className={controls ? "project-actions-trigger" : "recent-actions-trigger"}
-					aria-label={`${controls ? cl.projectActions : cl.filter}: ${name}`}
-				>
-					<Ellipsis size={16} aria-hidden="true" />
-				</Button>
-			</ActionMenuTrigger>
+			<SidebarActionTooltip label={controls ? cl.projectActions : cl.filter} disabled={open}>
+				<ActionMenuTrigger asChild>
+					<Button
+						ref={controls?.triggerRef}
+						variant="ghost"
+						size="icon-sm"
+						className={controls ? "project-actions-trigger" : "recent-actions-trigger"}
+						aria-label={`${controls ? cl.projectActions : cl.filter}: ${name}`}
+					>
+						<SidebarIcon name="more" />
+					</Button>
+				</ActionMenuTrigger>
+			</SidebarActionTooltip>
 			<ActionMenuContent
 				side={controls ? "right" : "bottom"}
 				align={controls ? "start" : "end"}
@@ -525,7 +530,7 @@ function ProjectConversationMenu({
 				{onManageFolder && (
 					<>
 						<ActionMenuItem onSelect={onManageFolder}>
-							<Icon name="folder" size={16} />
+							<SidebarIcon name="folder" />
 							{projectFolderLabels(locale).title}
 						</ActionMenuItem>
 						<ActionMenuSeparator />

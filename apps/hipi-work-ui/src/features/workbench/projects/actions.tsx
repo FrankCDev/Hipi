@@ -17,6 +17,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
 import type { ProjectCatalogCommand } from "../command-recovery.ts";
+import { SidebarActionTooltip } from "../sidebar/action-tooltip.tsx";
 import type { PreviewActions } from "../sidebar/preview-row.tsx";
 import type { ProjectActionOwner } from "./action-owner.ts";
 import { matchesProjectCommand } from "./commands.ts";
@@ -79,17 +80,19 @@ export function ProjectActions({
 					if (value) controls.onMenuOpen();
 				}}
 			>
-				<ActionMenuTrigger asChild>
-					<Button
-						ref={controls.triggerRef}
-						variant="ghost"
-						size="icon-sm"
-						className="project-actions-trigger"
-						aria-label={`${cl.projectActions}: ${item.project.name}`}
-					>
-						<Ellipsis size={16} aria-hidden="true" />
-					</Button>
-				</ActionMenuTrigger>
+				<SidebarActionTooltip label={cl.projectActions} disabled={open || !!renaming || controls.hidden}>
+					<ActionMenuTrigger asChild>
+						<Button
+							ref={controls.triggerRef}
+							variant="ghost"
+							size="icon-sm"
+							className="project-actions-trigger"
+							aria-label={`${cl.projectActions}: ${item.project.name}`}
+						>
+							<Ellipsis size={16} aria-hidden="true" />
+						</Button>
+					</ActionMenuTrigger>
+				</SidebarActionTooltip>
 				<ActionMenuContent
 					side="right"
 					align="start"
