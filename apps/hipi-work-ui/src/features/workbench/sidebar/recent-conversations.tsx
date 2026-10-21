@@ -541,7 +541,11 @@ export function RecentConversations({
 								</Button>
 							</div>
 						)}
-						{committed?.unpublished && <output className="nav-feedback">{labels.refreshing}</output>}
+						{committed?.unpublished && (
+							<output className={rows.length ? "sr-only" : "nav-feedback"} aria-live={rows.length ? "off" : undefined}>
+								{labels.refreshing}
+							</output>
+						)}
 						{committed?.reset && (
 							<output className="sr-only">
 								{locale.startsWith("zh")

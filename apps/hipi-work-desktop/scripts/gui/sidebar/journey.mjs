@@ -9,8 +9,10 @@ import { exerciseSidebarKeyboard } from "./item-navigation.mjs";
 import { nativeKeyEvents } from "./native-key.mjs";
 import { openRecentConversation } from "./new-chat-navigation.mjs";
 import { assertProjectPublication, exerciseProjectHoverPublication } from "./project-hover-publication.mjs";
+import { exerciseSidebarRowGeometry } from "./row-geometry.mjs";
 import { sidebarStartupDiagnostic } from "./startup-diagnostic.mjs";
 import { seedSidebarDocument } from "./startup-lifecycle.mjs";
+import { exerciseSidebarTooltipHandoff } from "./tooltip-handoff.mjs";
 
 const heading = (id) => `[data-sidebar-section="${id}"] .sidebar-section-toggle`;
 const project = (id) => `.workspace-branch[data-workspace-id="${id}"] .project-open`;
@@ -524,6 +526,12 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			await capture(cdp, directory, "sidebar-cold-restored");
 			return { final, coldRestored: true };
 		}
+		const tooltipHandoff = await exerciseSidebarTooltipHandoff({ cdp, directory });
+		actions.push({ name: "trusted pointer and keyboard tooltip focus handoff", tooltipHandoff });
+		record({ sidebarAction: "trusted pointer and keyboard tooltip focus handoff" });
+		const rowGeometry = await exerciseSidebarRowGeometry({ cdp, seed, directory });
+		actions.push({ name: "rendered first-child selected and parent hover geometry", rowGeometry });
+		record({ sidebarAction: "rendered first-child selected and parent hover geometry" });
 		const aliasSelection = await exerciseAliasSelection(cdp, seed, observeGeometry);
 		await observeGeometry("after alias selection");
 		actions.push({ name: "native project Recent alias ownership and disclosure fallback", aliasSelection });

@@ -1,13 +1,14 @@
 import { FolderOpen, X } from "lucide-react";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
+import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog.tsx";
 import { FileWorkbench } from "../../files/file-workbench.tsx";
 import type { FileWorkspaceSession } from "../../files/file-workspace-session.ts";
 import { FILE_PANEL, type FilePanelController, panelLayout } from "./panel-controller.ts";
 import { filePanelLabels } from "./panel-labels.ts";
+import { FilePanelSurface } from "./surface.tsx";
 
 export function useWorkAreaWidth(ref: RefObject<HTMLElement | null>) {
 	const [width, setWidth] = useState<number | null>(null);
@@ -41,9 +42,20 @@ export function FilePanel({
 	id: string;
 }) {
 	const { locale } = usePreferences();
+	const client = useAppClient();
 	const l = filePanelLabels(locale);
 	const state = useStore(controller.store);
-	const [retained, setRetained] = useState(state.open);
+	// Owner replacement resets local reviews/editor views, never presentation changes.
+	const [owner, setOwner] = useState({ session, controller, workspaceId, client, revision: 0 });
+	if (
+		owner.session !== session ||
+		owner.controller !== controller ||
+		owner.workspaceId !== workspaceId ||
+		owner.client !== client
+	) {
+		setOwner({ session, controller, workspaceId, client, revision: owner.revision + 1 });
+	}
+	const open = state.open && available !== null;
 	const layout = panelLayout(available ?? 0, state.width, state.ratio);
 	const width = state.fullWidth && !layout.overlay ? Math.max(0, (available ?? 0) - FILE_PANEL.handle) : layout.width;
 	const drag = useRef<{ pointer: number; x: number; width: number; element: HTMLElement } | null>(null);
@@ -55,9 +67,6 @@ export function FilePanel({
 		controller.finishResize(cancel);
 	};
 	useEffect(() => {
-		if (state.open) setRetained(true);
-	}, [state.open]);
-	useEffect(() => {
 		const release = () => {
 			const current = drag.current;
 			drag.current = null;
@@ -67,65 +76,20 @@ export function FilePanel({
 		if (layout.overlay || !state.open) release();
 		return release;
 	}, [controller, layout.overlay, state.open]);
-	if ((!state.open && !retained) || available === null) return null;
-	const content = <FileWorkbench workspaceId={workspaceId} session={session} guard={guard} visible={state.open} />;
-	if (layout.overlay)
-		return (
-			<Dialog open={state.open} onOpenChange={(open) => controller.setOpen(open)}>
-				<DialogContent
-					id={id}
-					className="file-panel-dialog"
-					closeLabel={l["filePanel.hide"]}
-					showCloseButton={false}
-					onEscapeKeyDown={(event) => {
-						// Radix handles Escape at document capture, before nested controls can cancel it.
-						// Keep the dialog open during IME too; the nested surface owns cancellation.
-						if (
-							event
-								.composedPath()
-								.some((target) => target instanceof Element && target.hasAttribute("data-file-editor-cancel"))
-						)
-							event.preventDefault();
-					}}
-					onCloseAutoFocus={(event) => {
-						event.preventDefault();
-						trigger.current?.focus({ preventScroll: true });
-					}}
-				>
-					<header className="file-panel-header">
-						<div className="file-panel-title">
-							<FolderOpen aria-hidden="true" size={18} />
-							<DialogTitle>{l["filePanel.title"]}</DialogTitle>
-						</div>
-						<Button
-							size="icon-sm"
-							variant="ghost"
-							className="file-panel-close"
-							aria-label={l["filePanel.hide"]}
-							title={l["filePanel.hide"]}
-							onClick={() => controller.setOpen(false)}
-						>
-							<X size={16} aria-hidden="true" />
-						</Button>
-					</header>
-					<DialogDescription className="sr-only">{l["filePanel.description"]}</DialogDescription>
-					{content}
-				</DialogContent>
-			</Dialog>
-		);
 	return (
 		<section
 			id={id}
 			className="file-panel-dock"
 			aria-label={l["filePanel.title"]}
 			data-full-width={state.fullWidth}
-			hidden={!state.open}
-			inert={!state.open}
-			aria-hidden={!state.open}
-			style={{ width: width + FILE_PANEL.handle, display: state.open ? undefined : "none" }}
+			hidden={!open}
+			inert={!open}
+			aria-hidden={!open}
+			style={{ width: layout.overlay ? 0 : width + FILE_PANEL.handle, display: open ? undefined : "none" }}
 		>
 			{/* A focusable separator follows the WAI-ARIA window splitter keyboard pattern. */}
 			<hr
+				hidden={layout.overlay}
 				tabIndex={0}
 				aria-label={l["filePanel.resize"]}
 				aria-orientation="vertical"
@@ -144,17 +108,17 @@ export function FilePanel({
 					}
 					if (event.key === "ArrowRight" && layout.width === FILE_PANEL.min) {
 						event.preventDefault();
-						controller.resizeFromSplitter(0, available);
+						controller.resizeFromSplitter(0, available ?? 0);
 						trigger.current?.focus({ preventScroll: true });
 						return;
 					}
 					if (event.key === "ArrowLeft" && layout.width === layout.max) {
 						event.preventDefault();
-						controller.resizeFromSplitter(available, available);
+						controller.resizeFromSplitter(available ?? 0, available ?? 0);
 						return;
 					}
 					const widths: Record<string, number> = {
-						ArrowLeft: state.fullWidth ? available : layout.width + 24,
+						ArrowLeft: state.fullWidth ? (available ?? 0) : layout.width + 24,
 						ArrowRight: layout.width - 24,
 						Home: FILE_PANEL.min,
 						End: layout.max,
@@ -162,7 +126,7 @@ export function FilePanel({
 					const width = widths[event.key];
 					if (width === undefined) return;
 					event.preventDefault();
-					controller.resizeFromSplitter(width, available);
+					controller.resizeFromSplitter(width, available ?? 0);
 				}}
 				onPointerDown={(event) => {
 					if (event.button !== 0 || drag.current) return;
@@ -180,7 +144,7 @@ export function FilePanel({
 				onPointerMove={(event) => {
 					const current = drag.current;
 					if (current?.pointer !== event.pointerId) return;
-					controller.resizeFromSplitter(current.width + current.x - event.clientX, available, false);
+					controller.resizeFromSplitter(current.width + current.x - event.clientX, available ?? 0, false);
 					if (!controller.store.getState().open) {
 						finishDrag();
 						trigger.current?.focus({ preventScroll: true });
@@ -200,11 +164,17 @@ export function FilePanel({
 			<span id={`${id}-resize-hint`} className="sr-only">
 				{l["filePanel.resizeHint"]}
 			</span>
-			<div id={`${id}-content`} className="file-panel-content">
+			<FilePanelSurface
+				open={open}
+				overlay={layout.overlay}
+				id={id}
+				trigger={trigger}
+				onClose={() => controller.setOpen(false)}
+			>
 				<header className="file-panel-header">
 					<div className="file-panel-title">
 						<FolderOpen aria-hidden="true" size={18} />
-						<h2>{l["filePanel.title"]}</h2>
+						<h2 id={`${id}-title`}>{l["filePanel.title"]}</h2>
 					</div>
 					<Button
 						size="icon-sm"
@@ -220,8 +190,11 @@ export function FilePanel({
 						<X size={16} aria-hidden="true" />
 					</Button>
 				</header>
-				{content}
-			</div>
+				<p id={`${id}-description`} className="sr-only">
+					{l["filePanel.description"]}
+				</p>
+				{open && <FileWorkbench key={owner.revision} workspaceId={workspaceId} session={session} guard={guard} />}
+			</FilePanelSurface>
 		</section>
 	);
 }

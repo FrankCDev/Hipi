@@ -1,7 +1,26 @@
-import { createContext, type ReactElement, type ReactNode, useContext, useEffect, useRef, useState } from "react";
+import { Slot } from "radix-ui";
+import {
+	type ComponentProps,
+	createContext,
+	type ReactElement,
+	type ReactNode,
+	useContext,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./tooltip.tsx";
 
 const ProviderContext = createContext<boolean | null>(null);
+
+/** Keep tooltip metadata out of the child primitive's state and slot namespace. */
+function ActionTooltipTarget({
+	"data-state": tooltipState,
+	"data-slot": _tooltipSlot,
+	...props
+}: ComponentProps<typeof Slot.Root> & { "data-state"?: string; "data-slot"?: string }) {
+	return <Slot.Root {...props} data-tooltip-state={tooltipState} />;
+}
 
 /** One warm delay budget for related controls; standalone consumers remain supported. */
 export function ActionTooltipProvider({ children, disabled = false }: { children: ReactNode; disabled?: boolean }) {
@@ -59,13 +78,14 @@ export function ActionTooltip({
 					if (blocked) event.preventDefault();
 				}}
 				onFocus={(event) => {
-					if (blocked) event.preventDefault();
+					if (!interactionAllowed.current) event.preventDefault();
 				}}
-				onFocusCapture={() => {
-					interactionAllowed.current = !blocked;
+				onFocusCapture={(event) => {
+					// Focus restored after a pointer action is not a fresh keyboard request.
+					interactionAllowed.current = !blocked && event.currentTarget.matches(":focus-visible");
 				}}
 			>
-				{children}
+				<ActionTooltipTarget>{children}</ActionTooltipTarget>
 			</TooltipTrigger>
 			{!blocked ? (
 				<TooltipContent side={side}>

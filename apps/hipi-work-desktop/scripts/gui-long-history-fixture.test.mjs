@@ -9,6 +9,7 @@ import { openTestRuntime } from "@hipi/work-runtime/testing";
 import { smokeProfile } from "../src/launch/profile.ts";
 import { fixture } from "./gui-flow.mjs";
 import {
+	fixtureProgress,
 	historyAnswer,
 	historyFixture,
 	ownedHistoryDirectory,
@@ -16,6 +17,25 @@ import {
 	verifyColdHistory,
 } from "./gui-long-history-fixture.mjs";
 import { createGuiProfile } from "./smoke-packaged-gui.mjs";
+
+test("fixture timing reports monotonic intervals and bounded numeric counts only", () => {
+	let now = 10;
+	const samples = [];
+	const progress = fixtureProgress(
+		(sample) => samples.push(sample),
+		() => now,
+	);
+	progress("seed-start");
+	now = 35;
+	progress("seed-messages", 20);
+	now = 47;
+	progress("seed-shutdown");
+	assert.deepEqual(samples, [
+		{ stage: "seed-start", count: 0, elapsedMs: 0, intervalMs: 0 },
+		{ stage: "seed-messages", count: 20, elapsedMs: 25, intervalMs: 25 },
+		{ stage: "seed-shutdown", count: 0, elapsedMs: 37, intervalMs: 12 },
+	]);
+});
 
 test("fixture contains actual multiline Markdown and one bounded original beyond preview", () => {
 	assert.match(historyAnswer(0), /\n\n\| Item \| Value \|\n/);
@@ -94,7 +114,14 @@ test(
 test(
 	"source fixture durably seeds 200 messages; cold verifier detects source-mode probe duplication",
 	{ timeout: 30000 },
-	async () => {
+	async (t) => {
+		const samples = [];
+		const reportProgress = (sample) => {
+			samples.push(sample);
+			t.diagnostic(JSON.stringify(sample));
+		};
+		const progress = fixtureProgress(reportProgress);
+		progress("source-test-start");
 		const root = await createGuiProfile();
 		let runtime;
 		let closed = true;
@@ -104,7 +131,8 @@ test(
 			assert.ok(closed);
 		};
 		try {
-			const seed = await seedLongHistory({ ownedProfileRoot: root, assertAllOwnedProcessesExited });
+			const seed = await seedLongHistory({ ownedProfileRoot: root, assertAllOwnedProcessesExited, reportProgress });
+			progress("source-seed-returned", seed.persistedMessages);
 			assert.equal(smokeProfile([`--smoke-data-root=${root}`], "deterministic").userData, join(root, "profile"));
 			assert.equal(seed.persistedMessages, 200);
 			assert.equal(seed.long.messages.length, 200);
@@ -116,6 +144,7 @@ test(
 			);
 			closed = false;
 			runtime = await openTestRuntime(join(root, "profile/deterministic-store"), { tokensPerSecond: 100000 });
+			progress("source-probe-open");
 			// This is a verifier unit/integration probe, deliberately NOT evidence of GUI submission.
 			const requestId = "source-verifier-probe";
 			const submit = async (id) => {
@@ -134,6 +163,7 @@ test(
 				}
 			};
 			await submit(requestId);
+			progress("source-probe-complete");
 			const tail = await runtime.call("getHistory", {
 				workspaceId: seed.workspaceId,
 				conversationId: seed.long.conversationId,
@@ -149,7 +179,15 @@ test(
 			await runtime.close();
 			runtime = undefined;
 			closed = true;
-			const result = await verifyColdHistory({ ownedProfileRoot: root, seed, gui, assertAllOwnedProcessesExited });
+			progress("source-probe-shutdown");
+			const result = await verifyColdHistory({
+				ownedProfileRoot: root,
+				seed,
+				gui,
+				assertAllOwnedProcessesExited,
+				reportProgress,
+			});
+			progress("source-cold-verifier-returned", result.persistedMessages);
 			assert.equal(result.originalSeedIdsAndTextPreserved, true);
 			assert.equal(result.persistedMessages, 202);
 			assert.equal(result.probeCount, 1);
@@ -162,19 +200,34 @@ test(
 					seed,
 					gui: { persistedProbe: { ...gui.persistedProbe, answerText: "wrong answer" } },
 					assertAllOwnedProcessesExited,
+					reportProgress,
 				}),
 			);
 			closed = false;
 			runtime = await openTestRuntime(join(root, "profile/deterministic-store"), { tokensPerSecond: 100000 });
 			await submit("duplicate-probe");
+			progress("source-duplicate-probe-complete");
 			await runtime.close();
 			runtime = undefined;
 			closed = true;
-			await assert.rejects(verifyColdHistory({ ownedProfileRoot: root, seed, gui, assertAllOwnedProcessesExited }));
+			await assert.rejects(
+				verifyColdHistory({ ownedProfileRoot: root, seed, gui, assertAllOwnedProcessesExited, reportProgress }),
+			);
 			assert.ok((await readdir(root)).includes("profile"), "Verifier never deletes caller profile");
+			assert.deepEqual(
+				samples.filter(({ stage }) => stage === "seed-messages").map(({ count }) => count),
+				Array.from({ length: 10 }, (_, i) => (i + 1) * 20),
+			);
+			for (const sample of samples) {
+				assert.deepEqual(Object.keys(sample), ["stage", "count", "elapsedMs", "intervalMs"]);
+				assert.match(sample.stage, /^[a-z-]+$/);
+				for (const key of ["count", "elapsedMs", "intervalMs"])
+					assert.ok(Number.isFinite(sample[key]) && sample[key] >= 0);
+			}
 		} finally {
 			await runtime?.close();
 			await rm(root, { recursive: true, force: true });
+			progress("source-test-cleaned");
 		}
 	},
 );

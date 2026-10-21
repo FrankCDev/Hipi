@@ -232,7 +232,9 @@ export function WorkspaceBranch({
 				conversations.coverage?.state !== "building" &&
 				(conversations.isFetching || conversations.coverage?.state === "refreshing") &&
 				!conversations.isLoadingMore && (
-					<output className="nav-feedback catalog-refresh-status">{cl.refreshing}</output>
+					<output className="sr-only" aria-live="off">
+						{cl.refreshing}
+					</output>
 				)}
 			{expanded && conversations.isError && (
 				<div className="nav-feedback" role="alert">

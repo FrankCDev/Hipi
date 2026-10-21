@@ -23,7 +23,7 @@ function editor(session: FileWorkspaceSession) {
 }
 
 const port = vi.hoisted(() => ({ files: undefined as FileClient | undefined }));
-vi.mock("../../../src/app/client-provider.tsx", () => ({ useFiles: () => port }));
+vi.mock("../../../src/app/client-provider.tsx", () => ({ useFiles: () => port, useAppClient: () => undefined }));
 class MemoryStorage implements BrowserStorage {
 	values = new Map<string, string>();
 	get length() {
@@ -179,11 +179,13 @@ function render(panel: FilePanelController, session?: FileWorkspaceSession, avai
 	cache.clear();
 	return html;
 }
-test("SSR closed surface has no empty dock; open dock has one named surface and bounded separator", () => {
+test("SSR keeps a hidden primitive shell; open dock has one named surface and bounded separator", () => {
 	const panel = new FilePanelController(new LocalState());
-	assert.equal(render(panel), "");
+	assert.match(render(panel), /hidden=""/);
+	assert.doesNotMatch(render(panel), /class="file-workbench"/);
 	panel.setOpen(true);
-	assert.equal(render(panel, undefined, null), "");
+	assert.match(render(panel, undefined, null), /hidden=""/);
+	assert.doesNotMatch(render(panel, undefined, null), /class="file-workbench"/);
 	const html = render(panel);
 	assert.equal((html.match(/class="file-workbench"/g) ?? []).length, 1);
 	assert.match(html, /aria-valuemin="320"/);
@@ -191,8 +193,8 @@ test("SSR closed surface has no empty dock; open dock has one named surface and 
 	assert.match(html, /aria-orientation="vertical"/);
 	assert.match(html, /收起文件/);
 	assert.match(html, /<svg[^>]*width="16"[^>]*height="16"[^>]*class="lucide lucide-x"/);
-	// Radix portals do not SSR their contents. Narrow mode must not leave a duplicate inline surface.
-	assert.doesNotMatch(render(panel, undefined, 600), /file-workbench|file-panel-dock/);
+	// Presentation uses exactly one inline editor host in either mode.
+	assert.equal((render(panel, undefined, 600).match(/class="file-workbench"/g) ?? []).length, 1);
 });
 test("hiding and reopening presentation leaves dirty editor ownership and protection unchanged", async () => {
 	const client = {
@@ -206,7 +208,7 @@ test("hiding and reopening presentation leaves dirty editor ownership and protec
 	panel.setOpen(true);
 	assert.match(render(panel, session), /有未保存修改/);
 	panel.setOpen(false);
-	assert.equal(render(panel, session), "");
+	assert.doesNotMatch(render(panel, session), /class="file-workbench"/);
 	assert.equal(session.protected, true);
 	panel.setOpen(true);
 	assert.match(render(panel, session), /work.txt/);

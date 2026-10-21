@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import test from "node:test";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { openRuntime } from "@hipi/work-runtime/node";
-import { ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
+import { fixtureProgress, ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
 import { createGuiProfile } from "../../smoke-packaged-gui.mjs";
 import {
 	publishVirtualizationProjection,
@@ -121,10 +121,17 @@ test("publication still requires ready with no cursor and preserves restart/erro
 	);
 });
 
-test("large fixture uses public deterministic runtime, persists 600 Recent scopes and no submitted turn", async () => {
+test("large fixture uses public deterministic runtime, persists 600 Recent scopes and no submitted turn", async (t) => {
+	const samples = [];
+	const progress = fixtureProgress((sample) => t.diagnostic(JSON.stringify(sample)));
+	progress("virtual-test-start");
 	const ownedProfileRoot = await createGuiProfile();
 	let closures = 0;
 	const context = {
+		reportProgress: (sample) => {
+			samples.push(sample);
+			t.diagnostic(JSON.stringify(sample));
+		},
 		ownedProfileRoot,
 		assertAllOwnedProcessesExited: async () => {
 			closures++;
@@ -132,6 +139,12 @@ test("large fixture uses public deterministic runtime, persists 600 Recent scope
 	};
 	try {
 		const seed = await seedSidebarVirtualization(context);
+		progress("virtual-test-seed-returned", seed.recent.length);
+		assert.deepEqual(
+			samples.filter(({ stage }) => stage === "virtual-seeded-rows").map(({ count }) => count),
+			[100, 200, 300, 400, 500, 600],
+		);
+		assert.ok(samples.some(({ stage }) => stage === "virtual-projection-ready"));
 		assert.equal(seed.recent.length, 600);
 		assert.equal(seed.snapshot.conversations.length, 601);
 		assert.equal(seed.snapshot.workspaces.length, 7);
@@ -163,7 +176,9 @@ test("large fixture uses public deterministic runtime, persists 600 Recent scope
 			submittedTurns: 0,
 		});
 		assert.equal(closures, 2);
+		progress("virtual-test-first-verification");
 		await assert.rejects(verifySidebarVirtualization({ ...context, seed, gui: {} }), /logical project adoption/);
+		progress("virtual-test-rejected-unadopted");
 		const models = createModels({ authContext: { env: async () => undefined, fileExists: async () => false } });
 		models.setProvider(fauxProvider().provider);
 		const runtime = await openRuntime(await ownedHistoryDirectory(ownedProfileRoot), {
@@ -187,10 +202,19 @@ test("large fixture uses public deterministic runtime, persists 600 Recent scope
 		} finally {
 			await runtime.close();
 		}
+		progress("virtual-test-adoption-shutdown");
 		assert.equal((await verifySidebarVirtualization({ ...context, seed, gui: {} })).coldCatalogUnchanged, true);
+		progress("virtual-test-adopted-verification");
 		await assert.rejects(seedSidebarVirtualization(context), /nonempty/);
+		for (const sample of samples) {
+			assert.deepEqual(Object.keys(sample), ["stage", "count", "elapsedMs", "intervalMs"]);
+			assert.match(sample.stage, /^[a-z-]+$/);
+			for (const key of ["count", "elapsedMs", "intervalMs"])
+				assert.ok(Number.isFinite(sample[key]) && sample[key] >= 0);
+		}
 	} finally {
 		await rm(ownedProfileRoot, { recursive: true, force: true });
+		progress("virtual-test-cleaned");
 	}
 });
 

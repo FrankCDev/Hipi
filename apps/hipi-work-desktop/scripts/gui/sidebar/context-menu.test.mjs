@@ -136,10 +136,35 @@ test("surface observation flushes the genuine row style and reads its animations
 	const value = contextMenuState(document, retained);
 	assert.deepEqual(reads, ["style", "animations"]);
 	assert.equal(value.rowBackground, expected.hoverSurface);
+	assert.equal(value.triggerDataState, null);
+	assert.equal(value.triggerDataSlot, null);
+	assert.equal(value.railComputedWidth, null);
+	assert.equal(value.railComputedOpacity, null);
 	assert.deepEqual(value.rowAnimations, [animation]);
 	assert.equal(contextRowSurfaceSettled(value), false);
 	row.getAnimations = undefined;
 	assert.throws(() => contextMenuState(document, retained), /requires Element.getAnimations/);
+	row.getAnimations = () => [];
+	const rail = { getClientRects: () => [], getBoundingClientRect: () => ({ width: 0 }) };
+	row.querySelector = () => rail;
+	retained.trigger = {
+		getAttribute: (name) =>
+			({ "data-state": "closed", "data-slot": "tooltip-trigger", "aria-expanded": "true" })[name] ?? null,
+	};
+	let railStyle = { width: "0px", opacity: "0" };
+	document.defaultView.getComputedStyle = (node) =>
+		node === rail ? railStyle : { backgroundColor: expected.hoverSurface };
+	const collision = contextMenuState(document, retained);
+	assert.equal(collision.triggerDataState, "closed");
+	assert.equal(collision.triggerDataSlot, "tooltip-trigger");
+	assert.equal(collision.sourceEllipsisOpen, true);
+	assert.equal(collision.railComputedWidth, 0);
+	assert.equal(collision.railComputedOpacity, 0);
+	assert.equal(collision.railVisible, false);
+	railStyle = { width: "auto", opacity: "Infinity" };
+	const invalid = contextMenuState(document, retained);
+	assert.equal(invalid.railComputedWidth, null);
+	assert.equal(invalid.railComputedOpacity, null);
 });
 
 test("hover sampling waits for actual animation settlement, not repeated matching colors", () => {

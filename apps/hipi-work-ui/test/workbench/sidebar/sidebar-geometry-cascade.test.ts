@@ -11,10 +11,44 @@ import { defaultConfig } from "../../../src/app/theme/config.ts";
 import { SidebarIcon } from "../../../src/features/workbench/sidebar/icon.tsx";
 
 afterEach(() => {
+	document.documentElement.removeAttribute("dir");
 	document.documentElement.removeAttribute("data-theme");
 	document.documentElement.removeAttribute("data-sidebar-colors");
 	document.head.replaceChildren();
 	document.body.replaceChildren();
+});
+
+test("section and project disclosures rotate the right-facing glyph once: inline-end when closed, down when open", async () => {
+	const { theme, sidebar } = await styles();
+	for (const ordered of [
+		[sidebar, theme],
+		[theme, sidebar],
+	]) {
+		mount(optimize(ordered.join("\n"), { minify: true }).code);
+		const root = document.querySelector(".sidebar");
+		assert.ok(root);
+		for (const className of ["sidebar-section-chevron", "project-chevron"]) {
+			const wrapper = document.createElement("span");
+			wrapper.className = className;
+			wrapper.innerHTML = renderToStaticMarkup(createElement(SidebarIcon, { name: "disclosure" }));
+			root.append(wrapper);
+			const glyph = wrapper.querySelector("svg");
+			assert.ok(glyph);
+			assert.ok(glyph.classList.contains("lucide-chevron-right"), "rotation assumes the actual right-facing glyph");
+			assert.equal(glyph.getAttribute("aria-hidden"), "true");
+			for (const direction of ["ltr", "rtl"] as const) {
+				document.documentElement.dir = direction;
+				for (const expanded of [false, true, false]) {
+					wrapper.dataset.expanded = String(expanded);
+					const rotation = getComputedStyle(wrapper).transform.match(/^rotate\((-?\d+)(?:deg)?\)$/);
+					assert.ok(rotation, "one wrapper rotation, including minified unitless zero");
+					assert.equal(Number(rotation[1]), expanded ? 90 : direction === "rtl" ? 180 : 0);
+					assert.ok(["", "none"].includes(getComputedStyle(glyph).transform), "no second rotation on the SVG");
+				}
+			}
+			wrapper.remove();
+		}
+	}
 });
 
 async function styles() {
@@ -99,6 +133,54 @@ test("sidebar dimensions remain token-driven and font-adaptive rather than repea
 		assert.equal(computed(selector).minHeight, "var(--sidebar-row-height)");
 	assert.match(computed(".sidebar").getPropertyValue("--sidebar-row-height"), /max\(.*var\(--font-ui-size\)/);
 	// jsdom validates the cascade/reference, not browser var() layout resolution or pixels.
+});
+
+test("expanded project separates its hovered header from the selected first session without changing other list gaps", async () => {
+	const { theme, sidebar } = await styles();
+	for (const ordered of [
+		[sidebar, theme],
+		[theme, sidebar],
+	]) {
+		mount(optimize(ordered.join("\n"), { minify: true }).code);
+		const branch = document.querySelector<HTMLElement>(".workspace-branch");
+		const header = branch?.querySelector<HTMLElement>(".project-row");
+		const content = branch?.querySelector<HTMLElement>(".project-conversations");
+		const selected = content?.querySelector<HTMLElement>(".sidebar-preview-row");
+		assert.ok(branch && header && content && selected);
+		header.classList.add("sidebar-preview-row");
+		header.dataset.state = "open";
+		selected.dataset.selected = "true";
+		assert.equal(header.nextElementSibling, content);
+		assert.equal(content.querySelector(".conversation-list")?.firstElementChild?.firstElementChild, selected);
+		assert.equal(computed(".workspace-branch").display, "flex");
+		assert.equal(computed(".workspace-branch").flexDirection, "column");
+		assert.equal(computed(".workspace-branch").gap, "var(--sidebar-row-gap)");
+		assert.equal(computed(".sidebar").getPropertyValue("--sidebar-row-gap"), "1px");
+		assert.equal(computed(".project-conversations").marginTop, "0px");
+		assert.equal(computed(".conversation-list").gap, "var(--sidebar-row-gap)");
+		assert.equal(Number.parseFloat(computed(".recent-virtual-list").gap), 0);
+		assert.notEqual(computed(".recent-conversations").display, "flex");
+		content.hidden = true;
+		assert.equal(getComputedStyle(content).display, "none");
+		// A hidden flex item contributes neither a box nor a gap; no margin or
+		// padding survives collapse. jsdom checks the cascade, not rendered pixels.
+		content.hidden = false;
+		assert.notEqual(getComputedStyle(content).display, "none");
+	}
+});
+
+test("counterfactual reproduces the touching project header and first-session containers", async () => {
+	const { theme, sidebar } = await styles();
+	const missingBranchGap = sidebar.replace(
+		/\.sidebar \.workspace-tree > \.workspace-branch:not\(\.recent-conversations\) \{[^}]*\}/,
+		"",
+	);
+	assert.notEqual(missingBranchGap, sidebar);
+	mount(optimize(`${missingBranchGap}\n${theme}`, { minify: true }).code);
+	assert.notEqual(computed(".workspace-branch").display, "flex");
+	assert.notEqual(computed(".workspace-branch").gap, "var(--sidebar-row-gap)");
+	assert.equal(computed(".project-conversations").marginTop, "0px");
+	assert.equal(computed(".conversation-list").marginTop, "0px");
 });
 
 test("counterfactual reproduces the nested conversation padding regression", async () => {

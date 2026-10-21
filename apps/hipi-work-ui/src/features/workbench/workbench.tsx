@@ -1001,7 +1001,9 @@ export function Workbench({
 																<output className="nav-feedback">{t("common.loading")}</output>
 															)}
 															{projects.hasData && projects.isFetching && !projects.isLoadingMore && (
-																<output className="catalog-refresh-status">{t("common.loading")}</output>
+																<output className="sr-only" aria-live="off">
+																	{t("common.loading")}
+																</output>
 															)}
 															{projects.isError && (
 																<div className="nav-feedback" role="alert">

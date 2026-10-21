@@ -23,6 +23,17 @@ export const historyFixture = {
 const marker = (n) => String(n).padStart(3, "0");
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
+/** Source-fixture diagnostics only: caller receives fixed stage labels and numeric progress. */
+export function fixtureProgress(report = () => {}, now = () => performance.now()) {
+	const started = now();
+	let previous = started;
+	return (stage, count = 0) => {
+		const current = now();
+		report({ stage, count, elapsedMs: Math.round(current - started), intervalMs: Math.round(current - previous) });
+		previous = current;
+	};
+}
+
 export function historyAnswer(n) {
 	const lead = `HISTORY_ANSWER_${marker(n)} 中文高度验证`;
 	if (n === historyFixture.expansionTurn)
@@ -107,7 +118,9 @@ async function assertText(runtime, conversationId, message, expected) {
 }
 
 /** Seed only before native launch. Owns and closes each public runtime before returning. */
-export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcessesExited }) {
+export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcessesExited, reportProgress }) {
+	const progress = fixtureProgress(reportProgress);
+	progress("seed-start");
 	await assertAllOwnedProcessesExited();
 	const directory = await ownedHistoryDirectory(ownedProfileRoot);
 	assert.deepEqual(await readdir(directory), [], "Never seed a nonempty store");
@@ -136,6 +149,7 @@ export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcesse
 			requestId: "long-create",
 			title: historyFixture.longTitle,
 		});
+		progress("seed-runtime-ready");
 		const submit = async (conversationId, requestId, text) => {
 			await runtime.call("submit", { workspaceId: historyFixture.workspaceId, conversationId, requestId, text });
 			const deadline = Date.now() + 30000;
@@ -147,19 +161,25 @@ export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcesse
 				await new Promise((resolve) => setTimeout(resolve, 5));
 			}
 		};
-		for (let n = 0; n < historyFixture.turns; n++)
+		for (let n = 0; n < historyFixture.turns; n++) {
 			await submit(long.conversationId, `seed-${marker(n)}`, historyUser(n));
+			if ((n + 1) % 10 === 0) progress("seed-messages", (n + 1) * 2);
+		}
 		control = await runtime.call("createConversation", {
 			workspaceId: historyFixture.workspaceId,
 			requestId: "control-create",
 			title: historyFixture.controlTitle,
 		});
 		await submit(control.conversationId, "control-seed", historyFixture.controlUser);
+		progress("seed-control-complete", 2);
 		await runtime.close();
 		runtime = undefined;
+		progress("seed-shutdown");
 		// A separate open proves the fixture is durable rather than an in-memory projection.
 		runtime = await openRuntime(directory, options());
+		progress("seed-cold-open");
 		const { messages, pages } = await readHistory(runtime, long.conversationId);
+		progress("seed-cold-read-pages", pages);
 		assert.equal(messages.length, historyFixture.turns * 2);
 		for (let n = 0; n < historyFixture.turns; n++) {
 			for (const [role, expected] of [
@@ -195,21 +215,33 @@ export async function seedLongHistory({ ownedProfileRoot, assertAllOwnedProcesse
 			peakSampledRssBytes,
 			resourceMeasurement: "source fixture Node RSS, not native GUI memory or product budget",
 		};
+		progress("seed-verified-messages", messages.length);
 		return result;
 	} finally {
 		clearInterval(sampler);
 		await runtime?.close();
+		progress("seed-final-shutdown");
 	}
 }
 
 /** Call only after both native launches and process-tree/listener closure have been confirmed. */
-export async function verifyColdHistory({ ownedProfileRoot, seed, gui, assertAllOwnedProcessesExited }) {
+export async function verifyColdHistory({
+	ownedProfileRoot,
+	seed,
+	gui,
+	assertAllOwnedProcessesExited,
+	reportProgress,
+}) {
+	const progress = fixtureProgress(reportProgress);
+	progress("verify-start");
 	await assertAllOwnedProcessesExited();
 	const directory = await ownedHistoryDirectory(ownedProfileRoot);
 	assert.ok(gui.persistedProbe?.userKey && gui.persistedProbe?.answerKey && gui.persistedProbe?.requestId);
 	const runtime = await openRuntime(directory, options());
 	try {
+		progress("verify-cold-open");
 		const { messages, pages } = await readHistory(runtime, seed.long.conversationId);
+		progress("verify-read-pages", pages);
 		assert.equal(messages.length, seed.persistedMessages + 2);
 		for (const original of seed.long.messages) {
 			const message = messages.find((m) => m.id === original.id);
@@ -240,6 +272,7 @@ export async function verifyColdHistory({ ownedProfileRoot, seed, gui, assertAll
 		assert.equal(control.messages.length, 2);
 		assert.equal(control.messages.find((m) => m.role === "user")?.text, historyFixture.controlUser);
 		assert.equal(control.messages.find((m) => m.role === "assistant")?.text, historyFixture.controlAnswer);
+		progress("verify-complete-messages", messages.length);
 		return {
 			originalSeedIdsAndTextPreserved: true,
 			persistedMessages: messages.length,
@@ -250,5 +283,6 @@ export async function verifyColdHistory({ ownedProfileRoot, seed, gui, assertAll
 		};
 	} finally {
 		await runtime.close();
+		progress("verify-shutdown");
 	}
 }

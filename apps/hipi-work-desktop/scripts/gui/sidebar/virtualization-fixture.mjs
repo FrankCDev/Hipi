@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readdir } from "node:fs/promises";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { openRuntime } from "@hipi/work-runtime/node";
-import { ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
+import { fixtureProgress, ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
 import { virtualizationWorkspaceIds } from "./virtualization-manifest.mjs";
 
 export const virtualizationFixture = Object.freeze({
@@ -88,12 +88,15 @@ export async function virtualizationSnapshot(runtime) {
 	};
 }
 
-export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwnedProcessesExited }) {
+export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwnedProcessesExited, reportProgress }) {
+	const progress = fixtureProgress(reportProgress);
+	progress("virtual-seed-start");
 	await assertAllOwnedProcessesExited();
 	const directory = await ownedHistoryDirectory(ownedProfileRoot);
 	assert.deepEqual(await readdir(directory), [], "Never seed a nonempty profile");
 	let runtime = await openRuntime(directory, runtimeOptions());
 	try {
+		progress("virtual-seed-open");
 		for (const [index, workspaceId] of virtualizationWorkspaceIds.entries())
 			await runtime.call("createWorkspace", { workspaceId, name: index === 0 ? "Chats" : `Virtual project ${index}` });
 		const active = await runtime.call("createConversation", {
@@ -108,16 +111,21 @@ export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwn
 			expectedPresentationRevision: 0,
 			pinned: true,
 		});
-		for (let index = 0; index < virtualizationFixture.recentRows; index++)
+		for (let index = 0; index < virtualizationFixture.recentRows; index++) {
 			await runtime.call("createConversation", {
 				workspaceId: virtualizationWorkspaceIds[Math.floor(index / 100)],
 				requestId: `virtual-recent-${index}`,
 				// Repeated visible names make canonical identity checks mandatory.
 				title: `Virtual Recent ${index % 7} 中文`,
 			});
+			if ((index + 1) % 100 === 0) progress("virtual-seeded-rows", index + 1);
+		}
 		await runtime.close();
+		progress("virtual-seed-shutdown");
 		runtime = await openRuntime(directory, runtimeOptions());
+		progress("virtual-cold-open");
 		await publishVirtualizationProjection(runtime);
+		progress("virtual-projection-ready");
 		const recent = [];
 		let position = { kind: "head" };
 		for (let pageNumber = 0; ; pageNumber++) {
@@ -139,6 +147,7 @@ export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwn
 			position = { kind: "continue", cursor: page.nextCursor };
 		}
 		assert.equal(recent.length, virtualizationFixture.recentRows);
+		progress("virtual-read-recent-rows", recent.length);
 		assert.equal(
 			new Set(recent.map((row) => JSON.stringify([row.workspaceId, row.conversationId]))).size,
 			recent.length,
@@ -146,6 +155,7 @@ export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwn
 		const snapshot = await virtualizationSnapshot(runtime);
 		const history = await runtime.call("getHistory", scope);
 		assert.deepEqual(history.messages, []);
+		progress("virtual-snapshot-rows", snapshot.conversations.length);
 		return {
 			...virtualizationFixture,
 			active: scope,
@@ -156,13 +166,23 @@ export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwn
 		};
 	} finally {
 		await runtime.close();
+		progress("virtual-final-shutdown");
 	}
 }
 
-export async function verifySidebarVirtualization({ ownedProfileRoot, seed, gui, assertAllOwnedProcessesExited }) {
+export async function verifySidebarVirtualization({
+	ownedProfileRoot,
+	seed,
+	gui,
+	assertAllOwnedProcessesExited,
+	reportProgress,
+}) {
+	const progress = fixtureProgress(reportProgress);
+	progress("virtual-verify-start");
 	await assertAllOwnedProcessesExited();
 	const runtime = await openRuntime(await ownedHistoryDirectory(ownedProfileRoot), runtimeOptions());
 	try {
+		progress("virtual-verify-open");
 		assert.deepEqual(await runtime.call("handshake", {}), seed.handshake);
 		if (gui) {
 			const catalog = await runtime.call("getProjectCatalogState", {});
@@ -178,6 +198,8 @@ export async function verifySidebarVirtualization({ ownedProfileRoot, seed, gui,
 			seed.snapshot,
 			"Scrolling must not mutate persisted catalog or pins",
 		);
+		progress("virtual-verify-catalog");
+		let checked = 0;
 		for (const conversation of seed.snapshot.conversations) {
 			const history = await runtime.call("getHistory", {
 				workspaceId: conversation.workspaceId,
@@ -185,9 +207,12 @@ export async function verifySidebarVirtualization({ ownedProfileRoot, seed, gui,
 			});
 			assert.equal(history.nextCursor, null);
 			assert.deepEqual(history.messages, [], "No input may submit a turn during the native gate");
+			if (++checked % 100 === 0) progress("virtual-verify-empty-histories", checked);
 		}
+		progress("virtual-verify-complete", checked);
 		return { coldCatalogUnchanged: true, conversations: seed.snapshot.conversations.length, submittedTurns: 0 };
 	} finally {
 		await runtime.close();
+		progress("virtual-verify-shutdown");
 	}
 }

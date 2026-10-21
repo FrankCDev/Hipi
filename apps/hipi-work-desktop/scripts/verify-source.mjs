@@ -82,6 +82,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-conversation-search.test.mjs"
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-hover.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-sidebar-geometry.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/journey.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/row-geometry.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/tooltip-handoff.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/native-key.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/new-chat-navigation.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/item-navigation.test.mjs");
@@ -149,6 +151,8 @@ const uiTests = [
 	"permission-presentation",
 	"retained-context-consent",
 	"workbench/files/file-panel",
+	"file-panel-lifecycle",
+	"file-panel-surface",
 	"workbench/files/file-panel-escape",
 	"file-workbench",
 	"file-search",
@@ -233,6 +237,7 @@ uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/disclosure-session.test.t
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/selection-owner.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/navigation-query.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/navigation-refresh.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/navigation-refresh-mounted.test.tsx");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/window-query.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/window-viewport.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/sidebar/virtual-recent-range.test.ts");

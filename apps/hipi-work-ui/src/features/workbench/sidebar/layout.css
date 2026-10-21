@@ -109,6 +109,13 @@
 	font-size: var(--font-ui-size);
 }
 
+.sidebar .workspace-tree > .workspace-branch:not(.recent-conversations) {
+	/* The project header and its visible child region are adjacent navigation rows. */
+	display: flex;
+	flex-direction: column;
+	gap: var(--sidebar-row-gap);
+}
+
 .workspace-tree .sidebar-preview-row {
 	height: auto;
 	min-height: var(--sidebar-row-height);
@@ -584,11 +591,19 @@
 
 .sidebar-section-chevron {
 	display: inline-flex;
-	transform: rotate(-90deg);
 }
 
-.sidebar-section-chevron[data-expanded="true"] {
+.sidebar :is(.sidebar-section-chevron, .project-chevron) {
+	/* SidebarIcon supplies a right-facing glyph; rotate its wrapper only. */
 	transform: rotate(0deg);
+}
+
+.sidebar :is(.sidebar-section-chevron, .project-chevron):dir(rtl) {
+	transform: rotate(180deg);
+}
+
+.sidebar :is(.sidebar-section-chevron, .project-chevron)[data-expanded="true"] {
+	transform: rotate(90deg);
 }
 
 @media (hover: hover) and (pointer: fine) {

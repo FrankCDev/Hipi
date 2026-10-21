@@ -29,7 +29,7 @@ function DialogOverlay({ className, ...props }: React.ComponentProps<typeof Dial
 	return (
 		<DialogPrimitive.Overlay
 			data-slot="dialog-overlay"
-			className={cn("fixed inset-0 z-50 bg-overlay", className)}
+			className={cn("fixed inset-0 z-[var(--ui-modal-layer)] bg-overlay", className)}
 			{...props}
 		/>
 	);
@@ -59,7 +59,7 @@ function DialogContent({
 				data-placement={placement}
 				data-scroll-body={scrollBody || placement === "right" ? "true" : undefined}
 				className={cn(
-					"ui-overlay-surface fixed z-50 gap-4 border border-border bg-background text-foreground p-6 shadow-lg duration-200 outline-none",
+					"ui-overlay-surface fixed z-[var(--ui-modal-layer)] gap-4 border border-border bg-background text-foreground p-6 shadow-lg duration-200 outline-none",
 					placement === "right"
 						? "inset-y-3 right-3 flex w-[calc(100vw-1.5rem)] max-w-[560px] flex-col overflow-hidden"
 						: "top-[50%] left-[50%] grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] sm:max-w-md",

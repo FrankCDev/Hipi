@@ -21,6 +21,9 @@ export function contextMenuState(document, retained) {
 	const preview = menu?.querySelector(".sidebar-menu-preview");
 	const sourceRow = retained.source?.closest(".sidebar-preview-row");
 	const rail = sourceRow?.querySelector(".conversation-hover-actions");
+	const railStyle = rail && document.defaultView.getComputedStyle(rail);
+	const railWidth = railStyle ? Number.parseFloat(railStyle.width) : NaN;
+	const railOpacity = railStyle ? Number.parseFloat(railStyle.opacity) : NaN;
 	const previewStyle = preview && document.defaultView.getComputedStyle(preview);
 	const messages = all("[data-message-id]");
 	const rows = all(".sidebar-preview-row");
@@ -81,6 +84,10 @@ export function contextMenuState(document, retained) {
 		rowBackground,
 		rowAnimations,
 		sourceHovered: sourceRow?.matches(":hover") === true,
+		triggerDataState: retained.trigger?.getAttribute("data-state") ?? null,
+		triggerDataSlot: retained.trigger?.getAttribute("data-slot") ?? null,
+		railComputedWidth: Number.isFinite(railWidth) ? railWidth : null,
+		railComputedOpacity: Number.isFinite(railOpacity) ? railOpacity : null,
 		railVisible:
 			!!rail?.getClientRects().length &&
 			rail.getBoundingClientRect().width > 0 &&

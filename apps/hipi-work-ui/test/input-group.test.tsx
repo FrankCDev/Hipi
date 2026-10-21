@@ -177,7 +177,8 @@ test("header search exposes a named closed dialog trigger without a loaded-title
 	// Real hover/focus behavior is covered by sidebar/action-tooltip-mounted.test.tsx.
 	assert.match(trigger, /data-action-tooltip-trigger=""/);
 	assert.doesNotMatch(trigger, /\stitle=/);
-	assert.match(trigger, /data-slot="tooltip-trigger"/);
+	assert.match(trigger, /data-slot="button"/);
+	assert.match(trigger, /data-tooltip-state="closed"/);
 	assert.match(trigger, /aria-expanded="false"/);
 	assert.match(trigger, /data-size="icon-sm"/);
 	assert.match(trigger, /focus-visible:outline-2/);

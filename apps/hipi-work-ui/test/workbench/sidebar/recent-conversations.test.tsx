@@ -474,6 +474,23 @@ test("non-last Recent begins with ten, reveals five, and offers only Show more",
 	assert.equal(vi.mocked(fixture.client.call).mock.calls.length, 0);
 	assert.equal(elements(ui.output, Button).length, 1, "No First page or Show less interaction is added");
 });
+
+test.each([0, 10])(
+	"unpublished Recent refresh keeps %i existing rows and distinguishes initial loading feedback",
+	(count) => {
+		const ui = harness();
+		const previous = snapshot([page(0, count, null)]);
+		ui.publish(previous);
+		const owners = [...ui.rows.values()];
+		const extent = only(ui.output, "ul").props.style?.height;
+		ui.publish({ ...previous, unpublished: true, paused: true });
+		const status = only(ui.output, "output");
+		assert.equal(status.props.className, count ? "sr-only" : "nav-feedback");
+		assert.equal(status.props["aria-live"], count ? "off" : undefined);
+		assert.deepEqual([...ui.rows.values()], owners);
+		assert.equal(only(ui.output, "ul").props.style?.height, extent);
+	},
+);
 test("last-section sentinel reveals five once per observation without a Show more control", () => {
 	const ui = harness({ last: true });
 	ui.publish(snapshot([page()]));

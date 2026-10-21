@@ -5,13 +5,12 @@ import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../../../src/components/ui/button.tsx";
-import { DialogContent } from "../../../src/components/ui/dialog.tsx";
 import { Input } from "../../../src/components/ui/input.tsx";
 import { DEFAULT_EDITOR_KEYBINDINGS } from "../../../src/features/files/editor-keybindings.ts";
 import { useFileLineNavigation } from "../../../src/features/files/file-line-navigation.tsx";
 import { useFileSearch } from "../../../src/features/files/file-search.tsx";
-import { FilePanel } from "../../../src/features/workbench/files/panel.tsx";
 import { FilePanelController } from "../../../src/features/workbench/files/panel-controller.ts";
+import { preserveFileEditorEscape } from "../../../src/features/workbench/files/surface.tsx";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
@@ -154,19 +153,8 @@ afterEach(() => {
 function narrowPanel() {
 	const controller = new FilePanelController(new LocalState());
 	controller.setOpen(true);
-	const panel = component(() =>
-		FilePanel({
-			controller,
-			available: 600,
-			workspaceId: "workspace",
-			guard: (action) => action(),
-			trigger: { current: null },
-			id: "files",
-		}),
-	);
-	const content = element(panel(), DialogContent);
-	assert.ok(content.props.onEscapeKeyDown);
-	return { onEscapeKeyDown: content.props.onEscapeKeyDown, controller, node: new Surface() };
+	// The actual mounted surface/dispatch is covered by file-panel-surface.test.tsx.
+	return { onEscapeKeyDown: preserveFileEditorEscape, controller, node: new Surface() };
 }
 function dispatchEscape(
 	outer: ReturnType<typeof narrowPanel>,

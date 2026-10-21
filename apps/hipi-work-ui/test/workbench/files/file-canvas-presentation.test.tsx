@@ -21,10 +21,11 @@ function editor(session: FileWorkspaceSession) {
 }
 
 const port = vi.hoisted(() => ({
+	owner: {},
 	files: undefined as FileClient | undefined,
 	fileAuthority: undefined as FileAuthority | undefined,
 }));
-vi.mock("../../../src/app/client-provider.tsx", () => ({ useFiles: () => port }));
+vi.mock("../../../src/app/client-provider.tsx", () => ({ useFiles: () => port, useAppClient: () => port.owner }));
 
 const baseline: FileText = { text: "original", revision: "a".repeat(64), encoding: "utf-8", bytes: 8 };
 const root: FileRoot = { workspaceId: "workspace", rootId: "root", displayName: "Project", writable: true };
@@ -43,6 +44,7 @@ function client(overrides: Partial<FileClient> = {}): FileClient {
 }
 
 beforeEach(() => {
+	port.owner = {};
 	port.files = client();
 	port.fileAuthority = undefined;
 });
@@ -98,7 +100,7 @@ test("file canvas has one visible panel title and a named close action while ret
 	const html = render({ panel: true });
 	assert.equal((html.match(/<h2\b/g) ?? []).length, 1);
 	assert.match(html, /class="file-panel-header"/);
-	assert.match(html, /<h2>工作区文件<\/h2>/);
+	assert.match(html, /<h2 id="file-canvas-title">工作区文件<\/h2>/);
 	assert.match(html, /aria-label="收起文件"/);
 	assert.match(html, /<aside class="file-workbench" aria-label="项目文件"/);
 	assert.match(html, /aria-controls="file-canvas-content"/);

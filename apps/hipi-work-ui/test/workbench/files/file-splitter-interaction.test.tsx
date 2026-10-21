@@ -11,6 +11,7 @@ import { FilePanelController } from "../../../src/features/workbench/files/panel
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
+const connection = vi.hoisted(() => ({ owner: {} }));
 const hooks = vi.hoisted(() => ({ cells: [] as Cell[], cursor: 0, commits: [] as (() => void)[], changed: false }));
 // Invokes production splitter callbacks/effects. Native pointer capture, focus,
 // modal portals and React reconciliation still require browser/platform coverage.
@@ -55,6 +56,9 @@ vi.mock("react", async () => {
 	};
 	return { ...mock, default: mock };
 });
+// This callback fixture supplies a stable connection identity; mounted ownership
+// and reconciliation are covered by file-panel-lifecycle.test.tsx.
+vi.mock("../../../src/app/client-provider.tsx", () => ({ useAppClient: () => connection.owner }));
 vi.mock("../../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
 
 function elements<C extends React.ElementType>(
@@ -127,6 +131,7 @@ function separator(node: React.ReactNode) {
 	return value.props;
 }
 beforeEach(() => {
+	connection.owner = {};
 	hooks.cells = [];
 	hooks.commits = [];
 	vi.clearAllMocks();
@@ -155,7 +160,8 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	const target = pointerTarget();
 	let view = panelView(session);
 	const firstOwner = elements(view, FileWorkbench)[0];
-	assert.equal(firstOwner?.props.visible, true);
+	assert.ok(firstOwner);
+	assert.equal(firstOwner.props.session, session);
 	const handle = separator(view);
 	pointer(handle.onPointerDown, target, 560);
 	pointer(handle.onPointerMove, target, 160);
@@ -166,7 +172,7 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	assert.equal(elements(view, "section")[0]?.props.style?.width, 1200);
 	assert.equal(elements(view, FileWorkbench)[0]?.type, firstOwner?.type);
 	assert.equal(elements(view, FileWorkbench)[0]?.props.session, session);
-	assert.equal(elements(view, FileWorkbench)[0]?.props.visible, true);
+	assert.equal(elements(view, FileWorkbench)[0]?.key, firstOwner.key);
 	pointer(separator(view).onPointerUp, target, 159);
 	assert.equal(target.hasPointerCapture(1), false);
 	key(panelView(session), "ArrowRight");
@@ -183,15 +189,15 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	const hidden = panelView(session);
 	assert.equal(elements(hidden, "section")[0]?.props.inert, true);
 	assert.equal(elements(hidden, "section")[0]?.props["aria-hidden"], true);
-	assert.equal(elements(hidden, FileWorkbench)[0]?.props.session, session);
-	assert.equal(elements(hidden, FileWorkbench)[0]?.props.visible, false);
+	// Explicit close intentionally unmounts presentation, not its session owner.
+	assert.equal(elements(hidden, FileWorkbench).length, 0);
 	assert.equal(session.snapshot(), snapshot);
 	assert.equal(tab.editor.snapshot().document?.text, "unsaved");
 	assert.equal(session.protected, true);
 	panel.setOpen(true);
 	const reopened = panelView(session);
 	assert.equal(elements(reopened, "section")[0]?.props.inert, false);
-	assert.equal(elements(reopened, FileWorkbench)[0]?.props.visible, true);
+	assert.equal(elements(reopened, FileWorkbench).length, 1);
 	assert.equal(elements(reopened, FileWorkbench)[0]?.props.session, session);
 	assert.equal(panel.store.getState().width, 640);
 });
