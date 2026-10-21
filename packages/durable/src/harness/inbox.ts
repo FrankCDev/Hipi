@@ -1,7 +1,8 @@
 import { copyJson, type Draft, type JsonRepresentation } from "@earendil-works/chord";
 import { defineDoc } from "../documents.ts";
-import { UserEntry } from "../entries.ts";
+import { type RunInputRefs, UserEntry } from "../entries.ts";
 import type { ConversationId, EntryDraft, EntryId, EntryRecord, JsonObject, SubmissionId, Tx } from "../types.ts";
+import { addRunInputRef } from "./run-inputs.ts";
 import type { InputEntry, QueueMode, Settings, UserInput } from "./types.ts";
 
 /** A queued submission: user input for a run, with the entry it is placed as when not `pi.user`, or an entry write. */
@@ -42,7 +43,11 @@ export type Boundary = {
 };
 
 /** Selected user items, in ID order, and whether a `head: "self"` write (a reset) was placed. */
-export type BoundaryResult = { readonly users: SubmissionId[]; readonly reset: boolean };
+export type BoundaryResult = {
+	readonly users: SubmissionId[];
+	readonly inputRefs: RunInputRefs;
+	readonly reset: boolean;
+};
 
 /**
  * Read what a boundary needs. Table reads must precede the commit's first table write, so callers prepare the
@@ -98,15 +103,17 @@ export async function applyBoundary(
 		tx.placeSubmission(item.id, entry.id);
 	}
 	const placed: SubmissionId[] = [];
+	const inputRefs: RunInputRefs = { entryIds: [], total: 0, omitted: false };
 	for (const index of users) {
 		const item = items[index] as Draft<Extract<InboxItem, { mode: "steer" | "followUp" }>>;
 		const entry = await appendInput(tx, conversationId, item.content as UserInput, item.entry as InputEntry, now);
 		tx.placeSubmission(item.id, entry.id);
 		placed.push(item.id);
+		addRunInputRef(inputRefs, entry.id);
 	}
 	const removed = [...writes, ...users].sort((a, b) => b - a);
 	for (const index of removed) items.splice(index, 1);
-	return { users: placed, reset };
+	return { users: placed, inputRefs, reset };
 }
 
 /** Append the entry an input is placed as: `entry`'s kind and data, or `pi.user`, with the user message of `content`. */

@@ -3,7 +3,7 @@ import {
 	type AppClient,
 	AppError,
 	type ProjectConversationSummary,
-	type SidebarPage,
+	type SidebarWindowResult,
 } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { test, vi } from "vitest";
@@ -27,12 +27,16 @@ import {
 } from "../../../src/features/workbench/sidebar/query-keys.ts";
 
 const view = { kind: "recent" } as const;
+type SidebarPage = Extract<SidebarWindowResult, { kind: "window" }>;
 const page = (
 	id: string,
 	nextCursor: string | null = null,
 	generation = "one",
 	membershipGeneration = 0,
 ): SidebarPage => ({
+	kind: "window",
+	previousCursor: null,
+	retained: { eligible: [], unavailable: [] },
 	items: id
 		? [
 				{
@@ -81,7 +85,9 @@ test("publication probes leave unchanged windows alone and retry failed replacem
 	cache.clear();
 });
 function reader(read: (cursor?: string, signal?: AbortSignal) => Promise<SidebarPage>) {
-	const call = vi.fn((_method, input, signal) => read(input.cursor, signal)) as AppClient["call"];
+	const call = vi.fn((_method, input, signal) =>
+		read(input.position.kind === "continue" ? input.position.cursor : undefined, signal),
+	) as AppClient["call"];
 	return { call, observe: vi.fn() };
 }
 const signal = () => new AbortController().signal;
@@ -246,8 +252,7 @@ test("stale continuation atomically recovers and never combines generations or p
 		const previous = { pages: [old], cursors: [undefined] };
 		cache.setQueryData(key, previous);
 		const pending = cache.fetchQuery(navigationOptions(cache, client, view, "active", "more"));
-		await Promise.resolve();
-		await Promise.resolve();
+		await vi.waitFor(() => assert.ok(finish));
 		assert.deepEqual(cache.getQueryData(key), previous);
 		assert.ok(finish);
 		finish(page("fresh", null, membershipOnly ? "one" : "two", membershipOnly ? 1 : 0));
@@ -481,4 +486,44 @@ test("logical membership and project-pin generations independently fence paginat
 		assert.equal(result.pages.length, 1);
 		assert.equal(result.pages[0]?.items[0]?.conversation.title, "changed");
 	}
+});
+
+test("project window walks backward after five-page eviction without rescanning head", async () => {
+	const calls: (string | undefined)[] = [];
+	const client = reader(async (cursor) => {
+		calls.push(cursor);
+		const index = Number(cursor ?? 0);
+		return {
+			...page(String(index), index < 9 ? String(index + 1) : null),
+			previousCursor: index ? String(index - 1) : null,
+		};
+	});
+	let window = await readNavigationWindow(client, view, "active", signal());
+	for (let index = 0; index < 9; index++)
+		window = await readNavigationWindow(client, view, "active", signal(), window, "more");
+	assert.deepEqual(
+		window.pages.map((p) => p.items[0]?.conversation.title),
+		["5", "6", "7", "8", "9"],
+	);
+	for (let index = 0; index < 5; index++)
+		window = await readNavigationWindow(client, view, "active", signal(), window, "previous");
+	assert.deepEqual(
+		window.pages.map((p) => p.items[0]?.conversation.title),
+		["0", "1", "2", "3", "4"],
+	);
+	assert.equal(calls.filter((cursor) => cursor === undefined).length, 1);
+});
+
+test("sparse project ranges remain a single visible page and never publish mixed generations", async () => {
+	const client = reader(async (cursor) => {
+		const index = Number(cursor ?? 0);
+		return {
+			...page(index < 12 ? "" : "visible", index < 12 ? String(index + 1) : null),
+			previousCursor: index ? String(index - 1) : null,
+		};
+	});
+	const window = await readNavigationWindow(client, view, "active", signal());
+	assert.equal(window.pages.length, 1);
+	assert.equal(window.pages[0]?.items[0]?.conversation.title, "visible");
+	assert.equal(window.pages[0]?.previousCursor, null);
 });

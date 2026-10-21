@@ -398,6 +398,7 @@ test("actual fast completion is visible without watching; fork at answer exclude
 		const observation = page.runResults?.items[0];
 		assert.ok(observation);
 		assert.equal(observation.responseMessageId, `${settled.answer}_0`);
+		assert.deepEqual(observation.inputRefs, { entryIds: [String(settled.entry)], total: 1, omitted: false });
 		assert.ok(runWallElapsedMs(observation) !== undefined);
 		const fork = await conversation.fork(settled.answer, { ownership: { kind: "ownerless" } }, context);
 		assert.equal((await readHistory(fork, scope)).runResults, undefined);

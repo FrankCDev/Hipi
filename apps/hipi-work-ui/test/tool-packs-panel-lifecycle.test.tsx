@@ -99,12 +99,13 @@ const client: AppClient = {
 	},
 	observe: async () => ({ dispose: async () => {} }),
 };
-function drive(active: boolean, current = conversation) {
+function drive(active: boolean, current = conversation, connected = true) {
 	hooks.cursor = 0;
 	const content = ToolPacksPanel({
 		workspaceId: current.workspaceId,
 		conversation: current,
 		active,
+		connected,
 		children: (body) => body,
 	});
 	for (const commit of hooks.commits.splice(0)) commit();
@@ -189,4 +190,20 @@ test("deactivating cancels the active read, and the next activation reuses the o
 	drive(true);
 	await vi.waitFor(() => assert.equal(first.session.getSnapshot().loaded, true));
 	assert.ok(calls.every(({ method }) => method === "listToolPacks" || method === "listActiveToolPackBindings"));
+});
+
+test("disconnect while open cancels reads without discarding import draft or re-sending commands", async () => {
+	blockRead = true;
+	const first = drive(true, conversation, true);
+	await vi.waitFor(() => assert.equal(calls.length, 1));
+	const reading = calls[0];
+	const disconnected = drive(true, conversation, false);
+	assert.equal(disconnected.session, first.session);
+	assert.equal(reading?.signal?.aborted, true);
+	assert.equal(hooks.modelEnabled, false);
+	await vi.waitFor(() => assert.equal(first.session.getSnapshot().busy, false));
+	blockRead = false;
+	drive(true, conversation, true);
+	await vi.waitFor(() => assert.equal(first.session.getSnapshot().loaded, true));
+	assert.ok(calls.every(({ method }) => method.startsWith("list")));
 });

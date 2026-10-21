@@ -9,6 +9,7 @@ import {
 	treeModelPath,
 } from "./file-tree-model.ts";
 import shadowStyles from "./pierre-file-tree-shadow.css?inline";
+import type { DirectoryEdge } from "./tree/directory-window.ts";
 
 type TreeSnapshot = {
 	scope: string;
@@ -25,6 +26,7 @@ type TreeSnapshot = {
 	onPreview?: (row: FileTreeRow) => void;
 	onCopyStatus?: (status: ClipboardStatus) => void;
 	onNoMatches?: (empty: boolean) => void;
+	onDemand?: (path: string, edge: DirectoryEdge, protectedPaths: ReadonlySet<string>) => void;
 };
 type TreeContextAction = { id: "copy" | "preview"; label: string; restoreFocus: boolean; run: () => void };
 
@@ -50,6 +52,8 @@ export class FileTreeAdapter {
 	private clipboard?: ClipboardFeedback;
 	private noMatches = false;
 	private actionPath?: string;
+	private demandFrame?: number;
+	private anchor?: { path: string; offset: number };
 
 	constructor(memory: FileTreeMemory, snapshot: TreeSnapshot) {
 		this.memory = memory;
@@ -84,12 +88,27 @@ export class FileTreeAdapter {
 		const labelsChanged = snapshot.labels !== this.snapshot.labels;
 		const sourceChanged = snapshot.scope !== this.snapshot.scope || snapshot.source !== this.snapshot.source;
 		const filterChanged = snapshot.filter !== this.snapshot.filter;
+		const focused = this.rows.get(this.model.getFocusedPath() ?? "");
+		const previousPaths = new Set(this.rows.keys());
 		if (snapshot.selected !== this.snapshot.selected) this.revealPath = snapshot.selected;
 		this.snapshot = snapshot;
 		this.rows = new Map(snapshot.rows.map((row) => [treeModelPath(row), row]));
 		const paths = [...this.rows.keys()];
 		this.order = new Map(paths.map((path, index) => [path, index]));
 		const pathsChanged = paths.length !== this.paths.length || paths.some((path, index) => path !== this.paths[index]);
+		if (pathsChanged && !this.restorePosition && !this.anchor) {
+			const scroll = this.host?.shadowRoot?.querySelector<HTMLElement>('[data-file-tree-virtualized-scroll="true"]');
+			if (scroll) {
+				const first = Math.floor(scroll.scrollTop / FILE_TREE_ROW_HEIGHT);
+				const visible = this.model.getVisibleRows(
+					first,
+					first + Math.ceil(scroll.clientHeight / FILE_TREE_ROW_HEIGHT) + 1,
+				);
+				const retained = visible.find((item) => this.rows.get(item.path)?.kind === "entry");
+				if (retained)
+					this.anchor = { path: retained.path, offset: retained.index * FILE_TREE_ROW_HEIGHT - scroll.scrollTop };
+			}
+		}
 		if (sourceChanged || pathsChanged || filterChanged) {
 			this.projectionVersion++;
 			if (this.clipboard) {
@@ -129,6 +148,17 @@ export class FileTreeAdapter {
 				if (path !== snapshot.selected) this.model.getItem(path)?.deselect();
 			}
 			if (snapshot.selected) this.model.getItem(snapshot.selected)?.select();
+			if (
+				pathsChanged &&
+				focused &&
+				(focused.kind === "boundary-before" || focused.kind === "boundary-after" || focused.kind === "pending")
+			) {
+				const added = [...this.rows].filter(
+					([path, row]) => row.kind === "entry" && row.parent === focused.path && !previousPaths.has(path),
+				);
+				const destination = focused.kind === "boundary-before" ? added.at(-1)?.[0] : added[0]?.[0];
+				if (destination) this.model.focusPath(destination);
+			}
 			if (this.restorePosition && this.memory.activePath) this.model.focusPath(this.memory.activePath);
 			this.model.setSearch(snapshot.filter || null);
 		} finally {
@@ -198,6 +228,7 @@ export class FileTreeAdapter {
 		const scroll = (event: Event) => {
 			if (!(event.target instanceof HTMLElement) || !event.target.dataset.fileTreeVirtualizedScroll) return;
 			if (!this.restorePosition) this.memory.scrollTop = event.target.scrollTop;
+			this.scheduleDemand();
 		};
 		const actionTarget = (event: Event) => {
 			const path = this.eventPath(event);
@@ -227,8 +258,7 @@ export class FileTreeAdapter {
 	activate(path: string, pinned = false) {
 		if (this.disposed) return;
 		const row = this.rows.get(path);
-		if (!row || (row.kind === "entry" && row.entry.kind !== "file") || row.kind === "pending" || row.kind === "empty")
-			return;
+		if (!row || (row.kind !== "failed" && (row.kind !== "entry" || row.entry.kind !== "file"))) return;
 		this.snapshot.onActivate(row, pinned);
 	}
 
@@ -284,6 +314,7 @@ export class FileTreeAdapter {
 		const scroll = this.host?.shadowRoot?.querySelector<HTMLElement>('[data-file-tree-virtualized-scroll="true"]');
 		if (scroll && !this.restorePosition) this.memory.scrollTop = scroll.scrollTop;
 		this.disposed = true;
+		if (this.demandFrame !== undefined) cancelAnimationFrame(this.demandFrame);
 		this.clipboard?.dispose();
 		this.detach?.();
 		this.unsubscribe();
@@ -379,11 +410,45 @@ export class FileTreeAdapter {
 		}
 		this.snapshot.onLimit(limited);
 		if (!this.restorePosition) this.memory.activePath = this.model.getFocusedPath() ?? undefined;
+		this.scheduleDemand();
 	}
 
 	private rowLabel(row: FileTreeRow) {
 		if (row.kind === "entry") return row.entry.name;
-		return this.snapshot.labels[row.kind === "pending" ? "loading" : row.kind === "failed" ? "retry" : row.kind];
+		return this.snapshot.labels[row.kind === "failed" ? "retry" : row.kind === "empty" ? "empty" : "loading"];
+	}
+
+	/** Read demand comes from Pierre's virtual viewport and focus, never synthetic row clicks. */
+	private scheduleDemand() {
+		if (this.disposed || !this.host || this.demandFrame !== undefined) return;
+		this.demandFrame = requestAnimationFrame(() => {
+			this.demandFrame = undefined;
+			const scroll = this.host?.shadowRoot?.querySelector<HTMLElement>('[data-file-tree-virtualized-scroll="true"]');
+			if (!scroll || scroll.clientHeight <= 0 || this.snapshot.filter) return;
+			if (this.anchor) {
+				const anchor = this.anchor;
+				this.anchor = undefined;
+				const item = this.model.getVisibleRows(0, this.model.getVisibleCount()).find((row) => row.path === anchor.path);
+				if (item) scroll.scrollTop = Math.max(0, item.index * FILE_TREE_ROW_HEIGHT - anchor.offset);
+			}
+			const start = Math.max(0, Math.floor(scroll.scrollTop / FILE_TREE_ROW_HEIGHT));
+			const end = start + Math.ceil(scroll.clientHeight / FILE_TREE_ROW_HEIGHT) + 1;
+			const visible = this.model.getVisibleRows(start, end);
+			const protectedPaths = new Set(
+				visible.flatMap((item) => {
+					const row = this.rows.get(item.path);
+					if (row?.kind !== "entry") return [];
+					const parts = row.entry.path.split("/");
+					return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+				}),
+			);
+			const candidates = visible.map((item) => item.path);
+			for (const path of candidates) {
+				const row = this.rows.get(path);
+				if (row && (row.kind === "pending" || row.kind === "boundary-before" || row.kind === "boundary-after"))
+					this.snapshot.onDemand?.(row.path, row.kind === "boundary-before" ? "before" : "after", protectedPaths);
+			}
+		});
 	}
 
 	private eventPath(event: Event) {
@@ -396,6 +461,7 @@ export class FileTreeAdapter {
 	private refreshPresentation() {
 		const shadow = this.host?.shadowRoot;
 		if (!shadow) return;
+		this.scheduleDemand();
 		const tree = shadow.querySelector('[role="tree"]');
 		if (tree?.getAttribute("aria-label") !== this.snapshot.label) tree?.setAttribute("aria-label", this.snapshot.label);
 		for (const element of shadow.querySelectorAll<HTMLElement>('[data-type="item"]')) {
@@ -405,7 +471,10 @@ export class FileTreeAdapter {
 			const label = this.rowLabel(row);
 			element.dataset.hipiKind = kind;
 			element.dataset.path = row.kind === "entry" ? row.entry.path : row.path;
-			element.setAttribute("aria-disabled", String(kind === "blocked" || kind === "pending" || kind === "empty"));
+			element.setAttribute(
+				"aria-disabled",
+				String(kind === "blocked" || kind === "pending" || kind === "empty" || kind.startsWith("boundary-")),
+			);
 			if (element.getAttribute("aria-label") !== label) element.setAttribute("aria-label", label);
 			const lane = element.querySelector<HTMLElement>('[data-item-section="action"]');
 			if (lane) lane.style.visibility = kind === "file" || kind === "directory" ? "" : "hidden";

@@ -220,8 +220,8 @@ export async function admitSubmission(
 			items.push({ id, mode, content, ...entry });
 		}
 		if (boundary === undefined) return id;
-		const { users } = await applyBoundary(tx, boundary, "final", now);
-		if (users.length > 0) await startRun(tx, conversationId, live, users, now);
+		const { users, inputRefs } = await applyBoundary(tx, boundary, "final", now);
+		if (users.length > 0) await startRun(tx, conversationId, live, users, now, inputRefs);
 		return id;
 	}
 	if (draft.type === "write") {
@@ -236,6 +236,6 @@ export async function admitSubmission(
 	const entry = await appendInput(tx, conversationId, draft.content, draft.entry, now);
 	const input = { conversationId, ...requestId, type: "input", status: "placed", entry: entry.id } as const;
 	const { id } = await tx.createSubmission(input);
-	await startRun(tx, conversationId, live, [id], now);
+	await startRun(tx, conversationId, live, [id], now, { entryIds: [entry.id], total: 1, omitted: false });
 	return id;
 }

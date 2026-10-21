@@ -22,6 +22,16 @@ vi.mock("react", async () => {
 	const actual = await vi.importActual<typeof React>("react");
 	const changed = (before: React.DependencyList | undefined, after: React.DependencyList) =>
 		!before || before.length !== after.length || after.some((value, index) => !Object.is(value, before[index]));
+	const effect = (setup: React.EffectCallback, deps: React.DependencyList) => {
+		const index = hooks.cursor++;
+		const previous = hooks.cells[index];
+		if (changed(previous?.deps, deps))
+			hooks.commits.push(() => {
+				previous?.cleanup?.();
+				const cleanup = setup();
+				hooks.cells[index] = { value: undefined, deps, cleanup: typeof cleanup === "function" ? cleanup : undefined };
+			});
+	};
 	return {
 		...actual,
 		useState: <T,>(initial?: T | (() => T)) => {
@@ -48,16 +58,8 @@ vi.mock("react", async () => {
 		},
 		useId: () => `search-test-${hooks.cursor++}`,
 		useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
-		useEffect: (setup: React.EffectCallback, deps: React.DependencyList) => {
-			const index = hooks.cursor++;
-			const previous = hooks.cells[index];
-			if (changed(previous?.deps, deps))
-				hooks.commits.push(() => {
-					previous?.cleanup?.();
-					const cleanup = setup();
-					hooks.cells[index] = { value: undefined, deps, cleanup: typeof cleanup === "function" ? cleanup : undefined };
-				});
-		},
+		useEffect: effect,
+		useLayoutEffect: effect,
 	};
 });
 vi.mock("../../../src/app/preferences.tsx", () => ({

@@ -45,7 +45,7 @@ const initialJournal = {
 	},
 };
 
-test.each([10, 11])(
+test.each([10, 11, 12])(
 	"protocol %i reload remains receipt-only and finishes only its byte-exact owned journal",
 	async (version) => {
 		const prior = { ...legacy, version };

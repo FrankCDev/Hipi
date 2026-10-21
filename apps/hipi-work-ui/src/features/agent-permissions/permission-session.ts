@@ -10,17 +10,21 @@ import {
 	type ToolApproval,
 	type ToolApprovalPage,
 } from "@hipi/work-runtime/contracts";
+import { ManagementCursorList } from "../../components/management-list/cursor-list.ts";
 import { type AgentCommand, readCommand, saveCommand } from "../workbench/command-recovery.ts";
 import type { LocalState } from "../workbench/local-state.ts";
 
 export const MAX_UNRESOLVED_OPERATIONS = 64;
 
+export type ApprovalReview = { approval: ToolApproval; operation: FileOperation | null };
 export type PermissionState = {
 	contexts: AgentContext[];
+	review: ApprovalReview | null;
 	activeContexts: AgentContext[];
 	contextMode: "active" | "history";
 	contextCursor: string | null;
 	approvalMode: "pending" | "history";
+	reviewMode: "pending" | "history";
 	approval: ToolApproval | null;
 	operation: FileOperation | null;
 	unresolvedOperations: FileOperation[];
@@ -36,6 +40,8 @@ export type PermissionState = {
 };
 /** Bounded current/history projections. Unknown commands use exact read-only result lookup. */
 export class PermissionSession {
+	readonly contextList: ManagementCursorList<AgentContext>;
+	readonly approvalList: ManagementCursorList<ApprovalReview>;
 	private client: AppClient;
 	private scope: Scope;
 	private local: LocalState | undefined;
@@ -48,10 +54,12 @@ export class PermissionSession {
 	private unresolved: AgentCommand | null = null;
 	private state: PermissionState = {
 		contexts: [],
+		review: null,
 		activeContexts: [],
 		contextMode: "active",
 		contextCursor: null,
 		approvalMode: "pending",
+		reviewMode: "pending",
 		approval: null,
 		operation: null,
 		unresolvedOperations: [],
@@ -69,6 +77,38 @@ export class PermissionSession {
 		this.client = client;
 		this.scope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 		this.local = local;
+		this.contextList = new ManagementCursorList(async (cursor, signal) => {
+			const page = await client.call("listAgentContexts", { ...this.scope, ...(cursor ? { cursor } : {}) }, signal);
+			signal.throwIfAborted();
+			if (page.items.some((item) => !this.inScope(item))) throw new Error("SCOPE_MISMATCH");
+			return page;
+		});
+		this.approvalList = new ManagementCursorList(async (cursor, signal) => {
+			const method = this.state.reviewMode === "history" ? "listToolApprovals" : "listPendingToolApprovals";
+			const page = await client.call(method, { ...this.scope, ...(cursor ? { cursor } : {}) }, signal);
+			signal.throwIfAborted();
+			if (page.items.some((item) => !this.inScope(item))) throw new Error("SCOPE_MISMATCH");
+			const items: ApprovalReview[] = [];
+			for (const approval of page.items) {
+				if (
+					approval.operationId &&
+					this.state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS &&
+					!this.state.unresolvedOperations.some((item) => item.operationId === approval.operationId)
+				)
+					throw new Error("OPERATION_REVIEW_CAPACITY");
+				const operation = await this.readOperation(approval, signal);
+				signal.throwIfAborted();
+				if (operation) {
+					const unresolvedOperations = this.trackOperation(operation);
+					this.publish({
+						unresolvedOperations,
+						operationLimitReached: unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS,
+					});
+				}
+				items.push({ approval, operation });
+			}
+			return { items, nextCursor: page.nextCursor };
+		});
 		this.recoveryKey = `permissions.${scope.workspaceId}.${scope.conversationId}`;
 		const saved = readCommand(local, this.recoveryKey);
 		const command = saved.request;
@@ -155,9 +195,11 @@ export class PermissionSession {
 				result.rootId === command.params.rootId &&
 				JSON.stringify(result.pathPrefixes) === JSON.stringify(command.params.pathPrefixes)
 			);
-		const source = [...this.state.contexts, ...this.state.activeContexts].find(
-			(item) => item.grantId === command.params.sourceGrantId && item.purpose === "live-files",
-		);
+		const source = [
+			...this.state.contexts,
+			...this.state.activeContexts,
+			...this.contextList.getSnapshot().pages.flatMap((page) => page.items),
+		].find((item) => item.grantId === command.params.sourceGrantId && item.purpose === "live-files");
 		return (
 			result.purpose === "retained-context" &&
 			result.sourceGrantId === command.params.sourceGrantId &&
@@ -171,7 +213,19 @@ export class PermissionSession {
 		if (!this.matches(command, result)) throw new Error("COMMAND_MISMATCH");
 		saveCommand(this.local, this.recoveryKey, null);
 		this.unresolved = null;
-		this.publish({ uncertain: false, notFound: false });
+		this.publish({
+			uncertain: false,
+			notFound: false,
+			...(command.method === "decideToolApproval" && "approvalId" in result
+				? {
+						review: {
+							approval: result,
+							operation:
+								this.state.review?.approval.approvalId === result.approvalId ? this.state.review.operation : null,
+						},
+					}
+				: {}),
+		});
 	}
 	private async check(signal: AbortSignal) {
 		const command = this.unresolved;
@@ -230,6 +284,20 @@ export class PermissionSession {
 		signal.throwIfAborted();
 		if (page.items.some((item) => !this.inScope(item))) throw new Error("SCOPE_MISMATCH");
 		const approval = page.items[0] ?? null;
+		const operation = await this.readOperation(approval, signal, reconcile);
+		this.publish({
+			contexts,
+			activeContexts,
+			contextCursor: contextPage?.nextCursor ?? null,
+			approval,
+			operation,
+			unresolvedOperations: operation ? this.trackOperation(operation) : this.state.unresolvedOperations,
+			nextCursor: page.nextCursor,
+			loaded: true,
+			uncertain: this.unresolved !== null || this.state.incompatible,
+		});
+	}
+	private async readOperation(approval: ToolApproval | null, signal: AbortSignal, reconcile = false) {
 		const operation = approval?.operationId
 			? await this.client.call(
 					"getFileOperation",
@@ -251,18 +319,25 @@ export class PermissionSession {
 				operation.contentDigest !== approval.contentDigest)
 		)
 			throw new Error("OPERATION_MISMATCH");
-		this.publish({
-			contexts,
-			activeContexts,
-			contextCursor: contextPage?.nextCursor ?? null,
-			approval,
-			operation,
-			unresolvedOperations: operation ? this.trackOperation(operation) : this.state.unresolvedOperations,
-			nextCursor: page.nextCursor,
-			loaded: true,
-			uncertain: this.unresolved !== null || this.state.incompatible,
-		});
+		return operation;
 	}
+	reviewApproval = (approval: ToolApproval, reconcile = false) => {
+		if (!this.inScope(approval)) return Promise.resolve();
+		if (
+			this.state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS &&
+			approval.operationId &&
+			!this.state.unresolvedOperations.some((item) => item.operationId === approval.operationId)
+		)
+			return Promise.resolve();
+		return this.run(async (signal) => {
+			const operation = await this.readOperation(approval, signal, reconcile);
+			this.publish({
+				review: { approval, operation },
+				unresolvedOperations: operation ? this.trackOperation(operation) : this.state.unresolvedOperations,
+			});
+		});
+	};
+
 	private sameOperation(expected: FileOperation, actual: FileOperation) {
 		return (
 			this.inScope(actual) &&
@@ -318,18 +393,26 @@ export class PermissionSession {
 		this.publish({ contextMode: mode });
 		return this.refresh();
 	};
+	reviewHistory = (mode: "pending" | "history") => {
+		if (this.state.busy || this.state.uncertain) return;
+		this.approvalList.reset();
+		this.publish({ reviewMode: mode, review: null });
+	};
 	approvalHistory = (mode: "pending" | "history") => {
 		if (this.state.busy || this.state.uncertain) return Promise.resolve();
 		this.cursor = undefined;
-		this.publish({ approvalMode: mode });
+		this.approvalList.reset();
+		this.publish({ approvalMode: mode, review: null });
 		return this.refresh();
 	};
 	authorize = (input: AgentContextRequest) =>
 		this.mutate({ version: PROTOCOL_VERSION, method: "authorizeAgentContext", params: input });
 	authorizeRetained = (input: RetainedContextRequest) => {
-		const source = [...this.state.contexts, ...this.state.activeContexts].find(
-			(context) => context.grantId === input.sourceGrantId && context.purpose === "live-files",
-		);
+		const source = [
+			...this.state.contexts,
+			...this.state.activeContexts,
+			...this.contextList.getSnapshot().pages.flatMap((page) => page.items),
+		].find((context) => context.grantId === input.sourceGrantId && context.purpose === "live-files");
 		if (!source || !this.inScope(input)) return Promise.resolve();
 		return this.mutate({ version: PROTOCOL_VERSION, method: "authorizeRetainedContext", params: input });
 	};
@@ -409,6 +492,8 @@ export class PermissionSession {
 			this.publish({ uncertain: true });
 		}
 		await this.read(signal);
+		void this.contextList.load("refresh");
+		void this.approvalList.load("refresh");
 	}
 	cancel() {
 		this.request?.abort();
@@ -418,6 +503,8 @@ export class PermissionSession {
 	}
 	dispose() {
 		this.disposed = true;
+		this.contextList.setActive(false);
+		this.approvalList.setActive(false);
 		this.request?.abort();
 		this.request = null;
 		this.listeners.clear();

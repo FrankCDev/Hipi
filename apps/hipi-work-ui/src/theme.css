@@ -790,9 +790,7 @@
 	flex: 1;
 	min-height: 0;
 	overflow: auto;
-	padding: 20px 20px 16px;
 	scroll-behavior: auto;
-	scrollbar-gutter: stable;
 	overflow-anchor: none;
 }
 .virtual-message-stack {
@@ -1112,22 +1110,7 @@
 	}
 }
 .composer-wrap {
-	padding: 0 20px var(--composer-bottom-inset);
 	flex-shrink: 0;
-}
-.conversation-footer {
-	position: absolute;
-	inset-inline: 0;
-	bottom: 0;
-	z-index: 2;
-	max-height: 70%;
-	overflow-y: auto;
-	background: linear-gradient(to bottom, transparent, var(--surface) 12px);
-	padding-top: 12px;
-	pointer-events: none;
-}
-.conversation-footer > * {
-	pointer-events: auto;
 }
 .composer-context {
 	max-width: calc(var(--reading-width) + 24px);
@@ -1155,7 +1138,6 @@
 	margin-top: 10px;
 }
 .composer {
-	max-width: calc(var(--reading-width) + 24px);
 	margin: auto;
 	border: 0;
 	border-radius: var(--composer-radius);
@@ -1412,20 +1394,9 @@
 	font-size: 11px;
 	overflow-wrap: anywhere;
 }
-@media (min-width: 1600px) {
-	.message-scroll {
-		padding-inline: 48px;
-	}
-}
 @media (max-width: 1000px) {
 	.connection-bar {
 		padding-inline: 22px;
-	}
-	.message-scroll {
-		padding: 24px 22px 12px;
-	}
-	.composer-wrap {
-		padding: 12px 22px;
 	}
 
 	.diagnostics-grid {
@@ -1468,18 +1439,12 @@
 	.connection-bar {
 		padding: 7px 16px;
 	}
-	.message-scroll {
-		padding: 22px 16px 12px;
-	}
 	.message {
 		gap: 10px;
 		margin-bottom: 24px;
 	}
 	.message-user .message-content {
 		max-width: 70%;
-	}
-	.composer-wrap {
-		padding: 10px 12px 12px;
 	}
 	.composer-actions {
 		gap: 8px;

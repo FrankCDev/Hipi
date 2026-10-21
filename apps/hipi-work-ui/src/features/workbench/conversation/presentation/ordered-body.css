@@ -1,0 +1,6 @@
+.assistant-public-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-conversation-item-gap);
+	min-width: 0;
+}

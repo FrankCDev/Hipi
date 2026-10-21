@@ -17,16 +17,21 @@ import { BrandMark } from "../../../components/brand-mark.tsx";
 import { ActionTooltip } from "../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
-import { InlineApproval } from "../../agent-permissions/inline-approval.tsx";
+import { InlineApproval, useInlineApprovalPresentation } from "../../agent-permissions/inline-approval.tsx";
 import {
 	InlineLiveActivities,
 	InlineMessageActivities,
+	InlineMessageToolBlock,
+	MessageActivitiesProvider,
 	useActivityTranscript,
 	useActivityTranscriptProjection,
+	usePresentedToolActivity,
 } from "../../tool-activities/activity-transcript.tsx";
 import { RunActivityHeader } from "./activity/header.tsx";
 import { projectRunActivities } from "./activity/projection.ts";
 import type { ConversationFailure } from "./failure.ts";
+import { useHistoryViewport } from "./history/use-viewport.ts";
+import type { HistoryViewport } from "./history/window.ts";
 import { AssistantClipboardCopy } from "./markdown/assistant-clipboard-copy.tsx";
 import { ClipboardCopy } from "./markdown/clipboard-copy.tsx";
 import { MessageMeasurementPolicy } from "./message-measurement-policy.ts";
@@ -47,6 +52,16 @@ import {
 } from "./scroll-intent.ts";
 import { projectTranscript, TRANSCRIPT_OVERSCAN, type TranscriptRow, transcriptEstimate } from "./transcript.ts";
 import { ConversationTurnFailure } from "./turn-failure.tsx";
+import {
+	type ConversationRow,
+	rowContainsKey,
+	rowMessages,
+	TURN_OVERSCAN,
+	turnMembershipChanged,
+} from "./turns/contracts.ts";
+import { projectAuthoritativeTurns } from "./turns/projection.ts";
+import { captureMessageViewport, messageViewportPixel } from "./turns/reading-anchor.ts";
+import { ConversationTurnRow } from "./turns/row.tsx";
 import { useMessageCopyText } from "./use-message-copy-text.ts";
 import { virtualMessageRange } from "./virtual-message-range.ts";
 import "./conversation-block-spacing.css";
@@ -67,6 +82,7 @@ export function ConversationMessages({
 	onOpenModelSettings,
 	searchAnchor,
 	onJumpLatest,
+	onHistoryViewport,
 }: {
 	snapshot: Snapshot | undefined;
 	responseActive?: boolean;
@@ -80,6 +96,7 @@ export function ConversationMessages({
 	onOpenModelSettings?: (returnFocus: HTMLElement) => void;
 	searchAnchor?: SearchHistoryWindow;
 	onJumpLatest?: () => void;
+	onHistoryViewport?: (viewport: HistoryViewport | null) => void;
 }) {
 	const { t } = usePreferences();
 	const activityContext = useActivityTranscript();
@@ -104,6 +121,8 @@ export function ConversationMessages({
 	});
 	const pendingRestore = useRef(savedPosition?.following === false ? savedPosition : undefined);
 	const restorationFrames = useRef<number[]>([]);
+	const searchPositionPending = useRef(!!searchAnchor);
+	const scheduleSearchPosition = useRef<() => void>(() => {});
 	const interruptReading = useRef<(direction: number) => void>(() => {});
 	const projection = useRef<MessageProjection<DisplaySnapshot | undefined> | null>(null);
 	const [nearEnd, setNearEnd] = useState(true);
@@ -119,19 +138,45 @@ export function ConversationMessages({
 	const initialized = useRef(false);
 	const published = useRef(incoming);
 	const followFinal = useRef(false);
-	const previousRows = useRef<readonly TranscriptRow[]>([]);
+	const previousRows = useRef<readonly ConversationRow[]>([]);
 	const baseRows = useMemo(
-		() => projectTranscript(snapshot, previousRows.current, snapshot?.requestFailure),
+		() => projectTranscript(snapshot, previousRows.current.flatMap(rowMessages), snapshot?.requestFailure),
 		[snapshot],
 	);
 	const groupChoices = activityContext?.groupChoices;
-	const rows = useMemo(() => {
-		if (!groupChoices) return baseRows;
-		const protectedKeys = new Set<string>();
-		if (focusedKey) protectedKeys.add(focusedKey);
-		if (selectionRange) for (const row of baseRows) protectedKeys.add(row.key);
-		return projectRunActivities(baseRows, snapshot, groupChoices, protectedKeys, responseActive !== false);
-	}, [baseRows, snapshot, groupChoices, focusedKey, selectionRange, responseActive]);
+	const protectedKeys = useMemo(() => {
+		const keys = new Set<string>();
+		if (focusedKey) keys.add(focusedKey);
+		if (selectionRange) for (const row of baseRows) keys.add(row.key);
+		return keys;
+	}, [baseRows, focusedKey, selectionRange]);
+	const rows = useMemo<ConversationRow[]>(() => {
+		const fallback = groupChoices
+			? projectRunActivities(baseRows, snapshot, groupChoices, protectedKeys, responseActive !== false)
+			: baseRows;
+		const turns = projectAuthoritativeTurns(baseRows, searchAnchor ? undefined : snapshot).filter(
+			(row) => row.kind === "turn",
+		);
+		const permitted = turns.filter(
+			(row) =>
+				previousRows.current.some((previous) => previous.key === row.key) ||
+				!row.children.some((child) => protectedKeys.has(child.key)),
+		);
+		const byStart = new Map(permitted.map((row) => [row.children[0]?.key, row]));
+		const members = new Set(permitted.flatMap((row) => row.children.map((child) => child.key)));
+		const runKeys = new Set(permitted.map((row) => `run:${row.runId}`));
+		const byRun = new Map(permitted.map((row) => [row.runId, row]));
+		const emitted = new Set<string>();
+		return fallback.flatMap<ConversationRow>((row) => {
+			const turn = byStart.get(row.key) ?? (row.kind === "run-activity" ? byRun.get(row.activity.id) : undefined);
+			if (turn) {
+				if (emitted.has(turn.key)) return [];
+				emitted.add(turn.key);
+				return [turn];
+			}
+			return members.has(row.key) || runKeys.has(row.key) ? [] : [row];
+		});
+	}, [baseRows, snapshot, groupChoices, protectedKeys, responseActive, searchAnchor]);
 	useLayoutEffect(() => {
 		previousRows.current = rows;
 	}, [rows]);
@@ -142,14 +187,18 @@ export function ConversationMessages({
 				range,
 				selectionRange,
 				selectionEndpoints,
-				rows.findIndex((row) => row.key === focusedKey),
+				rows.findIndex((row) => !!focusedKey && rowContainsKey(row, focusedKey)),
 			),
 		[rows, focusedKey, selectionRange, selectionEndpoints],
 	);
 	const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
 		count: rows.length,
 		getScrollElement: () => messages.current,
-		estimateSize: (index) => savedPosition?.heights.get(rows[index]?.key ?? "") ?? transcriptEstimate(rows[index]),
+		estimateSize: (index) =>
+			savedPosition?.heights.get(rows[index]?.key ?? "") ??
+			(rows[index]?.kind === "turn"
+				? rows[index].children.reduce((size, child) => size + transcriptEstimate(child), 0)
+				: transcriptEstimate(rows[index])),
 		measureElement: measurementPolicy.measureElement,
 		getItemKey,
 		rangeExtractor,
@@ -158,16 +207,25 @@ export function ConversationMessages({
 		// Core also follows size changes when anchorTo=end. A negative threshold
 		// disables that path without disabling stable-key prepend anchoring.
 		scrollEndThreshold: !searchAnchor && followIntent && selectionRange === null ? CONVERSATION_END_THRESHOLD : -1,
-		overscan: TRANSCRIPT_OVERSCAN,
+		overscan: rows.every((row) => row.kind === "turn") ? TURN_OVERSCAN : TRANSCRIPT_OVERSCAN,
 		// CSS spacing belongs to each measured row, so theme changes and reflow
 		// use the same measurement/scroll compensation as message content.
 		gap: 0,
-		paddingEnd: footerRef ? footerHeight + 16 : 32,
+		// Document clearance includes the transcript's bottom space. It is not
+		// the smaller scroll-padding used to reveal a focused element above the footer.
+		paddingEnd: footerHeight + 32,
 		onChange: (instance) => {
 			setNearEnd(instance.isAtEnd(CONVERSATION_END_THRESHOLD));
 		},
 	});
 	const renderedIndexes = useRef<number[]>([]);
+	const scheduleHistoryViewport = useHistoryViewport(
+		messages,
+		virtualizer,
+		rows,
+		searchPositionPending,
+		onHistoryViewport,
+	);
 	useLayoutEffect(() => {
 		measurementPolicy.synchronize(virtualizer);
 	});
@@ -214,14 +272,39 @@ export function ConversationMessages({
 			selectionIntersects(node, document.getSelection()),
 		);
 		const intent = (direction: number) => {
+			searchPositionPending.current = false;
 			pendingRestore.current = undefined;
 			for (const frame of restorationFrames.current) cancelAnimationFrame(frame);
 			restorationFrames.current = [];
 			initialized.current = true;
 			followFinal.current = false;
 			controller.userIntent(direction);
+			scheduleHistoryViewport();
 		};
 		interruptReading.current = intent;
+		searchPositionPending.current = !!initialSearchAnchor;
+		let searchScheduled = false;
+		const scheduleSearch = () => {
+			if (!searchPositionPending.current || searchScheduled) return;
+			searchScheduled = true;
+			restorationFrames.current.push(
+				requestAnimationFrame(() => {
+					restorationFrames.current.push(
+						requestAnimationFrame(() => {
+							searchScheduled = false;
+							if (!searchPositionPending.current || selectionIntersects(node, document.getSelection())) return;
+							const target = node.querySelector<HTMLElement>("[data-search-match]");
+							if (!target) return;
+							searchPositionPending.current = false;
+							target.scrollIntoView({ block: "center" });
+							scheduleHistoryViewport();
+						}),
+					);
+				}),
+			);
+		};
+		scheduleSearchPosition.current = scheduleSearch;
+		node.addEventListener("message-search-ready", scheduleSearch);
 		const wheel = (event: WheelEvent) => {
 			if (event.deltaY && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) intent(event.deltaY);
 		};
@@ -273,6 +356,8 @@ export function ConversationMessages({
 		window.addEventListener("pointercancel", pointerUp);
 		return () => {
 			interruptReading.current = () => {};
+			scheduleSearchPosition.current = () => {};
+			node.removeEventListener("message-search-ready", scheduleSearch);
 			unbindDisclosure();
 			controller.dispose();
 			scrollIntent.current = null;
@@ -288,7 +373,7 @@ export function ConversationMessages({
 			window.removeEventListener("pointerup", pointerUp);
 			window.removeEventListener("pointercancel", pointerUp);
 		};
-	}, [savedPosition, virtualizer, initialSearchAnchor]);
+	}, [savedPosition, virtualizer, initialSearchAnchor, scheduleHistoryViewport]);
 	useEffect(() => {
 		const footer = footerRef?.current;
 		if (!footer) return;
@@ -327,6 +412,27 @@ export function ConversationMessages({
 					!value?.running &&
 					!!scrollIntent.current?.follows &&
 					virtualizer.isAtEnd(CONVERSATION_END_THRESHOLD);
+				const node = messages.current;
+				if (
+					node &&
+					!scrollIntent.current?.follows &&
+					!scrollIntent.current?.holdingHeader &&
+					!selectionIntersects(node, document.getSelection())
+				) {
+					const nextRows = projectAuthoritativeTurns(projectTranscript(value), initialSearchAnchor ? undefined : value);
+					const priorRows = projectAuthoritativeTurns(
+						projectTranscript(published.current),
+						initialSearchAnchor ? undefined : published.current,
+					);
+					const changed = turnMembershipChanged(priorRows, nextRows);
+					const anchor = changed ? captureMessageViewport(node) : undefined;
+					if (anchor)
+						scrollIntent.current?.holdHeader(
+							() =>
+								selectionIntersects(node, document.getSelection()) ? undefined : messageViewportPixel(node, anchor.key),
+							() => {},
+						);
+				}
 				published.current = value;
 				setSnapshot(value);
 			},
@@ -362,31 +468,25 @@ export function ConversationMessages({
 			projection.current = null;
 			document.removeEventListener("selectionchange", selectionChanged);
 		};
-	}, [virtualizer, onNearTop]);
+	}, [virtualizer, onNearTop, initialSearchAnchor]);
 	useLayoutEffect(() => {
 		projection.current?.update(incoming, incoming?.running ?? false);
 	}, [incoming]);
 	useLayoutEffect(() => {
 		if (!snapshot) return;
 		if (initialSearchAnchor && !initialized.current) {
-			const index = rows.findIndex((row) => row.message?.id === initialSearchAnchor.target.messageId);
+			const index = rows.findIndex((row) =>
+				rowMessages(row).some((child) => child.message?.id === initialSearchAnchor.target.messageId),
+			);
 			if (index < 0) return;
 			initialized.current = true;
 			virtualizer.scrollToIndex(index, { align: "center" });
-			restorationFrames.current.push(
-				requestAnimationFrame(() => {
-					restorationFrames.current.push(
-						requestAnimationFrame(() => {
-							messages.current?.querySelector("[data-search-match]")?.scrollIntoView({ block: "center" });
-						}),
-					);
-				}),
-			);
+			scheduleSearchPosition.current();
 			return;
 		}
 		const restore = pendingRestore.current;
 		if (restore) {
-			const index = rows.findIndex((row) => row.key === restore.key);
+			const index = rows.findIndex((row) => rowContainsKey(row, restore.messageKey ?? restore.key));
 			if (index < 0 && snapshot.historyCursor) {
 				// A previous reading position can precede the latest snapshot. Keep
 				// the existing serial/cursor-fenced history owner in charge of reads.
@@ -399,7 +499,13 @@ export function ConversationMessages({
 			if (index >= 0) {
 				virtualizer.scrollToIndex(index, { align: "start" });
 				const settle = () => {
-					const currentIndex = previousRows.current.findIndex((row) => row.key === restore.key);
+					const currentIndex = previousRows.current.findIndex((row) => rowContainsKey(row, restore.key));
+					const node = messages.current;
+					const pixel = node ? messageViewportPixel(node, restore.messageKey ?? restore.key) : undefined;
+					if (node && pixel !== undefined) {
+						virtualizer.scrollToOffset(Math.max(0, node.scrollTop + pixel - restore.pixel));
+						return;
+					}
 					const target = virtualizer.getOffsetForIndex(currentIndex, "start");
 					if (target) virtualizer.scrollToOffset(Math.max(0, target[0] - restore.pixel));
 				};
@@ -431,11 +537,13 @@ export function ConversationMessages({
 			const offset = virtualizer.scrollOffset ?? node.scrollTop;
 			const anchor = virtualizer.getVirtualItems().find((item) => item.end > offset);
 			if (!anchor || !retained.some((row) => row.key === anchor.key)) return;
+			const messageAnchor = captureMessageViewport(node);
 			positions.save(
 				boundScope,
 				{
 					key: String(anchor.key),
-					pixel: anchor.start - offset,
+					messageKey: messageAnchor?.key,
+					pixel: messageAnchor?.pixel ?? anchor.start - offset,
 					following: virtualizer.options.scrollEndThreshold >= 0,
 				},
 				virtualizer.takeSnapshot(),
@@ -505,64 +613,95 @@ export function ConversationMessages({
 					if (!event.currentTarget.contains(event.relatedTarget)) setFocusedKey(undefined);
 				}}
 			>
-				{!snapshot && <output className="empty-copy">{t(error ? "work.error" : "common.loading")}</output>}
-				{snapshot && rows.length === 0 && !snapshot.historyCursor && (
-					<div className="conversation-empty">
-						<div className="conversation-empty-mark" aria-hidden="true">
-							<BrandMark size={40} />
+				<div className="conversation-column">
+					{!snapshot && <output className="empty-copy">{t(error ? "work.error" : "common.loading")}</output>}
+					{snapshot && rows.length === 0 && !snapshot.historyCursor && (
+						<div className="conversation-empty">
+							<div className="conversation-empty-mark" aria-hidden="true">
+								<BrandMark size={40} />
+							</div>
+							<h2>{t("work.readyTitle")}</h2>
+							<p>{t("work.readyBody")}</p>
 						</div>
-						<h2>{t("work.readyTitle")}</h2>
-						<p>{t("work.readyBody")}</p>
+					)}
+					<div className="message-stack virtual-message-stack" style={{ height: virtualizer.getTotalSize() }}>
+						{snapshot &&
+							virtualizer.getVirtualItems().map((item) => {
+								const row = rows[item.index];
+								if (!row) return null;
+								const renderMessage = (child: TranscriptRow) =>
+									child.kind === "request-failure" ? (
+										<ConversationTurnFailure failure={child.failure} onOpenModelSettings={onOpenModelSettings} />
+									) : child.kind === "run-activity" ? null : (
+										<div data-message-key={child.key} data-message-id={child.message?.id} data-index={item.index}>
+											<TranscriptMessage
+												row={child}
+												scope={snapshot}
+												stream={child.message ? undefined : snapshot}
+												responseActive={responseActive}
+												offset={originalOffsets.get(child.key)}
+												onOffsetChange={setOriginalOffsets}
+												searchAnchor={child.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
+											/>
+										</div>
+									);
+								return (
+									<div
+										key={row.key}
+										ref={virtualizer.measureElement}
+										data-index={item.index}
+										data-message-key={row.key}
+										data-message-id={row.message?.id}
+										data-turn-key={row.key}
+										data-transcript-kind={row.kind}
+										data-transcript-last={item.index === rows.length - 1}
+										className="virtual-message-row"
+										style={{ transform: `translateY(${item.start}px)` }}
+									>
+										{row.kind === "turn" ? (
+											<ConversationTurnRow
+												row={row}
+												snapshot={snapshot}
+												choices={groupChoices ?? new Map()}
+												protectedKeys={protectedKeys}
+												active={responseActive !== false}
+												onToggle={(key, expanded) => {
+													if (!selectionIntersects(messages.current, document.getSelection()))
+														activityContext?.setGroupChoice(key, expanded);
+												}}
+												render={renderMessage}
+											/>
+										) : row.kind === "run-activity" ? (
+											<RunActivityHeader
+												activity={row.activity}
+												onToggle={() => {
+													if (selectionIntersects(messages.current, document.getSelection())) return;
+													activityContext?.setGroupChoice(row.activity.key, !row.activity.expanded);
+												}}
+											/>
+										) : row.kind === "request-failure" ? (
+											<ConversationTurnFailure failure={row.failure} onOpenModelSettings={onOpenModelSettings} />
+										) : (
+											<TranscriptMessage
+												row={row}
+												scope={snapshot}
+												stream={row.message ? undefined : snapshot}
+												responseActive={responseActive}
+												offset={originalOffsets.get(row.key)}
+												onOffsetChange={setOriginalOffsets}
+												searchAnchor={row.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
+											/>
+										)}
+									</div>
+								);
+							})}
 					</div>
-				)}
-				<div className="message-stack virtual-message-stack" style={{ height: virtualizer.getTotalSize() }}>
-					{snapshot &&
-						virtualizer.getVirtualItems().map((item) => {
-							const row = rows[item.index];
-							if (!row) return null;
-							return (
-								<div
-									key={row.key}
-									ref={virtualizer.measureElement}
-									data-index={item.index}
-									data-message-key={row.key}
-									data-message-id={row.message?.id}
-									data-turn-key={row.key}
-									data-transcript-kind={row.kind}
-									data-transcript-last={item.index === rows.length - 1}
-									className="virtual-message-row"
-									style={{ transform: `translateY(${item.start}px)` }}
-								>
-									{row.kind === "run-activity" ? (
-										<RunActivityHeader
-											activity={row.activity}
-											onToggle={() => {
-												if (selectionIntersects(messages.current, document.getSelection())) return;
-												activityContext?.setGroupChoice(row.activity.key, !row.activity.expanded);
-											}}
-										/>
-									) : row.kind === "request-failure" ? (
-										<ConversationTurnFailure failure={row.failure} onOpenModelSettings={onOpenModelSettings} />
-									) : (
-										<TranscriptMessage
-											row={row}
-											scope={snapshot}
-											stream={row.message ? undefined : snapshot}
-											responseActive={responseActive}
-											offset={originalOffsets.get(row.key)}
-											onOffsetChange={setOriginalOffsets}
-											searchAnchor={row.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
-										/>
-									)}
-								</div>
-							);
-						})}
 				</div>
 			</section>
 			{historyStatus}
 			<ResponseAnnouncement snapshot={snapshot} error={error} failure={snapshot?.requestFailure} />
 			{displayPaused && <output className="message-pending small-copy">{t("markdown.pending")}</output>}
-			{(searchAnchor || !nearEnd) && (
+			{(searchAnchor || onJumpLatest || !nearEnd) && (
 				<ActionTooltip label={t("work.jumpLatest")} disabled={selectionRange !== null}>
 					<Button
 						className="jump-latest bg-popover rounded-full"
@@ -616,19 +755,24 @@ const TranscriptMessage = memo(
 		const copySource = useMessageCopyText(scope, message);
 		const active = !!stream?.running && responseActive !== false;
 		const phase = stream ? responsePhase(stream, active) : undefined;
+		const toolPresented = usePresentedToolActivity();
+		const approvalPresented = useInlineApprovalPresentation(stream, active);
+		const visiblePhase = toolPresented || approvalPresented ? undefined : phase;
 		if (stream && !stream.partial) {
 			if (!active && !stream.execution?.tools.total) return null;
 			return (
-				<article className="message message-assistant" data-content-search-unit-key={row.key} aria-busy={active}>
-					<div className="message-content">
-						{phase && <ResponseStatus phase={phase} />}
-						<InlineLiveActivities snapshot={stream} active={active} />
-						<InlineApproval snapshot={stream} active={active} />
-					</div>
-				</article>
+				<MessageActivitiesProvider messageId={message.id}>
+					<article className="message message-assistant" data-content-search-unit-key={row.key} aria-busy={active}>
+						<div className="message-content">
+							{visiblePhase && <ResponseStatus phase={visiblePhase} />}
+							<InlineLiveActivities snapshot={stream} active={active} />
+							<InlineApproval snapshot={stream} active={active} />
+						</div>
+					</article>
+				</MessageActivitiesProvider>
 			);
 		}
-		return (
+		const content = (
 			<article
 				ref={article}
 				className={`message message-${message.role}`}
@@ -641,6 +785,16 @@ const TranscriptMessage = memo(
 					<MessageContent
 						message={message}
 						onHydratedText={copySource.accept}
+						renderActivities={
+							!stream && message.role === "assistant"
+								? (contentIndexes) =>
+										contentIndexes === undefined ? (
+											<InlineMessageActivities messageId={message.id} toolCalls={message.toolCalls} />
+										) : (
+											<InlineMessageToolBlock contentIndexes={contentIndexes} />
+										)
+								: undefined
+						}
 						scope={scope}
 						offset={offset}
 						streaming={stream?.running}
@@ -655,12 +809,9 @@ const TranscriptMessage = memo(
 							});
 						}}
 					/>
-					{phase && <ResponseStatus phase={phase} />}
+					{visiblePhase && <ResponseStatus phase={visiblePhase} />}
 					{stream && <InlineLiveActivities snapshot={stream} active={active} />}
 					{stream && <InlineApproval snapshot={stream} active={active} />}
-					{!stream && message.role === "assistant" && (
-						<InlineMessageActivities messageId={message.id} toolCalls={message.toolCalls} />
-					)}
 					{message.interrupted && <span className="status-pill">{t("work.interrupted")}</span>}
 					{!stream && copySource.text && (
 						<div className="message-actions">
@@ -677,6 +828,13 @@ const TranscriptMessage = memo(
 					)}
 				</div>
 			</article>
+		);
+		return message.role === "assistant" ? (
+			<MessageActivitiesProvider messageId={message.id} toolCalls={message.toolCalls}>
+				{content}
+			</MessageActivitiesProvider>
+		) : (
+			content
 		);
 	},
 	(before, after) =>

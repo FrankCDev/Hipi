@@ -8,8 +8,12 @@ import {
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import { ApprovalCard } from "../src/features/agent-permissions/approval-card.tsx";
+import { ActivityHistoryWindow } from "../src/features/tool-activities/activity-history-window.tsx";
 import type { ActivityState } from "../src/features/tool-activities/activity-session.ts";
-import { ActivityTranscriptProvider } from "../src/features/tool-activities/activity-transcript.tsx";
+import {
+	ActivityTranscriptProvider,
+	useActivityTranscript,
+} from "../src/features/tool-activities/activity-transcript.tsx";
 import { activityLabels } from "../src/features/tool-activities/labels.ts";
 import { ActivityHistoryAction, ToolActivities } from "../src/features/tool-activities/tool-activities.tsx";
 
@@ -53,15 +57,21 @@ function activityMarkup(connected = true, running = false) {
 		/>,
 	);
 }
+function HistoryWindow() {
+	const context = useActivityTranscript();
+	assert.ok(context);
+	return <ActivityHistoryWindow session={context.session} state={context.state} enabled locale="en" />;
+}
 test("idle and empty scanned pages do not add composer chrome; progressive details retains history access", () => {
 	for (const page of [
 		undefined,
 		{ items: [], nextCursor: "more-records", coverage: "tasks" as const, membershipFence: "fence" },
+		{ items: [], nextCursor: null, coverage: "tasks" as const, membershipFence: "fence" },
 	]) {
 		fixture.state = { busy: false, failed: false, page };
 		const html = activityMarkup(true, true);
 		assert.doesNotMatch(html, /activity-context|View activity/);
-		assert.doesNotMatch(html, /No activity in this scanned page|Records not yet read|Execution completed|Last read/);
+		assert.doesNotMatch(html, /No recorded tool activity|Records not yet read|Execution completed|Last read/);
 	}
 	const details = renderToStaticMarkup(
 		<ActivityTranscriptProvider scope={scope} connected running={false}>
@@ -72,10 +82,22 @@ test("idle and empty scanned pages do not add composer chrome; progressive detai
 	assert.match(details, /aria-haspopup="dialog"/);
 	assert.match(details, /aria-expanded="false"/);
 	assert.match(details, /aria-controls=/);
-	assert.equal(
-		activityLabels("en")["activity.empty"],
-		"No activity in this scanned page. More records may be available on the next page.",
-	);
+	for (const nextCursor of ["more-records", null]) {
+		fixture.state = {
+			busy: false,
+			failed: false,
+			window: [{ index: 0, page: { items: [], nextCursor, coverage: "tasks", membershipFence: "fence" } }],
+		};
+		const history = renderToStaticMarkup(
+			<ActivityTranscriptProvider scope={scope} connected running={false}>
+				<HistoryWindow />
+			</ActivityTranscriptProvider>,
+		);
+		assert.match(history, /data-activity-history-window=""/);
+		assert.match(history, /tabindex="0" aria-label="Tool activity"/);
+		assert.equal(history.includes(activityLabels("en")["activity.empty"]), nextCursor === null);
+		assert.doesNotMatch(history, /<button|First page|Next page|Refresh page/);
+	}
 });
 test("compact snapshots use recorded tool and phase, including failed outcome and complete tooltip", () => {
 	fixture.state.page = { items: [activity], nextCursor: null, coverage: "tasks", membershipFence: "fence" };

@@ -79,6 +79,7 @@ function renderTree(
 						activityBasis: "creation",
 					},
 				],
+				previousCursor: null,
 				nextCursor,
 				coverage: { generation: "one", membershipGeneration: 0, state: "ready", completedAt: 1, nextCursor: null },
 			},
@@ -211,12 +212,13 @@ test("project disclosure and navigation have distinct names and only disclosure 
 	assert.ok(html.includes(`<section id="${region}" aria-labelledby="${openLabels?.[1]}"`));
 });
 
-test("a catalog page is rendered without the old lifetime slice and pagination remains explicit", () => {
+test("a catalog window renders all retained rows and uses an invisible loading boundary", () => {
 	const html = renderTree(false, 20);
 	assert.equal((html.match(/class="workspace-branch"/g) ?? []).length, 20);
 	assert.match(html, /My project 19/);
 	const expanded = renderTree(true);
-	assert.match(expanded, /加载更多/);
+	assert.doesNotMatch(expanded, /加载更多|下一页|刷新本页/);
+	assert.match(expanded, /aria-hidden="true" data-catalog-boundary=""/);
 	assert.match(expanded, /项目操作: My project 0/);
 	assert.match(expanded, /会话操作: My conversation/);
 	assert.doesNotMatch(expanded, /重命名会话/);
@@ -237,14 +239,16 @@ test("healthy project lists contain no persistent filter bar, counts or creation
 	);
 	assert.match(html, /project-actions-trigger/);
 	assert.match(html, /project-new-conversation/);
-	assert.match(html, /class="project-pagination"/);
+	assert.doesNotMatch(html, /class="project-pagination"|加载更多|下一页|刷新本页/);
+	assert.match(html, /aria-hidden="true" data-catalog-boundary=""/);
 });
 
 test("the sidebar remains an unfiltered bounded list independently of the search dialog", () => {
 	const html = renderTree(true, 1, "next-page");
 	assert.doesNotMatch(html, /project-page-summary|project-match-count|project-page-count/);
 	assert.match(html, /class="conversation-link"/);
-	assert.match(html, /加载更多/);
+	assert.doesNotMatch(html, /加载更多|下一页|刷新本页/);
+	assert.match(html, /aria-hidden="true" data-catalog-boundary=""/);
 });
 
 test("Recent is global and remains available independently of default workspace and project catalog windows", () => {
@@ -290,6 +294,7 @@ test("selected conversation remains mounted when it is outside the displayed dir
 				],
 				metadataGeneration: 1,
 				orderGeneration: 0,
+				previousCursor: null,
 				nextCursor: "next",
 			},
 		],
@@ -320,10 +325,11 @@ test("selected conversation remains mounted when it is outside the displayed dir
 			</QueryClientProvider>,
 		);
 	assert.match(render(), /data-selected-conversation="selected-conversation"/);
-	assert.match(render(), /加载更多/);
+	assert.doesNotMatch(render(), /加载更多|下一页|刷新本页/);
+	assert.match(render(), /aria-hidden="true" data-catalog-boundary=""/);
 	cache.setQueryData(["workspaces", "pages"], { pages: [{ items: [], nextCursor: null }], pageParams: [undefined] });
 	cache.setQueryData(["projects", "pages"], {
-		pages: [{ items: [], metadataGeneration: 1, orderGeneration: 0, nextCursor: null }],
+		pages: [{ items: [], metadataGeneration: 1, orderGeneration: 0, previousCursor: null, nextCursor: null }],
 		pageParams: [undefined],
 	});
 	const empty = render();

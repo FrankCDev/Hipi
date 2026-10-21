@@ -602,7 +602,7 @@ export function validateFileWorkbenchEvidence({ first, reopened }) {
 		"docxPreview",
 		"xlsxPreview",
 		"xlsxSavedValues",
-		"xlsxPagination",
+		"xlsxContinuousSheets",
 		"pdfPreview",
 		"pdfZoom",
 		"pdfReopenResetsZoom",

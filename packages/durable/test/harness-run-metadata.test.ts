@@ -9,6 +9,7 @@ import {
 	LiveDoc,
 	RunResultEntry,
 	ToolResultEntry,
+	UserEntry,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
@@ -32,6 +33,7 @@ describe("durable observational run membership", () => {
 		expect(answer.runId).toBe(answer.byTaskId);
 		expect(terminal.data).toEqual({
 			runId: answer.runId,
+			inputRefs: { entryIds: [entries.find(UserEntry.is)!.id], total: 1, omitted: false },
 			admittedAt: 100,
 			settledAt: 100,
 			terminalCause: "response",
@@ -62,9 +64,17 @@ describe("durable observational run membership", () => {
 		const terminal = entries.find(RunResultEntry.is)!;
 		const before = await root.fork(answer.id, { ownership: { kind: "ownerless" } }, context);
 		const after = await root.fork(terminal.id, { ownership: { kind: "ownerless" } }, context);
-		expect((await allEntries(before)).some(RunResultEntry.is)).toBe(false);
-		expect((await allEntries(after)).find(RunResultEntry.is)?.id).toBe(terminal.id);
+		const beforeEntries = await allEntries(before),
+			afterEntries = await allEntries(after);
+		expect(beforeEntries.filter(RunResultEntry.is).map((entry) => entry.data.inputRefs)).toEqual([]);
+		expect(afterEntries.find(RunResultEntry.is)).toEqual(terminal);
+		expect(afterEntries.find(RunResultEntry.is)?.data.inputRefs).toEqual({
+			entryIds: [afterEntries.find(UserEntry.is)!.id],
+			total: 1,
+			omitted: false,
+		});
 		expect((await harness.snapshot(LiveDoc, before.id, context))?.run).toBeUndefined();
+		expect((await harness.snapshot(LiveDoc, after.id, context))?.run).toBeUndefined();
 		await harness.close(context);
 	});
 
@@ -89,6 +99,12 @@ describe("durable observational run membership", () => {
 		expect(answers[0]!.byTaskId).not.toBe(answers[1]!.byTaskId);
 		expect(answers[0]!.runId).toBe(answers[1]!.runId);
 		expect(terminals).toHaveLength(1);
+		expect(entries.filter(UserEntry.is)).toHaveLength(2);
+		expect(terminals[0]!.data.inputRefs).toEqual({
+			entryIds: [entries.find(UserEntry.is)!.id],
+			total: 1,
+			omitted: false,
+		});
 		expect(terminals[0]!.data.settlement).toEqual({ status: "done", answer: answers[1]!.id });
 		expect(settled).toMatchObject({ status: "done", answer: answers[1]!.id });
 		expect((await root.context(context)).messages.map(textOf)).toEqual(["go", "first", "again", "last"]);
@@ -128,6 +144,11 @@ describe("durable observational run membership", () => {
 			expect(result.runId).toBe(answers[0]!.runId);
 			expect(answers.every((entry) => entry.runId === result.runId)).toBe(true);
 			expect(terminal.data.terminalCause).toBe(cause);
+			expect(terminal.data.inputRefs).toEqual({
+				entryIds: [entries.find(UserEntry.is)!.id],
+				total: 1,
+				omitted: false,
+			});
 			expect(terminal.data.settlement).toEqual({ status: "done", answer: answers.at(-1)!.id });
 			if (cause !== "response") expect(terminal.data.answerRequestStartedAt).toBeUndefined();
 			expect(answers).toHaveLength(cause === "response" ? 2 : 1);
@@ -173,10 +194,16 @@ describe("durable observational run membership", () => {
 		const input = await root.submit({ type: "input", content: "go" }, context);
 		await pending.reached;
 		const run = (await harness.snapshot(LiveDoc, root.id, context))!.run!;
+		expect(run.group!.inputRefs).toEqual({
+			entryIds: [(await input.status(context)).entry],
+			total: 1,
+			omitted: false,
+		});
 		await harness.abortTask(run.taskId, context);
 		expect(await input.wait(context)).toMatchObject({ status: "unanswered", reason: "aborted" });
 		const terminal = (await allEntries(root)).find(RunResultEntry.is)!;
 		expect(terminal.runId).toBe(run.group!.id);
+		expect(terminal.data.inputRefs).toEqual(run.group!.inputRefs);
 		expect(terminal.data).toMatchObject({
 			terminalCause: "unanswered",
 			settlement: { status: "unanswered", reason: "aborted" },
@@ -228,6 +255,7 @@ describe("durable observational run membership", () => {
 		const terminal = (await allEntries(second.root)).find(RunResultEntry.is)!;
 		expect(terminal.data.runId).toBe(group.id);
 		expect(terminal.data.admittedAt).toBe(group.admittedAt);
+		expect(terminal.data.inputRefs).toEqual(group.inputRefs);
 		await second.harness.close(context);
 	});
 });

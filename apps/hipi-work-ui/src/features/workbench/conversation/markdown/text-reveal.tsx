@@ -1,7 +1,7 @@
 import { usePageInView } from "framer-motion";
 import { createContext, useContext, useLayoutEffect, useMemo, useState } from "react";
-import type { ExtraProps } from "react-markdown";
 import { useReducedMotionPreference } from "../../../../app/theme/use-reduced-motion.ts";
+import type { MarkdownSourceNode } from "./source-node.ts";
 import "./text-reveal.css";
 
 type RevealedText = { source: string; leaves: Map<number, string>; structures: Set<string> };
@@ -54,10 +54,18 @@ export function revealWords(text: string): { offset: number; text: string }[] {
 	return result;
 }
 
-export function RevealedTextLeaf({ node }: ExtraProps) {
+export function RevealedTextLeaf({
+	node,
+	start: explicitStart,
+	text: explicitText,
+}: {
+	node?: MarkdownSourceNode;
+	start?: number;
+	text?: string;
+}) {
 	const context = useContext(TextRevealContext);
-	const start = node?.position?.start.offset;
-	const text = node?.children.map((child) => (child.type === "text" ? child.value : "")).join("") ?? "";
+	const start = explicitStart ?? node?.position?.start.offset;
+	const text = explicitText ?? node?.children.map((child) => (child.type === "text" ? child.value : "")).join("") ?? "";
 	const words = useMemo(() => revealWords(text), [text]);
 	const previousText = start === undefined ? undefined : context?.previous.leaves.get(start);
 	// Decoded text offsets are compared only with decoded text from the same leaf.

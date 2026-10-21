@@ -149,32 +149,8 @@ export function DocumentPreviewPane({
 				</div>
 			)}
 			{handle?.summary.truncated && <p className="notice">{l["preview.partial"]}</p>}
-			{state.page && handle && (
-				<>
-					<div className="file-actions">
-						<Button
-							size="sm"
-							variant="outline"
-							disabled={state.loading || state.page.page === 0}
-							onClick={() => void session.readPage((state.page?.page ?? 0) - 1)}
-						>
-							{l["preview.previous"]}
-						</Button>
-						<output>
-							{l["preview.page"]} {state.page.page + 1} / {handle.summary.pages}
-						</output>
-						<Button
-							size="sm"
-							variant="outline"
-							disabled={state.loading || state.page.page + 1 >= handle.summary.pages}
-							onClick={() => void session.readPage((state.page?.page ?? 0) + 1)}
-						>
-							{l["preview.next"]}
-						</Button>
-					</div>
-					<DocumentPage key={`${state.page.id}:${state.page.page}`} content={state.page.content} locale={locale} />
-				</>
-			)}
+			{state.document && handle && <DocumentPage key={handle.id} content={state.document} locale={locale} />}
+
 			{state.bytes &&
 				handle &&
 				(PREVIEW_HANDLERS[handle.kind].view === "pdf" ? (

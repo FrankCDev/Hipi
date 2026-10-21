@@ -39,7 +39,13 @@ const fixtures = [
 	[
 		"listProjects",
 		{ cursor: "opaque" },
-		{ items: [{ project, presentation }], metadataGeneration: 0, orderGeneration: 0, nextCursor: null },
+		{
+			items: [{ project, presentation }],
+			metadataGeneration: 0,
+			orderGeneration: 0,
+			previousCursor: null,
+			nextCursor: null,
+		},
 	],
 	["getProject", { projectId: "project_a" }, project],
 	["getProjectPresentation", { projectId: "project_a" }, presentation],
@@ -135,7 +141,13 @@ test("provenance is explicit, bounded and tied to declared workspace", () => {
 		);
 });
 test("pages and linked identity results reject ambiguity", () => {
-	const page = { items: [{ project, presentation }], metadataGeneration: 0, orderGeneration: 0, nextCursor: null };
+	const page = {
+		items: [{ project, presentation }],
+		metadataGeneration: 0,
+		orderGeneration: 0,
+		previousCursor: null,
+		nextCursor: null,
+	};
 	assert.throws(
 		() => parseProjectResult("listProjects", { ...page, items: Array(51).fill(page.items[0]) }),
 		ProjectContractError,

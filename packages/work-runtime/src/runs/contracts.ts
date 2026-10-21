@@ -1,6 +1,8 @@
 /** Observed facts only: never proof of complete run membership or active compute time. */
-export const RUN_LIMITS = { results: 64, bytes: 32768, answerLookups: 32 } as const;
-export type RunAdmission = { id: string; admittedAtMs?: number };
+export const RUN_LIMITS = { results: 64, bytes: 32768, entryLookups: 32, inputRefs: 32, inputBytes: 1024 } as const;
+/** Verified admitted inputs only, not all user messages or a whole-turn completeness proof. */
+export type RunInputRefs = { entryIds: string[]; total: number; omitted: boolean };
+export type RunAdmission = { id: string; admittedAtMs?: number; inputRefs?: RunInputRefs };
 export type RunResultObservation = {
 	id: string;
 	terminalEntryId: string;
@@ -13,6 +15,7 @@ export type RunResultObservation = {
 		| { status: "unanswered"; reason?: "aborted" | "reset" | "faulted" | "model_error" | "no_model" };
 	/** Exact fork-visible, single-model, non-tool assistant response. Not an early phase signal. */
 	responseMessageId?: string;
+	inputRefs?: RunInputRefs;
 };
 /** Different terminals for the same id are conflict evidence; consumers must not select a winner. */
 export type RunResults = { items: RunResultObservation[]; omitted: boolean };
@@ -35,10 +38,36 @@ export function parseRunIdentifier(value: unknown): string {
 export function isRunTimestamp(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
+export function parseRunInputRefs(value: unknown): RunInputRefs {
+	const p = object(value, ["entryIds", "total", "omitted"]);
+	if (
+		!Array.isArray(p.entryIds) ||
+		p.entryIds.length > RUN_LIMITS.inputRefs ||
+		!isRunTimestamp(p.total) ||
+		p.total < 1 ||
+		typeof p.omitted !== "boolean"
+	)
+		throw new Error("Invalid run input references");
+	const entryIds = Array.from(p.entryIds, parseRunIdentifier);
+	if (
+		entryIds.some((id, index) => index > 0 && Number(id) <= Number(entryIds[index - 1])) ||
+		entryIds.length > p.total ||
+		(!p.omitted && entryIds.length !== p.total)
+	)
+		throw new Error("Invalid run input coverage");
+	const result = { entryIds, total: p.total, omitted: p.omitted };
+	if (new TextEncoder().encode(JSON.stringify(result)).byteLength > RUN_LIMITS.inputBytes)
+		throw new Error("Invalid run input bounds");
+	return result;
+}
 export function parseRunAdmission(value: unknown): RunAdmission {
-	const p = object(value, ["id", "admittedAtMs"]);
+	const p = object(value, ["id", "admittedAtMs", "inputRefs"]);
 	if (p.admittedAtMs !== undefined && !isRunTimestamp(p.admittedAtMs)) throw new Error("Invalid run timestamp");
-	return { id: parseRunIdentifier(p.id), ...(p.admittedAtMs === undefined ? {} : { admittedAtMs: p.admittedAtMs }) };
+	return {
+		id: parseRunIdentifier(p.id),
+		...(p.admittedAtMs === undefined ? {} : { admittedAtMs: p.admittedAtMs }),
+		...(p.inputRefs === undefined ? {} : { inputRefs: parseRunInputRefs(p.inputRefs) }),
+	};
 }
 export function parseRunResult(value: unknown): RunResultObservation {
 	const p = object(value, [
@@ -49,6 +78,7 @@ export function parseRunResult(value: unknown): RunResultObservation {
 		"terminalCause",
 		"settlement",
 		"responseMessageId",
+		"inputRefs",
 	]);
 	const id = parseRunIdentifier(p.id),
 		terminalEntryId = parseRunIdentifier(p.terminalEntryId);
@@ -89,6 +119,9 @@ export function parseRunResult(value: unknown): RunResultObservation {
 		if (Number(answer) >= Number(terminalEntryId)) throw new Error("Invalid run response order");
 		responseMessageId = p.responseMessageId;
 	}
+	const inputRefs = p.inputRefs === undefined ? undefined : parseRunInputRefs(p.inputRefs);
+	if (inputRefs?.entryIds.some((entry) => Number(entry) >= Number(terminalEntryId)))
+		throw new Error("Invalid run input order");
 	return {
 		id,
 		terminalEntryId,
@@ -97,6 +130,7 @@ export function parseRunResult(value: unknown): RunResultObservation {
 		terminalCause: p.terminalCause,
 		settlement,
 		...(responseMessageId === undefined ? {} : { responseMessageId }),
+		...(inputRefs === undefined ? {} : { inputRefs }),
 	};
 }
 export function runResultsBytes(value: RunResults): number {

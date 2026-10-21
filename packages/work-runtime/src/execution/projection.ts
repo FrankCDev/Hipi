@@ -8,7 +8,7 @@ export function projectExecution(
 	view?: Pick<ConversationView, "conversation" | "entries">,
 ): ConversationExecution | undefined {
 	if (!live?.run) return undefined;
-	const run = projectRunAdmission(live);
+	const run = projectRunAdmission(live, view);
 	// Prove ownership and the COMPLETE ordered round before applying the presentation cap.
 	// Neither a matching call ID nor the latest assistant entry is sufficient evidence.
 	let anchors: NonNullable<ExecutionTool["anchor"]>[] | undefined;

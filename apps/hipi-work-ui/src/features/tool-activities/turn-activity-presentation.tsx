@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ChevronRight, Puzzle } from "lucide-react";
+import { ChevronRight, File, Folder, Pencil, Puzzle } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { useReducedMotionPreference } from "../../app/theme/use-reduced-motion.ts";
@@ -24,6 +24,7 @@ export function ActivityDisclosure({
 	active = false,
 	bodyVariant = "default",
 	children,
+	toolName,
 }: {
 	title: string;
 	count: number;
@@ -34,9 +35,18 @@ export function ActivityDisclosure({
 	active?: boolean;
 	bodyVariant?: "default" | "grouped";
 	children: ReactNode;
+	toolName?: string;
 }) {
 	const reducedMotion = useReducedMotionPreference();
 	const bodyId = useId();
+	const ToolIcon =
+		toolName === "hipi_files_save"
+			? Pencil
+			: toolName === "hipi_files_list"
+				? Folder
+				: toolName === "hipi_files_read"
+					? File
+					: Puzzle;
 	return (
 		<div className="inline-activity" data-activity-message-id={messageId} data-preserve-turn-viewport="">
 			<button
@@ -47,12 +57,12 @@ export function ActivityDisclosure({
 				onClick={onToggle}
 			>
 				<span className="activity-disclosure-heading">
-					<Puzzle aria-hidden="true" />
+					<ToolIcon aria-hidden="true" />
 					<span className="activity-disclosure-summary">
 						<CadencedText active={active}>{title}</CadencedText>
 					</span>
 				</span>
-				{count > 1 && <span className="inline-activity-count">{count}</span>}
+				{count > 1 && ToolIcon === Puzzle && <span className="inline-activity-count">{count}</span>}
 				{status && <span className="inline-activity-phase">{status}</span>}
 				<ChevronRight className="activity-disclosure-chevron" aria-hidden="true" />
 			</button>

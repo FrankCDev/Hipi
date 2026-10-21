@@ -89,7 +89,7 @@ export class FileWorkspaceSession {
 			// Only presentation state is evicted; tab contents and revisions are never evicted.
 			const oldest = this.trees.keys().next().value;
 			if (this.trees.size >= 64 && oldest !== undefined) this.trees.delete(oldest);
-			memory = { expanded: [""], cursors: {}, scrollTop: 0 };
+			memory = { expanded: [""], scrollTop: 0 };
 			this.trees.set(key, memory);
 		}
 		return memory;

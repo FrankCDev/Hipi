@@ -61,7 +61,13 @@ async function render(source: string, options: Partial<ComponentProps<typeof Mes
 }
 async function arrive(source: string) {
 	await render(source);
-	await act(async () => vi.advanceTimersByTimeAsync(400));
+	// Drain adaptive text buffering without assuming every arrival finishes in 400 ms.
+	// These tests explicitly settle CSS animation events; advancing timers alone must
+	// not settle or recreate earlier word/structure decorations.
+	for (let step = 0; step < 200 && vi.getTimerCount() > 0; step++) {
+		await act(async () => vi.advanceTimersToNextTimerAsync());
+	}
+	assert.equal(vi.getTimerCount(), 0, "the bounded arrival finishes without a timer leak");
 }
 function word(text: string) {
 	const result = [...host.querySelectorAll("span")].find((span) => span.textContent === text);
@@ -299,6 +305,25 @@ test("task marker has its own text-duration clock, not the ordinary list marker 
 	assert.equal(first.querySelector(".markdown-task-marker"), marker);
 	assert.equal(marker.className, "markdown-task-marker");
 	assert.ok(host.querySelectorAll(".markdown-task-marker")[2]?.classList.contains("markdown-task-reveal"));
+});
+
+test("split list syntax decorates the new parser row and later checkbox without replaying the row", async () => {
+	await render("- First item");
+	const first = host.querySelector("li");
+	assert.ok(first);
+	await arrive("- First item\n-");
+	assert.equal(host.querySelectorAll("li").length, 1, "repaired marker text is not an already visible row");
+	await arrive("- First item\n- [x");
+	const second = host.querySelectorAll("li")[1];
+	assert.ok(second?.classList.contains("markdown-structure-reveal"));
+	assert.equal(second.querySelector('[role="checkbox"]'), null);
+	await finish(second, "markdown-structure-reveal");
+	await arrive("- First item\n- [x] Another");
+	assert.equal(host.querySelector("li"), first);
+	assert.equal(host.querySelectorAll("li")[1], second);
+	assert.ok(!second.classList.contains("markdown-structure-reveal"));
+	assert.ok(!second.classList.contains("markdown-marker-reveal"));
+	assert.ok(second.querySelector(".markdown-task-marker")?.classList.contains("markdown-task-reveal"));
 });
 
 test("quote, rule and table rows reveal once without remounting earlier rows during append", async () => {

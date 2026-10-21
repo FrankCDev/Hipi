@@ -17,7 +17,7 @@ const input: Params<"reorderSidebarPin"> = {
 	before: { kind: "conversation", workspaceId: "execution", conversationId: "chat" },
 	expectedOrderRevision: 7,
 };
-const current = { items: [], nextCursor: null, nextPinKey: null, orderRevision: 12 };
+const current = { items: [], previousCursor: null, nextCursor: null, nextPinKey: null, orderRevision: 12 };
 function fixture(local = new LocalState()) {
 	const calls: { method: Method; params: unknown }[] = [];
 	let handler: (method: Method, params: unknown) => Promise<unknown> = async (method) => {

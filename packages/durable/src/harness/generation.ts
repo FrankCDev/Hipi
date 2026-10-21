@@ -12,7 +12,7 @@ import type {
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { isRetryableAssistantError, retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.ts";
+import { AssistantEntry, ResetEntry, type RunInputRefs, SystemEntry, UserEntry } from "../entries.ts";
 import type { ExecutionEnv } from "../env/index.ts";
 import { defineTask } from "../tasks.ts";
 import type {
@@ -34,6 +34,7 @@ import { assignJson } from "./json.ts";
 import { endRun, LiveDoc, type LiveState, type ToolSlot } from "./live.ts";
 import { planSystemEntries, renderSections, replaySections } from "./prompt.ts";
 import { ensureProviderSessionId } from "./provider.ts";
+import { boundedRunInputRefs, mergeRunInputRefs } from "./run-inputs.ts";
 import { appendToolResult, harnessError, ToolTask, type ToolTaskResult } from "./tool.ts";
 import type {
 	AfterFailedRun,
@@ -428,8 +429,8 @@ async function endFailedRun(
 	});
 	if (failure.policy === "withdraw") await withdrawQueuedInputs(tx, conversationId, "run_failed");
 	if (failure.boundary === undefined) return;
-	const { users } = await applyBoundary(tx, failure.boundary, "final", runtime.now());
-	if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
+	const { users, inputRefs } = await applyBoundary(tx, failure.boundary, "final", runtime.now());
+	if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now(), inputRefs);
 }
 
 /**
@@ -637,7 +638,7 @@ async function answer(runtime: Runtime, message: AssistantMessage, context: Cont
 			live.run?.taskId === runtime.taskId ? live.run.group?.id : undefined,
 		);
 		const result: Next = { status: "terminal", outcome: { status: "completed", result: { entryId: entry.id } } };
-		const { users, reset } = await applyBoundary(tx, boundary, "final", runtime.now());
+		const { users, inputRefs, reset } = await applyBoundary(tx, boundary, "final", runtime.now());
 		if (continuation !== undefined && users.length === 0 && !reset) {
 			const user = { role: "user", content: continuation, timestamp: runtime.now() } as const;
 			await tx.appendEntry(UserEntry, conversationId, {
@@ -662,7 +663,7 @@ async function answer(runtime: Runtime, message: AssistantMessage, context: Cont
 				answerRequestStartedAt: message.timestamp,
 			},
 		);
-		if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
+		if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now(), inputRefs);
 		return result;
 	}, context);
 }
@@ -770,7 +771,7 @@ async function finishToolRound(
 				const entry = await tx.appendEntry(ResetEntry, conversationId, { head: "self", model: [message] });
 				boundary.head = entry.id;
 			}
-			const { users } = await applyBoundary(tx, boundary, "final", now);
+			const { users, inputRefs } = await applyBoundary(tx, boundary, "final", now);
 			await endRun(
 				tx,
 				live,
@@ -782,9 +783,9 @@ async function finishToolRound(
 					terminalCause: handoff === undefined ? "tool-terminate" : "tool-handoff",
 				},
 			);
-			if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
+			if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now(), inputRefs);
 		} else {
-			const { users, reset } = await applyBoundary(tx, boundary, "postTools", now);
+			const { users, inputRefs, reset } = await applyBoundary(tx, boundary, "postTools", now);
 			if (reset) {
 				// The queued reset cut the run's context before an answer.
 				await endRun(
@@ -794,11 +795,18 @@ async function finishToolRound(
 					{ status: "unanswered", reason: "reset" },
 					{ conversationId, settledAt: now, terminalCause: "unanswered" },
 				);
-				if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now());
+				if (users.length > 0) await startRun(tx, conversationId, live, users, runtime.now(), inputRefs);
 			} else {
 				delete live.tools;
 				delete live.nestedTools;
-				if (live.run?.taskId === runtime.taskId) live.run.inputs.push(...users);
+				if (live.run?.taskId === runtime.taskId) {
+					if (live.run.group) {
+						const refs = mergeRunInputRefs(live.run.group.inputRefs, live.run.inputs.length, inputRefs);
+						if (refs) live.run.group.inputRefs = refs;
+						else delete live.run.group.inputRefs;
+					}
+					live.run.inputs.push(...users);
+				}
 				handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
 			}
 		}
@@ -830,12 +838,16 @@ export async function startRun(
 	live: Draft<LiveState>,
 	inputs: SubmissionId[],
 	admittedAt: number,
+	inputRefs: RunInputRefs,
 ): Promise<void> {
 	const taskId = await createGeneration(tx, conversationId);
+	const refs = boundedRunInputRefs(inputRefs, inputs.length);
 	live.run = {
 		taskId,
 		inputs,
-		...(Number.isFinite(admittedAt) && admittedAt >= 0 ? { group: { id: taskId, admittedAt } } : {}),
+		...(Number.isFinite(admittedAt) && admittedAt >= 0
+			? { group: { id: taskId, admittedAt, ...(refs === undefined ? {} : { inputRefs: refs }) } }
+			: {}),
 	};
 }
 

@@ -12,8 +12,15 @@ import {
 	type MessageToolCalls,
 	type Scope,
 } from "./contracts.ts";
+import { projectPublicBlocks } from "./messages/public-block-projection.ts";
 import { RUN_LIMITS, type RunResults, runResultsBytes } from "./runs/contracts.ts";
-import { projectMessageRunId, projectRunResult, responseMessageId } from "./runs/projection.ts";
+import {
+	projectMessageRunId,
+	projectRunResult,
+	recordedInputRefs,
+	responseMessageId,
+	verifiedInputRefs,
+} from "./runs/projection.ts";
 
 /** Offsets and lengths use UTF-16 code units; boundaries never split a surrogate pair. */
 export function textOf(message: PiMessage): string {
@@ -62,6 +69,7 @@ export function previewMessage(entry: EntryRecord, index: number): Message | und
 		text: text.slice(0, end),
 		textLength: text.length,
 		truncated: end < text.length,
+		publicBlocks: projectPublicBlocks(message, text, toolCalls),
 		...(runId === undefined ? {} : { runId }),
 		...(toolCalls ? { toolCalls } : {}),
 		...(message.role === "assistant" && message.stopReason === "aborted" ? { interrupted: true as const } : {}),
@@ -150,9 +158,16 @@ export async function readHistory(
 	const terminals: EntryRecord[] = [];
 	const finish = async (nextCursor: string | null): Promise<HistoryPage> => {
 		const runResults: RunResults = { items: [], omitted: false };
-		const answers = new Map(page.items.map((entry) => [Number(entry.id), entry]));
+		const entries = new Map(page.items.map((entry) => [Number(entry.id), entry]));
 		const attempted = new Set<number>();
-		let lookups = 0;
+		const lookup = async (id: number) => {
+			if (id > position.fence || entries.has(id) || attempted.has(id) || attempted.size >= RUN_LIMITS.entryLookups)
+				return;
+			attempted.add(id);
+			const entry = await visibleEntry(conversation, id);
+			if (entry) entries.set(id, entry);
+		};
+		const candidates = [];
 		for (const terminal of terminals) {
 			const projected = projectRunResult(terminal);
 			if (!projected) {
@@ -160,15 +175,23 @@ export async function readHistory(
 				continue;
 			}
 			const { result, answerId } = projected;
+			candidates.push({ terminal, result });
 			if (result.terminalCause === "response" && answerId !== undefined && answerId <= position.fence) {
-				if (!answers.has(answerId) && !attempted.has(answerId) && lookups < RUN_LIMITS.answerLookups) {
-					lookups++;
-					attempted.add(answerId);
-					const answer = await visibleEntry(conversation, answerId);
-					if (answer) answers.set(answerId, answer);
-				}
-				const response = responseMessageId(terminal, result, answers.get(answerId));
+				await lookup(answerId);
+				const response = responseMessageId(terminal, result, entries.get(answerId));
 				if (response) result.responseMessageId = response;
+			}
+		}
+		// Answer proof gets the first share of the ONE page-wide exact-read budget.
+		for (const { terminal, result } of candidates) {
+			const data = terminal.data;
+			const refs = recordedInputRefs(
+				data && typeof data === "object" && !Array.isArray(data) ? data.inputRefs : undefined,
+				terminal.id,
+			);
+			if (refs) {
+				for (const id of refs.entryIds) await lookup(Number(id));
+				result.inputRefs = verifiedInputRefs(refs, terminal.conversationId, entries);
 			}
 			if (
 				runResults.items.length < RUN_LIMITS.results &&

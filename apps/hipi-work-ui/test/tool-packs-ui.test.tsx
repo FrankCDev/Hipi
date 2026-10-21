@@ -34,6 +34,7 @@ test("the workbench entry is a compact official dialog trigger, with no eager ca
 		<PreferencesProvider>
 			<AppClientProvider client={client}>
 				<ToolPacksDialog
+					connected
 					workspaceId="workspace"
 					conversation={{
 						workspaceId: "workspace",

@@ -1305,7 +1305,7 @@ test("completion gate requires every first-run, native-picker and cold-restart o
 			"docxPreview",
 			"xlsxPreview",
 			"xlsxSavedValues",
-			"xlsxPagination",
+			"xlsxContinuousSheets",
 			"pdfPreview",
 			"pdfZoom",
 			"pdfReopenResetsZoom",

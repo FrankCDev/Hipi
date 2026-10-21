@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import { type AppClient, type Conversation, type Method, type Params, parseResult } from "@hipi/work-runtime/contracts";
+import {
+	type AgentContext,
+	type AppClient,
+	type Conversation,
+	type Method,
+	type Params,
+	parseResult,
+} from "@hipi/work-runtime/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -11,6 +18,7 @@ import { ToolPackSession } from "../src/features/tool-packs/session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 
 const queries = vi.hoisted(() => new Map<string, boolean>());
+const projectFixture = vi.hoisted(() => ({ available: false, failed: false }));
 vi.mock("@tanstack/react-query", () => ({
 	useQuery: ({ queryKey, enabled }: { queryKey: string[]; enabled: boolean }) => {
 		queries.set(queryKey[0] ?? "", enabled);
@@ -23,8 +31,10 @@ vi.mock("@tanstack/react-query", () => ({
 						]
 					: queryKey[0] === "tool-pack-model"
 						? { model }
-						: undefined,
-			isError: false,
+						: queryKey[0] === "projectFolder" && projectFixture.available
+							? { status: "available", root: { rootId: "root" } }
+							: undefined,
+			isError: queryKey[0] === "projectFolder" && projectFixture.failed,
 			isFetching: false,
 			isPending: false,
 			refetch: async () => {},
@@ -47,11 +57,17 @@ const conversation: Conversation = {
 };
 const model = { provider: "faux", modelId: "fixed-model" };
 let local = new LocalState();
+let contexts: AgentContext[] = [];
+let contextReadFailed = false;
 const calls: { method: Method; params: unknown }[] = [];
 const client: AppClient = {
 	call: async <M extends Method>(method: M, params: Params<M>) => {
 		calls.push({ method, params });
-		if (method === "listActiveAgentContexts" || method === "listActiveToolPackBindings") return parseResult(method, []);
+		if (method === "listActiveAgentContexts") {
+			if (contextReadFailed) throw new Error("READ_FAILED");
+			return parseResult(method, contexts);
+		}
+		if (method === "listActiveToolPackBindings") return parseResult(method, []);
 		if (method === "listPendingToolApprovals" || method === "listToolPacks")
 			return parseResult(method, { items: [], nextCursor: null });
 		if (method === "getAgentCommandResult") return parseResult(method, null);
@@ -116,6 +132,10 @@ beforeEach(() => {
 	);
 	Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: () => {} });
 	queries.clear();
+	projectFixture.available = false;
+	projectFixture.failed = false;
+	contexts = [];
+	contextReadFailed = false;
 	permissionActivation.mockClear();
 	packOwnership.mockClear();
 	calls.length = 0;
@@ -261,5 +281,113 @@ test("direct file consent remains unavailable without a ready connection, model 
 		await click(trigger);
 		assert.equal(document.querySelector(".context-consent-dialog"), null);
 	}
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("stale project-folder data after a failed host read does not assert unshared project status", async () => {
+	projectFixture.available = true;
+	projectFixture.failed = true;
+	await drive();
+	await click(find(".capabilities-trigger"));
+	assert.equal(document.querySelector(".project-context-notice"), null);
+	assert.ok(find('button[aria-haspopup="dialog"]', find(".conversation-options-dialog")));
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("ordinary unshared project stays out of the composer and retains explicit consent in management", async () => {
+	projectFixture.available = true;
+	await drive();
+	assert.equal(host.querySelector(".project-context-notice"), null);
+	assert.equal(host.querySelector(".permission-attention")?.childElementCount, 0);
+	const trigger = find(".permission-mode-trigger");
+	assert.equal(trigger.hasAttribute("title"), false);
+	assert.equal(trigger.hasAttribute("data-action-tooltip-trigger"), true);
+	assert.equal(trigger.querySelectorAll("svg").length, 1, "Management retains its shield, not a fake mode chevron");
+	await click(find(".capabilities-trigger"));
+	const management = find<HTMLElement>(".conversation-options-dialog");
+	const notice = find<HTMLElement>(".project-context-notice", management);
+	assert.ok(notice.textContent?.includes("Project files are not shared with this chat"));
+	await click(find("button", notice));
+	assert.ok(find(".context-consent-dialog"));
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("only an active unexpired grant for this model and root removes the unshared management state", async () => {
+	projectFixture.available = true;
+	const grant: AgentContext = {
+		workspaceId: conversation.workspaceId,
+		conversationId: conversation.conversationId,
+		grantId: "grant",
+		requestId: "grant-request",
+		purpose: "live-files",
+		rootId: "root",
+		pathPrefixes: [""],
+		model,
+		expiresAt: Date.now() + 60000,
+		disclosureVersion: 1,
+		status: "active",
+		revision: 1,
+	};
+	// Contract values are checked by parseResult in the injected client, not inferred from assistant text.
+	contexts = [grant];
+	const { session } = await drive();
+	await click(find(".capabilities-trigger"));
+	assert.equal(document.querySelector(".project-context-notice"), null);
+	for (const changed of [
+		{ ...grant, rootId: "other" },
+		{ ...grant, model: { ...model, modelId: "different-model" } },
+		{ ...grant, expiresAt: 1 },
+	]) {
+		contexts = [changed];
+		await act(async () => session.refresh());
+		assert.ok(document.querySelector(".project-context-notice"));
+		assert.equal(host.querySelector(".project-context-notice"), null);
+	}
+	// Revoked grants disappear from the active endpoint; non-active values are contract errors.
+	contexts = [];
+	await act(async () => session.refresh());
+	assert.ok(document.querySelector(".project-context-notice"));
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("unverified permission reads and offline state never claim project files are unshared", async () => {
+	projectFixture.available = true;
+	contextReadFailed = true;
+	await drive();
+	assert.ok(host.textContent?.includes(permissionLabels("en")["permissions.action.failed"]));
+	assert.equal(host.querySelector(".project-context-notice"), null);
+	await click(find(".capabilities-trigger"));
+	assert.equal(document.querySelector(".project-context-notice"), null);
+	await closeDialog(".conversation-options-dialog");
+	await drive(conversation, false);
+	await click(find(".capabilities-trigger"));
+	assert.equal(document.querySelector(".project-context-notice"), null);
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("plus hover uses the shared tooltip and opening consent retires it through returned focus", async () => {
+	await drive();
+	const plus = find(".composer-add-trigger");
+	assert.equal(plus.hasAttribute("title"), false);
+	assert.equal(plus.querySelector("svg")?.getAttribute("width"), "16");
+	await act(async () => {
+		plus.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+	});
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 220)));
+	assert.equal(document.querySelector('[role="tooltip"]')?.textContent, "Add files and tools");
+	assert.equal(plus.getAttribute("data-state"), "closed", "Tooltip state must not replace menu state");
+	await act(async () => {
+		plus.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }));
+	});
+	assert.ok(document.querySelector('[role="menu"]'));
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	await click(find(".capability-context-trigger"));
+	assert.ok(document.querySelector(".context-consent-dialog"));
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	await closeDialog(".context-consent-dialog");
+	assert.equal(document.activeElement, plus);
+	await act(async () => new Promise((resolve) => setTimeout(resolve, 220)));
+	assert.equal(document.querySelector('[role="tooltip"]'), null, "Restored pointer focus is not a new hover");
+	assert.equal(find(".composer-add-trigger"), plus);
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });

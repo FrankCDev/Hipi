@@ -39,9 +39,14 @@ export type RunTerminalCause = "response" | "tool-terminate" | "tool-handoff" | 
 /** Known built-in codes safe to duplicate into observational transcript metadata. */
 export type RunUnansweredReason = "aborted" | "reset" | "faulted" | "model_error" | "no_model";
 
+/** Bounded prefix of admitted input placements, not proof of a complete transcript turn. */
+export type RunInputRefs = { entryIds: EntryId[]; total: number; omitted: boolean };
+
 /** Bounded observational run facts. Times are wall-clock samples, not active execution durations. */
 export type RunResult = {
 	runId: TaskId;
+	/** Absent on older writers; synthetic onYield users are not admitted inputs. */
+	inputRefs?: RunInputRefs;
 	admittedAt: number;
 	settledAt: number;
 	terminalCause: RunTerminalCause;

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import type { AppClient, Conversation, SidebarPage } from "@hipi/work-runtime/contracts";
+import type { AppClient, Conversation, SidebarPage, SidebarWindowResult } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -130,6 +130,27 @@ async function openMenu() {
 	await settle(0);
 	assert.ok(document.querySelector("[role='menu']"));
 }
+function viewport(region: HTMLElement) {
+	const rect = (top: number, height = 0) => new DOMRect(0, top, 100, height);
+	vi.spyOn(region, "getBoundingClientRect").mockImplementation(() => rect(0, 100));
+	vi.spyOn(region, "getClientRects").mockReturnValue({
+		0: rect(0, 100),
+		length: 1,
+		item: (index: number) => (index === 0 ? rect(0, 100) : null),
+		*[Symbol.iterator]() {
+			yield rect(0, 100);
+		},
+	});
+	const edge = region.querySelector<HTMLElement>("[data-catalog-boundary]");
+	assert.ok(edge);
+	let top = 150;
+	vi.spyOn(edge, "getBoundingClientRect").mockImplementation(() => rect(top));
+	return async (nextTop = 80) => {
+		top = nextTop;
+		region.dispatchEvent(new Event("scroll"));
+		await settle(40);
+	};
+}
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	// jsdom has no viewport scrolling; Radix focus restoration remains real.
@@ -251,27 +272,44 @@ test("real rename retains its draft and modal focus during exit, then releases t
 	assert.equal(document.activeElement, node(".project-toggle"));
 });
 
-test("a delayed actual last page cannot reclaim dirty editor focus after project collapse", async () => {
+test("a delayed viewport read is cancelled on project retirement and cannot reclaim dirty editor focus", async () => {
 	await act(async () => cache.setQueryData(key, { pages: [{ ...page, nextCursor: "last" }], cursors: [undefined] }));
 	await settle(0);
-	let finish: ((value: SidebarPage) => void) | undefined;
-	vi.mocked(client.call).mockImplementation(
-		(() =>
-			new Promise<SidebarPage>((resolve) => {
-				finish = resolve;
-			})) as AppClient["call"],
-	);
-	const more = node<HTMLButtonElement>(".project-pagination button");
-	await act(async () => {
-		more.focus();
-		more.click();
-	});
+	let finish: ((value: SidebarWindowResult) => void) | undefined;
+	let signal: AbortSignal | undefined;
+	vi.mocked(client.call).mockImplementation(((_method, _params, readSignal) => {
+		signal = readSignal;
+		return new Promise<SidebarWindowResult>((resolve) => {
+			finish = resolve;
+		});
+	}) as AppClient["call"]);
+	const demand = viewport(node(".project-conversations"));
+	await demand(150);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 0, "Offscreen continuation is not fetched");
+	await demand();
 	assert.ok(finish);
+	assert.deepEqual(vi.mocked(client.call).mock.calls[0]?.slice(0, 2), [
+		"listSidebarWindow",
+		{
+			view: { kind: "workspace", workspaceId: "workspace" },
+			filter: "active",
+			position: { kind: "continue", cursor: "last" },
+			retainedScopes: [{ workspaceId: "workspace", conversationId: "chat" }],
+		},
+	]);
+	assert.ok(signal);
+	assert.equal(signal.aborted, false);
+	const retained = cache.getQueryData(key);
 	await render(false);
 	const editor = node<HTMLTextAreaElement>("textarea");
 	await act(async () => editor.focus());
-	await act(async () => finish?.(page));
 	await settle();
+	assert.equal(signal.aborted, true);
+	await act(async () =>
+		finish?.({ ...page, kind: "window", previousCursor: "earlier", retained: { eligible: [], unavailable: [] } }),
+	);
+	await settle(0);
+	assert.deepEqual(cache.getQueryData(key), retained, "A cancelled late reply cannot replace the coherent window");
 	assert.equal(document.activeElement, editor);
 	assert.equal(editor.value, "Unsaved working draft");
 	assert.equal(document.querySelector(".project-pagination button"), null);
@@ -279,11 +317,12 @@ test("a delayed actual last page cannot reclaim dirty editor focus after project
 });
 
 for (const fence of ["inert", "hidden", "visible"] as const) {
-	test(`last-page callback respects ${fence} region when removed button leaves body focus`, async () => {
+	test(`last viewport callback never claims body focus in a ${fence} region`, async () => {
 		let finish: (() => void) | undefined;
 		const pending = new Promise<void>((resolve) => {
 			finish = resolve;
 		});
+		const requested = vi.fn();
 		function PaginationFixture({ closed }: { closed: boolean }) {
 			const list = useRef<HTMLElement>(null);
 			const [loading, setLoading] = useState(false);
@@ -296,23 +335,26 @@ for (const fence of ["inert", "hidden", "visible"] as const) {
 					inert={closed && fence === "inert"}
 					hidden={closed && fence === "hidden"}
 				>
+					<button type="button" data-catalog-key="row">
+						Existing row
+					</button>
 					<CatalogPagination
 						listRef={list}
 						pages={{
 							hasMore,
-							canRestart: false,
+							hasPrevious: false,
 							isFetching: loading,
-							isLoadingMore: loading,
 							isError: false,
-							windowed: false,
-							atLimit: false,
+							itemKeys: ["row"],
+							evictedKeys: () => [],
 							async loadMore() {
+								requested();
 								setLoading(true);
 								await pending;
 								setHasMore(false);
 								setLoading(false);
 							},
-							async restart() {},
+							async loadPrevious() {},
 						}}
 					/>
 				</section>
@@ -328,19 +370,67 @@ for (const fence of ["inert", "hidden", "visible"] as const) {
 			);
 		};
 		await paint(false);
-		const more = node<HTMLButtonElement>(".project-pagination button");
-		await act(async () => {
-			more.focus();
-			more.click();
-		});
+		const region = node("[data-pagination-region]");
+		const demand = viewport(region);
+		const row = node<HTMLButtonElement>("[data-catalog-key='row']");
+		await act(async () => row.focus());
+		await demand();
+		assert.equal(requested.mock.calls.length, 1);
+		assert.equal(document.activeElement, row, "Loading never moves focus from the real row");
 		await paint(true);
-		await act(async () => more.blur());
+		await act(async () => row.blur());
 		assert.equal(document.activeElement, document.body);
 		await act(async () => finish?.());
+		await demand();
+		assert.equal(requested.mock.calls.length, 1, "A settled terminal read cannot loop");
+		assert.equal(region.hasAttribute("inert"), fence === "inert");
+		assert.equal(region.hidden, fence === "hidden");
+		assert.deepEqual([...region.querySelectorAll("button")], [row], "Only the content row remains focusable");
 		assert.equal(document.querySelector(".project-pagination button"), null);
-		assert.equal(document.activeElement, fence === "visible" ? node("[data-pagination-region]") : document.body);
+		assert.equal(document.activeElement, document.body);
 	});
 }
+
+test("failed viewport continuation retains rows and dirty input until explicit error retry succeeds", async () => {
+	await act(async () => cache.setQueryData(key, { pages: [{ ...page, nextCursor: "last" }], cursors: [undefined] }));
+	await settle(0);
+	let failing = true;
+	vi.mocked(client.call).mockImplementation((async () => {
+		if (failing) throw new Error("Read unavailable");
+		return {
+			...page,
+			kind: "window",
+			items: [{ ...page.items[0], conversation: { ...conversation, conversationId: "last", title: "Last chat" } }],
+			previousCursor: "earlier",
+			retained: { eligible: [], unavailable: [] },
+		};
+	}) as AppClient["call"]);
+	const row = node(".conversation-link");
+	const editor = node<HTMLTextAreaElement>("textarea");
+	await act(async () => editor.focus());
+	const demand = viewport(node(".project-conversations"));
+	await demand();
+	assert.ok(node("[role='alert']"));
+	assert.equal(node(".conversation-link"), row);
+	assert.equal(document.activeElement, editor);
+	assert.equal(editor.value, "Unsaved working draft");
+	await demand();
+	assert.equal(vi.mocked(client.call).mock.calls.length, 1, "An error does not auto-retry from viewport demand");
+	failing = false;
+	await act(async () => node<HTMLButtonElement>("[role='alert'] button").click());
+	await settle(40);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 2);
+	assert.deepEqual(
+		vi.mocked(client.call).mock.calls[1]?.slice(0, 2),
+		vi.mocked(client.call).mock.calls[0]?.slice(0, 2),
+	);
+	assert.equal(document.querySelector("[role='alert']"), null);
+	assert.equal(node(".conversation-link"), row);
+	assert.match(host.textContent ?? "", /Last chat/);
+	assert.equal(document.activeElement, editor);
+	assert.equal(editor.value, "Unsaved working draft");
+	assert.equal(document.querySelector(".project-pagination button"), null);
+});
 
 test("live reduced-motion preference follows system changes and explicit on/off overrides", async () => {
 	let system = false;

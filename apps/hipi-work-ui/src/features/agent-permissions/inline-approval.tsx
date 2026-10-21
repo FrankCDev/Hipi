@@ -5,11 +5,11 @@ import { matchesExecutionApproval } from "./approval-correlation.ts";
 import { usePermissionOwner } from "./permission-provider.tsx";
 import { MAX_UNRESOLVED_OPERATIONS } from "./permission-session.ts";
 
-export function InlineApproval({ snapshot, active }: { snapshot: Snapshot; active: boolean }) {
+/** The same eligibility controls the card and suppresses redundant waiting copy. */
+export function useInlineApprovalPresentation(snapshot: Snapshot | undefined, active: boolean) {
 	const owner = usePermissionOwner();
-	const { locale } = usePreferences();
-	if (!owner || !active || !snapshot.running || !owner.connected || !owner.visible) return null;
-	const { state, session, now } = owner;
+	if (!owner || !active || !snapshot?.running || !owner.connected || !owner.visible) return null;
+	const { state, now } = owner;
 	const approval = state.approval;
 	if (
 		owner.scope.workspaceId !== snapshot.workspaceId ||
@@ -17,6 +17,15 @@ export function InlineApproval({ snapshot, active }: { snapshot: Snapshot; activ
 		!matchesExecutionApproval(approval, snapshot, snapshot.execution, now)
 	)
 		return null;
+	return { owner, approval };
+}
+
+export function InlineApproval({ snapshot, active }: { snapshot: Snapshot; active: boolean }) {
+	const presentation = useInlineApprovalPresentation(snapshot, active);
+	const { locale } = usePreferences();
+	if (!presentation) return null;
+	const { owner, approval } = presentation;
+	const { state, session, now } = owner;
 	return (
 		<div data-preserve-turn-viewport="">
 			<ApprovalCard

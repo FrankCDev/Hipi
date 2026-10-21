@@ -24,6 +24,8 @@ import "./fixture.css";
 const total = 384;
 const initialStart = total - LIMITS.historyMessages;
 const emptyHistory = new URLSearchParams(location.search).has("empty");
+const retainedOriginal = new URLSearchParams(location.search).has("original");
+const foldedUser = new URLSearchParams(location.search).has("fold");
 const overlayFooter = new URLSearchParams(location.search).has("footer");
 const original = Array.from({ length: 480 }, (_, i) => `Original line ${i}: ${"abcdef0123456789 ".repeat(5)}`).join(
 	"\n",
@@ -31,23 +33,29 @@ const original = Array.from({ length: 480 }, (_, i) => `Original line ${i}: ${"a
 const source = (index: number) =>
 	`Message ${index}\n\n${"A wrapping paragraph 中文阅读位置. ".repeat(4 + (index % 5))}\n\n` +
 	`\`\`\`ts\n${Array.from({ length: 2 + (index % 4) }, (_, line) => `const item${line} = ${index};`).join("\n")}\n\`\`\``;
-function message(index: number): Message {
-	const truncated = index === total - 4;
-	const text = truncated ? "Bounded original preview. Open to read the authoritative text page." : source(index);
+function message(index: number, retained = retainedOriginal): Message {
+	const truncated = retained && index === total - 4;
+	const user = foldedUser && index === total - 5;
+	const text = truncated
+		? original.slice(0, LIMITS.messagePreview)
+		: user
+			? Array.from({ length: 40 }, (_, line) => `Folded user line ${line}`).join("\n\n")
+			: source(index);
 	return {
 		id: `m-${index}`,
-		role: "assistant",
+		role: user ? "user" : "assistant",
 		text,
 		textLength: truncated ? original.length : text.length,
 		truncated,
 	};
 }
-const initialMessages = Array.from({ length: LIMITS.historyMessages }, (_, i) => message(initialStart + i));
 const scope: Scope = { workspaceId: "fixture-workspace", conversationId: "fixture-a" };
 function initial(boundScope: Scope): Snapshot {
 	return parseSnapshot({
 		...boundScope,
-		messages: initialMessages,
+		messages: Array.from({ length: LIMITS.historyMessages }, (_, i) =>
+			message(initialStart + i, retainedOriginal && boundScope.conversationId === "fixture-a"),
+		),
 		partial: "",
 		partialLength: 0,
 		partialTruncated: false,

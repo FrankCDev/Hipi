@@ -28,9 +28,12 @@ export function constrainClippedControls(root: HTMLElement, bottom: number) {
 }
 
 /** Source and measured-line bounds are independent. Expanding never reads another message. */
-export function UserMessageContent({ source }: { source: string }) {
+export function UserMessageContent({ source, revealTarget }: { source: string; revealTarget?: string }) {
 	const { t } = usePreferences();
 	const [expanded, setExpanded] = useState(false);
+	useLayoutEffect(() => {
+		if (revealTarget !== undefined) setExpanded(true);
+	}, [revealTarget]);
 	const [overflow, setOverflow] = useState(source.length > USER_MESSAGE_COLLAPSED_UNITS);
 	const viewport = useRef<HTMLDivElement>(null);
 	const content = useRef<HTMLDivElement>(null);
@@ -88,7 +91,7 @@ export function UserMessageContent({ source }: { source: string }) {
 		<div className="user-message-surface">
 			<div className="user-message-fold" data-collapsed={overflow && !expanded} ref={viewport}>
 				<div ref={content} className="user-message-body">
-					<MessageMarkdown source={displayed} tone="user" />
+					<MessageMarkdown source={displayed} tone="user" trackSourceRanges={revealTarget !== undefined} />
 				</div>
 			</div>
 			{overflow && !expanded && (

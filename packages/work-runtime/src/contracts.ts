@@ -35,12 +35,20 @@ import {
 } from "./activities/contracts.ts";
 import { type FilePresentation, parseFilePresentation } from "./activities/file-presentation.ts";
 import { type ConversationExecution, parseExecution } from "./execution/contracts.ts";
+import { type MessagePublicBlocks, parseMessagePublicBlocks } from "./messages/public-blocks.ts";
 import { parseRunIdentifier, parseRunResults, type RunResults } from "./runs/contracts.ts";
 
 export type { FilePresentation } from "./activities/file-presentation.ts";
 export {
+	type MessagePublicBlock,
+	type MessagePublicBlocks,
+	PUBLIC_BLOCK_LIMITS,
+	parseMessagePublicBlocks,
+} from "./messages/public-blocks.ts";
+export {
 	RUN_LIMITS,
 	type RunAdmission,
+	type RunInputRefs,
 	type RunResultObservation,
 	type RunResults,
 	runWallElapsedMs,
@@ -147,7 +155,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -198,6 +206,7 @@ export type ConversationCommandResult = {
 export type ConversationPresentation = Scope & { revision: number; pinned: boolean };
 export type PinnedConversation = { conversation: Conversation; presentation: ConversationPresentation };
 export type PinnedConversationPage = Page<PinnedConversation> & {
+	previousCursor: string | null;
 	orderGeneration: number;
 	/** First canonical pin beyond this page, including pins not loaded by the client. */
 	nextPinnedScope: Scope | null;
@@ -325,6 +334,7 @@ export type Message = TextPreview & {
 	runId?: string;
 	role: "user" | "assistant";
 	toolCalls?: MessageToolCalls;
+	publicBlocks?: MessagePublicBlocks;
 	interrupted?: true;
 	/** Observer-local presentation continuity, never a history identifier or command authority. */
 	streamId?: string;
@@ -1017,7 +1027,18 @@ function parseMessageToolCalls(value: unknown): MessageToolCalls {
 }
 function parseMessage(value: unknown): Message {
 	const m = object(value);
-	fields(m, ["id", "role", "text", "textLength", "truncated", "interrupted", "streamId", "toolCalls", "runId"]);
+	fields(m, [
+		"id",
+		"role",
+		"text",
+		"textLength",
+		"truncated",
+		"interrupted",
+		"streamId",
+		"toolCalls",
+		"runId",
+		"publicBlocks",
+	]);
 	let runId: string | undefined;
 	if (m.runId !== undefined) {
 		try {
@@ -1031,7 +1052,7 @@ function parseMessage(value: unknown): Message {
 		throw new AppError("INVALID_REQUEST");
 	if (m.streamId !== undefined && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
 	if (m.role !== "user" && m.role !== "assistant") throw new AppError("INVALID_REQUEST");
-	return {
+	const result: Message = {
 		id: string(m.id, 256),
 		...(runId === undefined ? {} : { runId }),
 		role: m.role,
@@ -1040,6 +1061,14 @@ function parseMessage(value: unknown): Message {
 		...(m.interrupted === true ? { interrupted: true as const } : {}),
 		...(m.streamId === undefined ? {} : { streamId: streamIdentity(m.streamId) }),
 	};
+	if (m.publicBlocks !== undefined) {
+		try {
+			result.publicBlocks = parseMessagePublicBlocks(m.publicBlocks, result);
+		} catch {
+			throw new AppError("INVALID_REQUEST");
+		}
+	}
+	return result;
 }
 function streamIdentity(value: unknown): string {
 	const result = string(value, 36);
@@ -1903,7 +1932,7 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		}
 	} else if (method === "listPinnedConversations") {
 		const p = object(value);
-		fields(p, ["items", "nextCursor", "orderGeneration", "nextPinnedScope"]);
+		fields(p, ["items", "previousCursor", "nextCursor", "orderGeneration", "nextPinnedScope"]);
 		const page = parsePage(
 			{ items: p.items, nextCursor: p.nextCursor },
 			LIMITS.directoryPage,
@@ -1933,7 +1962,12 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 			)
 		)
 			throw new AppError("INVALID_REQUEST");
-		result = { ...page, orderGeneration: integer(p.orderGeneration), nextPinnedScope };
+		result = {
+			...page,
+			previousCursor: cursor(p.previousCursor),
+			orderGeneration: integer(p.orderGeneration),
+			nextPinnedScope,
+		};
 	} else if (method === "getConversationCommandResult") {
 		if (value === null) result = null;
 		else {

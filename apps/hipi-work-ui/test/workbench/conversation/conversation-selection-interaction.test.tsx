@@ -605,7 +605,7 @@ test("StrictMode effect replay retains the hydrated anchor and repositions its a
 	frame();
 	frame();
 	assert.equal(history.mount.querySelector(".message-scroll")?.getAttribute("data-reading-mode"), "search");
-	assert.equal(history.mount.querySelector(".search-match-text")?.textContent, "Second");
+	assert.equal(history.mount.querySelector("[data-search-match]")?.textContent, "Second");
 	assert.ok(history.mount.querySelector('[data-message-id="a"]'));
 	assert.ok(history.mount.querySelector('[data-message-id="b"]'));
 	assert.ok(

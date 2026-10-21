@@ -10,6 +10,7 @@ export function projectRunActivities(
 	choices: ReadonlyMap<string, boolean>,
 	protectedKeys: ReadonlySet<string>,
 	active: boolean,
+	retainCollapsedMembers = false,
 ): TranscriptRow[] {
 	if (!snapshot || snapshot.runResults?.omitted) return [...rows];
 	const results = new Map<string, RunResultObservation[]>();
@@ -70,7 +71,7 @@ export function projectRunActivities(
 		const index = entries[0]?.index ?? rows.findIndex((row) => row.kind === "assistant-stream");
 		if (index < 0) continue;
 		headers.set(index, { key, kind: "run-activity", activity });
-		if (!expanded) for (const member of members) hidden.add(member);
+		if (!expanded && !retainCollapsedMembers) for (const member of members) hidden.add(member);
 	}
 	return rows.flatMap((row, index) => {
 		const header = headers.get(index);

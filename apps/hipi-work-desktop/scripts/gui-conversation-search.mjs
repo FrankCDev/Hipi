@@ -13,6 +13,29 @@ export function assertSearchHit(hits, scope, messageId, phrase) {
 	assert.equal(hit.highlight, phrase);
 }
 
+export function searchBlockVisible(document, messageId, phrase) {
+	const rows = [...document.querySelectorAll("[data-message-id]")].filter((row) => row.dataset.messageId === messageId);
+	if (rows.length !== 1) return false;
+	const body = rows[0].querySelector('[data-message-document-complete="true"]');
+	const blocks = body?.querySelectorAll("[data-search-match][data-markdown-source-start][data-markdown-source-end]");
+	if (blocks?.length !== 1 || !blocks[0].textContent.includes(phrase)) return false;
+	const block = blocks[0];
+	const start = Number(block.dataset.markdownSourceStart),
+		end = Number(block.dataset.markdownSourceEnd);
+	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) return false;
+	const rect = block.getBoundingClientRect(),
+		host = document.querySelector(".message-scroll")?.getBoundingClientRect();
+	return (
+		!!host &&
+		rect.width > 0 &&
+		rect.height > 0 &&
+		rect.top >= host.top - 1 &&
+		rect.top < host.bottom &&
+		rect.left >= host.left - 1 &&
+		rect.right <= host.right + 1
+	);
+}
+
 export async function exerciseConversationSearch(cdp, directory, scope) {
 	for (const id of [scope.workspaceId, scope.conversationId]) assert.match(id, /^[A-Za-z0-9_-]{1,128}$/);
 	const phrase = "中文流式验证",
@@ -21,7 +44,7 @@ export async function exerciseConversationSearch(cdp, directory, scope) {
 	const read = (expression) => evaluate(cdp, expression);
 	const check = (expression, label) => until(() => read(expression), label);
 	const messageId = await read(
-		`(()=>{const rows=[...document.querySelectorAll('.virtual-message-row[data-message-id]')].filter(e=>e.querySelector('.message-user')&&e.textContent.includes(${JSON.stringify(phrase)}));return rows.length===1?rows[0].dataset.messageId:null})()`,
+		`(()=>{const rows=[...document.querySelectorAll('[data-message-id]')].filter(e=>e.querySelector('.message-user')&&e.textContent.includes(${JSON.stringify(phrase)}));return rows.length===1?rows[0].dataset.messageId:null})()`,
 	);
 	assert.match(messageId ?? "", /^[A-Za-z0-9_-]{1,128}$/, "Exact existing user message identity is required");
 	assert.equal(await read("document.querySelector('.composer textarea').value"), "");
@@ -29,12 +52,12 @@ export async function exerciseConversationSearch(cdp, directory, scope) {
 	await cdp.request("Input.insertText", { text: draft });
 	assert.equal(await read("document.querySelector('.composer textarea').value"), draft);
 	await read(
-		`void (window.__hipiSearchContinuity={projectIds:[...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId),opener:document.querySelector('.sidebar-search-trigger'),sidebar:document.querySelector('.sidebar'),main:document.querySelector('.main-shell'),panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),ids:[...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId)})`,
+		`void (window.__hipiSearchContinuity={projectIds:[...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId),opener:document.querySelector('.sidebar-search-trigger'),sidebar:document.querySelector('.sidebar'),main:document.querySelector('.main-shell'),panel:document.querySelector('.conversation-panel'),composer:document.querySelector('.composer textarea'),history:document.querySelector('.message-scroll'),ids:[...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId)})`,
 	);
 	const continuity = async (history = true) =>
 		assert.equal(
 			await read(
-				`(()=>{const b=window.__hipiSearchContinuity;return b.sidebar===document.querySelector('.sidebar')&&b.main===document.querySelector('.main-shell')&&b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===${JSON.stringify(draft)}&&JSON.stringify(b.projectIds)===JSON.stringify([...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId))&&${history ? "JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('.virtual-message-row[data-message-id]')].map(e=>e.dataset.messageId))" : "true"}})()`,
+				`(()=>{const b=window.__hipiSearchContinuity;return b.sidebar===document.querySelector('.sidebar')&&b.main===document.querySelector('.main-shell')&&b.panel===document.querySelector('.conversation-panel')&&b.composer===document.querySelector('.composer textarea')&&b.history===document.querySelector('.message-scroll')&&b.composer.value===${JSON.stringify(draft)}&&JSON.stringify(b.projectIds)===JSON.stringify([...document.querySelectorAll('.workspace-branch[data-workspace-id]')].map(e=>e.dataset.workspaceId))&&${history ? "JSON.stringify(b.ids)===JSON.stringify([...document.querySelectorAll('[data-message-id]')].map(e=>e.dataset.messageId))" : "true"}})()`,
 			),
 			true,
 			"Search must retain app owners, unsent draft and canonical history",
@@ -80,14 +103,14 @@ export async function exerciseConversationSearch(cdp, directory, scope) {
 			"actual result activation retains canonical conversation in anchored search mode",
 		);
 		await check(
-			`(()=>{const rows=[...document.querySelectorAll('.virtual-message-row[data-message-id]')].filter(e=>e.dataset.messageId===${JSON.stringify(messageId)});if(rows.length!==1)return false;const mark=rows[0].querySelector('.search-match-original mark[data-search-match]'),r=mark?.getBoundingClientRect(),h=document.querySelector('.message-scroll').getBoundingClientRect();return mark?.textContent===${JSON.stringify(phrase)}&&r.width>0&&r.height>0&&r.top>=h.top-1&&r.bottom<=h.bottom+1&&r.left>=h.left-1&&r.right<=h.right+1})()`,
-			"exact message anchor renders matched original text",
+			`(${searchBlockVisible.toString()})(document, ${JSON.stringify(messageId)}, ${JSON.stringify(phrase)})`,
+			"exact message source block contains the match and is positioned in the viewport",
 		);
 		await continuity(false);
 		await capture(cdp, directory, "conversation-content-search-anchor");
 		await click(cdp, ".jump-latest");
 		await check(
-			"document.querySelector('.message-scroll')?.dataset.readingMode==='live'&&!document.querySelector('.search-match-original')",
+			"document.querySelector('.message-scroll')?.dataset.readingMode==='live'&&!document.querySelector('[data-message-document-complete] [data-search-match]')",
 			"Jump to latest exits anchored reading mode",
 		);
 		await until(async () => {

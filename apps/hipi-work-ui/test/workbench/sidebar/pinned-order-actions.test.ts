@@ -14,6 +14,7 @@ function fixture(successor: Scope | null = { workspaceId: "unloaded", conversati
 	const page: PinnedConversationPage = {
 		items,
 		orderGeneration: 7,
+		previousCursor: null,
 		nextCursor: successor ? "cursor" : null,
 		nextPinnedScope: successor,
 	};

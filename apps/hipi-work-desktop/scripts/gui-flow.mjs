@@ -21,7 +21,6 @@ export const fixture = {
 const diagnosticLabels = [
 	"Close",
 	"Close activity",
-	"Refresh this page",
 	"View activity",
 	"Conversation details",
 	"Model status",
@@ -671,16 +670,20 @@ export async function activityEvidence(cdp) {
 		return {
 			failed: !!dialog.querySelector('[role="alert"]'),
 			loading: [...dialog.querySelectorAll('output')].some(e => e.textContent === 'Reading records…'),
-			section: paragraphs.find(t => t === 'Task-record section' || t === 'Retained-result section'),
-			empty: paragraphs.includes('No activity in this scanned page. More records may be available on the next page.')
+			continuousWindow: dialog.querySelectorAll('[data-activity-history-window]').length === 1,
+			empty: paragraphs.includes('No recorded tool activity.')
 		}; })()`,
 		);
 		if (!state) return;
 		assert.equal(state.failed, false, "Tool activity read failed");
-		if (state.loading || !state.section) return;
-		assert.equal(state.empty, true, "Deterministic no-tool fixture must have a confirmed empty activity page");
-		return { section: state.section, empty: true };
-	}, "successful tool activity page");
+		if (state.loading || !state.continuousWindow) return;
+		assert.equal(
+			state.empty,
+			true,
+			"Deterministic no-tool fixture must have a confirmed terminal empty activity window",
+		);
+		return { continuousWindow: true, empty: true };
+	}, "successful continuous tool activity window");
 }
 async function inspectActivities(cdp, directory, reopened) {
 	await click(cdp, 'button[aria-label="Conversation details"]');
@@ -701,7 +704,25 @@ async function inspectActivities(cdp, directory, reopened) {
 	);
 	await click(cdp, ".workbench-detail-dialog .activity-trigger");
 	await activityEvidence(cdp);
-	await click(cdp, `${selector} button`, "Refresh this page");
+	await click(cdp, `${selector} [data-activity-history-window]`);
+	for (const key of ["End", "Home"]) {
+		for (const type of ["keyDown", "keyUp"])
+			await cdp.request("Input.dispatchKeyEvent", {
+				type,
+				key,
+				code: key,
+				windowsVirtualKeyCode: key === "End" ? 35 : 36,
+			});
+		assert.equal(
+			await evaluate(
+				cdp,
+				`document.activeElement === document.querySelector(${JSON.stringify(`${selector} [data-activity-history-window]`)})`,
+			),
+			true,
+			"Continuous activity navigation retains the actual scroll-region focus",
+		);
+		await activityEvidence(cdp);
+	}
 	const evidence = await activityEvidence(cdp);
 	await capture(cdp, directory, reopened ? "activities-reopened" : "activities");
 	await click(cdp, `${selector} button`, "Close activity");

@@ -17,7 +17,16 @@ export type ConversationSearchState = {
 	refreshFailed: boolean;
 	nextCursor: string | null;
 	scanLimited: boolean;
+	hasPrevious: boolean;
 };
+
+// Result payloads are bounded independently of how far a search is explored.
+// Backward navigation replays opaque cursors, rather than retaining an unbounded
+// cursor/result ledger. Each demand performs at most one bounded scan batch.
+export const SEARCH_RESULT_WINDOW_PAGES = 8;
+const SEARCH_SCAN_BATCH = 16;
+type ResultPage = { nextCursor: string | null; ordinal: number; previous: boolean; items: ConversationSearchHit[] };
+type PreviousReplay = { cursor?: string; ordinal: number; target: number; candidate?: ResultPage };
 
 export function searchHitKey(hit: ConversationSearchHit) {
 	return JSON.stringify([
@@ -42,6 +51,7 @@ export class ConversationSearchController {
 		refreshFailed: false,
 		nextCursor: null,
 		scanLimited: false,
+		hasPrevious: false,
 	};
 	private readonly listeners = new Set<() => void>();
 	private queryRequest?: AbortController;
@@ -55,6 +65,9 @@ export class ConversationSearchController {
 	private composing = false;
 	private lastRefresh = 0;
 	private readonly seen = new Set<string>();
+	private pages: ResultPage[] = [];
+	private nextOrdinal = 0;
+	private previousReplay?: PreviousReplay;
 
 	constructor(privateClient: AppClient) {
 		this.client = privateClient;
@@ -78,6 +91,9 @@ export class ConversationSearchController {
 		clearTimeout(this.queryTimer);
 		clearTimeout(this.refreshTimer);
 		this.seen.clear();
+		this.pages = [];
+		this.nextOrdinal = 0;
+		this.previousReplay = undefined;
 		this.set({
 			query: value.trim(),
 			items: [],
@@ -86,6 +102,7 @@ export class ConversationSearchController {
 			loading: !!value.trim() && !composing,
 			failed: false,
 			scanLimited: false,
+			hasPrevious: false,
 		});
 		if (!this.active || composing || !value.trim()) return;
 		this.queryTimer = setTimeout(() => this.restart(), 180);
@@ -102,15 +119,32 @@ export class ConversationSearchController {
 		this.queryRequest = undefined;
 		this.seen.clear();
 		if (!this.active || this.composing || !this.state.query) return;
-		this.set({ items: [], queryGeneration: undefined, nextCursor: null, scanLimited: false, failed: false });
+		this.pages = [];
+		this.nextOrdinal = 0;
+		this.previousReplay = undefined;
+		// Keep the current view during index checkpoints; swap only after the
+		// replacement read arrives, rather than flashing an empty list.
+		this.set({ nextCursor: null, scanLimited: false, failed: false, hasPrevious: false });
 		this.load();
 	};
 
 	loadMore = () => {
-		if (this.state.nextCursor && !this.queryRequest) {
+		if (this.active && !this.composing && this.state.nextCursor && !this.queryRequest) {
+			this.previousReplay = undefined;
 			this.set({ failed: false, scanLimited: false });
 			this.load(this.state.nextCursor);
 		}
+	};
+
+	loadPrevious = () => {
+		if (!this.active || this.composing || !this.state.hasPrevious || this.queryRequest) return;
+		const first = this.pages[0];
+		if (!first) return;
+		this.previousReplay ??= { ordinal: 0, target: first.ordinal };
+		const request = new AbortController();
+		this.queryRequest = request;
+		this.set({ loading: true, failed: false, scanLimited: false });
+		void this.replayPrevious(request, this.previousReplay);
 	};
 
 	refresh = () => {
@@ -134,6 +168,9 @@ export class ConversationSearchController {
 		clearTimeout(this.yieldTimer);
 		this.resolveYield?.();
 		this.resolveYield = undefined;
+		this.previousReplay = undefined;
+		this.pages = [];
+		this.seen.clear();
 	}
 
 	private async buildIndex(request: AbortController) {
@@ -205,7 +242,7 @@ export class ConversationSearchController {
 		let cursor = initialCursor;
 		let restarted = false;
 		try {
-			for (let pageCount = 0; pageCount < 16; pageCount++) {
+			for (let pageCount = 0; pageCount < SEARCH_SCAN_BATCH; pageCount++) {
 				let page: ConversationSearchPage;
 				try {
 					page = await this.client.call(
@@ -220,7 +257,10 @@ export class ConversationSearchController {
 						cursor = undefined;
 						pageCount = -1;
 						this.seen.clear();
-						this.set({ items: [], queryGeneration: undefined, nextCursor: null });
+						this.pages = [];
+						this.nextOrdinal = 0;
+						this.previousReplay = undefined;
+						this.set({ items: [], queryGeneration: undefined, nextCursor: null, hasPrevious: false });
 						continue;
 					}
 					throw error;
@@ -228,21 +268,96 @@ export class ConversationSearchController {
 				if (!this.active || this.queryRequest !== request) return;
 				if (page.nextCursor && (page.nextCursor === cursor || this.seen.has(page.nextCursor)))
 					throw new AppError("INVALID_REQUEST");
-				const items = new Map(this.state.items.map((hit) => [searchHitKey(hit), hit]));
-				for (const hit of page.items) items.set(searchHitKey(hit), hit);
+				if (this.pages.length && page.index.generation !== this.state.queryGeneration)
+					throw new AppError("CURSOR_STALE");
+				if (page.items.length) {
+					this.pages.push({
+						nextCursor: page.nextCursor,
+						ordinal: this.nextOrdinal,
+						previous: this.pages.length > 0,
+						items: page.items,
+					});
+					if (this.pages.length > SEARCH_RESULT_WINDOW_PAGES) this.pages.shift();
+				}
+				this.nextOrdinal++;
 				this.set({
-					items: [...items.values()],
+					items: page.items.length || !this.pages.length ? this.windowItems() : this.state.items,
+					hasPrevious: this.pages[0]?.previous ?? false,
 					index: this.refreshRequest ? (this.state.index ?? page.index) : page.index,
 					queryGeneration: page.index.generation,
 					nextCursor: page.nextCursor,
 				});
 				if (cursor) this.seen.add(cursor);
+				// A bounded recent ledger catches immediate/cyclic server cursors;
+				// the scan budget also prevents a long cycle from becoming a hot loop.
+				if (this.seen.size > SEARCH_SCAN_BATCH * SEARCH_RESULT_WINDOW_PAGES)
+					this.seen.delete(this.seen.values().next().value ?? "");
 				if (page.items.length || !page.nextCursor) return;
 				cursor = page.nextCursor;
 			}
 			this.set({ scanLimited: true });
 		} catch {
 			if (this.active && this.queryRequest === request) this.set({ failed: true });
+		} finally {
+			if (this.active && this.queryRequest === request) {
+				this.queryRequest = undefined;
+				this.set({ loading: false });
+			}
+		}
+	}
+
+	private windowItems() {
+		return [...new Map(this.pages.flatMap((page) => page.items).map((hit) => [searchHitKey(hit), hit])).values()];
+	}
+
+	private async replayPrevious(request: AbortController, replay: PreviousReplay) {
+		const seen = new Set<string>();
+		try {
+			for (let count = 0; count < SEARCH_SCAN_BATCH && replay.ordinal < replay.target; count++) {
+				const cursor = replay.cursor;
+				const page = await this.client.call(
+					"searchConversations",
+					{ query: this.state.query, ...(cursor ? { cursor } : {}) },
+					request.signal,
+				);
+				if (!this.active || this.queryRequest !== request) return;
+				if (page.index.generation !== this.state.queryGeneration) throw new AppError("CURSOR_STALE");
+				if (page.nextCursor && (page.nextCursor === cursor || seen.has(page.nextCursor)))
+					throw new AppError("INVALID_REQUEST");
+				if (cursor) seen.add(cursor);
+				if (page.items.length)
+					replay.candidate = {
+						nextCursor: page.nextCursor,
+						ordinal: replay.ordinal,
+						previous: !!replay.candidate,
+						items: page.items,
+					};
+				replay.ordinal++;
+				replay.cursor = page.nextCursor ?? undefined;
+				if (!page.nextCursor && replay.ordinal < replay.target) throw new AppError("CURSOR_STALE");
+			}
+			if (replay.ordinal < replay.target) {
+				this.set({ scanLimited: true });
+				return;
+			}
+			if (replay.candidate) {
+				this.pages.unshift(replay.candidate);
+				if (this.pages.length > SEARCH_RESULT_WINDOW_PAGES) this.pages.pop();
+				const last = this.pages.at(-1);
+				this.nextOrdinal = (last?.ordinal ?? -1) + 1;
+				this.seen.clear();
+				this.set({ items: this.windowItems(), nextCursor: last?.nextCursor ?? null });
+			}
+			this.previousReplay = undefined;
+			this.set({ hasPrevious: replay.candidate?.previous ?? false });
+		} catch (error) {
+			if (this.active && this.queryRequest === request) {
+				if (error instanceof AppError && error.code === "CURSOR_STALE") {
+					this.restart();
+					return;
+				}
+				this.set({ failed: true });
+			}
 		} finally {
 			if (this.active && this.queryRequest === request) {
 				this.queryRequest = undefined;

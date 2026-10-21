@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient, useLocalState } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
+import { ManagementList } from "../../components/management-list/management-list.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
@@ -23,11 +24,13 @@ export function ToolPacksPanel({
 	workspaceId,
 	conversation,
 	active,
+	connected,
 	children,
 }: {
 	workspaceId: string;
 	conversation?: Conversation;
 	active: boolean;
+	connected: boolean;
 	children: (content: ReactNode) => ReactNode;
 }) {
 	const client = useAppClient();
@@ -39,6 +42,16 @@ export function ToolPacksPanel({
 		[client, local, workspaceId, conversation?.conversationId],
 	);
 	const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot);
+	const packs = useSyncExternalStore(
+		session.packList.subscribe,
+		session.packList.getSnapshot,
+		session.packList.getSnapshot,
+	);
+	const bindings = useSyncExternalStore(
+		session.bindingList.subscribe,
+		session.bindingList.getSnapshot,
+		session.bindingList.getSnapshot,
+	);
 	const [text, setText] = useState("");
 	const [invalid, setInvalid] = useState(false);
 	const [reading, setReading] = useState(false);
@@ -54,7 +67,7 @@ export function ToolPacksPanel({
 		queryKey: ["tool-pack-model", workspaceId, conversation?.conversationId],
 		queryFn: ({ signal }) =>
 			client.call("getConversationModel", { workspaceId, conversationId: conversation?.conversationId ?? "" }, signal),
-		enabled: active && !!conversation,
+		enabled: active && connected && !!conversation,
 		retry: false,
 	});
 	const model = modelQuery.data?.model;
@@ -69,10 +82,25 @@ export function ToolPacksPanel({
 		session.setArchived(archived);
 	}, [session, archived]);
 	useEffect(() => {
-		if (active) void session.refresh();
+		if (active && connected) void session.refresh();
 		else session.cancel();
-	}, [session, active]);
-	const disabled = state.busy || reading || state.failed || !!state.pending || state.incompatible || !state.loaded;
+	}, [session, active, connected]);
+	useEffect(() => {
+		if (active && connected && state.loaded && !state.busy && !state.failed) {
+			void session.packList.load("refresh");
+			if (state.history) void session.bindingList.load("refresh");
+		}
+	}, [session, active, connected, state.loaded, state.busy, state.failed, state.history]);
+	const disabled =
+		packs.failed ||
+		(state.history && bindings.failed) ||
+		!connected ||
+		state.busy ||
+		reading ||
+		state.failed ||
+		!!state.pending ||
+		state.incompatible ||
+		!state.loaded;
 	const capacity = bindingCapacity(state.active, Date.now());
 	const digest = target?.kind === "live" ? target.pack.digest : target?.binding.digest;
 	const sourceReady = !!digest && state.source?.digest === digest;
@@ -83,20 +111,85 @@ export function ToolPacksPanel({
 		setConfirmed(false);
 		void session.source(value.kind === "live" ? value.pack.digest : value.binding.digest);
 	};
+	const renderBinding = (binding: ToolPackBinding) => {
+		if (!conversation) return null;
+		return (
+			<article key={binding.bindingId} className="grid gap-2 rounded-md border border-border p-3">
+				<p className="font-medium">{l[binding.purpose === "live-package" ? "toolPacks.live" : "toolPacks.retained"]}</p>
+				<p className="break-all">{binding.digest}</p>
+				<p>
+					{binding.model.provider} / {binding.model.modelId}
+				</p>
+				<p>
+					{
+						l[
+							`toolPacks.status.${binding.status === "active" && binding.expiresAt <= Date.now() ? "expired" : binding.status}`
+						]
+					}{" "}
+					· {l["toolPacks.expires"]}: {date(binding.expiresAt)}
+				</p>
+				<div className="flex flex-wrap gap-2">
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={!connected || state.busy}
+						onClick={() => {
+							setTarget(null);
+							void session.source(binding.digest);
+						}}
+					>
+						{l["toolPacks.source"]}
+					</Button>
+					{binding.purpose === "live-package" && (
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={disabled || archived || !model || !binding.disclosed || !capacity.retained}
+							onClick={() => choose({ kind: "retained", binding })}
+						>
+							{l["toolPacks.retain"]}
+						</Button>
+					)}
+					<Button
+						size="sm"
+						variant="outline"
+						disabled={disabled || binding.status !== "active" || binding.expiresAt <= Date.now()}
+						onClick={() =>
+							void session.execute({
+								version: PROTOCOL_VERSION,
+								method: "revokeToolPackBinding",
+								params: {
+									workspaceId,
+									conversationId: conversation.conversationId,
+									requestId: crypto.randomUUID(),
+									bindingId: binding.bindingId,
+									expectedRevision: binding.revision,
+								},
+							})
+						}
+					>
+						{l["toolPacks.revoke"]}
+					</Button>
+				</div>
+			</article>
+		);
+	};
 	return children(
 		<div className="tool-packs-panel grid gap-4">
 			<p className="text-sm text-muted-foreground">{l["toolPacks.description"]}</p>
 			<p className="text-sm text-muted-foreground">{l["toolPacks.effects"]}</p>
-			<Button
-				variant="outline"
-				disabled={state.busy || reading}
-				onClick={() => {
-					void session.refresh();
-					if (conversation) void modelQuery.refetch();
-				}}
-			>
-				{l["toolPacks.refresh"]}
-			</Button>
+			{(state.failed || state.pending || modelQuery.isError) && (
+				<Button
+					variant="outline"
+					disabled={!connected || state.busy || reading}
+					onClick={() => {
+						void session.refresh();
+						if (conversation) void modelQuery.refetch();
+					}}
+				>
+					{l["toolPacks.refresh"]}
+				</Button>
+			)}
 			{(state.busy || reading) && <output aria-live="polite">{l["toolPacks.loading"]}</output>}
 			{state.failed && <p role="alert">{l["toolPacks.failed"]}</p>}
 			{state.incompatible && <p role="alert">{l["toolPacks.incompatible"]}</p>}
@@ -132,7 +225,7 @@ export function ToolPacksPanel({
 					id={fileId}
 					type="file"
 					accept=".json,application/json"
-					disabled={state.busy || reading}
+					disabled={!connected || state.busy || reading}
 					className="text-sm focus-visible:outline-ring"
 					onChange={async (event) => {
 						const file = event.target.files?.[0];
@@ -160,7 +253,7 @@ export function ToolPacksPanel({
 					value={text}
 					maxLength={65536}
 					rows={5}
-					disabled={state.busy || reading}
+					disabled={!connected || state.busy || reading}
 					aria-invalid={invalid}
 					className="font-mono"
 					onChange={(event) => {
@@ -172,7 +265,7 @@ export function ToolPacksPanel({
 				{invalid && <p role="alert">{l["toolPacks.invalid"]}</p>}
 				<Button
 					variant="outline"
-					disabled={state.busy || reading || !text}
+					disabled={!connected || state.busy || reading || !text}
 					onClick={() => {
 						try {
 							validatePackageText(text);
@@ -218,97 +311,93 @@ export function ToolPacksPanel({
 			</section>
 			<section className="grid gap-2 border-t border-border pt-3">
 				<h3 className="font-medium">{l["toolPacks.workspace"]}</h3>
-				{state.loaded && !state.packs.length && <p>{l["toolPacks.empty"]}</p>}
-				{state.packs.map((pack) => (
-					<article key={pack.digest} className="grid gap-2 rounded-md border border-border p-3 text-sm">
-						<p className="font-medium">
-							{pack.name} · {pack.version} · {l[`toolPacks.status.${pack.status}`]}
-						</p>
-						<p>{pack.description}</p>
-						<p className="break-all">{pack.digest}</p>
-						<div className="flex flex-wrap gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={state.busy}
-								onClick={() => {
-									setTarget(null);
-									void session.source(pack.digest);
-								}}
-							>
-								{l["toolPacks.source"]}
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={disabled || pack.status === "uninstalled"}
-								onClick={() =>
-									void session.execute({
-										version: PROTOCOL_VERSION,
-										method: "setToolPackEnabled",
-										params: {
-											workspaceId,
-											requestId: crypto.randomUUID(),
-											digest: pack.digest,
-											expectedRevision: pack.revision,
-											enabled: pack.status !== "enabled",
-										},
-									})
-								}
-							>
-								{l[pack.status === "enabled" ? "toolPacks.disable" : "toolPacks.enable"]}
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={disabled || pack.status === "uninstalled"}
-								onClick={() =>
-									void session.execute({
-										version: PROTOCOL_VERSION,
-										method: "uninstallToolPack",
-										params: {
-											workspaceId,
-											requestId: crypto.randomUUID(),
-											digest: pack.digest,
-											expectedRevision: pack.revision,
-										},
-									})
-								}
-							>
-								{l["toolPacks.uninstall"]}
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={disabled || archived || !model || pack.status !== "enabled" || !capacity.live}
-								onClick={() => choose({ kind: "live", pack })}
-							>
-								{l["toolPacks.bind"]}
-							</Button>
-						</div>
-					</article>
-				))}
-				<div className="flex gap-2">
-					<Button variant="ghost" disabled={state.busy} onClick={() => void session.pagePacks()}>
-						{l["toolPacks.first"]}
-					</Button>
-					<Button
-						variant="ghost"
-						disabled={state.busy || !state.packCursor}
-						onClick={() => {
-							if (state.packCursor) void session.pagePacks(state.packCursor);
-						}}
-					>
-						{l["toolPacks.next"]}
-					</Button>
-				</div>
+
+				<ManagementList
+					resource={session.packList}
+					active={active && connected}
+					label={l["toolPacks.workspace"]}
+					retryLabel={l["toolPacks.retryRead"]}
+					loadingLabel={l["toolPacks.loading"]}
+					emptyLabel={l["toolPacks.empty"]}
+					itemKey={(pack) => pack.digest}
+				>
+					{(pack) => (
+						<article key={pack.digest} className="grid gap-2 rounded-md border border-border p-3 text-sm">
+							<p className="font-medium">
+								{pack.name} · {pack.version} · {l[`toolPacks.status.${pack.status}`]}
+							</p>
+							<p>{pack.description}</p>
+							<p className="break-all">{pack.digest}</p>
+							<div className="flex flex-wrap gap-2">
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={!connected || state.busy}
+									onClick={() => {
+										setTarget(null);
+										void session.source(pack.digest);
+									}}
+								>
+									{l["toolPacks.source"]}
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={disabled || pack.status === "uninstalled"}
+									onClick={() =>
+										void session.execute({
+											version: PROTOCOL_VERSION,
+											method: "setToolPackEnabled",
+											params: {
+												workspaceId,
+												requestId: crypto.randomUUID(),
+												digest: pack.digest,
+												expectedRevision: pack.revision,
+												enabled: pack.status !== "enabled",
+											},
+										})
+									}
+								>
+									{l[pack.status === "enabled" ? "toolPacks.disable" : "toolPacks.enable"]}
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={disabled || pack.status === "uninstalled"}
+									onClick={() =>
+										void session.execute({
+											version: PROTOCOL_VERSION,
+											method: "uninstallToolPack",
+											params: {
+												workspaceId,
+												requestId: crypto.randomUUID(),
+												digest: pack.digest,
+												expectedRevision: pack.revision,
+											},
+										})
+									}
+								>
+									{l["toolPacks.uninstall"]}
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={disabled || archived || !model || pack.status !== "enabled" || !capacity.live}
+									onClick={() => choose({ kind: "live", pack })}
+								>
+									{l["toolPacks.bind"]}
+								</Button>
+							</div>
+						</article>
+					)}
+				</ManagementList>
 			</section>
 			{conversation && (
 				<section className="grid gap-2 border-t border-border pt-3 text-sm">
 					<div className="flex flex-wrap gap-2">
 						<Button
 							variant="ghost"
-							disabled={state.busy}
+							disabled={!connected || state.busy}
 							aria-pressed={!state.history}
 							onClick={() => void session.pageBindings(false)}
 						>
@@ -316,7 +405,7 @@ export function ToolPacksPanel({
 						</Button>
 						<Button
 							variant="ghost"
-							disabled={state.busy}
+							disabled={!connected || state.busy}
 							aria-pressed={state.history}
 							onClick={() => void session.pageBindings(true)}
 						>
@@ -324,84 +413,23 @@ export function ToolPacksPanel({
 						</Button>
 					</div>
 					<p>{l["toolPacks.capacity"]}</p>
-					{state.loaded && !state.bindings.length && <p>{l["toolPacks.noBindings"]}</p>}
-					{state.bindings.map((binding) => (
-						<article key={binding.bindingId} className="grid gap-2 rounded-md border border-border p-3">
-							<p className="font-medium">
-								{l[binding.purpose === "live-package" ? "toolPacks.live" : "toolPacks.retained"]}
-							</p>
-							<p className="break-all">{binding.digest}</p>
-							<p>
-								{binding.model.provider} / {binding.model.modelId}
-							</p>
-							<p>
-								{
-									l[
-										`toolPacks.status.${binding.status === "active" && binding.expiresAt <= Date.now() ? "expired" : binding.status}`
-									]
-								}{" "}
-								· {l["toolPacks.expires"]}: {date(binding.expiresAt)}
-							</p>
-							<div className="flex flex-wrap gap-2">
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={state.busy}
-									onClick={() => {
-										setTarget(null);
-										void session.source(binding.digest);
-									}}
-								>
-									{l["toolPacks.source"]}
-								</Button>
-								{binding.purpose === "live-package" && (
-									<Button
-										size="sm"
-										variant="outline"
-										disabled={disabled || archived || !model || !binding.disclosed || !capacity.retained}
-										onClick={() => choose({ kind: "retained", binding })}
-									>
-										{l["toolPacks.retain"]}
-									</Button>
-								)}
-								<Button
-									size="sm"
-									variant="outline"
-									disabled={disabled || binding.status !== "active" || binding.expiresAt <= Date.now()}
-									onClick={() =>
-										void session.execute({
-											version: PROTOCOL_VERSION,
-											method: "revokeToolPackBinding",
-											params: {
-												workspaceId,
-												conversationId: conversation.conversationId,
-												requestId: crypto.randomUUID(),
-												bindingId: binding.bindingId,
-												expectedRevision: binding.revision,
-											},
-										})
-									}
-								>
-									{l["toolPacks.revoke"]}
-								</Button>
-							</div>
-						</article>
-					))}
-					{state.history && (
-						<div className="flex gap-2">
-							<Button variant="ghost" disabled={state.busy} onClick={() => void session.pageBindings(true)}>
-								{l["toolPacks.first"]}
-							</Button>
-							<Button
-								variant="ghost"
-								disabled={state.busy || !state.bindingCursor}
-								onClick={() => {
-									if (state.bindingCursor) void session.pageBindings(true, state.bindingCursor);
-								}}
-							>
-								{l["toolPacks.next"]}
-							</Button>
-						</div>
+					{state.history ? (
+						<ManagementList
+							resource={session.bindingList}
+							active={active && connected}
+							label={l["toolPacks.history"]}
+							retryLabel={l["toolPacks.retryRead"]}
+							loadingLabel={l["toolPacks.loading"]}
+							emptyLabel={l["toolPacks.noBindings"]}
+							itemKey={(binding) => binding.bindingId}
+						>
+							{renderBinding}
+						</ManagementList>
+					) : (
+						<>
+							{state.loaded && !state.failed && !state.bindings.length && <p>{l["toolPacks.noBindings"]}</p>}
+							{state.bindings.map(renderBinding)}
+						</>
 					)}
 				</section>
 			)}

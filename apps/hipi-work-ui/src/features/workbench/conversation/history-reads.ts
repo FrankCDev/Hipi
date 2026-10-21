@@ -2,6 +2,7 @@ import {
 	type AppClient,
 	AppError,
 	type ConversationSearchHit,
+	LIMITS,
 	type Scope,
 	type SearchHistoryWindow,
 } from "@hipi/work-runtime/contracts";
@@ -76,6 +77,11 @@ export async function readMessagePage(
 		page.conversationId !== scope.conversationId ||
 		page.messageId !== messageId ||
 		page.textLength !== textLength ||
+		page.text.length > LIMITS.textChunk ||
+		page.offset + page.text.length > textLength ||
+		(page.nextOffset === null
+			? page.offset + page.text.length !== textLength
+			: page.nextOffset !== page.offset + page.text.length || page.nextOffset <= offset) ||
 		(page.offset !== offset &&
 			!(
 				offset > 0 &&

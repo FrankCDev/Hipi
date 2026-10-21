@@ -1,6 +1,5 @@
 import type { FileRoot, FileTarget } from "@hipi/work-runtime/files";
 import type { FileClient } from "@hipi/work-runtime/files/protocol";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -9,15 +8,16 @@ import type { ClipboardStatus } from "../workbench/conversation/markdown/clipboa
 import { fileLabels } from "./file-labels.ts";
 import { FileTreeAdapter } from "./file-tree-adapter.ts";
 import {
+	FILE_TREE_EXPANSION_LIMIT,
 	type FileTreeMemory,
 	type FileTreeRow,
 	fileTarget,
 	flattenFileTree,
-	pageFileTree,
 	revealFileTreeSelection,
 	treeSelectedPath,
 	visibleDirectories,
 } from "./file-tree-model.ts";
+import { type DirectoryEdge, DirectoryWindow } from "./tree/directory-window.ts";
 import "./pierre-file-tree.css";
 
 export function FileTree({
@@ -37,9 +37,9 @@ export function FileTree({
 }) {
 	const { locale } = usePreferences();
 	const l = fileLabels(locale);
-	const cache = useQueryClient();
 	const [expanded, setExpanded] = useState(memory.expanded);
-	const [cursors, setCursors] = useState(memory.cursors);
+	const windows = useRef(new Map<string, DirectoryWindow>());
+	const [, render] = useState(0);
 	const [limited, setLimited] = useState(false);
 	const [filter, setFilter] = useState("");
 	const [noMatches, setNoMatches] = useState(false);
@@ -48,32 +48,100 @@ export function FileTree({
 	const mount = useRef<HTMLDivElement>(null);
 	const adapter = useRef<FileTreeAdapter | undefined>(undefined);
 	const directories = visibleDirectories(expanded);
-	const queries = useQueries({
-		queries: directories.map((path) => ({
-			queryKey: ["files", root.workspaceId, root.rootId, path, cursors[path]?.at(-1)],
-			queryFn: ({ signal }: { signal: AbortSignal }) =>
-				files.list(fileTarget(root, path), cursors[path]?.at(-1), signal),
-			gcTime: 0,
-			retry: false,
-		})),
-	});
+	useEffect(() => {
+		const retained = windows.current;
+		return () => {
+			for (const window of retained.values()) window.dispose();
+			retained.clear();
+		};
+	}, []);
+	useEffect(() => {
+		const paths = new Set(visibleDirectories(expanded));
+		for (const [path, window] of windows.current)
+			if (!paths.has(path)) {
+				window.dispose();
+				windows.current.delete(path);
+			}
+	}, [expanded]);
+	const demand = (
+		path: string,
+		edge: DirectoryEdge,
+		protectedPaths: ReadonlySet<string> = new Set(),
+		retry = false,
+	) => {
+		if (!directories.includes(path)) return;
+		// Visible boundaries only: expanding many folders cannot enqueue a whole disk scan.
+		if ([...windows.current.values()].filter((window) => window.snapshot().pending).length >= 4) return;
+		let window = windows.current.get(path);
+		if (!window) {
+			memory.directories ??= new Map();
+			window = new DirectoryWindow(
+				files,
+				fileTarget(root, path),
+				() => {
+					const current = windows.current.get(path);
+					if (current && memory.directories) {
+						memory.directories.delete(path);
+						memory.directories.set(path, current.bookmark());
+						const oldest = memory.directories.keys().next().value;
+						if (oldest !== undefined && memory.directories.size > FILE_TREE_EXPANSION_LIMIT)
+							memory.directories.delete(oldest);
+					}
+					render((value) => value + 1);
+				},
+				memory.directories.get(path),
+			);
+			windows.current.set(path, window);
+		}
+		void window.load(edge, protectedPaths, retry);
+	};
+	useEffect(() => {
+		let active = true;
+		let validating = false;
+		const validate = async () => {
+			if (validating) return;
+			validating = true;
+			try {
+				for (const window of windows.current.values()) {
+					if (!active) return;
+					if (window.snapshot().pages.length) await window.validate();
+				}
+			} finally {
+				validating = false;
+			}
+		};
+		window.addEventListener("focus", validate);
+		return () => {
+			active = false;
+			window.removeEventListener("focus", validate);
+		};
+	}, []);
 	const results = new Map(
-		directories.map((path, index) => [
-			path,
-			{
-				data: queries[index]?.data,
-				pending: queries[index]?.isPending ?? true,
-				failed: queries[index]?.isError ?? false,
-			},
-		]),
+		directories.map((path) => {
+			const state = windows.current.get(path)?.snapshot();
+			return [
+				path,
+				{
+					data: state?.pages.length
+						? {
+								entries: state.pages.flatMap((page) => page.data.entries),
+								nextCursor: state.pages.at(-1)?.data.nextCursor ?? null,
+							}
+						: undefined,
+					pending: !state || state.pending || (!state.failed && state.pages.length === 0),
+					failed: state?.failed ?? false,
+					before: state?.before,
+					after: state?.after,
+				},
+			];
+		}),
 	);
-	const rows = flattenFileTree(expanded, cursors, results);
+	const rows = flattenFileTree(expanded, results);
 	const selectedPath = treeSelectedPath(root, selected);
 	const revealPath = useRef<string | undefined>(selectedPath);
 	useEffect(() => {
 		memory.expanded = expanded;
-		memory.cursors = cursors;
-	}, [memory, expanded, cursors]);
+	}, [memory, expanded]);
 	useEffect(() => {
 		revealPath.current = selectedPath;
 	}, [selectedPath]);
@@ -89,12 +157,7 @@ export function FileTree({
 		if (row.kind === "entry") {
 			if (row.entry.kind === "file") open(fileTarget(root, row.entry.path), root.writable, pinned);
 		} else if (row.kind === "failed") {
-			void cache.invalidateQueries({ queryKey: ["files", root.workspaceId, root.rootId, row.path] });
-		} else if (row.kind === "previous" || row.kind === "next") {
-			revealPath.current = undefined;
-			const next = pageFileTree(expanded, cursors, row.path, row.kind, results.get(row.path)?.data?.nextCursor);
-			setExpanded(next.expanded);
-			setCursors(next.cursors);
+			demand(row.path, "after", new Set(), true);
 		}
 	};
 	const snapshot = {
@@ -114,6 +177,7 @@ export function FileTree({
 		onCopyStatus: setCopyStatus,
 		onNoMatches: setNoMatches,
 		onActivate: activate,
+		onDemand: demand,
 		onPreview: preview
 			? (row: FileTreeRow) => {
 					if (row.kind === "entry" && row.entry.kind === "file") preview(fileTarget(root, row.entry.path));

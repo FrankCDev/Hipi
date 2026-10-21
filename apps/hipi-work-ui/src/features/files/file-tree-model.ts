@@ -1,17 +1,23 @@
 import type { FileEntry, FilePage, FileRoot, FileTarget } from "@hipi/work-runtime/files";
+import type { DirectoryBookmark } from "./tree/directory-window.ts";
 
 export const FILE_TREE_ROW_HEIGHT = 28;
 export const FILE_TREE_EXPANSION_LIMIT = 64;
 export type FileTreeMemory = {
 	expanded: string[];
-	cursors: Record<string, (string | undefined)[]>;
 	scrollTop: number;
 	activePath?: string;
+	directories?: Map<string, DirectoryBookmark>;
 };
-export type DirectoryResult = { data?: FilePage; pending: boolean; failed: boolean };
+export type DirectoryResult = { data?: FilePage; pending: boolean; failed: boolean; before?: boolean; after?: boolean };
 export type FileTreeRow =
 	| { id: string; kind: "entry"; entry: FileEntry; depth: number; parent: string; expanded?: boolean }
-	| { id: string; kind: "pending" | "failed" | "empty" | "previous" | "next"; path: string; depth: number };
+	| {
+			id: string;
+			kind: "pending" | "failed" | "empty" | "boundary-before" | "boundary-after";
+			path: string;
+			depth: number;
+	  };
 
 export function fileTarget(root: FileRoot, path: string): FileTarget {
 	return { workspaceId: root.workspaceId, rootId: root.rootId, path };
@@ -49,24 +55,6 @@ export function revealFileTreeSelection(expanded: string[], rows: readonly FileT
 	}
 	return { expanded: next.size === expanded.length ? expanded : [...next], limited: false };
 }
-export function pageFileTree(
-	expanded: readonly string[],
-	cursors: FileTreeMemory["cursors"],
-	path: string,
-	direction: "previous" | "next",
-	nextCursor?: string | null,
-) {
-	return {
-		expanded: expanded.filter((item) => item === "" || item === path || (path !== "" && !item.startsWith(`${path}/`))),
-		cursors: {
-			...cursors,
-			[path]:
-				direction === "previous"
-					? (cursors[path] ?? []).slice(0, -1)
-					: [...(cursors[path] ?? [undefined]), nextCursor ?? undefined],
-		},
-	};
-}
 export function visibleDirectories(expanded: readonly string[]) {
 	const paths = new Set(expanded);
 	return expanded
@@ -79,17 +67,18 @@ export function visibleDirectories(expanded: readonly string[]) {
 /** Only currently authorized, paginated directory replies are projected into rows. */
 export function flattenFileTree(
 	expanded: readonly string[],
-	cursors: FileTreeMemory["cursors"],
 	results: ReadonlyMap<string, DirectoryResult>,
 ): FileTreeRow[] {
 	const rows: FileTreeRow[] = [];
 	const paths = new Set(expanded);
 	const visit = (path: string, depth: number) => {
 		const result = results.get(path);
-		if (!result || result.pending) rows.push({ id: `${path}:pending`, kind: "pending", path, depth });
-		else if (result.failed) rows.push({ id: `${path}:failed`, kind: "failed", path, depth });
+		if (!result || (result.pending && !result.data)) rows.push({ id: `${path}:pending`, kind: "pending", path, depth });
+		else if (result.failed && !result.data) rows.push({ id: `${path}:failed`, kind: "failed", path, depth });
 		else {
-			if (result.data?.entries.length === 0) rows.push({ id: `${path}:empty`, kind: "empty", path, depth });
+			if (result.before) rows.push({ id: `${path}:boundary-before`, kind: "boundary-before", path, depth });
+			if (result.data?.entries.length === 0 && !result.after && !result.failed)
+				rows.push({ id: `${path}:empty`, kind: "empty", path, depth });
 			for (const entry of result.data?.entries ?? []) {
 				const isExpanded = entry.kind === "directory" && paths.has(entry.path);
 				rows.push({
@@ -102,8 +91,8 @@ export function flattenFileTree(
 				});
 				if (isExpanded) visit(entry.path, depth + 1);
 			}
-			if ((cursors[path]?.length ?? 0) > 1) rows.push({ id: `${path}:previous`, kind: "previous", path, depth });
-			if (result.data?.nextCursor) rows.push({ id: `${path}:next`, kind: "next", path, depth });
+			if (result.failed) rows.push({ id: `${path}:failed`, kind: "failed", path, depth });
+			else if (result.after) rows.push({ id: `${path}:boundary-after`, kind: "boundary-after", path, depth });
 		}
 	};
 	visit("", 0);

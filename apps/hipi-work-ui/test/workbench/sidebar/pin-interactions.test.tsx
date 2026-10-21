@@ -184,6 +184,7 @@ test.each(["en", "zh-CN"])(
 			pages: [
 				{
 					items: [{ conversation, presentation: { ...original, revision: 1, pinned: true } }],
+					previousCursor: null,
 					nextCursor: null,
 					orderGeneration: 1,
 					nextPinnedScope: null,
@@ -269,6 +270,7 @@ test("mixed pins render server project/conversation order without regrouping and
 					},
 				],
 				nextCursor: null,
+				previousCursor: null,
 				nextPinKey: null,
 				orderRevision: 8,
 			},

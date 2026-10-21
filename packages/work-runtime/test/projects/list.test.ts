@@ -16,6 +16,8 @@ test("project list uses indexed bounded candidates across 20k sparse pinned excl
 		project.run(id, id, id);
 		if (i < 19999) pin.run(id, i + 1);
 	}
+	// The highest legal pin ordinal is not the unpinned keyset bucket.
+	db.exec("UPDATE project_presentations SET pin_ordinal=9007199254740991 WHERE project_id='p19998'");
 	db.exec("COMMIT");
 	const denied = async (): Promise<never> => {
 		throw new Error("list must not access physical storage");
@@ -58,6 +60,17 @@ test("project list uses indexed bounded candidates across 20k sparse pinned excl
 		assert.equal(count, 20000);
 		assert.equal(emptyContinuation, true);
 		assert.equal(page.items.at(-1)?.project.projectId, "p19999");
+		let reverseCount = page.items.length;
+		let previousCursor = page.previousCursor;
+		const seen = new Set<string>();
+		while (previousCursor) {
+			assert.equal(seen.has(previousCursor), false);
+			seen.add(previousCursor);
+			page = catalog.list({ cursor: previousCursor });
+			reverseCount += page.items.length;
+			previousCursor = page.previousCursor;
+		}
+		assert.equal(reverseCount, 20000, "reverse candidate windows retain every sparse eligible project");
 		const first = catalog.list({});
 		db.exec("UPDATE project_presentation_state SET order_generation=1");
 		assert.throws(() => catalog.list({ cursor: first.nextCursor! }), { code: "CURSOR_STALE" });

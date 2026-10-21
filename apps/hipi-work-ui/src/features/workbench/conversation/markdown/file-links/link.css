@@ -1,0 +1,47 @@
+/* Ordinary local Markdown file mention: inline-flow label, 16px icon slot,
+ * 3px separation and hover-only dashed underline; colors inherit theme tokens. */
+.markdown-file-link {
+	--file-mention-icon-size: calc(var(--spacing) * 4);
+	--file-mention-icon-gap: calc(var(--spacing) * 0.75);
+	--file-mention-color: color-mix(in srgb, var(--brand) 80%, var(--text) 20%);
+	display: inline;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: var(--file-mention-color);
+	font: inherit;
+	font-weight: 500;
+	text-align: start;
+	white-space: nowrap;
+	cursor: pointer;
+	box-decoration-break: clone;
+}
+.markdown-file-link-icon {
+	display: inline-flex;
+	align-items: center;
+	box-sizing: content-box;
+	width: var(--file-mention-icon-size);
+	height: 1em;
+	padding-inline-end: var(--file-mention-icon-gap);
+	vertical-align: middle;
+	transform: translateY(calc(0.5ex - 0.5cap));
+}
+.markdown-file-link-icon svg {
+	width: var(--file-mention-icon-size);
+	height: var(--file-mention-icon-size);
+}
+.markdown-file-link-label {
+	white-space: normal;
+	overflow-wrap: break-word;
+}
+.markdown-file-link:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+	border-radius: var(--radius-md, 6px);
+}
+@media (hover: hover) {
+	.markdown-file-link:hover {
+		text-decoration: underline dashed currentColor 0.5px;
+		text-underline-offset: 2px;
+	}
+}

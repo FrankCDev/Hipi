@@ -7,7 +7,6 @@ import {
 	FILE_TREE_EXPANSION_LIMIT,
 	type FileTreeMemory,
 	type FileTreeRow,
-	pageFileTree,
 	revealFileTreeSelection,
 	treeModelPath,
 	treeSelectedPath,
@@ -25,7 +24,7 @@ function entry(path: string, kind: "file" | "directory" | "blocked" = "file"): F
 	};
 }
 function fixture(rows: FileTreeRow[], expanded = [""], memory?: FileTreeMemory) {
-	const state = memory ?? { expanded, cursors: {}, scrollTop: 0 };
+	const state = memory ?? { expanded, scrollTop: 0 };
 	const snapshot = {
 		scope: "workspace:root",
 		source: {},
@@ -40,21 +39,21 @@ function fixture(rows: FileTreeRow[], expanded = [""], memory?: FileTreeMemory) 
 	return { adapter: new FileTreeAdapter(state, snapshot), snapshot, memory: state };
 }
 
-test("model paths distinguish directories, blocked names and non-resource pagination rows", () => {
+test("model paths distinguish directories, blocked names and non-resource loading boundaries", () => {
 	const values: FileTreeRow[] = [
 		entry("src", "directory"),
 		entry("src/next.ts"),
 		entry("src/:hipi-state:next", "blocked"),
 		entry("src/:hipi-blocked:x", "blocked"),
 		entry("src/\ud800", "blocked"),
-		{ id: "src:next", kind: "next", path: "src", depth: 1 },
+		{ id: "src:next", kind: "boundary-after", path: "src", depth: 1 },
 		{ id: "src:pending", kind: "pending", path: "src", depth: 1 },
 	];
 	const paths = values.map(treeModelPath);
 	assert.equal(new Set(paths).size, values.length);
 	assert.equal(paths[0], "src/");
 	assert.equal(paths[1], "src/next.ts");
-	assert.equal(paths[5], "src/:hipi-state:next");
+	assert.equal(paths[5], "src/:hipi-state:boundary-after");
 });
 
 test("selected file identity must match both workspace and root, never root alone", () => {
@@ -118,9 +117,9 @@ test("expansion limit is enforced through public handles without losing existing
 	adapter.dispose();
 });
 
-test("activation forwards only current real files and explicit paging/retry controls", () => {
+test("activation forwards only current real files and explicit failure recovery", () => {
 	const blocked = entry(":hipi-state:next", "blocked");
-	const next: FileTreeRow = { id: ":next", kind: "next", path: "", depth: 0 };
+	const next: FileTreeRow = { id: ":next", kind: "boundary-after", path: "", depth: 0 };
 	const pending: FileTreeRow = { id: ":pending", kind: "pending", path: "", depth: 0 };
 	const { adapter, snapshot } = fixture([entry("a.ts"), blocked, next, pending]);
 	adapter.activate("a.ts");
@@ -134,7 +133,6 @@ test("activation forwards only current real files and explicit paging/retry cont
 		[
 			["entry", false],
 			["entry", true],
-			["next", false],
 		],
 	);
 	const onActivate = vi.fn();
@@ -149,18 +147,8 @@ test("activation forwards only current real files and explicit paging/retry cont
 	assert.equal(onActivate.mock.calls.length, 1, "Disposed roots cannot forward callbacks");
 });
 
-test("page navigation preserves unrelated siblings while pruning replaced descendants and exact cursor history", () => {
-	const expanded = ["", "src", "src/nested", "docs", "docs/nested"];
-	const first = pageFileTree(expanded, { docs: [undefined, "docs-two"] }, "src", "next", "src-two");
-	assert.deepEqual(first.expanded, ["", "src", "docs", "docs/nested"]);
-	assert.deepEqual(first.cursors, { docs: [undefined, "docs-two"], src: [undefined, "src-two"] });
-	const back = pageFileTree(first.expanded, first.cursors, "src", "previous");
-	assert.deepEqual(back.cursors.src, [undefined]);
-	assert.deepEqual(pageFileTree(expanded, {}, "", "next", "root-two").expanded, [""]);
-});
-
 test("selection restoration and model reset retain exact focus; cleanup detaches subscriptions idempotently", () => {
-	const memory: FileTreeMemory = { expanded: [""], cursors: {}, scrollTop: 280, activePath: "b.ts" };
+	const memory: FileTreeMemory = { expanded: [""], scrollTop: 280, activePath: "b.ts" };
 	const { adapter, snapshot } = fixture([entry("a.ts"), entry("b.ts")], [""], memory);
 	assert.equal(adapter.model.getFocusedPath(), "b.ts");
 	adapter.update({ ...snapshot, rows: [entry("a.ts"), entry("b.ts"), entry("c.ts")], selected: "b.ts" });
@@ -355,4 +343,14 @@ test("public engine server projection virtualizes ten thousand paths into a comp
 	const renderedRows = (payload.shadowHtml.match(/role="treeitem"/g) ?? []).length;
 	assert.ok(renderedRows > 0 && renderedRows <= 28, `Rendered ${renderedRows} rows rather than all 10,000`);
 	assert.match(payload.outerStart, /--trees-item-height:28px/);
+});
+
+test("keyboard loading-boundary focus transfers into new files instead of chasing the moving tail", () => {
+	const boundary: FileTreeRow = { id: ":boundary-after", kind: "boundary-after", path: "", depth: 0 };
+	const { adapter, snapshot } = fixture([entry("a.ts"), boundary]);
+	adapter.model.focusPath(treeModelPath(boundary));
+	adapter.update({ ...snapshot, rows: [entry("a.ts"), entry("b.ts"), entry("c.ts"), boundary] });
+	assert.equal(adapter.model.getFocusedPath(), "b.ts");
+	assert.equal(snapshot.onActivate.mock.calls.length, 0);
+	adapter.dispose();
 });

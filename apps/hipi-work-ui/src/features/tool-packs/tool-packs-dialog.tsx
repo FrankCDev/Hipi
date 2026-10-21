@@ -6,12 +6,20 @@ import { Dialog, DialogBody, DialogContent, DialogTitle, DialogTrigger } from ".
 import { toolPackLabels } from "./labels.ts";
 import { ToolPacksPanel } from "./tool-packs-panel.tsx";
 
-export function ToolPacksDialog({ workspaceId, conversation }: { workspaceId: string; conversation?: Conversation }) {
+export function ToolPacksDialog({
+	workspaceId,
+	conversation,
+	connected,
+}: {
+	workspaceId: string;
+	conversation?: Conversation;
+	connected: boolean;
+}) {
 	const { locale } = usePreferences();
 	const l = toolPackLabels(locale);
 	const [open, setOpen] = useState(false);
 	return (
-		<ToolPacksPanel workspaceId={workspaceId} conversation={conversation} active={open}>
+		<ToolPacksPanel workspaceId={workspaceId} conversation={conversation} active={open} connected={connected}>
 			{(content) => (
 				<Dialog open={open} onOpenChange={setOpen}>
 					<DialogTrigger asChild>

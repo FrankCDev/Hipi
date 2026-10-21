@@ -1,7 +1,7 @@
 import type { Draft, JsonRepresentation, JsonValue } from "@earendil-works/chord";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { defineDoc } from "../documents.ts";
-import { RunResultEntry, type RunTerminalCause, type RunUnansweredReason } from "../entries.ts";
+import { type RunInputRefs, RunResultEntry, type RunTerminalCause, type RunUnansweredReason } from "../entries.ts";
 import type { Transaction } from "../session/transaction.ts";
 import type {
 	ConversationId,
@@ -14,6 +14,7 @@ import type {
 	Tx,
 } from "../types.ts";
 import { convertPartial } from "./generation.ts";
+import { boundedRunInputRefs } from "./run-inputs.ts";
 import type { SchedulerOutcome } from "./scheduler.ts";
 import type { CompactionReason, CompactionResult, ToolDiagnostic } from "./types.ts";
 
@@ -95,7 +96,7 @@ export type LiveState = {
 		taskId: TaskId;
 		inputs: SubmissionId[];
 		/** Optional observations only. Older writers may preserve this but omit member/terminal records. */
-		group?: { id: TaskId; admittedAt: number };
+		group?: { id: TaskId; admittedAt: number; inputRefs?: RunInputRefs };
 	};
 	/** Presentation of the current generation attempt. */
 	generation?: {
@@ -190,11 +191,13 @@ export async function endRun(
 			evidence.settledAt >= 0
 		) {
 			const answerRequestStartedAt = evidence.answerRequestStartedAt;
+			const inputRefs = boundedRunInputRefs(group.inputRefs, live.run.inputs.length);
 			const reason = settlement.status === "unanswered" ? knownRunReason(settlement.reason) : undefined;
 			await tx.appendEntry(RunResultEntry, evidence.conversationId, {
 				runId: group.id,
 				data: {
 					runId: group.id,
+					...(inputRefs === undefined ? {} : { inputRefs }),
 					admittedAt: group.admittedAt,
 					settledAt: evidence.settledAt,
 					terminalCause: evidence.terminalCause,

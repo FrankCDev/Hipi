@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Folder, FolderOpen, FolderPlus, PanelRight, RefreshCw, Shield, ShieldX } from "lucide-react";
+import { FileText, Folder, FolderOpen, FolderPlus, PanelRight, Shield, ShieldX } from "lucide-react";
 import { type SyntheticEvent, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useFiles } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
@@ -103,6 +103,7 @@ export function FileWorkbench({
 			return files.listRoots(workspaceId, signal);
 		},
 		enabled: !!files && !!workspaceId,
+		refetchOnWindowFocus: true,
 	});
 	const projectRoot = project.data?.root;
 	const projectRootId = projectRoot?.rootId;
@@ -299,12 +300,12 @@ export function FileWorkbench({
 		session.pin(active.id);
 	};
 	const memory = () => {
-		if (!selectedRoot) return { expanded: [""], cursors: {}, scrollTop: 0 };
+		if (!selectedRoot) return { expanded: [""], scrollTop: 0 };
 		if (session) return session.treeMemory(selectedRoot);
 		const key = JSON.stringify([selectedRoot.workspaceId, selectedRoot.rootId]);
 		let value = fallbackTrees.current.get(key);
 		if (!value) {
-			value = { expanded: [""], cursors: {}, scrollTop: 0 };
+			value = { expanded: [""], scrollTop: 0 };
 			fallbackTrees.current.set(key, value);
 		}
 		return value;
@@ -525,19 +526,6 @@ export function FileWorkbench({
 									) : (
 										<h3 title={selectedRoot?.displayName}>{selectedRoot?.displayName ?? l["browse.title"]}</h3>
 									)}
-									<Button
-										size="icon-xs"
-										variant="ghost"
-										aria-label={l.refresh}
-										title={l.refresh}
-										disabled={roots.isFetching}
-										onClick={() => {
-											void roots.refetch();
-											void cache.invalidateQueries({ queryKey: ["files", workspaceId] });
-										}}
-									>
-										<RefreshCw size={16} aria-hidden />
-									</Button>
 								</div>
 								{roots.isPending && <output className="file-loading">{l.loading}</output>}
 								{project.data && ["unavailable", "moved", "revoked"].includes(project.data.status) && (
@@ -548,6 +536,9 @@ export function FileWorkbench({
 								{roots.isError && (
 									<p className="file-state" role="alert">
 										{l.failed}
+										<Button variant="ghost" size="sm" onClick={() => void roots.refetch()}>
+											{l.retry}
+										</Button>
 									</p>
 								)}
 								{selectedRoot && (

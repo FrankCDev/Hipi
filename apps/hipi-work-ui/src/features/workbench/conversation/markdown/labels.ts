@@ -1,4 +1,5 @@
 const en = {
+	"markdown.renderFailed": "This message could not be formatted. The complete text remains available below.",
 	"markdown.code": "Code",
 	"markdown.enableWrap": "Enable word wrap",
 	"markdown.disableWrap": "Disable word wrap",
@@ -9,6 +10,7 @@ const en = {
 };
 type Labels = { [Key in keyof typeof en]: string };
 const zh: Labels = {
+	"markdown.renderFailed": "此消息暂时无法格式化，完整文本仍保留在下方。",
 	"markdown.code": "代码",
 	"markdown.enableWrap": "启用自动换行",
 	"markdown.disableWrap": "禁用自动换行",

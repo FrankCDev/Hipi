@@ -21,6 +21,7 @@ import type { SearchHistoryAnchor } from "./history-controller.ts";
 import { ConversationModelControls } from "./model.tsx";
 import { ConversationReceipt } from "./receipt.tsx";
 import { useConversation } from "./use-conversation.ts";
+import "./layout.css";
 
 export function ConversationPane({
 	conversation,
@@ -132,6 +133,7 @@ export function ConversationPane({
 					</Dialog>
 					<ConversationHistory
 						scope={conversation}
+						connected={observation.connection === "connected"}
 						snapshot={observation.snapshot}
 						responseActive={
 							observation.connection === "connected" &&
@@ -147,20 +149,22 @@ export function ConversationPane({
 						onExitSearchAnchor={onExitSearchAnchor}
 					/>
 					<div className="conversation-footer" ref={footer}>
-						<ConversationComposer
-							controller={controller}
-							controls={
-								<div className="conversation-tools">
-									<ConversationCapabilities
-										key={`${conversation.workspaceId}/${conversation.conversationId}`}
-										conversation={conversation}
-										model={controller.model.data?.model}
-										connected={observation.connection === "connected"}
-									/>
-									<ConversationModelControls controller={controller} onOpenModelSettings={onOpenModelSettings} />
-								</div>
-							}
-						/>
+						<div className="conversation-column">
+							<ConversationComposer
+								controller={controller}
+								controls={
+									<div className="conversation-tools">
+										<ConversationCapabilities
+											key={`${conversation.workspaceId}/${conversation.conversationId}`}
+											conversation={conversation}
+											model={controller.model.data?.model}
+											connected={observation.connection === "connected"}
+										/>
+										<ConversationModelControls controller={controller} onOpenModelSettings={onOpenModelSettings} />
+									</div>
+								}
+							/>
+						</div>
 					</div>
 					<ActivityHistoryDialog />
 				</section>

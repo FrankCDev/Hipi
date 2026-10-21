@@ -3,6 +3,7 @@ import {
 	createContext,
 	type ReactNode,
 	type RefObject,
+	useCallback,
 	useContext,
 	useEffect,
 	useId,
@@ -26,6 +27,7 @@ import {
 	type LiveActivityRead,
 	useLiveActivityRead,
 } from "./live-activity.ts";
+import { MessageActivityOwner } from "./message-activity-owner.tsx";
 import { HistoricalTurnActivities, LiveTurnActivities } from "./turn-activities.tsx";
 import "./activity-transcript.css";
 
@@ -40,6 +42,9 @@ type Props = {
 type ActivityTranscript = {
 	scope: Scope;
 	live: LiveActivityRead;
+	presentationGeneration: string;
+	presentedToolActivity: boolean;
+	leasePresentation: (owner: symbol, generation: string) => () => void;
 	transcript?: Snapshot;
 	setTranscript: (view: { snapshot?: Snapshot; active: boolean }) => void;
 	session: ActivitySession;
@@ -78,6 +83,20 @@ function changedGroupChoice(current: ReadonlyMap<string, boolean>, key: string, 
 
 export function useActivityTranscript() {
 	return useContext(ActivityContext);
+}
+
+/** True only while a current tool summary is actually mounted, not merely present in runtime state. */
+export function usePresentedToolActivity() {
+	return useActivityTranscript()?.presentedToolActivity ?? false;
+}
+function useToolPresentationLease(active: boolean) {
+	const context = useActivityTranscript();
+	const lease = context?.leasePresentation;
+	const generation = context?.presentationGeneration;
+	const [owner] = useState(() => Symbol("tool-presentation"));
+	useLayoutEffect(() => {
+		if (active && lease && generation) return lease(owner, generation);
+	}, [active, lease, generation, owner]);
 }
 
 /** One read owner for compact, inline and dialog views. Pages and output stay bounded. */
@@ -124,6 +143,20 @@ function ScopedActivityTranscript({
 	const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
 	const [transcript, setTranscript] = useState<{ snapshot?: Snapshot; active: boolean }>({ active: false });
 	const live = useLiveActivityRead(client, scope, transcript.snapshot, connected && transcript.active, rootRef);
+	const presentationGeneration = JSON.stringify(transcript.snapshot?.execution ?? null);
+	const [presentations, setPresentations] = useState<ReadonlyMap<symbol, string>>(() => new Map());
+	const leasePresentation = useCallback((owner: symbol, generation: string) => {
+		setPresentations((current) =>
+			current.size >= 128 && !current.has(owner) ? current : new Map(current).set(owner, generation),
+		);
+		return () =>
+			setPresentations((current) => {
+				if (current.get(owner) !== generation) return current;
+				const next = new Map(current);
+				next.delete(owner);
+				return next;
+			});
+	}, []);
 	const [inlinePage, setInlinePage] = useState(state.cursor ? undefined : state.page);
 	const [open, setOpenState] = useState(false);
 	const scopeKey = JSON.stringify([scope.workspaceId, scope.conversationId]);
@@ -193,6 +226,13 @@ function ScopedActivityTranscript({
 			value={{
 				scope,
 				live,
+				presentationGeneration,
+				presentedToolActivity:
+					live.active &&
+					transcript.snapshot?.workspaceId === scope.workspaceId &&
+					transcript.snapshot?.conversationId === scope.conversationId &&
+					[...presentations.values()].includes(presentationGeneration),
+				leasePresentation,
 				transcript: transcript.snapshot,
 				setTranscript,
 				session,
@@ -222,9 +262,70 @@ function ScopedActivityTranscript({
 	);
 }
 
-export function InlineMessageActivities({ messageId, toolCalls }: { messageId: string; toolCalls?: MessageToolCalls }) {
+const MessageActivitiesContext = createContext<{ messageId: string; toolCalls?: MessageToolCalls } | null>(null);
+
+export function MessageActivitiesProvider({
+	messageId,
+	toolCalls,
+	children,
+}: {
+	messageId: string;
+	toolCalls?: MessageToolCalls;
+	children: ReactNode;
+}) {
+	const context = useActivityTranscript();
+	if (!context) return children;
+	return (
+		<MessageActivityOwner scope={context.scope} connected={context.connected} messageId={messageId} live={context.live}>
+			<MessageActivitiesContext.Provider value={{ messageId, toolCalls }}>{children}</MessageActivitiesContext.Provider>
+		</MessageActivityOwner>
+	);
+}
+
+export function InlineMessageToolBlock({ contentIndexes }: { contentIndexes: readonly number[] }) {
+	const message = useContext(MessageActivitiesContext);
+	if (!message?.toolCalls) return null;
+	const items = message.toolCalls.items.filter((item) => contentIndexes.includes(item.contentIndex));
+	if (!items.length) return null;
+	return (
+		<InlineMessageActivities
+			messageId={message.messageId}
+			toolCalls={{ items, total: items.length }}
+			contentIndexes={contentIndexes}
+		/>
+	);
+}
+
+export function InlineMessageActivities({
+	messageId,
+	toolCalls,
+	contentIndexes,
+}: {
+	messageId: string;
+	toolCalls?: MessageToolCalls;
+	contentIndexes?: readonly number[];
+}) {
 	const context = useActivityTranscript();
 	const { locale } = usePreferences();
+	const groupKey = contentIndexes === undefined ? messageId : JSON.stringify([messageId, contentIndexes[0]]);
+	const liveItems = anchoredLiveActivities(context?.transcript, context?.live.state.page).get(messageId);
+	const liveTools = anchoredLiveTools(context?.transcript, context?.live.state.page).get(messageId);
+	const selectedItems =
+		contentIndexes === undefined
+			? liveItems
+			: liveItems?.filter((item) => !!item.anchor && contentIndexes.includes(item.anchor.contentIndex));
+	const selectedTools =
+		contentIndexes === undefined
+			? liveTools
+			: liveTools?.filter((tool) => {
+					const anchor =
+						tool.anchor ??
+						liveItems?.find((item) => item.taskId === tool.taskId && item.callId === tool.callId)?.anchor;
+					return !!anchor && contentIndexes.includes(anchor.contentIndex);
+				});
+	useToolPresentationLease(
+		!!toolCalls?.total && !!context?.live.active && !!selectedTools?.some((tool) => tool.status !== "done"),
+	);
 	if (!context) return null;
 	if (toolCalls)
 		return (
@@ -234,10 +335,13 @@ export function InlineMessageActivities({ messageId, toolCalls }: { messageId: s
 				messageId={messageId}
 				toolCalls={toolCalls}
 				live={context.live}
-				liveItems={anchoredLiveActivities(context.transcript, context.live.state.page).get(messageId)}
-				liveTools={anchoredLiveTools(context.transcript, context.live.state.page).get(messageId)}
-				expanded={context.expandedGroups.has(messageId)}
-				onToggle={() => context.toggleGroup(messageId)}
+				liveItems={selectedItems}
+				liveTools={selectedTools}
+				contentIndexes={contentIndexes}
+				manualChoice={context.groupChoices.get(groupKey)}
+				expanded={context.expandedGroups.has(groupKey)}
+				onToggle={() => context.toggleGroup(groupKey)}
+				onExpandedChange={(expanded) => context.setGroupChoice(groupKey, expanded)}
 				onOpenArtifact={context.onOpenArtifact}
 			/>
 		);
@@ -293,11 +397,12 @@ export function InlineMessageActivities({ messageId, toolCalls }: { messageId: s
 
 export function InlineLiveActivities({ snapshot, active }: { snapshot: Snapshot; active: boolean }) {
 	const context = useActivityTranscript();
-	if (!context || !snapshot.execution || !snapshot.running) return null;
-	const anchored = anchoredLiveTools(snapshot, context.live.state.page);
+	const anchored = anchoredLiveTools(snapshot, context?.live.state.page);
 	const bound = new Set([...anchored.values()].flat());
-	const items = snapshot.execution.tools.items.filter((item) => !bound.has(item));
-	const total = snapshot.execution.tools.total - bound.size;
+	const items = snapshot.execution?.tools.items.filter((item) => !bound.has(item)) ?? [];
+	const total = (snapshot.execution?.tools.total ?? 0) - bound.size;
+	useToolPresentationLease(active && !!snapshot.running && total > 0 && items.some((item) => item.status !== "done"));
+	if (!context || !snapshot.execution || !snapshot.running) return null;
 	if (total <= 0) return null;
 	return (
 		<LiveTurnActivities

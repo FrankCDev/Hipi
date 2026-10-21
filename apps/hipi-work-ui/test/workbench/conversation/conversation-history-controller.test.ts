@@ -169,7 +169,7 @@ test("dispose aborts and ignores late success or rejection without publication",
 	}
 });
 
-test("empty scan limit needs explicit continuation and preserves cursor-cycle detection", async () => {
+test("empty scans yield automatically and preserve cursor-cycle detection without a continue action", async () => {
 	const { controller, calls } = harness();
 	controller.update(snapshot([], "c0"));
 	controller.setNearTop(true);
@@ -177,15 +177,13 @@ test("empty scan limit needs explicit continuation and preserves cursor-cycle de
 		calls[index]?.resolve(page([], `c${index + 1}`));
 		await tick();
 	}
-	assert.equal(calls.length, 16);
-	assert.equal(controller.state.blocked, "scan-limit");
-	controller.setNearTop(true);
-	assert.equal(calls.length, 16);
-	controller.retry();
+	assert.equal(controller.state.blocked, null);
+	await new Promise((resolve) => setTimeout(resolve, 5));
 	assert.equal(calls[16]?.cursor, "c16");
 	calls[16]?.resolve(page([], "c0"));
 	await tick();
 	assert.equal(controller.state.failed, true);
+	controller.dispose();
 });
 
 test("capacity stops retained growth and reset uses latest observation while guarding obsolete requests", async () => {
@@ -253,7 +251,7 @@ test("bridge staging reaches capacity without exposing or evicting the held hist
 	controller.update(snapshot(["held"], "older"));
 	controller.update(snapshot(["live"], "bridge-0"));
 	for (let index = 0; index < 64; index++) {
-		if (controller.state.blocked === "scan-limit") controller.retry();
+		if (!calls[index]) await new Promise((resolve) => setTimeout(resolve, 5));
 		calls[index]?.resolve(
 			page(
 				Array.from({ length: 32 }, (_, row) => `${index}-${row}`),

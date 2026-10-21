@@ -1,5 +1,6 @@
+import { useInView, usePageInView } from "framer-motion";
 import { CodeXml, File } from "lucide-react";
-import { type ComponentProps, useEffect, useId, useState } from "react";
+import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
 import { ActionTooltip } from "../../components/ui/action-tooltip.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -11,8 +12,15 @@ import {
 	DialogTrigger,
 } from "../../components/ui/dialog.tsx";
 import { ActivityCard } from "./activity-card.tsx";
+import {
+	CompactFileActivity,
+	type CompactFileSummary,
+	compactFilePresentation,
+	matchesCompactFileSummary,
+} from "./compact-file-activity.tsx";
 import { inlineActivityLabels } from "./inline-activity-labels.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
+import { RetainedOutputView } from "./retained-output-view.tsx";
 import "./inline-activity-card.css";
 
 /** Inline result presentation; the existing session remains the only output reader. */
@@ -25,14 +33,30 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 	const slot = state.outputs?.get(activity.activityId);
 	const output = slot?.page;
 	const expanded = activity.textAvailable;
+	const root = useRef<HTMLElement>(null);
+	const visible = useInView(root, { initial: true });
+	const pageVisible = usePageInView();
 	const [lease] = useState(() => Symbol("inline-output"));
 	useEffect(
-		() => session.outputs.lease(lease, activity.textAvailable ? [activity.activityId] : []),
-		[session, lease, activity.activityId, activity.textAvailable],
+		() => session.outputs.lease(lease, activity.textAvailable && visible && pageVisible ? [activity.activityId] : []),
+		[session, lease, activity.activityId, activity.textAvailable, visible, pageVisible],
 	);
 	const failed = activity.toolResult === "error" || activity.outcome === "failed" || activity.outcome === "faulted";
+	const [summary, setSummary] = useState<{ session: typeof session; activityId: string; value: CompactFileSummary }>();
+	useEffect(() => {
+		const value = compactFilePresentation(activity, output);
+		if (value) setSummary({ session, activityId: activity.activityId, value });
+	}, [activity, output, session]);
+	const presentation =
+		compactFilePresentation(activity, output) ??
+		(summary?.session === session &&
+		summary.activityId === activity.activityId &&
+		matchesCompactFileSummary(activity, summary.value)
+			? summary.value
+			: undefined);
+	if (presentation) return <CompactFileActivity {...props} presentation={presentation} rootRef={root} />;
 	return (
-		<section className="inline-tool-result" data-outcome={failed ? "error" : undefined}>
+		<section ref={root} className="inline-tool-result" data-outcome={failed ? "error" : undefined}>
 			<div className="inline-tool-result-heading">
 				<span className="inline-tool-result-name">{toolLabel(activity.toolName, locale)}</span>
 				<span className="inline-tool-result-state">
@@ -100,53 +124,13 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 			{activity.outputTruncated && <p className="inline-tool-note">{l["activity.truncated"]}</p>}
 			<div id={outputId} hidden={!expanded}>
 				{expanded && (
-					<>
-						{slot?.busy && !output && <output>{l["activity.loading"]}</output>}
-						{slot?.failed && (
-							<div>
-								<p role="alert">{l["activity.failed"]}</p>
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={disabled || slot.busy}
-									onClick={() => session.outputs.retry(activity.activityId)}
-								>
-									{l["activity.retry"]}
-								</Button>
-							</div>
-						)}
-						{output && (
-							<div className="inline-tool-text-card">
-								<div className="inline-tool-text-header">{inline["inline.plaintext"]}</div>
-								{/* Retained text has no trusted MIME/Markdown contract. Preserve it as escaped plaintext. */}
-								<pre className="inline-tool-text">{output.text}</pre>
-							</div>
-						)}
-						<div className="inline-tool-output-pages">
-							{output && slot?.cursor !== undefined && (
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={disabled || !!slot?.busy}
-									onClick={() => session.outputs.read(activity.activityId)}
-								>
-									{l["activity.text.first"]}
-								</Button>
-							)}
-							{output?.nextCursor && (
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={disabled || !!slot?.busy}
-									onClick={() => {
-										if (output.nextCursor) session.outputs.read(activity.activityId, output.nextCursor);
-									}}
-								>
-									{l["activity.text.next"]}
-								</Button>
-							)}
-						</div>
-					</>
+					<RetainedOutputView
+						activityId={activity.activityId}
+						session={session.outputs}
+						slot={slot}
+						disabled={disabled}
+						locale={locale}
+					/>
 				)}
 			</div>
 		</section>

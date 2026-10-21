@@ -85,7 +85,7 @@ test("multiple expanded siblings are flattened without losing descendants when a
 		],
 	]);
 	assert.deepEqual(
-		flattenFileTree(expanded, {}, results).map((row) => [row.id, row.depth]),
+		flattenFileTree(expanded, results).map((row) => [row.id, row.depth]),
 		[
 			["src", 0],
 			["src/nested", 1],
@@ -96,21 +96,22 @@ test("multiple expanded siblings are flattened without losing descendants when a
 	);
 	assert.deepEqual(visibleDirectories(["", "src/nested", "docs"]), ["", "docs"]);
 	assert.deepEqual(
-		flattenFileTree(["", "src/nested", "docs"], {}, results).map((row) => row.id),
+		flattenFileTree(["", "src/nested", "docs"], results).map((row) => row.id),
 		["src", "docs", "docs/readme.md"],
 	);
 });
 
-test("paging, blocked resources and incomplete directory replies remain explicit rows", () => {
+test("automatic boundaries, blocked resources and incomplete directory replies remain explicit rows", () => {
 	const rows = flattenFileTree(
 		["", "loading", "failed", "empty"],
-		{ "": [undefined, "page2"] },
 		new Map([
 			[
 				"",
 				{
 					pending: false,
 					failed: false,
+					before: true,
+					after: true,
 					data: {
 						entries: [
 							{ name: "blocked", path: "blocked", kind: "blocked" },
@@ -129,7 +130,7 @@ test("paging, blocked resources and incomplete directory replies remain explicit
 	);
 	assert.deepEqual(
 		rows.map((row) => row.kind),
-		["entry", "entry", "pending", "entry", "failed", "entry", "empty", "previous", "next"],
+		["boundary-before", "entry", "entry", "pending", "entry", "failed", "entry", "empty", "boundary-after"],
 	);
-	assert.equal(rows[0]?.kind === "entry" && rows[0].entry.kind, "blocked");
+	assert.equal(rows[1]?.kind === "entry" && rows[1].entry.kind, "blocked");
 });

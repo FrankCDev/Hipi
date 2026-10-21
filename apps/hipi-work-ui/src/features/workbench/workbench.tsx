@@ -42,6 +42,7 @@ import { useHomeDraft } from "./composer/use-home-draft.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
 import { ConversationHeaderIdentity } from "./conversation/header.tsx";
 import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
+import { ProjectFileLinksProvider } from "./conversation/markdown/file-links/provider.tsx";
 import { ConversationPane } from "./conversation/pane.tsx";
 import { artifactNavigation } from "./files/artifact-navigation.ts";
 import { FilePanel, useWorkAreaWidth } from "./files/panel.tsx";
@@ -344,6 +345,7 @@ export function Workbench({
 	const catalogBlocked =
 		catalogState.busy || !!catalogState.pending || !!catalogState.initialSend || catalogState.incompatible;
 	const projects = useCatalogPages<ProjectListItem, ProjectPage>({
+		retainedKey: sidebarSelection?.kind === "project" ? sidebarSelection.projectId : (selectedProjectId ?? undefined),
 		queryKey: ["projects"],
 		queryPage: (cursor, signal) => client.call("listProjects", cursor ? { cursor } : {}, signal),
 		itemKey: (item) => item.project.projectId,
@@ -1062,7 +1064,11 @@ export function Workbench({
 																	{t("work.showMore")}
 																</Button>
 															)}
-															<CatalogPagination pages={projects} listRef={navigationList} />
+															<CatalogPagination
+																pages={projects}
+																listRef={navigationList}
+																enabled={projectListExpanded || orderedProjects.length <= visibleProjects.length}
+															/>
 														</SidebarSectionContent>
 													</SidebarOrderSection>
 												),
@@ -1303,30 +1309,39 @@ export function Workbench({
 							style={{ width: retainedConversationWidth }}
 						>
 							{entryState === "ready" && selected ? (
-								<ConversationPane
+								<ProjectFileLinksProvider
 									key={`${selected.workspaceId}.${selected.conversationId}`}
-									conversation={selected}
-									searchAnchor={searchAnchor}
-									onExitSearchAnchor={() => setSearchAnchor(undefined)}
-									draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
-									onOpenModelSettings={(returnFocus) => {
-										settingsReturn.current = returnFocus;
-										setSettingsCategory("models");
-										setSettingsOpen(true);
-									}}
-									onOpenArtifact={
-										session
-											? artifactNavigation(selected, () => navigation.store.getState().scope, session, panel)
-											: undefined
-									}
-									detailsOpen={detailsOpen}
-									onDetailsClose={() => {
-										setDetailsOpen(false);
-										const target = detailsReturn.current;
-										if (target?.isConnected && target.getClientRects().length) target.focus();
-										else detailsTrigger.current?.focus();
-									}}
-								/>
+									workspaceId={selected.workspaceId}
+									session={session}
+									panel={panel}
+									navigation={navigation}
+									connected={() => connectionLease.active && currentConnection.current === connectionLease}
+								>
+									<ConversationPane
+										key={`${selected.workspaceId}.${selected.conversationId}`}
+										conversation={selected}
+										searchAnchor={searchAnchor}
+										onExitSearchAnchor={() => setSearchAnchor(undefined)}
+										draftRecoveryRevision={recoveredDrafts[`${selected.workspaceId}.${selected.conversationId}`]}
+										onOpenModelSettings={(returnFocus) => {
+											settingsReturn.current = returnFocus;
+											setSettingsCategory("models");
+											setSettingsOpen(true);
+										}}
+										onOpenArtifact={
+											session
+												? artifactNavigation(selected, () => navigation.store.getState().scope, session, panel)
+												: undefined
+										}
+										detailsOpen={detailsOpen}
+										onDetailsClose={() => {
+											setDetailsOpen(false);
+											const target = detailsReturn.current;
+											if (target?.isConnected && target.getClientRects().length) target.focus();
+											else detailsTrigger.current?.focus();
+										}}
+									/>
+								</ProjectFileLinksProvider>
 							) : entryState === "pending" ? (
 								<output className="conversation-entry-pending" aria-busy={!selectedQuery.isError}>
 									{t(selectedQuery.isError ? "nav.loadError" : "common.loading")}
@@ -1340,7 +1355,6 @@ export function Workbench({
 										currentProject && (
 											<HomeProjectPicker
 												current={currentProject}
-												pages={projects}
 												disabled={catalogBlocked || homeDraft.busy || homeDraft.failed}
 												allowProjectless={canCreateProjectless(local, projectCatalog.data)}
 												onSelect={(project) => {
@@ -1457,7 +1471,13 @@ export function Workbench({
 					onOpenConversation={() => setSettingsOpen(false)}
 					credentialSettings={<ModelSettings />}
 					workspaceActions={
-						workspace ? <ToolPacksDialog key={workspace.workspaceId} workspaceId={workspace.workspaceId} /> : undefined
+						workspace ? (
+							<ToolPacksDialog
+								key={workspace.workspaceId}
+								workspaceId={workspace.workspaceId}
+								connected={connectionLease.active && currentConnection.current === connectionLease}
+							/>
+						) : undefined
 					}
 					runtimeActions={
 						<ConnectionActions

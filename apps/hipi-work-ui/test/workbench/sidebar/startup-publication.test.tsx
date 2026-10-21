@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { AppClient, SidebarCoverage, SidebarPage, SidebarView } from "@hipi/work-runtime/contracts";
+import type { AppClient, SidebarCoverage, SidebarView, SidebarWindowResult } from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test, vi } from "vitest";
@@ -14,8 +14,12 @@ import { useNavigation } from "../../../src/features/workbench/sidebar/use-navig
 const fixture = vi.hoisted(() => ({ client: undefined as AppClient | undefined }));
 vi.mock("../../../src/app/client-provider.tsx", () => ({ useAppClient: () => fixture.client }));
 
+type SidebarPage = Extract<SidebarWindowResult, { kind: "window" }>;
 function page(state: SidebarCoverage["state"], populated = false): SidebarPage {
 	return {
+		kind: "window",
+		previousCursor: null,
+		retained: { eligible: [], unavailable: [] },
 		items: populated
 			? [
 					{

@@ -1,8 +1,10 @@
+// @vitest-environment jsdom
 import assert from "node:assert/strict";
 import { type FileRoot, FileServiceError, type FileText } from "@hipi/work-runtime/files";
 import type { FileClient } from "@hipi/work-runtime/files/protocol";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRef } from "react";
+import { act, createRef } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, test, vi } from "vitest";
 import type { FileAuthority } from "../../../src/app/file-client.ts";
@@ -107,14 +109,87 @@ test("file canvas has one visible panel title and a named close action while ret
 	assert.match(html, /aria-valuemin="320"/);
 });
 
-test("folder authorization is separate from browsing and still discloses read and write access", () => {
-	port.fileAuthority = { chooseRoot: async () => {}, revokeRoot: async () => {} };
+test("folder authorization is separate from continuous browsing without refresh or pagination chrome", () => {
+	const chooseRoot = vi.fn(async () => {});
+	const revokeRoot = vi.fn(async () => {});
+	port.fileAuthority = { chooseRoot, revokeRoot };
 	const html = render();
 	assert.ok(html.includes(l["access.title"]));
 	assert.ok(html.includes("Project"));
 	assert.ok(!html.includes(l.revoke), "Authorization controls are disclosed on demand, not mixed into file rows");
 	assert.match(html, /class="file-tree-pane"/);
-	assert.match(html, /aria-label="刷新目录"/);
+	assert.match(html, /data-file-tree-engine="pierre"/);
+	assert.match(html, /aria-label="筛选已加载文件"/);
+	assert.doesNotMatch(html, /aria-label="刷新目录"|下一页|刷新本页|加载更多/);
+	assert.equal(chooseRoot.mock.calls.length, 0);
+	assert.equal(revokeRoot.mock.calls.length, 0);
+});
+
+test("access disclosure keeps exact root permissions and only explicit actions choose or revoke authorization", async () => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	const readonly: FileRoot = { ...root, rootId: "readonly", displayName: "Reference", writable: false };
+	const chooseRoot = vi.fn(async () => {});
+	const revokeRoot = vi.fn(async () => {});
+	const readText = vi.fn(async () => baseline);
+	const saveText = vi.fn(async () => baseline);
+	port.files = client({ listRoots: async () => [root, readonly], readText, saveText });
+	port.fileAuthority = { chooseRoot, revokeRoot };
+	const session = new FileWorkspaceSession(port.files);
+	// This test owns the access dialog; continuous tree navigation has independent mounted coverage.
+	session.layout.treeOpen = false;
+	const cache = new QueryClient({ defaultOptions: { queries: { staleTime: Number.POSITIVE_INFINITY } } });
+	cache.setQueryData(["fileRoots", "workspace"], [root, readonly]);
+	const host = document.createElement("div");
+	document.body.append(host);
+	const renderer = createRoot(host);
+	try {
+		await act(async () =>
+			renderer.render(
+				<QueryClientProvider client={cache}>
+					<PreferencesProvider>
+						<FileWorkbench workspaceId="workspace" session={session} />
+					</PreferencesProvider>
+				</QueryClientProvider>,
+			),
+		);
+		assert.equal(document.querySelector('[role="dialog"]'), null);
+		const access = host.querySelector<HTMLButtonElement>(`button[aria-label="${l["access.title"]}"]`);
+		assert.ok(access);
+		await act(async () => access.click());
+		const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+		assert.ok(dialog);
+		const rows = [...dialog.querySelectorAll<HTMLElement>(".file-access-row")];
+		assert.equal(rows.length, 2);
+		assert.equal(rows[0]?.querySelector(".file-access-name")?.textContent, "Project");
+		assert.equal(rows[0]?.querySelector(".file-access-kind")?.textContent, l["access.readWrite"]);
+		assert.equal(rows[1]?.querySelector(".file-access-name")?.textContent, "Reference");
+		assert.equal(rows[1]?.querySelector(".file-access-kind")?.textContent, l.readonly);
+		assert.equal(chooseRoot.mock.calls.length, 0);
+		assert.equal(revokeRoot.mock.calls.length, 0);
+		const choose = [...dialog.querySelectorAll("button")].find((button) => button.textContent === l.choose);
+		assert.ok(choose);
+		await act(async () => choose.click());
+		assert.deepEqual(chooseRoot.mock.calls, [["workspace"]]);
+		const revoke = rows[1]?.querySelector("button");
+		assert.ok(revoke);
+		await act(async () => revoke.click());
+		assert.deepEqual(revokeRoot.mock.calls, [["workspace", "readonly"]]);
+		assert.equal(readText.mock.calls.length, 0);
+		assert.equal(saveText.mock.calls.length, 0);
+	} finally {
+		await act(async () => renderer.unmount());
+		host.remove();
+		cache.clear();
+		session.dispose();
+		vi.unstubAllGlobals();
+	}
 });
 
 test("missing capability and workspace are intentional states without a simulated file picker", () => {

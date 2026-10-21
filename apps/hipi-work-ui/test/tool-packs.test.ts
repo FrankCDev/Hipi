@@ -361,3 +361,54 @@ test("protocol 8 pack recovery preserves its original lookup digest and only exp
 		null,
 	);
 });
+
+test("management windows are bounded and never replace complete active binding authority", async () => {
+	const f = fixture();
+	const binding = {
+		workspaceId,
+		conversationId: "conversation",
+		bindingId: "live",
+		digest,
+		model: { provider: "fake", modelId: "model" },
+		expiresAt: Date.now() + 60000,
+		status: "active",
+		revision: 1,
+		createdAt: 1,
+		disclosureVersion: 1,
+		disclosed: true,
+		purpose: "live-package",
+	};
+	f.handle(async (method, params) => {
+		if (method === "listActiveToolPackBindings") return [binding];
+		if (method === "listToolPacks") {
+			const index = Number((params as { cursor?: string }).cursor ?? 0);
+			return {
+				items: [{ ...pack, digest: String(index + 1).repeat(64) }],
+				nextCursor: index < 5 ? String(index + 1) : null,
+			};
+		}
+		if (method === "listToolPackBindings") {
+			const index = Number((params as { cursor?: string }).cursor ?? 0);
+			return {
+				items: [{ ...binding, bindingId: `history-${index}`, status: "revoked" }],
+				nextCursor: index < 5 ? String(index + 1) : null,
+			};
+		}
+	});
+	await f.session.refresh();
+	f.session.packList.setActive(true);
+	f.session.bindingList.setActive(true);
+	for (let index = 0; index < 6; index++) {
+		await f.session.packList.load();
+		await f.session.bindingList.load();
+		assert.ok(f.session.packList.getSnapshot().pages.length <= 3);
+		assert.ok(f.session.bindingList.getSnapshot().pages.length <= 3);
+	}
+	assert.equal(f.session.getSnapshot().active[0]?.bindingId, "live");
+	assert.equal(f.session.getSnapshot().active[0]?.status, "active");
+	assert.equal(f.session.packList.getSnapshot().before, 3);
+	for (let index = 0; index < 3; index++) await f.session.packList.load("previous");
+	assert.equal(f.session.packList.getSnapshot().pages[0]?.items[0]?.digest, "1".repeat(64));
+	assert.ok(f.calls.every((call) => call.method.startsWith("list")));
+	f.session.dispose();
+});

@@ -177,9 +177,35 @@ test("status dimensions, generic tools, escaped retained text, provenance and ac
 	assert.match(html, /File effect: unknown/);
 	assert.match(html, /does not confirm rollback/);
 	assert.match(html, /new_pack_custom_tool/);
-	assert.match(html, /aria-expanded="true"/);
+	assert.match(html, /aria-expanded="false"/);
 	assert.match(html, /aria-controls=/);
-	assert.match(html, /&lt;script&gt;/);
+	const outputHtml = renderToStaticMarkup(
+		<ActivityCard
+			activity={activity}
+			locale="en"
+			session={session}
+			disabled={false}
+			sharedOutput
+			state={{
+				...state,
+				outputs: new Map([
+					[
+						activity.activityId,
+						{
+							busy: false,
+							failed: false,
+							page: state.text,
+							chunks: [
+								{ index: 0, page: state.text, bytes: new TextEncoder().encode(JSON.stringify(state.text)).byteLength },
+							],
+						},
+					],
+				]),
+			}}
+		/>,
+	);
+	assert.match(outputHtml, /&lt;script&gt;/);
+	assert.doesNotMatch(outputHtml, /<script>|<img/);
 	assert.doesNotMatch(html, /<script>|<img/);
 	const observed = renderToStaticMarkup(
 		<ActivityCard

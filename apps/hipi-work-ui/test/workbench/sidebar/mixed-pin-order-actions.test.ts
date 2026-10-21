@@ -27,6 +27,7 @@ const chat: SidebarPinItem = {
 };
 const page: SidebarPinPage = {
 	items: [project, chat],
+	previousCursor: null,
 	nextCursor: "next",
 	nextPinKey: { kind: "project", projectId: "unloaded" },
 	orderRevision: 8,

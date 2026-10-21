@@ -22,6 +22,7 @@ export const PRESENTATION_SCHEMA =
 export const PRESENTATION_ORDER_SCHEMA =
 	"ALTER TABLE presentation_state ADD COLUMN order_generation INTEGER NOT NULL DEFAULT 0; UPDATE presentation_state SET order_generation=generation";
 export type PresentationFailpoint = "after_read" | "after_commit" | "before_archive_cleanup";
+const MAX_PIN_LIST_CANDIDATES = 256;
 type RecordValue = ConversationPresentation & {
 	pinOrdinal: number | null;
 	pinConversationRevision: number | null;
@@ -398,6 +399,7 @@ export class ConversationPresentations {
 	async list(input: Params<"listPinnedConversations">): Promise<Result<"listPinnedConversations">> {
 		const state = this.#state();
 		let after = 0;
+		let direction: "next" | "previous" = "next";
 		if (input.cursor !== undefined) {
 			let value: Record<string, unknown>;
 			try {
@@ -406,67 +408,104 @@ export class ConversationPresentations {
 				if (
 					!value ||
 					Array.isArray(value) ||
-					Object.keys(value).sort().join(",") !== "after,generation,kind,storeId,version" ||
+					Object.keys(value).sort().join(",") !== "after,direction,generation,kind,storeId,version" ||
 					value.storeId !== this.#storeId ||
 					value.kind !== "pinned" ||
-					value.version !== 1
+					value.version !== 2 ||
+					(value.direction !== "next" && value.direction !== "previous")
 				)
 					throw new Error();
 				after = integer(value.after);
 				integer(value.generation);
+				direction = value.direction;
 			} catch {
 				throw new AppError("INVALID_REQUEST");
 			}
 			if (value.generation !== state.orderGeneration) throw new AppError("CURSOR_STALE");
 		}
 		let orderGeneration = state.orderGeneration;
+		let scanned = 0;
+		const read = async (row: Record<string, unknown>) => {
+			if (++scanned > MAX_PIN_LIST_CANDIDATES) throw new AppError("CAPACITY_EXCEEDED");
+			const candidate = record(row);
+			if (candidate.pinOrdinal === null) throw new AppError("STORE_MISMATCH");
+			const conversation = await this.#getConversation(candidate);
+			if (this.#state().orderGeneration !== orderGeneration) throw new AppError("CURSOR_STALE");
+			this.recordArchive(conversation);
+			const current = this.#state();
+			if (input.cursor !== undefined && current.orderGeneration !== orderGeneration)
+				throw new AppError("CURSOR_STALE");
+			orderGeneration = current.orderGeneration;
+			return { candidate, conversation };
+		};
 		let scanAfter = after;
-		let pageAfter = after;
-		const items: PinnedConversation[] = [];
-		let nextPinnedScope: Scope | null = null;
-		while (nextPinnedScope === null) {
+		const found: { ordinal: number; item: PinnedConversation }[] = [];
+		while (found.length <= LIMITS.directoryPage) {
+			if (scanned === MAX_PIN_LIST_CANDIDATES) {
+				const more = this.#database
+					.prepare(
+						direction === "next"
+							? "SELECT 1 FROM conversation_presentations WHERE pin_ordinal>? LIMIT 1"
+							: "SELECT 1 FROM conversation_presentations WHERE pin_ordinal<? LIMIT 1",
+					)
+					.get(scanAfter);
+				if (more) throw new AppError("CAPACITY_EXCEEDED");
+				break;
+			}
 			const rows = this.#database
-				.prepare("SELECT * FROM conversation_presentations WHERE pin_ordinal>? ORDER BY pin_ordinal LIMIT ?")
-				.all(scanAfter, LIMITS.directoryPage + 1);
-			if (rows.length === 0) break;
+				.prepare(
+					direction === "next"
+						? "SELECT * FROM conversation_presentations WHERE pin_ordinal>? ORDER BY pin_ordinal LIMIT ?"
+						: "SELECT * FROM conversation_presentations WHERE pin_ordinal<? ORDER BY pin_ordinal DESC LIMIT ?",
+				)
+				.all(scanAfter, Math.min(LIMITS.directoryPage + 1, MAX_PIN_LIST_CANDIDATES - scanned));
+			if (!rows.length) break;
 			for (const row of rows) {
-				const candidate = record(row);
-				if (candidate.pinOrdinal === null) throw new AppError("STORE_MISMATCH");
-				const conversation = await this.#getConversation(candidate);
-				// Check before our own synchronous cleanup, not only membership revisions after the scan.
-				// A pure reorder changes neither membership revisions nor nextOrdinal.
-				if (this.#state().orderGeneration !== orderGeneration) throw new AppError("CURSOR_STALE");
-				this.recordArchive(conversation);
-				const current = this.#state();
-				if (input.cursor !== undefined && current.orderGeneration !== orderGeneration)
-					throw new AppError("CURSOR_STALE");
-				orderGeneration = current.orderGeneration;
-				scanAfter = candidate.pinOrdinal;
+				const { candidate, conversation } = await read(row);
+				scanAfter = candidate.pinOrdinal!;
 				if (conversation.archivedAt !== null) continue;
-				if (items.length === LIMITS.directoryPage) {
-					nextPinnedScope = { workspaceId: candidate.workspaceId, conversationId: candidate.conversationId };
-					break;
-				}
-				items.push({ conversation, presentation: this.#public(candidate) });
-				pageAfter = candidate.pinOrdinal;
+				found.push({ ordinal: scanAfter, item: { conversation, presentation: this.#public(candidate) } });
+				if (found.length > LIMITS.directoryPage) break;
 			}
 		}
+		const window = found.slice(0, LIMITS.directoryPage);
+		if (direction === "previous") window.reverse();
+		const first = window[0],
+			last = window.at(-1);
+		let successor = direction === "next" ? found[LIMITS.directoryPage]?.item.conversation : undefined;
+		if (direction === "previous" && last) {
+			const row = this.#database
+				.prepare("SELECT * FROM conversation_presentations WHERE pin_ordinal>? ORDER BY pin_ordinal LIMIT 1")
+				.get(last.ordinal);
+			if (row) {
+				const value = await read(row);
+				if (value.conversation.archivedAt === null) successor = value.conversation;
+			}
+		}
+		const hasPrevious =
+			first &&
+			!!this.#database
+				.prepare("SELECT 1 FROM conversation_presentations WHERE pin_ordinal<? LIMIT 1")
+				.get(first.ordinal);
+		const encode = (position: number, order: "next" | "previous") =>
+			Buffer.from(
+				JSON.stringify({
+					version: 2,
+					kind: "pinned",
+					storeId: this.#storeId,
+					generation: orderGeneration,
+					direction: order,
+					after: position,
+				}),
+			).toString("base64url");
 		return {
-			items,
+			items: window.map(({ item }) => item),
 			orderGeneration,
-			nextPinnedScope,
-			nextCursor:
-				nextPinnedScope !== null
-					? Buffer.from(
-							JSON.stringify({
-								version: 1,
-								kind: "pinned",
-								storeId: this.#storeId,
-								generation: orderGeneration,
-								after: pageAfter,
-							}),
-						).toString("base64url")
-					: null,
+			previousCursor: hasPrevious && first ? encode(first.ordinal, "previous") : null,
+			nextPinnedScope: successor
+				? { workspaceId: successor.workspaceId, conversationId: successor.conversationId }
+				: null,
+			nextCursor: successor && last ? encode(last.ordinal, "next") : null,
 		};
 	}
 }

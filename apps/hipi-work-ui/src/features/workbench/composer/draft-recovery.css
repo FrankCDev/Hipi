@@ -1,0 +1,21 @@
+/* Hipi-specific recovery inventory, not a reference-client visual claim. */
+.draft-recovery-viewport {
+	--draft-recovery-max-height: 24rem;
+	--draft-recovery-row-height: 2rem;
+	max-height: min(var(--draft-recovery-max-height), 50dvh);
+	overflow: auto;
+	overflow-anchor: none;
+	scrollbar-gutter: stable;
+}
+.draft-recovery-size {
+	position: relative;
+}
+.draft-recovery-source {
+	position: absolute;
+	inset-inline: 0;
+	min-height: var(--draft-recovery-row-height);
+}
+.draft-recovery-source summary {
+	min-height: var(--draft-recovery-row-height);
+	overflow-wrap: anywhere;
+}

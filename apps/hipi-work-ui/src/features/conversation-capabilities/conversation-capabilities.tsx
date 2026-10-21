@@ -1,7 +1,8 @@
 import type { Conversation, ModelReference } from "@hipi/work-runtime/contracts";
-import { Blocks, ChevronDown, FolderPlus, Plus, ShieldCheck } from "lucide-react";
+import { Blocks, FolderPlus, Plus, ShieldCheck } from "lucide-react";
 import { type MouseEvent, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
+import { ActionTooltip } from "../../components/ui/action-tooltip.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "../../components/ui/dialog.tsx";
 import {
@@ -52,23 +53,28 @@ export function ConversationCapabilities({
 					workspaceId={conversation.workspaceId}
 					conversation={conversation}
 					active={section === "tool-packs"}
+					connected={connected}
 				>
 					{(toolPacks) => (
 						<section className="permission-controls capabilities-controls" aria-label={l["capabilities.title"]}>
 							<div className="capability-actions">
 								<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-									<DropdownMenuTrigger asChild>
-										<Button
-											ref={plusTrigger}
-											variant="ghost"
-											size="icon-sm"
-											className="composer-add-trigger"
-											aria-label={l["capabilities.add"]}
-											title={l["capabilities.add"]}
-										>
-											<Plus size={18} aria-hidden="true" />
-										</Button>
-									</DropdownMenuTrigger>
+									<ActionTooltip
+										label={l["capabilities.add"]}
+										disabled={menuOpen || section !== null || contextAction["aria-expanded"]}
+									>
+										<DropdownMenuTrigger asChild>
+											<Button
+												ref={plusTrigger}
+												variant="ghost"
+												size="icon-sm"
+												className="composer-add-trigger"
+												aria-label={l["capabilities.add"]}
+											>
+												<Plus size={16} aria-hidden="true" />
+											</Button>
+										</DropdownMenuTrigger>
+									</ActionTooltip>
 									<DropdownMenuContent
 										className="composer-add-menu"
 										align="start"
@@ -111,21 +117,24 @@ export function ConversationCapabilities({
 										</DropdownMenuItem>
 									</DropdownMenuContent>
 								</DropdownMenu>
-								<Button
-									variant="ghost"
-									size="sm"
-									className="capabilities-trigger permission-mode-trigger"
-									aria-label={l["capabilities.permissions"]}
-									title={l["capabilities.permissions"]}
-									aria-haspopup="dialog"
-									aria-expanded={section === "files"}
-									aria-controls={dialogId}
-									onClick={showPermissions}
+								<ActionTooltip
+									label={l["capabilities.permissions"]}
+									disabled={section !== null || contextAction["aria-expanded"]}
 								>
-									<ShieldCheck size={16} aria-hidden="true" />
-									<span>{l["capabilities.permissions"]}</span>
-									<ChevronDown size={12} aria-hidden="true" />
-								</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										className="capabilities-trigger permission-mode-trigger"
+										aria-label={l["capabilities.permissions"]}
+										aria-haspopup="dialog"
+										aria-expanded={section === "files"}
+										aria-controls={dialogId}
+										onClick={showPermissions}
+									>
+										<ShieldCheck size={16} aria-hidden="true" />
+										<span>{l["capabilities.permissions"]}</span>
+									</Button>
+								</ActionTooltip>
 							</div>
 							<Dialog
 								open={section !== null}

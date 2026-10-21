@@ -10,6 +10,8 @@
 }
 [data-hipi-kind="blocked"],
 [data-hipi-kind="pending"],
+[data-hipi-kind="boundary-before"],
+[data-hipi-kind="boundary-after"],
 [data-hipi-kind="empty"] {
 	color: var(--muted);
 	cursor: default;
@@ -27,7 +29,7 @@
 [data-hipi-kind="pending"] [data-item-section="icon"],
 [data-hipi-kind="empty"] [data-item-section="icon"],
 [data-hipi-kind="failed"] [data-item-section="icon"],
-[data-hipi-kind="previous"] [data-item-section="icon"],
-[data-hipi-kind="next"] [data-item-section="icon"] {
+[data-hipi-kind="boundary-before"] [data-item-section="icon"],
+[data-hipi-kind="boundary-after"] [data-item-section="icon"] {
 	visibility: hidden;
 }

@@ -6,16 +6,19 @@ import type {
 	ToolActivitySelector,
 } from "@hipi/work-runtime/contracts";
 import { usePageInView } from "framer-motion";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { MessageProjection, selectionIntersects } from "../workbench/conversation/message-projection.ts";
 import type { ToolActivityArtifact } from "./activity-card.tsx";
+import { ActivityContinuation } from "./activity-continuation.tsx";
+import { ActivityHistoryWindow } from "./activity-history-window.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { InlineActivityCard } from "./inline-activity-card.tsx";
 import { activityLabels, toolLabel } from "./labels.ts";
 import type { LiveActivityRead, LiveTool } from "./live-activity.ts";
+import { useMessageActivityOwner } from "./message-activity-owner.tsx";
 import { ActivityDisclosure, ActivitySummaryCoverage } from "./turn-activity-presentation.tsx";
 
 type Props = { scope: Scope; connected: boolean; onOpenArtifact?: (artifact: ToolActivityArtifact) => void };
@@ -27,6 +30,9 @@ export function HistoricalTurnActivities({
 	liveTools,
 	expanded,
 	onToggle,
+	contentIndexes,
+	manualChoice,
+	onExpandedChange,
 	...props
 }: Props & {
 	messageId: string;
@@ -36,9 +42,15 @@ export function HistoricalTurnActivities({
 	liveTools?: readonly LiveTool[];
 	expanded: boolean;
 	onToggle: () => void;
+	contentIndexes?: readonly number[];
+	manualChoice?: boolean;
+	onExpandedChange?: (expanded: boolean) => void;
 }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
+	const owner = useMessageActivityOwner();
+	const Details =
+		owner?.live?.session === live?.session && owner?.live?.session ? ActivityDetailsContent : ActivityDetailsView;
 	const selector = useMemo<ToolActivitySelector>(() => ({ kind: "message", messageId }), [messageId]);
 	const [manualExpanded, setManualExpanded] = useState<boolean>();
 	const current = live?.active
@@ -46,11 +58,14 @@ export function HistoricalTurnActivities({
 		: undefined;
 	const currentSlot = live?.active ? liveTools?.find((item) => item.status !== "done") : undefined;
 	const liveActive = !!current || !!currentSlot;
-	const shownExpanded = manualExpanded ?? (!!liveTools?.length || !!liveItems?.length || expanded);
+	const shownExpanded = manualChoice ?? manualExpanded ?? (!!liveTools?.length || !!liveItems?.length || expanded);
 	if (!toolCalls.total) return null;
 	return (
 		<ActivityDisclosure
 			bodyVariant="grouped"
+			toolName={
+				toolCalls.items.every((item) => item.name === toolCalls.items[0]?.name) ? toolCalls.items[0]?.name : undefined
+			}
 			title={toolCalls.items[0] ? toolLabel(toolCalls.items[0].name, locale) : l["activity.title"]}
 			count={toolCalls.total}
 			expanded={shownExpanded}
@@ -67,7 +82,8 @@ export function HistoricalTurnActivities({
 			onToggle={() => {
 				const next = !shownExpanded;
 				setManualExpanded(next);
-				if (expanded !== next) onToggle();
+				if (onExpandedChange) onExpandedChange(next);
+				else if (expanded !== next) onToggle();
 			}}
 			messageId={messageId}
 		>
@@ -83,9 +99,9 @@ export function HistoricalTurnActivities({
 						active={live?.active ?? false}
 					/>
 					{liveTools?.length && !live?.session ? null : live?.session && (liveTools?.length || liveItems?.length) ? (
-						<ActivityDetailsView
+						<Details
 							{...props}
-							state={live.state}
+							state={owner?.live?.session === live.session ? owner.live.state : live.state}
 							session={live.session}
 							items={liveItems ?? []}
 							showUnavailable={
@@ -93,11 +109,63 @@ export function HistoricalTurnActivities({
 							}
 						/>
 					) : (
-						<ScopedActivityDetails {...props} selector={selector} />
+						<HistoricalActivityDetails
+							{...props}
+							selector={selector}
+							messageId={messageId}
+							contentIndexes={contentIndexes}
+							windowed={
+								contentIndexes === undefined && (toolCalls.total > 16 || toolCalls.items.length < toolCalls.total)
+							}
+						/>
 					)}
 				</>
 			)}
 		</ActivityDisclosure>
+	);
+}
+function HistoricalActivityDetails(
+	props: Props & {
+		selector: ToolActivitySelector;
+		messageId: string;
+		contentIndexes?: readonly number[];
+		windowed?: boolean;
+	},
+) {
+	const owner = useMessageActivityOwner();
+	if (!owner || owner.messageId !== props.messageId) return <ScopedActivityDetails {...props} />;
+	return <SharedMessageActivityDetails {...props} owner={owner} />;
+}
+function SharedMessageActivityDetails({
+	owner,
+	contentIndexes,
+	windowed,
+	...props
+}: Props & {
+	owner: NonNullable<ReturnType<typeof useMessageActivityOwner>>;
+	contentIndexes?: readonly number[];
+	windowed?: boolean;
+}) {
+	useEffect(() => owner.lease(windowed), [owner.lease, windowed]);
+	if (windowed)
+		return (
+			<WindowedActivityDetails {...props} connected={owner.connected} session={owner.session} state={owner.state} />
+		);
+	return (
+		<ActivityDetailsContent
+			{...props}
+			connected={owner.connected}
+			state={owner.state}
+			session={owner.session}
+			items={
+				owner.state.page?.items.filter(
+					(item) =>
+						item.anchor &&
+						`${item.anchor.assistantEntryId}_${item.anchor.modelIndex}` === owner.messageId &&
+						(contentIndexes === undefined || contentIndexes.includes(item.anchor.contentIndex)),
+				) ?? []
+			}
+		/>
 	);
 }
 export function LiveTurnActivities({
@@ -186,8 +254,14 @@ function ScopedActivityDetails({
 	selector,
 	expectedCalls,
 	running = false,
+	windowed = false,
 	onOpenArtifact,
-}: Props & { selector: ToolActivitySelector; expectedCalls?: ReadonlyMap<string, string>; running?: boolean }) {
+}: Props & {
+	selector: ToolActivitySelector;
+	expectedCalls?: ReadonlyMap<string, string>;
+	running?: boolean;
+	windowed?: boolean;
+}) {
 	const client = useAppClient();
 	const visible = usePageInView();
 	const root = useRef<HTMLDivElement>(null);
@@ -219,7 +293,7 @@ function ScopedActivityDetails({
 				root.current?.closest(".conversation-panel") ?? root.current,
 				document.getSelection(),
 			);
-			if (!selected) await session.page();
+			if (!selected) await (windowed ? session.windowPage(0) : session.inlinePage());
 			if (!stopped && (running || selected) && !session.snapshot().failed)
 				timer = setTimeout(() => void refresh(), 2000);
 		};
@@ -229,7 +303,16 @@ function ScopedActivityDetails({
 			clearTimeout(timer);
 			if (!session.snapshot().expanded) session.cancel();
 		};
-	}, [session, connected, visible, running, state.failed, state.expanded]);
+	}, [session, connected, visible, running, state.failed, state.expanded, windowed]);
+	if (windowed)
+		return (
+			<WindowedActivityDetails
+				connected={connected && visible}
+				state={state}
+				session={session}
+				onOpenArtifact={onOpenArtifact}
+			/>
+		);
 	return (
 		<div ref={root}>
 			<ActivityDetailsView
@@ -240,6 +323,42 @@ function ScopedActivityDetails({
 				onOpenArtifact={onOpenArtifact}
 			/>
 		</div>
+	);
+}
+function WindowedActivityDetails({
+	connected,
+	state,
+	session,
+	onOpenArtifact,
+}: {
+	connected: boolean;
+	state: ActivityState;
+	session: ActivitySession;
+	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
+}) {
+	const { locale } = usePreferences();
+	const l = activityLabels(locale);
+	return (
+		<>
+			{!connected && <output>{l["activity.offline"]}</output>}
+			{state.busy && <output>{l["activity.loading"]}</output>}
+			{state.failed && (
+				<>
+					<p role="alert">{l["activity.failed"]}</p>
+					<Button variant="ghost" size="sm" disabled={!connected || state.busy} onClick={() => void session.retry()}>
+						{l["activity.retry"]}
+					</Button>
+				</>
+			)}
+			<ActivityHistoryWindow
+				session={session}
+				state={state}
+				enabled={connected}
+				locale={locale}
+				inline
+				onOpenArtifact={onOpenArtifact}
+			/>
+		</>
 	);
 }
 function ActivityDetailsView({
@@ -255,9 +374,6 @@ function ActivityDetailsView({
 	items?: readonly ToolActivity[];
 	showUnavailable?: boolean;
 }) {
-	const { locale } = usePreferences();
-	const l = activityLabels(locale);
-
 	const root = useRef<HTMLDivElement>(null);
 	const [display, setDisplay] = useState({ session, outputs: state.outputs });
 	const projection = useMemo(
@@ -282,11 +398,42 @@ function ActivityDetailsView({
 		};
 	}, [projection]);
 	const presented = { ...state, outputs: display.session === session ? display.outputs : undefined };
+	return (
+		<ActivityDetailsContent
+			connected={connected}
+			state={presented}
+			session={session}
+			items={items}
+			showUnavailable={showUnavailable}
+			onOpenArtifact={onOpenArtifact}
+			rootRef={root}
+		/>
+	);
+}
+function ActivityDetailsContent({
+	connected,
+	state,
+	session,
+	items = state.page?.items ?? [],
+	showUnavailable = true,
+	onOpenArtifact,
+	rootRef,
+}: {
+	connected: boolean;
+	state: ActivityState;
+	session: ActivitySession;
+	items?: readonly ToolActivity[];
+	showUnavailable?: boolean;
+	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
+	rootRef?: RefObject<HTMLDivElement | null>;
+}) {
+	const { locale } = usePreferences();
+	const l = activityLabels(locale);
 	const disabled = state.busy || !connected;
 	return (
-		<div className="grid gap-2" ref={root}>
+		<div className="inline-activity-records" ref={rootRef}>
 			{!connected && <output>{l["activity.offline"]}</output>}
-			{state.busy && !state.page && <output>{l["activity.loading"]}</output>}
+			{state.busy && <output>{l["activity.loading"]}</output>}
 			{items
 				.toSorted((a, b) => (a.anchor?.contentIndex ?? 0) - (b.anchor?.contentIndex ?? 0))
 				.map((item) => (
@@ -294,13 +441,15 @@ function ActivityDetailsView({
 						key={item.activityId}
 						activity={item}
 						locale={locale}
-						state={presented}
+						state={state}
 						session={session}
 						disabled={disabled}
 						onOpenArtifact={onOpenArtifact}
 					/>
 				))}
-			{state.page?.items.length === 0 && !state.page.unavailableTaskIds && <p>{l["activity.empty"]}</p>}
+			{!state.busy && state.page?.items.length === 0 && !state.page.nextCursor && !state.page.unavailableTaskIds && (
+				<p>{l["activity.phase.unavailable"]}</p>
+			)}
 			{showUnavailable && !!state.page?.unavailableTaskIds?.length && <p>{l["activity.phase.unavailable"]}</p>}
 			{state.failed && (
 				<>
@@ -310,23 +459,7 @@ function ActivityDetailsView({
 					</Button>
 				</>
 			)}
-			{state.page && !state.failed && (
-				<div className="flex gap-2">
-					<Button variant="ghost" size="sm" disabled={disabled} onClick={() => void session.page()}>
-						{l["activity.refresh"]}
-					</Button>
-					{state.page.nextCursor && (
-						<Button
-							variant="ghost"
-							size="sm"
-							disabled={disabled}
-							onClick={() => void session.page(state.page?.nextCursor ?? undefined)}
-						>
-							{l["activity.next"]}
-						</Button>
-					)}
-				</div>
-			)}
+			<ActivityContinuation session={session} state={state} enabled={connected} locale={locale} />
 		</div>
 	);
 }

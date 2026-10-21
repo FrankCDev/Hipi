@@ -18,7 +18,7 @@ import { Dialog, DialogContent } from "../../../src/components/ui/dialog.tsx";
 import { Input } from "../../../src/components/ui/input.tsx";
 import { Popover, PopoverContent } from "../../../src/components/ui/popover.tsx";
 import { ConversationActions } from "../../../src/features/workbench/catalog/controls.tsx";
-import { CatalogPagination } from "../../../src/features/workbench/catalog/pagination.tsx";
+import { CatalogPagination, type CatalogViewportPages } from "../../../src/features/workbench/catalog/pagination.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { useProjectActionOwner } from "../../../src/features/workbench/projects/action-owner.ts";
@@ -1330,79 +1330,145 @@ test("a delayed dirty-file callback cannot mutate a disposed catalog or report o
 	assert.equal(cache.invalidateQueries.mock.calls.length, 0);
 });
 
-test("First page retains origin focus while busy and restores list focus when the control disappears", () => {
-	const body = {};
-	const button = { isConnected: true };
-	const document = { activeElement: button, body };
+function viewportCallbacks(pages: CatalogViewportPages) {
+	const body = { closest: () => null };
+	const document = Object.assign(new EventTarget(), {
+		activeElement: body as unknown,
+		body,
+		visibilityState: "visible",
+		querySelector: () => null,
+	});
 	vi.stubGlobal("document", document);
-	const focus = vi.fn();
-	const listRef: React.RefObject<HTMLElement | null> = { current: null };
-	const closest = vi.fn(() => null); // This fixture models a visible, non-inert list.
-	Object.assign(listRef, { current: { focus, closest } });
-	const pages = {
-		hasMore: false,
-		canRestart: true,
-		isFetching: false,
-		isLoadingMore: false,
-		isError: false,
-		windowed: true,
-		atLimit: false,
-		loadMore: vi.fn(async () => {}),
-		restart: vi.fn(async () => {}),
+	vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => setTimeout(() => callback(0), 16));
+	vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+	const rows = pages.itemKeys.map((key, index) => ({
+		dataset: { catalogKey: key },
+		isConnected: true,
+		getBoundingClientRect: () => ({ top: index * 30, bottom: index * 30 + 20 }),
+		closest() {
+			return this;
+		},
+	}));
+	let boundaryTop = 150;
+	const boundary = { getBoundingClientRect: () => ({ top: boundaryTop, bottom: boundaryTop }) };
+	const region = Object.assign(new EventTarget(), {
+		scrollTop: 0,
+		focus: vi.fn(),
+		closest: () => null,
+		getClientRects: () => [{}],
+		getBoundingClientRect: () => ({ top: 0, bottom: 100 }),
+		querySelectorAll: () => rows.filter((row) => row.isConnected),
+		contains: (value: unknown) => rows.some((row) => row === value),
+	});
+	// Only adapt viewport geometry and event dispatch; the production component
+	// still owns demand, eviction protection, single flight, and focus callbacks.
+	const listRef: React.RefObject<HTMLElement | null> = { current: region as unknown as HTMLElement };
+	const render = () =>
+		drive("pagination", () => {
+			const view = CatalogPagination({ pages, listRef });
+			Object.assign(requiredRef(view.props.ref), { current: boundary });
+			return view;
+		});
+	return {
+		document,
+		region,
+		rows,
+		render,
+		boundary: (top: number) => {
+			boundaryTop = top;
+			region.dispatchEvent(new Event("scroll"));
+		},
 	};
-	const render = () => drive("pagination", () => CatalogPagination({ pages, listRef }));
-	const first = element(render(), Button);
-	assert.equal(first.props.children, "First page");
-	assert.ok(first.props.onClick);
-	invoke(first.props.onClick, [{ currentTarget: button }]);
-	assert.equal(pages.restart.mock.calls.length, 1);
+}
+
+test("continuous demand preserves row focus while busy and never restores list focus after a late completion", async () => {
+	let finish: (() => void) | undefined;
+	const pages: CatalogViewportPages = {
+		hasMore: true,
+		hasPrevious: false,
+		isFetching: false,
+		isError: false,
+		itemKeys: ["first", "second"],
+		evictedKeys: () => ["first"],
+		protectItem: vi.fn(),
+		loadMore: vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		),
+		loadPrevious: vi.fn(async () => {}),
+	};
+	const ui = viewportCallbacks(pages);
+	const first = ui.rows[0];
+	assert.ok(first);
+	ui.document.activeElement = first;
+	const boundary = element(ui.render(), "div");
+	assert.equal(boundary.props["aria-hidden"], "true");
+	assert.equal(elements(boundary, Button).length, 0);
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 0, "Offscreen boundaries do not demand a page");
+	ui.boundary(80);
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 1);
+	assert.deepEqual(vi.mocked(pages.protectItem).mock.calls, [["first"]]);
+	assert.equal(ui.document.activeElement, first);
 	pages.isFetching = true;
-	const busy = element(render(), Button);
-	assert.equal(busy.props["aria-disabled"], true);
-	assert.equal(busy.props.disabled, undefined, "busy controls remain focusable");
-	assert.ok(busy.props.onClick);
-	invoke(busy.props.onClick, [{ currentTarget: button }]);
-	assert.equal(pages.restart.mock.calls.length, 1);
-	pages.canRestart = false;
-	pages.windowed = false;
-	assert.equal(render(), null);
-	assert.equal(focus.mock.calls.length, 0);
-	button.isConnected = false;
-	Object.assign(document, { activeElement: body });
+	ui.render();
+	ui.boundary(80);
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 1, "Repeated demand stays single flight");
+	const editor = { closest: () => null };
+	ui.document.activeElement = editor;
+	first.isConnected = false;
+	pages.itemKeys = ["second"];
+	pages.hasMore = false;
 	pages.isFetching = false;
-	assert.equal(render(), null);
-	assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
-	assert.deepEqual(closest.mock.calls, [["[inert], [hidden]"]]);
+	assert.ok(finish);
+	finish();
+	await Promise.resolve();
+	ui.render();
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(ui.document.activeElement, editor);
+	assert.equal(ui.region.focus.mock.calls.length, 0, "Background completion has no focus-restoration owner");
 });
 
-test("bounded pagination labels disclose eviction and an error blocks Load more without removing First page", () => {
-	const pages = {
+test("bounded viewport demand protects an evicted focus owner and errors block both directions without transport controls", async () => {
+	const pages: CatalogViewportPages = {
 		hasMore: true,
-		canRestart: true,
+		hasPrevious: true,
 		isFetching: false,
-		isLoadingMore: false,
 		isError: false,
-		windowed: false,
-		atLimit: true,
+		itemKeys: ["first", "second"],
+		evictedKeys: (direction) => [direction === "next" ? "first" : "second"],
 		loadMore: vi.fn(async () => {}),
-		restart: vi.fn(async () => {}),
+		loadPrevious: vi.fn(async () => {}),
 	};
-	const listRef: React.RefObject<HTMLElement | null> = { current: null };
-	const render = () => drive("pagination", () => CatalogPagination({ pages, listRef }));
-	assert.equal(
-		element(render(), "p").props.children,
-		"Up to 5 pages stay visible. Loading more replaces the earliest page.",
-	);
-	pages.windowed = true;
+	const ui = viewportCallbacks(pages);
+	ui.document.activeElement = ui.rows[0];
+	ui.render();
+	ui.boundary(80);
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 0, "Do not evict focus without a retention owner");
+	pages.protectItem = vi.fn();
+	ui.render();
+	ui.boundary(80);
+	await vi.advanceTimersByTimeAsync(16);
+	assert.deepEqual(vi.mocked(pages.protectItem).mock.calls, [["first"]]);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 1);
 	pages.isError = true;
-	assert.equal(element(render(), "p").props.children, "Earlier pages are no longer shown. Use First page to return.");
-	const buttons = elements(render(), Button);
-	assert.equal(buttons[0]?.props.children, "First page");
-	const more = buttons.find((entry) => entry.props.children === "Load more");
-	assert.ok(more?.props.onClick);
-	assert.equal(more.props["aria-disabled"], true);
-	invoke(more.props.onClick, []);
-	assert.equal(pages.loadMore.mock.calls.length, 0);
+	const failed = ui.render();
+	ui.boundary(80);
+	await vi.advanceTimersByTimeAsync(16);
+	ui.region.scrollTop = 20;
+	ui.region.dispatchEvent(new Event("scroll"));
+	ui.region.scrollTop = 0;
+	ui.region.dispatchEvent(new Event("scroll"));
+	await vi.advanceTimersByTimeAsync(16);
+	assert.equal(vi.mocked(pages.loadMore).mock.calls.length, 1);
+	assert.equal(vi.mocked(pages.loadPrevious).mock.calls.length, 0, "Only the query owner's explicit retry can recover");
+	assert.equal(elements(failed, Button).length, 0);
+	assert.equal(elements(failed, "p").length, 0, "Cursor eviction is not user-facing pagination chrome");
 });
 
 function contextEntry(ui: ReturnType<typeof rowAndActions>, keyboard = false) {

@@ -1,0 +1,21 @@
+.conversation-turn {
+	display: flex;
+	flex-direction: column;
+	gap: var(--ui-conversation-item-gap);
+}
+.conversation-turn-process {
+	width: min(100%, var(--reading-width));
+	margin-inline: auto;
+}
+.conversation-turn-body {
+	--turn-body-gutter: 0.5rem;
+	overflow: hidden;
+	margin-inline-start: calc(-1 * var(--turn-body-gutter));
+	padding-inline-start: var(--turn-body-gutter);
+}
+.conversation-turn-body[data-settled="true"] {
+	overflow: visible;
+}
+.conversation-turn-body > .conversation-turn-block {
+	padding-block-start: var(--ui-conversation-item-gap);
+}

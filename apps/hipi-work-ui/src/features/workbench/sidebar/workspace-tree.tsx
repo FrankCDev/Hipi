@@ -199,6 +199,17 @@ export function WorkspaceBranch({
 				: { kind: "workspace", workspaceId: homeWorkspaceId },
 		filter,
 		expanded && !sectionCollapsed && !fenced,
+		() => {
+			const focused = focusedRow.current?.closest<HTMLElement>("[data-workspace-id][data-conversation-id]");
+			return [
+				...(props.selectedConversation
+					? [{ workspaceId: props.selectedWorkspace, conversationId: props.selectedConversation }]
+					: []),
+				...(focused?.dataset.workspaceId && focused.dataset.conversationId
+					? [{ workspaceId: focused.dataset.workspaceId, conversationId: focused.dataset.conversationId }]
+					: []),
+			];
+		},
 	);
 	const containsCurrent =
 		!recent &&
@@ -274,6 +285,7 @@ export function WorkspaceBranch({
 							<li
 								key={JSON.stringify([conversation.workspaceId, conversation.conversationId])}
 								className="conversation-nav-item"
+								data-catalog-key={JSON.stringify([conversation.workspaceId, conversation.conversationId])}
 							>
 								<ConversationPreview
 									conversation={conversation}
@@ -328,6 +340,13 @@ export function WorkspaceBranch({
 			className={`workspace-branch${recent ? " recent-conversations" : ""}`}
 			data-workspace-id={recent ? undefined : homeWorkspaceId}
 			data-project-id={projectItem?.project.projectId}
+			data-catalog-key={
+				projectItem
+					? props.pinnedProject
+						? JSON.stringify(["project", projectItem.project.projectId])
+						: projectItem.project.projectId
+					: undefined
+			}
 			data-pinned-project={props.pinnedProject ? "" : undefined}
 			data-current={current}
 			data-contains-current={containsCurrent}

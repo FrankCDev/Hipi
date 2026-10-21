@@ -29,6 +29,7 @@ export type ProjectPage = {
 	items: ProjectListItem[];
 	metadataGeneration: number;
 	orderGeneration: number;
+	previousCursor: string | null;
 	nextCursor: string | null;
 };
 export const PROJECT_RECOVERY_REASONS = [
@@ -552,7 +553,7 @@ export function parseProjectResult<M extends ProjectMethod>(method: M, value: un
 			break;
 		}
 		case "listProjects": {
-			const p = object(value, ["items", "metadataGeneration", "orderGeneration", "nextCursor"]);
+			const p = object(value, ["items", "metadataGeneration", "orderGeneration", "previousCursor", "nextCursor"]);
 			if (!Array.isArray(p.items) || p.items.length > PROJECT_LIMITS.page) return invalid();
 			const items = Array.from(p.items, (value): ProjectListItem => {
 				const item = object(value, ["project", "presentation"]);
@@ -566,6 +567,7 @@ export function parseProjectResult<M extends ProjectMethod>(method: M, value: un
 				items,
 				metadataGeneration: integer(p.metadataGeneration),
 				orderGeneration: integer(p.orderGeneration),
+				previousCursor: p.previousCursor === null ? null : string(p.previousCursor, PROJECT_LIMITS.cursor),
 				nextCursor: p.nextCursor === null ? null : string(p.nextCursor, PROJECT_LIMITS.cursor),
 			};
 			break;

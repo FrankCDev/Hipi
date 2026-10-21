@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import type { Snapshot } from "@hipi/work-runtime/contracts";
+import { type AppClient, parseResult, type Snapshot } from "@hipi/work-runtime/contracts";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { AppClientProvider } from "../../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../../src/app/preferences.tsx";
+import {
+	ActivityTranscriptProvider,
+	useActivityTranscriptProjection,
+} from "../../../src/features/tool-activities/activity-transcript.tsx";
 import { StreamingMessage } from "../../../src/features/workbench/conversation/messages.tsx";
 import { ResponseStatus } from "../../../src/features/workbench/conversation/response-status.tsx";
 
@@ -54,7 +59,9 @@ const render = async (content: ReactNode) => {
 };
 const viewport = async (visible: boolean) => {
 	await act(async () => {
-		for (const observer of observers) observer.enter(visible);
+		// A real delivery targets the observers registered at notification time;
+		// Motion may replace one synchronously while handling that notification.
+		for (const observer of [...observers]) observer.enter(visible);
 	});
 };
 const page = async (hidden: boolean) => {
@@ -106,7 +113,7 @@ test("first token replaces waiting status, while paused partial text remains non
 		?.closest(".message-assistant");
 	assert.ok(waitingArticle, "empty-response activity shares the message reading-width column");
 	await render(<StreamingMessage snapshot={{ ...snapshot, partial: "Hello", partialLength: 5 }} />);
-	assert.equal(host.querySelector("article"), waitingArticle, "first token retains the assistant shell");
+	assert.ok(host.querySelector("article") === waitingArticle, "first token retains the assistant shell");
 	assert.equal(host.querySelector(".response-status"), null);
 	assert.equal(host.querySelector("article")?.getAttribute("aria-busy"), "true");
 	assert.match(host.textContent ?? "", /Hello/);
@@ -134,7 +141,7 @@ test("authoritative tool/wait status can coexist with text, but cancellation/dis
 	assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, "tools");
 	assert.match(host.textContent ?? "", /Retained text/);
 	await render(<StreamingMessage snapshot={value} responseActive={false} />);
-	assert.equal(host.querySelector("article"), article);
+	assert.ok(host.querySelector("article") === article, "cancellation retains the assistant shell");
 	assert.equal(host.querySelector(".response-status"), null);
 	assert.equal(article.getAttribute("aria-busy"), "false");
 	assert.match(host.textContent ?? "", /Retained text/);
@@ -148,7 +155,7 @@ test("authoritative tool/wait status can coexist with text, but cancellation/dis
 			responseActive
 		/>,
 	);
-	assert.equal(host.querySelector("article"), article);
+	assert.ok(host.querySelector("article") === article, "retry retains the assistant shell");
 	assert.equal(host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase, "retry");
 });
 
@@ -174,4 +181,70 @@ test("actual waits replace Thinking and completion removes the placeholder inste
 	}
 	await render(<StreamingMessage snapshot={{ ...snapshot, running: false, execution }} />);
 	assert.equal(host.querySelector(".response-status"), null);
+});
+
+test("a mounted current tool summary replaces generic progress; missing surface and next generation retain waiting", async () => {
+	const client: AppClient = {
+		call: async (method, params) =>
+			parseResult(method, {
+				items: [],
+				nextCursor: null,
+				coverage: "tasks",
+				membershipFence: "f",
+				...("selector" in params && params.selector?.kind === "tasks"
+					? { unavailableTaskIds: params.selector.taskIds }
+					: {}),
+			}),
+		observe: async () => ({ dispose: async () => {} }),
+	};
+	const toolSnapshot: Snapshot = {
+		...snapshot,
+		execution: {
+			ownerTaskId: "11",
+			submissionIds: ["10"],
+			submissionCount: 1,
+			tools: { items: [{ taskId: "12", callId: "call", name: "read", status: "running" }], total: 1, active: 1 },
+			blockingCompactionCount: 0,
+		},
+	};
+	function View({ value }: { value: Snapshot }) {
+		useActivityTranscriptProjection(value, true);
+		return <StreamingMessage snapshot={value} />;
+	}
+	async function show(value: Snapshot) {
+		await render(
+			<AppClientProvider client={client}>
+				<ActivityTranscriptProvider scope={value} connected running={value.running}>
+					<View value={value} />
+				</ActivityTranscriptProvider>
+			</AppClientProvider>,
+		);
+	}
+	await render(<StreamingMessage snapshot={toolSnapshot} />);
+	assert.equal(
+		host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase,
+		"tools",
+		"a phase without any mounted tool owner must retain its waiting state",
+	);
+	await show(toolSnapshot);
+	assert.ok(
+		host.querySelector(".inline-activity"),
+		"unavailable exact detail still has a truthful mounted slot summary",
+	);
+	assert.equal(host.querySelector(".response-status"), null);
+	assert.ok(toolSnapshot.execution);
+	await show({
+		...snapshot,
+		execution: {
+			...toolSnapshot.execution,
+			ownerTaskId: "20",
+			tools: { items: [], total: 0, active: 0 },
+			generation: { attempt: 1 },
+		},
+	});
+	assert.equal(
+		host.querySelector<HTMLElement>(".response-status")?.dataset.responsePhase,
+		"generating",
+		"old mounted tool leases cannot suppress a new generation",
+	);
 });

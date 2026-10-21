@@ -805,7 +805,7 @@ test("reopen preserves an already restored conversation selection without extra 
 	assert.deepEqual(cdp.clicks, []);
 });
 
-test("activity evidence requires a loaded successful page, not merely absence of console errors", async () => {
+test("activity evidence requires a loaded successful continuous window, not merely absence of console errors", async () => {
 	let paragraphs = [];
 	let loading = true;
 	let failed = false;
@@ -817,6 +817,7 @@ test("activity evidence requires a loaded successful page, not merely absence of
 			throw new Error(`Unexpected selector: ${selector}`);
 		},
 		querySelectorAll(selector) {
+			if (selector === "[data-activity-history-window]") return [{}];
 			if (selector === "p") return paragraphs.map((textContent) => ({ textContent }));
 			if (selector === "output") return loading ? [{ textContent: "Reading records…" }] : [];
 			throw new Error(`Unexpected selector: ${selector}`);
@@ -827,10 +828,7 @@ test("activity evidence requires a loaded successful page, not merely absence of
 			assert.equal(method, "Runtime.evaluate");
 			if (++reads === 3) {
 				loading = false;
-				paragraphs = [
-					"Task-record section",
-					"No activity in this scanned page. More records may be available on the next page.",
-				];
+				paragraphs = ["Task-record section", "No recorded tool activity."];
 			}
 			return {
 				result: {
@@ -843,11 +841,11 @@ test("activity evidence requires a loaded successful page, not merely absence of
 			};
 		},
 	};
-	assert.deepEqual(await activityEvidence(cdp), { section: "Task-record section", empty: true });
+	assert.deepEqual(await activityEvidence(cdp), { continuousWindow: true, empty: true });
 	assert.equal(reads, 3);
 	failed = true;
 	await assert.rejects(activityEvidence(cdp), /Tool activity read failed/);
 	failed = false;
 	paragraphs = ["Task-record section"];
-	await assert.rejects(activityEvidence(cdp), /confirmed empty activity page/);
+	await assert.rejects(activityEvidence(cdp), /confirmed terminal empty activity window/);
 });

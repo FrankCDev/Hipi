@@ -1,7 +1,8 @@
-import type { ModelReference, Scope } from "@hipi/work-runtime/contracts";
+import type { AgentContext, ModelReference, Scope } from "@hipi/work-runtime/contracts";
 import { ShieldCheck } from "lucide-react";
 import { type MouseEventHandler, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
+import { ManagementList } from "../../components/management-list/management-list.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
 import { projectFolderLabels } from "../workbench/projects/folder-labels.ts";
@@ -57,16 +58,9 @@ function PermissionManagementView({
 	const contextId = useId();
 	useEffect(() => {
 		// Closed audit views return to the pending queue so new approvals stay discoverable.
-		if (
-			!detailsOpen &&
-			connected &&
-			!state.busy &&
-			!state.failed &&
-			!state.uncertain &&
-			state.approvalMode !== "pending"
-		)
-			void session.approvalHistory("pending");
-	}, [detailsOpen, connected, state.busy, state.failed, state.uncertain, state.approvalMode, session]);
+		if (!detailsOpen && connected && !state.busy && !state.failed && !state.uncertain && state.reviewMode !== "pending")
+			void session.reviewHistory("pending");
+	}, [detailsOpen, connected, state.busy, state.failed, state.uncertain, state.reviewMode, session]);
 	const disabled = state.busy || state.failed || state.uncertain || !connected || !state.loaded;
 	const contextAction: ContextAction = {
 		disabled: disabled || archived || !model,
@@ -84,6 +78,8 @@ function PermissionManagementView({
 		state.activeContexts.some(
 			(context) =>
 				context.purpose === "live-files" &&
+				context.workspaceId === scope.workspaceId &&
+				context.conversationId === scope.conversationId &&
 				context.rootId === project.data?.root?.rootId &&
 				context.status === "active" &&
 				context.expiresAt > now &&
@@ -91,7 +87,7 @@ function PermissionManagementView({
 				context.model.modelId === model?.modelId,
 		);
 	const approval = state.approval;
-	const operation = state.operation;
+	const review = state.review;
 	const date = (value: number) =>
 		new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "medium" }).format(value);
 	const notices = (
@@ -103,8 +99,78 @@ function PermissionManagementView({
 			{state.notFound && <p role="alert">{l["permissions.action.notFound"]}</p>}
 		</>
 	);
+	const renderContext = (context: AgentContext) => (
+		<div key={context.grantId} className="border-t border-border py-2 grid gap-1 break-all">
+			<p className="font-medium">
+				{l[context.purpose === "retained-context" ? "permissions.retained.tag" : "permissions.retained.live"]}
+			</p>
+			{context.purpose === "retained-context" && (
+				<p>
+					{l["permissions.retained.source"]}: {context.sourceGrantId}
+				</p>
+			)}
+			<p>
+				{context.rootId} / {context.pathPrefixes.map((path) => path || "/").join(", ")} · {context.model.provider} /{" "}
+				{context.model.modelId}
+			</p>
+			<p>
+				{
+					l[
+						`permissions.status.${context.status === "active" && context.expiresAt <= now ? "expired" : context.status}`
+					]
+				}{" "}
+				· {l["permissions.context.expires"]}: {date(context.expiresAt)}
+			</p>
+			{context.purpose === "live-files" && (
+				<RetainedContextDialog
+					scope={boundScope}
+					source={context}
+					model={model}
+					session={session}
+					disabled={
+						disabled || archived || (state.contextMode === "history" && session.contextList.getSnapshot().failed)
+					}
+					disabledReason={archived ? l["permissions.archived"] : undefined}
+				/>
+			)}
+			<Button
+				variant="outline"
+				size="sm"
+				disabled={
+					disabled ||
+					(state.contextMode === "history" && session.contextList.getSnapshot().failed) ||
+					context.status !== "active" ||
+					context.expiresAt <= now
+				}
+				onClick={() => void session.revoke(context)}
+			>
+				{l["permissions.context.revoke"]}
+			</Button>
+		</div>
+	);
 	const content = (
 		<div className="permission-panel grid gap-4">
+			{/* Ordinary context availability belongs in management, not a permanent composer warning. */}
+			{project.data?.status === "available" &&
+				!project.isError &&
+				connected &&
+				state.loaded &&
+				!state.failed &&
+				!state.uncertain &&
+				!state.incompatible &&
+				!!model &&
+				!projectAuthorized &&
+				!archived && (
+					<div className="project-context-notice">
+						<span>
+							<ShieldCheck size={14} aria-hidden="true" />
+							{pl.currentChat}
+						</span>
+						<Button variant="ghost" size="sm" {...contextAction}>
+							{pl.authorize}
+						</Button>
+					</div>
+				)}
 			{state.unresolvedOperations.length > 0 && (
 				<section className="grid gap-3" aria-label={l["permissions.operation.attention"]}>
 					<h3>{l["permissions.operation.attention"]}</h3>
@@ -151,14 +217,16 @@ function PermissionManagementView({
 				<Button variant="outline" size="sm" {...contextAction}>
 					{l["permissions.context.authorize"]}
 				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					disabled={state.busy || !connected}
-					onClick={() => void session.refresh().then(() => setNow(Date.now()))}
-				>
-					{l["permissions.action.refresh"]}
-				</Button>
+				{(state.failed || state.uncertain) && (
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={state.busy || !connected}
+						onClick={() => void session.refresh().then(() => setNow(Date.now()))}
+					>
+						{l[state.uncertain ? "permissions.operation.reconcile" : "permissions.action.retryRead"]}
+					</Button>
+				)}
 			</div>
 			{archived && <output>{l["permissions.archived"]}</output>}
 			{state.busy && <output>{l["permissions.action.loading"]}</output>}
@@ -242,144 +310,89 @@ function PermissionManagementView({
 			</div>
 			<details open={state.contextMode === "history"}>
 				<summary>
-					{l[state.contextMode === "active" ? "permissions.context.active" : "permissions.context.history"]} (
-					{state.contexts.length})
+					{l[state.contextMode === "active" ? "permissions.context.active" : "permissions.context.history"]}
+					{state.contextMode === "active" && ` (${state.contexts.length})`}
 				</summary>
 				<p>{l["permissions.context.revokeNote"]}</p>
 				<p>{l["permissions.retained.restart"]}</p>
-				{state.contexts.length === 0 && <p>{l["permissions.context.none"]}</p>}
-				{state.contexts.map((context) => (
-					<div key={context.grantId} className="border-t border-border py-2 grid gap-1 break-all">
-						<p className="font-medium">
-							{l[context.purpose === "retained-context" ? "permissions.retained.tag" : "permissions.retained.live"]}
-						</p>
-						{context.purpose === "retained-context" && (
-							<p>
-								{l["permissions.retained.source"]}: {context.sourceGrantId}
-							</p>
-						)}
-						<p>
-							{context.rootId} / {context.pathPrefixes.map((path) => path || "/").join(", ")} · {context.model.provider}{" "}
-							/ {context.model.modelId}
-						</p>
-						<p>
-							{
-								l[
-									`permissions.status.${context.status === "active" && context.expiresAt <= now ? "expired" : context.status}`
-								]
-							}{" "}
-							· {l["permissions.context.expires"]}: {date(context.expiresAt)}
-						</p>
-						{context.purpose === "live-files" && (
-							<RetainedContextDialog
-								scope={boundScope}
-								source={context}
-								model={model}
-								session={session}
-								disabled={disabled || archived}
-								disabledReason={archived ? l["permissions.archived"] : undefined}
-							/>
-						)}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={disabled || context.status !== "active" || context.expiresAt <= now}
-							onClick={() => void session.revoke(context)}
-						>
-							{l["permissions.context.revoke"]}
-						</Button>
-					</div>
-				))}
-				{state.contextMode === "history" && (
-					<div className="flex gap-1">
-						<Button
-							variant="ghost"
-							disabled={state.busy || state.uncertain || !connected}
-							onClick={() => void session.contextHistory("history")}
-						>
-							{l["permissions.action.first"]}
-						</Button>
-						<Button
-							variant="ghost"
-							disabled={state.busy || state.uncertain || !connected || !state.contextCursor}
-							onClick={() => {
-								if (state.contextCursor) void session.contextHistory("history", state.contextCursor);
-							}}
-						>
-							{l["permissions.action.next"]}
-						</Button>
-					</div>
+				{state.contextMode === "active" && state.loaded && !state.failed && state.contexts.length === 0 && (
+					<p>{l["permissions.context.none"]}</p>
+				)}
+				{state.contextMode === "history" ? (
+					<ManagementList
+						resource={session.contextList}
+						active={detailsOpen && connected && owner.visible}
+						label={l["permissions.context.history"]}
+						retryLabel={l["permissions.action.retryRead"]}
+						loadingLabel={l["permissions.action.loading"]}
+						emptyLabel={l["permissions.context.none"]}
+						itemKey={(context) => context.grantId}
+					>
+						{renderContext}
+					</ManagementList>
+				) : (
+					state.contexts.map(renderContext)
 				)}
 			</details>
 			<div className="flex flex-wrap gap-1">
 				<Button
 					variant="ghost"
 					disabled={state.busy || state.uncertain || !connected}
-					aria-pressed={state.approvalMode === "pending"}
-					onClick={() => void session.approvalHistory("pending")}
+					aria-pressed={state.reviewMode === "pending"}
+					onClick={() => void session.reviewHistory("pending")}
 				>
 					{l["permissions.approval.pending"]}
 				</Button>
 				<Button
 					variant="ghost"
 					disabled={state.busy || state.uncertain || !connected}
-					aria-pressed={state.approvalMode === "history"}
-					onClick={() => void session.approvalHistory("history")}
+					aria-pressed={state.reviewMode === "history"}
+					onClick={() => void session.reviewHistory("history")}
 				>
 					{l["permissions.approval.history"]}
 				</Button>
 			</div>
-			{approval ? (
-				<ApprovalCard
-					approval={approval}
-					approveDisabled={state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS}
-					operation={operation}
-					contexts={state.activeContexts}
-					now={now}
-					locale={locale}
-					disabled={disabled || archived}
-					reconcileDisabled={state.busy || !connected}
-					onDecide={(decision) => void session.decide(approval, decision)}
-					onReconcile={() => void session.refresh(true)}
-				/>
-			) : (
-				state.loaded && <p>{l["permissions.approval.none"]}</p>
-			)}
-			<div className="flex gap-2">
-				<Button
-					size="sm"
-					variant="ghost"
-					disabled={state.busy || state.uncertain || !connected}
-					onClick={() => void session.page()}
-				>
-					{l["permissions.action.first"]}
-				</Button>
-				<Button
-					size="sm"
-					variant="ghost"
-					disabled={state.busy || state.uncertain || !connected || !state.nextCursor}
-					onClick={() => {
-						if (state.nextCursor) void session.page(state.nextCursor);
-					}}
-				>
-					{l["permissions.action.next"]}
-				</Button>
-			</div>
+			<ManagementList
+				resource={session.approvalList}
+				active={detailsOpen && connected && owner.visible}
+				label={l[state.reviewMode === "pending" ? "permissions.approval.pending" : "permissions.approval.history"]}
+				retryLabel={l["permissions.action.retryRead"]}
+				loadingLabel={l["permissions.action.loading"]}
+				emptyLabel={l["permissions.approval.none"]}
+				itemKey={(item) => item.approval.approvalId}
+			>
+				{(item) => (
+					<ApprovalCard
+						approval={
+							review?.approval.approvalId === item.approval.approvalId &&
+							review.approval.revision >= item.approval.revision
+								? review.approval
+								: item.approval
+						}
+						approveDisabled={state.unresolvedOperations.length >= MAX_UNRESOLVED_OPERATIONS}
+						operation={
+							review?.approval.approvalId === item.approval.approvalId &&
+							review.operation &&
+							(!item.operation || review.operation.revision >= item.operation.revision)
+								? review.operation
+								: item.operation
+						}
+						contexts={state.activeContexts}
+						now={now}
+						locale={locale}
+						disabled={disabled || archived || session.approvalList.getSnapshot().failed}
+						reconcileDisabled={state.busy || !connected}
+						onDecide={(decision) =>
+							void session.decide(item.approval, decision).then(() => session.approvalList.load("refresh"))
+						}
+						onReconcile={() => void session.reviewApproval(item.approval, true)}
+					/>
+				)}
+			</ManagementList>
 		</div>
 	);
 	const attention = !detailsOpen && (
 		<div className="permission-attention" aria-live="polite">
-			{project.data?.status === "available" && !projectAuthorized && !archived && (
-				<div className="project-context-notice">
-					<span>
-						<ShieldCheck size={14} aria-hidden="true" />
-						{pl.currentChat}
-					</span>
-					<Button variant="ghost" size="sm" {...contextAction}>
-						{pl.authorize}
-					</Button>
-				</div>
-			)}
 			{state.unresolvedOperations.length > 0 && (
 				<>
 					<p role="alert">{l["permissions.operation.unknown"]}</p>

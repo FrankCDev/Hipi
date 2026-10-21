@@ -4,6 +4,7 @@ export {
 	CompactionEntry,
 	defineEntry,
 	ResetEntry,
+	type RunInputRefs,
 	type RunResult,
 	RunResultEntry,
 	type RunTerminalCause,

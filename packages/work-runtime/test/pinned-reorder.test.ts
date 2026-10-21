@@ -125,20 +125,20 @@ test("reorder protocol binds both exact scopes, generation, result and permanent
 	assert.deepEqual(parseResult("getPresentationCommandResult", receipt), receipt);
 	for (const orderGeneration of [1, 4, -1, 2.1])
 		assert.throws(() => parseResult("getPresentationCommandResult", { ...receipt, result: { orderGeneration } }));
+	const page = {
+		items: [],
+		previousCursor: null,
+		nextCursor: null,
+		nextPinnedScope: null,
+		orderGeneration: 2,
+	};
+	assert.deepEqual(parseResult("listPinnedConversations", page), page);
 	for (const patch of [
 		{ nextPinnedScope: input.moved, nextCursor: null },
 		{ nextPinnedScope: null, nextCursor: "cursor" },
 		{ orderGeneration: undefined },
 	])
-		assert.throws(() =>
-			parseResult("listPinnedConversations", {
-				items: [],
-				nextCursor: null,
-				nextPinnedScope: null,
-				orderGeneration: 2,
-				...patch,
-			}),
-		);
+		assert.throws(() => parseResult("listPinnedConversations", { ...page, ...patch }));
 });
 
 test("partial-page reorder preserves every unloaded pin, revisions, gaps and immutable receipts", async () => {

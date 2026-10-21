@@ -60,8 +60,9 @@ const BUDGETS = {
 			// Tool argument validation reaches TypeBox; provider-session creation reaches pi-ai's lean UUID utility; the
 			// memory and SQLite storages share scan order and cursor handling. Values from Chord's root (copyJson,
 			// replicatedState) reach its host runtime through the root barrel. Chord's context reaches pi-telemetry's root
-			// (index, noop, metrics, memory) for its NOOP telemetry default.
-			maxFiles: 70,
+			// (index, noop, metrics, memory) for its NOOP telemetry default. Bounded run-input references add one
+			// shared Harness module with type-only dependencies, used directly by inbox, generation and live state.
+			maxFiles: 71,
 			forbid: [
 				"packages/ai/src/index.ts",
 				"packages/ai/src/utils/typebox-helpers.ts",

@@ -47,7 +47,7 @@ export function markdownSegments(source: string): MarkdownSegment[] {
 
 /** Parser positions identify the particular card, including fences nested in lists or quotes. */
 export function isOpenCodeFence(source: string, startLine: number, endLine: number): boolean {
-	const lines = source.split("\n");
+	const lines = source.replace(/\r\n?/gu, "\n").split("\n");
 	const opening = lines[startLine - 1]?.replace(/^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|\d+[.)])[ \t]+))*/u, "").trimStart();
 	const marker = /^(`{3,}|~{3,})/u.exec(opening ?? "")?.[1];
 	if (!marker) return false;

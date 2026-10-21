@@ -6,7 +6,10 @@ import { afterEach, test } from "vitest";
 import { catalogPagesOptions, useCatalogPages } from "../../../src/features/workbench/catalog/use-pages.ts";
 
 type Item = { id: string; title: string };
-type Reader = (cursor: string | undefined, signal: AbortSignal) => Promise<Page<Item>>;
+type Reader = (
+	cursor: string | undefined,
+	signal: AbortSignal,
+) => Promise<Page<Item> & { previousCursor?: string | null }>;
 const cleanups: (() => void)[] = [];
 
 // The real Query observer drives requests and cache transitions. SSR samples the
@@ -239,4 +242,53 @@ test("workspace/filter switches abort old reads and cannot populate the new scop
 	await Promise.resolve();
 	assert.deepEqual(list.observer.getCurrentResult().data?.pages, [page("archived-b", null)]);
 	assert.equal(list.cache.getQueryData(["conversations", "project-a", "active", "pages"]), undefined);
+});
+
+test("bounded catalog scrolls back across evicted pages without restarting or duplicating rows", async () => {
+	const calls: (string | undefined)[] = [];
+	const list = catalog(async (cursor) => {
+		calls.push(cursor);
+		const index = Number(cursor?.slice(1) ?? 0);
+		return {
+			...page(`item-${index}`, index < 12 ? `n${index + 1}` : null),
+			previousCursor: index ? `p${index - 1}` : null,
+		};
+	});
+	await list.ready();
+	for (let index = 0; index < 9; index++) await list.read().loadMore();
+	assert.equal(list.read().pages.length, 5);
+	assert.deepEqual(
+		list.read().items.map(({ id }) => id),
+		[5, 6, 7, 8, 9].map((n) => `item-${n}`),
+	);
+	for (let index = 0; index < 5; index++) await list.read().loadPrevious();
+	assert.deepEqual(
+		list.read().items.map(({ id }) => id),
+		[0, 1, 2, 3, 4].map((n) => `item-${n}`),
+	);
+	assert.equal(list.read().hasPrevious, false);
+	assert.equal(calls.filter((cursor) => cursor === undefined).length, 1);
+});
+
+test("backward failure preserves the window and retries its exact failed cursor", async () => {
+	let failed = true;
+	const calls: (string | undefined)[] = [];
+	const list = catalog(async (cursor) => {
+		calls.push(cursor);
+		if (cursor === "previous" && failed) throw new Error("offline");
+		return { ...page(cursor === "previous" ? "first" : "second", null), previousCursor: cursor ? null : "previous" };
+	});
+	await list.ready();
+	await list.read().loadPrevious();
+	assert.deepEqual(
+		list.read().items.map(({ id }) => id),
+		["second"],
+	);
+	failed = false;
+	await list.read().retry();
+	assert.deepEqual(calls, [undefined, "previous", "previous"]);
+	assert.deepEqual(
+		list.read().items.map(({ id }) => id),
+		["first", "second"],
+	);
 });

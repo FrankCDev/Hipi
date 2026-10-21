@@ -1,23 +1,20 @@
 import { FileServiceError, type FileTarget } from "@hipi/work-runtime/files";
-import {
-	PREVIEW_LIMITS,
-	type PreviewClient,
-	type PreviewHandle,
-	type PreviewPage,
-} from "@hipi/work-runtime/previews/protocol";
+import type { DocumentPreview } from "@hipi/work-runtime/previews/contracts";
+import { PREVIEW_LIMITS, type PreviewClient, type PreviewHandle } from "@hipi/work-runtime/previews/protocol";
+import { appendPreviewDocument, MAX_DOCUMENT_PREVIEW_CHUNKS } from "./document-assembly.ts";
 import { PREVIEW_HANDLERS } from "./preview-registry.ts";
 
 export const PREVIEW_BYTE_LIMIT = PREVIEW_HANDLERS.pdf.maxBytes;
 export type PreviewSnapshot = {
 	target?: FileTarget;
 	handle?: PreviewHandle;
-	page?: PreviewPage;
+	document?: DocumentPreview;
 	bytes?: Uint8Array<ArrayBuffer>;
 	loading?: boolean;
 	error?: string;
 };
 
-/** Owns one authorized handle and one page/binary buffer; stale replies never publish. */
+/** Owns one authorized handle and one bounded document/binary buffer; stale replies never publish. */
 export class PreviewSession {
 	private state: PreviewSnapshot = {};
 	private listeners = new Set<() => void>();
@@ -73,9 +70,27 @@ export class PreviewSession {
 			this.handle = handle;
 			const handler = PREVIEW_HANDLERS[handle.kind];
 			if (handler.source === "pages") {
-				if (handle.summary.pages < 1) throw new FileServiceError("BLOCKED_RESOURCE");
-				this.publish({ target, handle });
-				await this.readPage(0);
+				if (!Number.isInteger(handle.summary.pages) || handle.summary.pages < 1)
+					throw new FileServiceError("BLOCKED_RESOURCE");
+				if (handle.summary.pages > MAX_DOCUMENT_PREVIEW_CHUNKS) throw new FileServiceError("LIMIT_EXCEEDED");
+				this.publish({ target, handle, loading: true });
+				let document: DocumentPreview | undefined;
+				for (let page = 0; page < handle.summary.pages; page++) {
+					if (generation !== this.generation) return;
+					if (signal.aborted) throw new FileServiceError("CLOSED");
+					const result = await this.client.readPage(handle.id, page, signal);
+					if (generation !== this.generation) return;
+					if (signal.aborted) throw new FileServiceError("CLOSED");
+					if (
+						result.id !== handle.id ||
+						result.revision !== handle.revision ||
+						result.page !== page ||
+						result.content.format !== handle.kind
+					)
+						throw new FileServiceError("BLOCKED_RESOURCE");
+					document = appendPreviewDocument(document, result.content);
+				}
+				if (generation === this.generation) this.publish({ target, handle, document });
 				return;
 			}
 			if (handle.summary.bytes <= 0 || handle.summary.bytes > handler.maxBytes)
@@ -102,32 +117,7 @@ export class PreviewSession {
 			if (generation === this.generation) this.fail(error instanceof FileServiceError ? error.code : "IO_ERROR");
 		}
 	}
-	async readPage(page: number) {
-		const handle = this.handle;
-		if (!handle || !Number.isInteger(page) || page < 0 || page >= handle.summary.pages) return;
-		this.pending?.abort();
-		const controller = new AbortController();
-		this.pending = controller;
-		const generation = ++this.generation;
-		const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
-		const target = this.state.target;
-		this.publish({ target, handle, loading: true });
-		try {
-			const result = await this.client.readPage(handle.id, page, signal);
-			if (generation !== this.generation) return;
-			if (signal.aborted) throw new FileServiceError("CLOSED");
-			if (
-				result.id !== handle.id ||
-				result.revision !== handle.revision ||
-				result.page !== page ||
-				result.content.format !== handle.kind
-			)
-				throw new FileServiceError("BLOCKED_RESOURCE");
-			this.publish({ target, handle, page: result });
-		} catch (error) {
-			if (generation === this.generation) this.fail(error instanceof FileServiceError ? error.code : "IO_ERROR");
-		}
-	}
+
 	dispose() {
 		this.clear();
 		this.listeners.clear();

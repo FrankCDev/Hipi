@@ -137,17 +137,25 @@ test("mixed page preserves order, matching metadata and explicit projectless mem
 			membership: { ...conversation.membership, workspaceId: "workspace_b", projectId: null },
 		},
 	];
-	const page = { items, nextCursor: "opaque", nextPinKey: { kind: "project", projectId: "next" }, orderRevision: 3 };
+	const page = {
+		items,
+		previousCursor: null,
+		nextCursor: "opaque",
+		nextPinKey: { kind: "project", projectId: "next" },
+		orderRevision: 3,
+	};
 	assert.deepEqual(parseSidebarPinResult("listSidebarPins", page), page);
 	assert.deepEqual(
 		parseSidebarPinResult("listSidebarPins", {
 			items: [],
+			previousCursor: null,
 			nextCursor: "opaque",
 			nextPinKey: projectKey,
 			orderRevision: 0,
 		}),
 		{
 			items: [],
+			previousCursor: null,
 			nextCursor: "opaque",
 			nextPinKey: projectKey,
 			orderRevision: 0,
@@ -171,6 +179,7 @@ test("mixed page candidate and cursor bounds reject oversized or malformed envel
 	assert.equal(
 		parseSidebarPinResult("listSidebarPins", {
 			items,
+			previousCursor: null,
 			nextCursor: "x".repeat(2048),
 			nextPinKey: projectKey,
 			orderRevision: 1,
@@ -181,6 +190,7 @@ test("mixed page candidate and cursor bounds reject oversized or malformed envel
 		() =>
 			parseSidebarPinResult("listSidebarPins", {
 				items: [...items, project],
+				previousCursor: null,
 				nextCursor: null,
 				nextPinKey: null,
 				orderRevision: 1,
@@ -192,6 +202,7 @@ test("mixed page candidate and cursor bounds reject oversized or malformed envel
 			() =>
 				parseSidebarPinResult("listSidebarPins", {
 					items: [],
+					previousCursor: null,
 					nextCursor,
 					nextPinKey: projectKey,
 					orderRevision: 1,
@@ -201,13 +212,20 @@ test("mixed page candidate and cursor bounds reject oversized or malformed envel
 	for (const orderRevision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, "0", null])
 		assert.throws(
 			() =>
-				parseSidebarPinResult("listSidebarPins", { items: [], nextCursor: null, nextPinKey: null, orderRevision }),
+				parseSidebarPinResult("listSidebarPins", {
+					items: [],
+					previousCursor: null,
+					nextCursor: null,
+					nextPinKey: null,
+					orderRevision,
+				}),
 			SidebarPinContractError,
 		);
 	assert.throws(
 		() =>
 			parseSidebarPinResult("listSidebarPins", {
 				items: [],
+				previousCursor: null,
 				nextCursor: null,
 				nextPinKey: null,
 				orderRevision: 0,
@@ -248,18 +266,29 @@ test("mixed page lookahead is mandatory, correlated with continuation and absent
 		[[conversation], projectKey],
 		[[conversation], otherConversation],
 	] as [SidebarPinItem[], PinKey][]) {
-		const page = { items, nextCursor: "opaque", nextPinKey, orderRevision: 3 };
+		const page = { items, previousCursor: null, nextCursor: "opaque", nextPinKey, orderRevision: 3 };
 		assert.deepEqual(parseSidebarPinResult("listSidebarPins", page), page);
 	}
-	const terminal = { items: [project, conversation], nextCursor: null, nextPinKey: null, orderRevision: 3 };
+	const terminal = {
+		items: [project, conversation],
+		previousCursor: null,
+		nextCursor: null,
+		nextPinKey: null,
+		orderRevision: 3,
+	};
 	assert.deepEqual(parseSidebarPinResult("listSidebarPins", terminal), terminal);
 	for (const invalid of [
 		{ ...terminal, nextPinKey: undefined },
-		{ ...terminal, nextCursor: "opaque" },
+		{ ...terminal, previousCursor: null, nextCursor: "opaque" },
 		{ ...terminal, nextPinKey: projectKey },
-		{ ...terminal, nextCursor: "opaque", nextPinKey: projectKey },
-		{ ...terminal, nextCursor: "opaque", nextPinKey: conversationKey },
-		{ ...terminal, nextCursor: "opaque", nextPinKey: { ...otherConversation, projectId: "extra" } },
+		{ ...terminal, previousCursor: null, nextCursor: "opaque", nextPinKey: projectKey },
+		{ ...terminal, previousCursor: null, nextCursor: "opaque", nextPinKey: conversationKey },
+		{
+			...terminal,
+			previousCursor: null,
+			nextCursor: "opaque",
+			nextPinKey: { ...otherConversation, projectId: "extra" },
+		},
 	])
 		assert.throws(() => parseSidebarPinResult("listSidebarPins", invalid), SidebarPinContractError);
 });

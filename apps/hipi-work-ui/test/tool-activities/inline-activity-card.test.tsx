@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import { type AppClient, type Method, type Params, parseResult, type ToolActivity } from "@hipi/work-runtime/contracts";
+import {
+	type AppClient,
+	type FilePresentation,
+	type Method,
+	type Params,
+	parseResult,
+	type ToolActivity,
+} from "@hipi/work-runtime/contracts";
 import { act, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -31,6 +38,7 @@ const calls: { method: Method; params: Params<Method> }[] = [];
 const opened: string[] = [];
 let item: ToolActivity;
 let failText = false;
+let presentation: FilePresentation | undefined;
 const client: AppClient = {
 	call: async <M extends Method>(method: M, params: Params<M>) => {
 		calls.push({ method, params });
@@ -41,6 +49,7 @@ const client: AppClient = {
 		const cursor = (params as Params<"getToolActivityText">).cursor;
 		return parseResult(method, {
 			activityId: item.activityId,
+			...(presentation && !cursor ? { presentation } : {}),
 			text: cursor ? "second chunk" : "<img src='unsafe'>\n**literal output**",
 			nextCursor: cursor ? null : "next",
 			retainedOutputOnly: true,
@@ -63,8 +72,17 @@ function View() {
 }
 beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.stubGlobal(
+		"IntersectionObserver",
+		class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		},
+	);
 	item = { ...activity };
 	failText = false;
+	presentation = undefined;
 	calls.length = 0;
 	opened.length = 0;
 	host = document.createElement("div");
@@ -98,13 +116,12 @@ test("expanded inline tool output is directly read, escaped and bounded through 
 	assert.doesNotMatch(host.textContent ?? "", /Retained tool output only/);
 	assert.match(host.textContent ?? "", /Output was truncated upstream/);
 	assert.doesNotMatch(host.textContent ?? "", /First output chunk/);
-	await act(async () => button("Next output chunk").click());
-	assert.equal(host.querySelector("pre")?.textContent, "second chunk");
+	const viewport = host.querySelector(".retained-output-viewport");
+	assert.ok(viewport);
+	await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 100 })));
+	assert.match(host.querySelector("pre")?.textContent ?? "", /literal output.*second chunk/s);
 	assert.equal((calls[2]?.params as Params<"getToolActivityText">).cursor, "next");
-	assert.equal(session.snapshot().outputs?.get(item.activityId)?.cursor, "next");
-	await act(async () => button("First output chunk").click());
-	assert.equal(session.snapshot().outputs?.get(item.activityId)?.cursor, undefined);
-	assert.doesNotMatch(host.textContent ?? "", /First output chunk/);
+	assert.doesNotMatch(host.textContent ?? "", /First output chunk|Next output chunk/);
 	await act(async () => button("src/example.ts").click());
 	assert.deepEqual(opened, ["src/example.ts"]);
 });
@@ -166,4 +183,71 @@ test("output cursor follows successfully displayed text through failure, collaps
 	assert.equal(session.snapshot().textCursor, undefined);
 	session.dispose();
 	assert.equal(session.snapshot().textCursor, undefined);
+});
+
+test("protocol11 file presentation renders a compact file row while raw output remains in the same-reader dialog", async () => {
+	item = { ...activity, effect: undefined, artifact: undefined, outputTruncated: false };
+	presentation = {
+		version: 1,
+		target: { rootId: "root", path: "src/example.ts" },
+		result: { kind: "read", revision: "a".repeat(64), text: "hello", offset: 0, nextOffset: null, textLength: 5 },
+	};
+	await act(async () => root.render(<View />));
+	assert.ok(host.querySelector(".inline-file-activity-row .lucide-file"));
+	assert.match(host.textContent ?? "", /Read file.*example.ts/);
+	assert.equal(host.querySelector("pre"), null);
+	assert.doesNotMatch(host.textContent ?? "", /Execution completed|plaintext|literal output/);
+	const count = calls.length;
+	await act(async () => button("Tool call details").click());
+	assert.match(document.querySelector('[role="dialog"] pre')?.textContent ?? "", /literal output/);
+	assert.equal(calls.length, count);
+	const viewport = document.querySelector('[role="dialog"] .retained-output-viewport');
+	assert.ok(viewport);
+	failText = true;
+	await act(async () => viewport.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 100 })));
+	assert.ok(host.querySelector(".inline-file-activity"));
+	assert.ok(document.querySelector('[role="dialog"]'));
+	assert.match(document.querySelector('[role="dialog"]')?.textContent ?? "", /Records could not be read/);
+	failText = false;
+	await act(async () => button("Retry read", document.querySelector('[role="dialog"]') ?? document).click());
+	assert.match(document.querySelector('[role="dialog"] pre')?.textContent ?? "", /literal output.*second chunk/s);
+});
+test("directory and confirmed save presentation do not invent diff statistics or expand raw JSON in the row", async () => {
+	for (const kind of ["directory", "save"] as const) {
+		item = {
+			...activity,
+			toolName: kind === "directory" ? "hipi_files_list" : "hipi_files_save",
+			outputTruncated: false,
+			effect: kind === "save" ? { operationId: "operation-private", status: "confirmed" } : undefined,
+			artifact: undefined,
+		};
+		presentation = {
+			version: 1,
+			target: { rootId: "root", path: "src" },
+			result:
+				kind === "directory"
+					? { kind, entries: [], hasMore: false }
+					: { kind, operationId: "operation-private", revision: "a".repeat(64), bytes: 42 },
+		};
+		await act(async () => {
+			root.render(<div />);
+		});
+		await session.page();
+		await act(async () => root.render(<View />));
+		assert.ok(host.querySelector(kind === "directory" ? ".lucide-folder" : ".lucide-pencil"));
+		assert.equal(host.querySelector("pre"), null);
+		assert.doesNotMatch(host.textContent ?? "", /[+-]\d|Edited|Created/);
+	}
+});
+test("presentation cannot hide unknown writes or be reused for another tool or activity", async () => {
+	presentation = {
+		version: 1,
+		target: { rootId: "root", path: "src/example.ts" },
+		result: { kind: "save", operationId: "operation-private", revision: "a".repeat(64), bytes: 42 },
+	};
+	item = { ...activity, toolName: "hipi_files_save" };
+	await act(async () => root.render(<View />));
+	assert.equal(host.querySelector(".inline-file-activity"), null);
+	assert.match(host.textContent ?? "", /original write is not confirmed/);
+	assert.ok(host.querySelector("pre"));
 });

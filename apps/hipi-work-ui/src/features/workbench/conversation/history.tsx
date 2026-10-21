@@ -5,6 +5,7 @@ import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { conversationSearchLabels } from "../search/labels.ts";
 import type { ConversationFailure } from "./failure.ts";
+import type { HistoryViewport } from "./history/window.ts";
 import {
 	anchoredHistorySnapshot,
 	ConversationHistoryController,
@@ -18,6 +19,7 @@ import { readingPositionsFor } from "./reading-position.ts";
 type Props = {
 	scope: Scope;
 	snapshot: Snapshot | undefined;
+	connected?: boolean;
 	responseActive?: boolean;
 	error: boolean;
 	footerRef?: RefObject<HTMLElement | null>;
@@ -41,6 +43,7 @@ export function ConversationHistory(props: Props) {
 function ScopedHistory({
 	scope,
 	snapshot,
+	connected = true,
 	responseActive,
 	error,
 	footerRef,
@@ -81,6 +84,7 @@ function ScopedHistory({
 			appliedAnchor.current = undefined;
 		};
 	}, [client, scope.workspaceId, scope.conversationId]);
+	useLayoutEffect(() => controller.current?.setConnected(connected), [connected]);
 	useLayoutEffect(() => {
 		if (searchAnchor === appliedAnchor.current) return;
 		if (searchAnchor) controller.current?.openAnchor(searchAnchor);
@@ -92,7 +96,11 @@ function ScopedHistory({
 		if (snapshot) controller.current?.update(snapshot);
 	}, [snapshot]);
 	const onNearTop = useCallback((nearTop: boolean) => controller.current?.setNearTop(nearTop), []);
-	const status = state.blocked || state.failed || state.loading || state.reconciling;
+	const onHistoryViewport = useCallback(
+		(viewport: HistoryViewport | null) => controller.current?.setViewport(viewport),
+		[],
+	);
+	const status = state.capacity || state.failed || state.loading || state.reconciling;
 	const jumpLatest = () => {
 		appliedAnchor.current = undefined;
 		focusLatest.current = true;
@@ -118,8 +126,9 @@ function ScopedHistory({
 			responseActive={responseActive}
 			error={error}
 			onNearTop={onNearTop}
+			onHistoryViewport={onHistoryViewport}
 			searchAnchor={state.anchor?.window}
-			onJumpLatest={state.anchor ? jumpLatest : undefined}
+			onJumpLatest={state.anchor || state.newer ? jumpLatest : undefined}
 			historyStatus={
 				status || state.anchor ? (
 					<div className={state.anchor ? "search-history-status" : "history-status"}>
@@ -127,26 +136,6 @@ function ScopedHistory({
 							<>
 								<output>{l.anchored}</output>
 								<div className="search-history-actions">
-									{state.anchor.window.olderCursor && (
-										<Button
-											size="sm"
-											variant="ghost"
-											disabled={state.loading || state.capacity}
-											onClick={() => controller.current?.loadAnchored("older")}
-										>
-											{l.older}
-										</Button>
-									)}
-									{state.anchor.window.newerCursor && (
-										<Button
-											size="sm"
-											variant="ghost"
-											disabled={state.loading || state.capacity}
-											onClick={() => controller.current?.loadAnchored("newer")}
-										>
-											{l.newer}
-										</Button>
-									)}
 									<Button size="sm" variant="ghost" onClick={jumpLatest}>
 										{t("work.jumpLatest")}
 									</Button>
@@ -158,24 +147,17 @@ function ScopedHistory({
 								{t(
 									state.capacity
 										? "history.capacity"
-										: state.blocked === "scan-limit"
-											? "history.scanLimit"
-											: state.failed
-												? "history.failed"
-												: state.reconciling
-													? "history.reconciling"
-													: "common.loading",
+										: state.failed
+											? "history.failed"
+											: state.reconciling
+												? "history.reconciling"
+												: "common.loading",
 								)}
 							</output>
 						)}
-						{(state.failed || state.blocked === "scan-limit") && (
+						{state.failed && (
 							<Button size="sm" variant="ghost" onClick={() => controller.current?.retry()}>
-								{t(state.blocked === "scan-limit" ? "history.continueScan" : "history.retry")}
-							</Button>
-						)}
-						{state.capacity && (
-							<Button size="sm" variant="ghost" onClick={jumpLatest}>
-								{t("history.releaseLatest")}
+								{t("history.retry")}
 							</Button>
 						)}
 					</div>

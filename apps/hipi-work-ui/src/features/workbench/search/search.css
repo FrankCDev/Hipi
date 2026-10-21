@@ -17,6 +17,7 @@
 .conversation-search-results {
 	min-height: 0;
 	overflow-y: auto;
+	overflow-anchor: none;
 	overscroll-behavior: contain;
 	display: grid;
 	gap: 4px;
@@ -52,7 +53,6 @@
 	display: grid;
 	gap: 6px;
 }
-.conversation-search-actions,
 .search-history-actions {
 	display: flex;
 	flex-wrap: wrap;

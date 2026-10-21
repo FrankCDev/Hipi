@@ -22,7 +22,16 @@
 }
 .permission-mode-trigger {
 	gap: 4px;
-	padding: 4px 6px;
+}
+.capabilities-controls .capability-actions > .permission-mode-trigger {
+	height: var(--composer-action-size);
+	min-height: var(--composer-action-size);
+	min-width: var(--composer-action-size);
+	border-radius: var(--composer-auxiliary-radius);
+	font-size: calc(var(--font-ui-size) - 1px);
+	line-height: var(--composer-auxiliary-line-height);
+	padding-block: 0;
+	padding-inline: var(--composer-permission-inline-padding);
 }
 .composer-add-menu {
 	width: min(260px, calc(100vw - 24px));

@@ -316,7 +316,7 @@ const orderInput: Params<"reorderPinnedConversation"> = {
 	before: { workspaceId: "other", conversationId: "anchor" },
 	expectedOrderGeneration: 7,
 };
-const orderPage = { items: [], nextCursor: null, orderGeneration: 12, nextPinnedScope: null };
+const orderPage = { items: [], previousCursor: null, nextCursor: null, orderGeneration: 12, nextPinnedScope: null };
 
 test.each([false, true])("order recovery reconciles current list after historical receipt (lost=%s)", async (lost) => {
 	const f = fixture();

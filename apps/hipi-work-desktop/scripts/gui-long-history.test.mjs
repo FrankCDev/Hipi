@@ -6,6 +6,7 @@ import {
 	addPartial,
 	anchored,
 	assertLongHistoryAcceptance,
+	continuousDocumentState,
 	executionState,
 	observeExecution,
 	observeStream,
@@ -237,7 +238,7 @@ test("acceptance cannot promote incomplete native observations or duplicated res
 	const first = {
 		prepend: { status: "validated" },
 		oldestReached: true,
-		expansion: { status: "validated" },
+		continuousDocument: { status: "validated", exactOriginal: true, startEndStart: true },
 		scopeIsolation: true,
 		streamValidation: "validated",
 		persistedProbe: { userKey: "message:user", answerKey: "message:answer" },
@@ -246,7 +247,7 @@ test("acceptance cannot promote incomplete native observations or duplicated res
 	assertLongHistoryAcceptance(first, reopened);
 	for (const broken of [
 		{ ...first, prepend: { status: "notvalidated" } },
-		{ ...first, expansion: { status: "notvalidated" } },
+		{ ...first, continuousDocument: { status: "notvalidated" } },
 		{ ...first, streamValidation: "notvalidated" },
 	])
 		assert.throws(() => assertLongHistoryAcceptance(broken, reopened));
@@ -271,4 +272,33 @@ test("scenario stays separate, preserves native lifecycle, and cannot mutate app
 	assert.match(harness, /safeCleanup = scenarioResourcesClosed/);
 	assert.match(harness, /if \(process.argv\[1\].*await runPackagedGui\(\)/);
 	assert.doesNotMatch(harness, /--no-sandbox|disable-web-security/);
+});
+
+test("continuous document observations require one canonical body and both real paragraph boundaries", () => {
+	const paragraphs = [
+		{ textContent: "lead", getBoundingClientRect: () => ({ top: 20, bottom: 40 }) },
+		{ textContent: "tail\nEND", getBoundingClientRect: () => ({ top: 60, bottom: 1200 }) },
+	];
+	let complete = true;
+	const body = { querySelectorAll: () => paragraphs };
+	const rows = [{ dataset: { messageId: "one" }, querySelector: () => (complete ? body : null) }];
+	const document = {
+		querySelectorAll: () => rows,
+		querySelector: () => ({ getBoundingClientRect: () => ({ top: 0, bottom: 500 }) }),
+	};
+	const before = continuousDocumentState(document, "one");
+	assert.equal(before.text, "lead\n\ntail\nEND");
+	assert.equal(before.startVisible, true);
+	assert.equal(before.endVisible, false);
+	paragraphs[0].getBoundingClientRect = () => ({ top: -700, bottom: -680 });
+	paragraphs[1].getBoundingClientRect = () => ({ top: -660, bottom: 480 });
+	const after = continuousDocumentState(document, "one");
+	assert.equal(after.text, before.text);
+	assert.equal(after.startVisible, false);
+	assert.equal(after.endVisible, true);
+	complete = false;
+	assert.equal(continuousDocumentState(document, "one"), null);
+	complete = true;
+	rows.push(rows[0]);
+	assert.equal(continuousDocumentState(document, "one"), null);
 });

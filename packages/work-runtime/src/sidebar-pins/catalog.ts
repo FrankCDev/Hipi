@@ -220,19 +220,22 @@ export class SidebarPins {
 			throw new AppError("INDEX_RECOVERY_REQUIRED");
 		const orderRevision = this.#state().orderRevision;
 		let after = 0;
+		let direction: "next" | "previous" = "next";
 		if (input.cursor) {
 			try {
 				const value: unknown = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8"));
 				if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
 				const c = value as Record<string, unknown>;
 				if (
-					Object.keys(c).sort().join() !== "after,kind,orderRevision,storeId,version" ||
+					Object.keys(c).sort().join() !== "after,direction,kind,orderRevision,storeId,version" ||
 					c.kind !== "sidebar_pins" ||
-					c.version !== 1 ||
+					c.version !== 2 ||
+					(c.direction !== "next" && c.direction !== "previous") ||
 					c.storeId !== this.#storeId
 				)
 					throw new Error();
 				after = integer(c.after);
+				direction = c.direction;
 				integer(c.orderRevision);
 				if (c.orderRevision !== orderRevision) throw new AppError("CURSOR_STALE");
 			} catch (error) {
@@ -240,9 +243,24 @@ export class SidebarPins {
 				throw new AppError("INVALID_REQUEST");
 			}
 		}
-		const rows = this.#db.prepare(SIDEBAR_PIN_CANDIDATES).all(after, 51),
-			items: SidebarPinMethods["listSidebarPins"]["result"]["items"] = [];
-		for (const row of rows) {
+		const scanned = this.#db
+			.prepare(
+				direction === "next"
+					? SIDEBAR_PIN_CANDIDATES
+					: "SELECT kind,project_id,workspace_id,conversation_id,ordinal FROM sidebar_pin_order WHERE ordinal<? ORDER BY ordinal DESC LIMIT ?",
+			)
+			.all(after, 51);
+		const rows = scanned.slice(0, 50);
+		if (direction === "previous") rows.reverse();
+		const first = rows[0],
+			last = rows.at(-1);
+		const nextRow = last ? this.#db.prepare(SIDEBAR_PIN_CANDIDATES).get(last.ordinal, 1) : undefined;
+		const hasPrevious = first
+			? !!this.#db.prepare("SELECT 1 FROM sidebar_pin_order WHERE ordinal<? LIMIT 1").get(first.ordinal)
+			: false;
+		const items: SidebarPinMethods["listSidebarPins"]["result"]["items"] = [];
+		// The forward successor remains verified even while the page itself was read backwards.
+		for (const row of nextRow ? [...rows, nextRow] : rows) {
 			const value = key(row);
 			if (value.kind === "project") {
 				items.push({
@@ -265,23 +283,23 @@ export class SidebarPins {
 		if (this.#state().orderRevision !== orderRevision) throw new AppError("CURSOR_STALE");
 		if (this.#db.prepare("SELECT state FROM project_catalog_state WHERE singleton=1").get()?.state !== "ready")
 			throw new AppError("INDEX_RECOVERY_REQUIRED");
-		const last = rows.slice(0, 50).at(-1);
+		const encode = (position: unknown, order: "next" | "previous") =>
+			Buffer.from(
+				JSON.stringify({
+					version: 2,
+					kind: "sidebar_pins",
+					storeId: this.#storeId,
+					orderRevision,
+					direction: order,
+					after: integer(position),
+				}),
+			).toString("base64url");
 		return {
-			items: items.slice(0, 50),
+			items: items.slice(0, rows.length),
 			orderRevision,
-			nextPinKey: rows.length > 50 ? key(rows[50]) : null,
-			nextCursor:
-				rows.length > 50 && last
-					? Buffer.from(
-							JSON.stringify({
-								version: 1,
-								kind: "sidebar_pins",
-								storeId: this.#storeId,
-								orderRevision,
-								after: last.ordinal,
-							}),
-						).toString("base64url")
-					: null,
+			nextPinKey: nextRow ? key(nextRow) : null,
+			nextCursor: nextRow && last ? encode(last.ordinal, "next") : null,
+			previousCursor: hasPrevious && first ? encode(first.ordinal, "previous") : null,
 		};
 	}
 }

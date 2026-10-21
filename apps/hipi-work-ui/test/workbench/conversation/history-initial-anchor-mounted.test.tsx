@@ -175,7 +175,12 @@ async function advance(ms: number) {
 }
 beforeEach(() => {
 	vi.useFakeTimers();
+	Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 	vi.clearAllMocks();
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+		assert.equal(method, "getToolActivities");
+		return parseResult(method, page);
+	});
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	// React's shared document delegation is renderer-owned and intentionally
 	// survives individual roots. Initialize it before measuring product owners.
@@ -290,6 +295,28 @@ const anchor: SearchHistoryWindow = {
 	olderCursor: null,
 	newerCursor: null,
 };
+
+test("search history loads viewport boundaries without transport buttons and preserves real failure retry", async () => {
+	let reject: ((error: Error) => void) | undefined;
+	const pending = new Promise<unknown>((_resolve, fail) => {
+		reject = fail;
+	});
+	vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) =>
+		parseResult(method, method === "getHistoryAroundMatch" ? await pending : page),
+	);
+	const searchAnchor = { locator: "opaque", window: { ...anchor, olderCursor: "older", newerCursor: "newer" } };
+	const owner = host(() => (
+		<ConversationHistory scope={scope} snapshot={latest} error={false} searchAnchor={searchAnchor} />
+	));
+	owner.drive();
+	for (let index = 0; index < 5; index++) frame();
+	const labels = [...owner.mount.querySelectorAll("button")].map((button) => button.textContent);
+	for (const label of ["Load earlier messages", "Load later messages", "history.continueScan", "history.releaseLatest"])
+		assert.equal(labels.includes(label), false);
+	assert.equal(vi.mocked(client.call).mock.calls.filter((call) => call[0] === "getHistoryAroundMatch").length, 1);
+	await act(async () => reject?.(new Error("read failed")));
+	assert.ok([...owner.mount.querySelectorAll("button")].some((button) => button.textContent === "history.retry"));
+});
 test.each([false, true])("initial hydrated history never visits the live tail (StrictMode=%s)", (strict) => {
 	let snapshot = latest;
 	const searchAnchor = { window: anchor, locator: "opaque" };
@@ -304,7 +331,7 @@ test.each([false, true])("initial hydrated history never visits the live tail (S
 	assert.ok(virtualizer.scrollToIndex.mock.calls.length > 0);
 	assert.ok(virtualizer.scrollToIndex.mock.calls.every((call) => call[0] === 1 && call[1]?.align === "center"));
 	assert.equal(owner.mount.querySelector(".message-scroll")?.getAttribute("data-reading-mode"), "search");
-	assert.equal(owner.mount.querySelector(".search-match-text")?.textContent, "Second");
+	assert.equal(owner.mount.querySelector("[data-search-match]")?.textContent, "Second");
 	const centerCalls = virtualizer.scrollToIndex.mock.calls.length;
 	root.scrollTop = 123.5;
 	snapshot = { ...latest, partial: "Background generation", running: true };
@@ -379,3 +406,104 @@ test("selection before hydrated match settling cancels the later scroll", () => 
 	assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0);
 	assert.equal(root.scrollTop, 143.25);
 });
+
+test.each(["none", "wheel", "selection", "scope"])(
+	"delayed canonical search respects prior %s intent",
+	async (interruption) => {
+		const text = `# Heading\n\n${"x".repeat(9000)}\n\n**target**`;
+		const id = `delayed-${interruption}`;
+		const start = text.indexOf("**target**");
+		const targetMessage = {
+			id,
+			role: "assistant" as const,
+			text: text.slice(0, 100),
+			textLength: text.length,
+			truncated: true,
+		};
+		let currentScope = scope;
+		let snapshot = { ...latest, messages: [targetMessage] };
+		let searchAnchor: { window: SearchHistoryWindow; locator: string } | undefined = {
+			locator: id,
+			window: {
+				...scope,
+				messages: [targetMessage],
+				target: {
+					...scope,
+					messageId: id,
+					offset: start,
+					text: "**target**",
+					nextOffset: null,
+					textLength: text.length,
+				},
+				matchStart: start + 2,
+				matchEnd: start + 8,
+				olderCursor: null,
+				newerCursor: null,
+			},
+		};
+		let resolve: ((value: unknown) => void) | undefined;
+		const pending = new Promise<unknown>((r) => {
+			resolve = r;
+		});
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) =>
+			parseResult(method, method === "getMessageText" ? await pending : page),
+		);
+		const owner = host(() => (
+			<ConversationHistory scope={currentScope} snapshot={snapshot} error={false} searchAnchor={searchAnchor} />
+		));
+		owner.drive();
+		frame();
+		frame();
+		assert.equal(searchMark.scrollIntoView.mock.calls.length, 0, "No block position before canonical document exists");
+		root.scrollTop = 143.25;
+		if (interruption === "wheel") act(() => root.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 })));
+		if (interruption === "selection")
+			act(() => {
+				const selection = document.getSelection();
+				assert.ok(selection);
+				const range = document.createRange();
+				range.selectNodeContents(root);
+				selection.removeAllRanges();
+				selection.addRange(range);
+				document.dispatchEvent(new Event("selectionchange"));
+			});
+		if (interruption === "scope") {
+			currentScope = { ...scope, conversationId: "replacement" };
+			snapshot = { ...latest, ...currentScope, messages: [] };
+			searchAnchor = undefined;
+			owner.drive();
+			frame();
+			frame();
+			searchMark.scrollIntoView.mockClear();
+			virtualizer.scrollToEnd.mockClear();
+		}
+		await act(async () =>
+			resolve?.({ ...scope, messageId: id, text, offset: 0, nextOffset: null, textLength: text.length }),
+		);
+		if (interruption === "selection")
+			act(() => {
+				document.getSelection()?.removeAllRanges();
+				document.dispatchEvent(new Event("selectionchange"));
+			});
+		frame();
+		frame();
+		frame();
+		assert.ok(
+			owner.mount.querySelector("[data-message-document-complete=true]") || interruption === "scope",
+			JSON.stringify({
+				calls: vi.mocked(client.call).mock.calls.map((x) => x[0]),
+				text: owner.mount.textContent?.slice(-300),
+			}),
+		);
+		assert.equal(searchMark.scrollIntoView.mock.calls.length, interruption === "none" ? 1 : 0);
+		assert.equal(virtualizer.scrollToEnd.mock.calls.length, 0, "Hydration cannot follow the live end");
+		if (interruption !== "scope") {
+			const block = owner.mount.querySelector<HTMLElement>("[data-search-match]");
+			assert.ok(block);
+			assert.equal(block.textContent, "target");
+			assert.equal(Number(block.dataset.markdownSourceStart), start);
+			assert.equal(Number(block.dataset.markdownSourceEnd), text.length);
+			assert.equal(root.scrollTop, 143.25);
+		}
+	},
+);

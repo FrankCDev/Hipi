@@ -677,3 +677,79 @@ test("capacity preserves expired-context recovery and lost authorization-result 
 	);
 	f.session.dispose();
 });
+
+test("management retains every approval across transport pages without replacing inline ownership or authority", async () => {
+	const f = fixture();
+	await f.session.refresh();
+	f.handle(async (method, params) => {
+		if (method === "listToolApprovals") {
+			const cursor = (params as { cursor?: string }).cursor;
+			const index = cursor ? Number(cursor) : 0;
+			return {
+				items: [{ ...f.approval, approvalId: `review-${index}` }],
+				nextCursor: index < 4 ? String(index + 1) : null,
+			};
+		}
+	});
+	f.session.reviewHistory("history");
+	f.session.approvalList.setActive(true);
+	const seen = new Set<string>();
+	for (let index = 0; index < 5; index++) {
+		await f.session.approvalList.load();
+		for (const item of f.session.approvalList.getSnapshot().pages.flatMap((page) => page.items))
+			seen.add(item.approval.approvalId);
+	}
+	assert.equal(seen.size, 5);
+	const item = f.session.approvalList.getSnapshot().pages[0]?.items[0]?.approval;
+	assert.ok(item);
+	await f.session.reviewApproval(item);
+	assert.equal(f.session.getSnapshot().review?.approval.approvalId, item.approvalId);
+	assert.equal(f.session.getSnapshot().approval?.approvalId, "approval");
+	assert.equal(f.session.getSnapshot().approvalMode, "pending");
+	assert.equal(f.session.getSnapshot().activeContexts.length, 1);
+	assert.ok(f.calls.every((call) => call.method.startsWith("list")));
+	f.session.dispose();
+});
+test("management reads never hold the consent mutation lock and foreign list results never publish", async () => {
+	const f = fixture();
+	await f.session.refresh();
+	const pending = Promise.withResolvers<unknown>();
+	f.handle(async (method) => (method === "listToolApprovals" ? pending.promise : undefined));
+	f.session.reviewHistory("history");
+	f.session.approvalList.setActive(true);
+	const reading = f.session.approvalList.load();
+	assert.equal(f.session.getSnapshot().busy, false);
+	pending.resolve({ items: [{ ...f.approval, conversationId: "foreign" }], nextCursor: null });
+	await reading;
+	assert.equal(f.session.approvalList.getSnapshot().failed, true);
+	assert.equal(f.session.approvalList.getSnapshot().pages.length, 0);
+	assert.equal(f.session.getSnapshot().activeContexts.length, 1);
+	f.session.dispose();
+});
+
+test("scrolling review retains unknown operation evidence after its display page is evicted", async () => {
+	const f = fixture();
+	await f.session.refresh();
+	f.handle(async (method, params) => {
+		if (method === "listToolApprovals") {
+			const index = Number((params as { cursor?: string }).cursor ?? 0);
+			return {
+				items: [{ ...f.approval, approvalId: `approval-${index}`, operationId: `operation-${index}` }],
+				nextCursor: index < 5 ? String(index + 1) : null,
+			};
+		}
+		if (method === "getFileOperation") {
+			const id = (params as { operationId: string }).operationId;
+			return operationFor({ ...f.approval, approvalId: id.replace("operation", "approval"), operationId: id });
+		}
+	});
+	f.session.reviewHistory("history");
+	f.session.approvalList.setActive(true);
+	for (let index = 0; index < 6; index++) await f.session.approvalList.load();
+	assert.equal(f.session.approvalList.getSnapshot().pages.length, 3);
+	assert.equal(f.session.getSnapshot().unresolvedOperations.length, 6);
+	assert.ok(f.session.getSnapshot().unresolvedOperations.some((item) => item.operationId === "operation-0"));
+	assert.equal(f.session.getSnapshot().approval?.approvalId, "approval");
+	assert.ok(f.calls.every((call) => call.method.startsWith("list") || call.method === "getFileOperation"));
+	f.session.dispose();
+});

@@ -3,7 +3,9 @@ import type { VirtualItem } from "@tanstack/react-virtual";
 
 export type ConversationReadingPosition = {
 	key: string;
-	/** Row top relative to the scroll viewport, including fractional CSS pixels. */
+	/** Stable child identity when a measured turn contains multiple messages. */
+	messageKey?: string;
+	/** Message or row top relative to the scroll viewport, including fractional CSS pixels. */
 	pixel: number;
 	following: boolean;
 	heights: ReadonlyMap<string, number>;

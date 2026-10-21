@@ -9,6 +9,7 @@ import {
 	type ToolPackRecord,
 	toolPackCommandPayload,
 } from "@hipi/work-runtime/contracts";
+import { ManagementCursorList } from "../../components/management-list/cursor-list.ts";
 import type { LocalState } from "../workbench/local-state.ts";
 import {
 	type PackCommand,
@@ -38,6 +39,8 @@ export type PackState = {
 };
 /** Owns one connection and scope. Closing a dialog stops waiting, never replays a mutation. */
 export class ToolPackSession {
+	readonly packList: ManagementCursorList<ToolPackRecord>;
+	readonly bindingList: ManagementCursorList<ToolPackBinding>;
 	private client: AppClient;
 	private local: LocalState;
 	readonly workspaceId: string;
@@ -53,6 +56,24 @@ export class ToolPackSession {
 	constructor(client: AppClient, local: LocalState, workspaceId: string, conversationId?: string) {
 		this.client = client;
 		this.local = local;
+		this.packList = new ManagementCursorList(async (cursor, signal) => {
+			const page = await client.call("listToolPacks", { workspaceId, ...(cursor ? { cursor } : {}) }, signal);
+			signal.throwIfAborted();
+			if (page.items.some((item) => item.workspaceId !== workspaceId)) throw new Error("SCOPE_MISMATCH");
+			return page;
+		});
+		this.bindingList = new ManagementCursorList(async (cursor, signal) => {
+			if (!conversationId) return { items: [], nextCursor: null };
+			const page = await client.call(
+				"listToolPackBindings",
+				{ workspaceId, conversationId, ...(cursor ? { cursor } : {}) },
+				signal,
+			);
+			signal.throwIfAborted();
+			if (page.items.some((item) => item.workspaceId !== workspaceId || item.conversationId !== conversationId))
+				throw new Error("SCOPE_MISMATCH");
+			return page;
+		});
 		this.workspaceId = workspaceId;
 		this.conversationId = conversationId;
 		this.key = conversationId
@@ -311,6 +332,8 @@ export class ToolPackSession {
 	};
 	dispose = () => {
 		this.disposed = true;
+		this.packList.setActive(false);
+		this.bindingList.setActive(false);
 		this.request?.abort();
 		this.request = null;
 		this.listeners.clear();

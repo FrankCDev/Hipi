@@ -1,6 +1,6 @@
 import { AppError, type ConversationSearchHit, SEARCH_LIMITS } from "@hipi/work-runtime/contracts";
 import { Search, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -46,12 +46,17 @@ function SearchContent({
 	const owner = useMemo(() => new ConversationSearchController(client), [client]);
 	const state = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
 	const [value, setValue] = useState("");
-	const [selected, setSelected] = useState<string>();
+	const [selected, setSelected] = useState<{ hit: ConversationSearchHit; generation?: string }>();
 	const [opening, setOpening] = useState(false);
 	const [openError, setOpenError] = useState<"stale" | "failed">();
 	const activation = useRef<AbortController | undefined>(undefined);
 	const input = useRef<HTMLInputElement>(null);
 	const composing = useRef(false);
+	const results = useRef<HTMLDivElement>(null);
+	const anchor = useRef<{ key: string; top: number } | undefined>(undefined);
+	const pendingMove = useRef<{ key?: string; direction: "before" | "after" } | undefined>(undefined);
+	const automaticReads = useRef(0);
+	const lastScrollTop = useRef(0);
 	const id = useId();
 	useEffect(() => {
 		owner.activate();
@@ -63,9 +68,13 @@ function SearchContent({
 	}, [owner]);
 	const selectedIndex = Math.max(
 		0,
-		state.items.findIndex((item) => searchHitKey(item) === selected),
+		state.items.findIndex((item) => searchHitKey(item) === (selected && searchHitKey(selected.hit))),
 	);
-	const active = state.items[selectedIndex];
+	const active =
+		selected && selected.generation === state.queryGeneration && (state.items.length > 0 || state.loading)
+			? (state.items.find((item) => searchHitKey(item) === searchHitKey(selected.hit)) ?? selected.hit)
+			: state.items[selectedIndex];
+	const offscreenSelection = !!active && !state.items.includes(active);
 	const activate = async (hit: ConversationSearchHit) => {
 		activation.current?.abort();
 		const request = new AbortController();
@@ -100,6 +109,11 @@ function SearchContent({
 		setOpenError(undefined);
 		setValue(next);
 		setSelected(undefined);
+		pendingMove.current = undefined;
+		anchor.current = undefined;
+		automaticReads.current = 0;
+		lastScrollTop.current = 0;
+		if (results.current) results.current.scrollTop = 0;
 		owner.setQuery(next, isComposing);
 	};
 	const complete =
@@ -110,9 +124,68 @@ function SearchContent({
 	const move = (index: number) => {
 		const hit = state.items[index];
 		if (!hit) return;
-		setSelected(searchHitKey(hit));
+		setSelected({ hit, generation: state.queryGeneration });
 		document.getElementById(`${id}-result-${index}`)?.scrollIntoView({ block: "nearest" });
 	};
+	const demand = (direction: "before" | "after", keyboard = false) => {
+		if (state.loading || state.failed || opening || composing.current) return;
+		if (direction === "before" ? !state.hasPrevious : !state.nextCursor) return;
+		const root = results.current;
+		const top = root?.getBoundingClientRect().top ?? 0;
+		const visible = Array.from(root?.querySelectorAll<HTMLElement>("[data-search-hit-key]") ?? []).find(
+			(row) => row.getBoundingClientRect().bottom > top,
+		);
+		anchor.current = visible
+			? { key: visible.dataset.searchHitKey ?? "", top: visible.getBoundingClientRect().top }
+			: undefined;
+		pendingMove.current = keyboard ? { key: active && searchHitKey(active), direction } : undefined;
+		if (direction === "before") owner.loadPrevious();
+		else owner.loadMore();
+	};
+	useLayoutEffect(() => {
+		const root = results.current;
+		if (root && anchor.current) {
+			const saved = anchor.current;
+			const row = Array.from(root.querySelectorAll<HTMLElement>("[data-search-hit-key]")).find(
+				(item) => item.dataset.searchHitKey === saved.key,
+			);
+			if (row) {
+				root.scrollTop += row.getBoundingClientRect().top - saved.top;
+				lastScrollTop.current = root.scrollTop;
+			}
+			anchor.current = undefined;
+		}
+		const pending = pendingMove.current;
+		if (pending) {
+			const previous = state.items.findIndex((hit) => searchHitKey(hit) === pending.key);
+			const index = pending.direction === "after" ? previous + 1 : previous - 1;
+			const hit = state.items[index];
+			if (hit) {
+				pendingMove.current = undefined;
+				setSelected({ hit, generation: state.queryGeneration });
+				document.getElementById(`${id}-result-${index}`)?.scrollIntoView({ block: "nearest" });
+			}
+		}
+	}, [state.items, state.queryGeneration, id]);
+	useEffect(() => {
+		const root = results.current;
+		// Fill an initially short viewport, never drain an entire sparse index in
+		// the background. Further scan budgets require a scroll or keyboard demand.
+		if (
+			root &&
+			root.clientHeight > 0 &&
+			root.scrollHeight <= root.clientHeight &&
+			state.nextCursor &&
+			!state.loading &&
+			!state.failed &&
+			!state.scanLimited &&
+			!opening &&
+			automaticReads.current < 8
+		) {
+			automaticReads.current++;
+			owner.loadMore();
+		}
+	}, [owner, state.loading, state.failed, state.scanLimited, state.nextCursor, opening]);
 	return (
 		<DialogContent
 			className="conversation-search-dialog"
@@ -142,7 +215,9 @@ function SearchContent({
 					aria-autocomplete="list"
 					aria-expanded
 					aria-controls={`${id}-results`}
-					aria-activedescendant={active ? `${id}-result-${selectedIndex}` : undefined}
+					aria-activedescendant={
+						active ? (offscreenSelection ? `${id}-selected` : `${id}-result-${selectedIndex}`) : undefined
+					}
 					autoComplete="off"
 					maxLength={SEARCH_LIMITS.query}
 					placeholder={l.placeholder}
@@ -160,7 +235,20 @@ function SearchContent({
 						if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 							event.preventDefault();
-							move(Math.max(0, Math.min(state.items.length - 1, selectedIndex + (event.key === "ArrowDown" ? 1 : -1))));
+							const direction = event.key === "ArrowDown" ? "after" : "before";
+							if (
+								!offscreenSelection &&
+								(direction === "after" ? selectedIndex >= state.items.length - 1 : selectedIndex === 0)
+							)
+								demand(direction, true);
+							else
+								move(
+									offscreenSelection
+										? direction === "after"
+											? 0
+											: state.items.length - 1
+										: selectedIndex + (direction === "after" ? 1 : -1),
+								);
 						} else if (event.key === "Enter" && active && !opening) {
 							event.preventDefault();
 							void activate(active);
@@ -185,7 +273,31 @@ function SearchContent({
 					</InputGroupAddon>
 				)}
 			</InputGroup>
-			<div className="conversation-search-results" role="listbox" id={`${id}-results`} aria-label={l.title}>
+			<div
+				ref={results}
+				className="conversation-search-results"
+				role="listbox"
+				id={`${id}-results`}
+				aria-label={l.title}
+				aria-busy={state.loading}
+				onScroll={(event) => {
+					const root = event.currentTarget;
+					const delta = root.scrollTop - lastScrollTop.current;
+					lastScrollTop.current = root.scrollTop;
+					if (delta < 0 && root.scrollTop <= 1 && state.hasPrevious) demand("before");
+					else if (delta > 0 && root.scrollHeight - root.scrollTop - root.clientHeight <= 1) demand("after");
+				}}
+				onWheel={(event) => {
+					const root = event.currentTarget;
+					if (event.deltaY < 0 && root.scrollTop <= 1) demand("before");
+					else if (event.deltaY > 0 && root.scrollHeight - root.scrollTop - root.clientHeight <= 1) demand("after");
+				}}
+			>
+				{offscreenSelection && active && (
+					<div id={`${id}-selected`} role="option" tabIndex={-1} aria-selected className="sr-only">
+						{active.title}
+					</div>
+				)}
 				{state.items.map((hit, index) => (
 					<button
 						key={searchHitKey(hit)}
@@ -193,14 +305,18 @@ function SearchContent({
 						type="button"
 						role="option"
 						tabIndex={-1}
-						aria-selected={index === selectedIndex}
+						aria-selected={!offscreenSelection && index === selectedIndex}
 						disabled={opening}
 						className="conversation-search-result"
 						data-workspace-id={hit.workspaceId}
 						data-conversation-id={hit.conversationId}
 						data-message-id={hit.kind === "message" ? hit.messageId : undefined}
 						data-match-kind={hit.kind}
-						onPointerMove={() => setSelected(searchHitKey(hit))}
+						data-search-hit-key={searchHitKey(hit)}
+						onPointerMove={() => {
+							pendingMove.current = undefined;
+							setSelected({ hit, generation: state.queryGeneration });
+						}}
 						onClick={() => void activate(hit)}
 					>
 						<span className="conversation-search-result-title">{hit.title}</span>
@@ -223,6 +339,7 @@ function SearchContent({
 				{state.loading && <output>{l.loading}</output>}
 				{state.refreshing && <output>{state.index?.completedAt ? l.refreshing : l.building}</output>}
 				{state.query && !complete && <p>{l.partial}</p>}
+				{state.query && complete && state.scanLimited && <p>{l.incomplete}</p>}
 				{state.query &&
 					complete &&
 					!state.loading &&
@@ -240,17 +357,26 @@ function SearchContent({
 						</Button>
 					</p>
 				)}
-				{state.refreshFailed && <p role="alert">{l.refreshFailed}</p>}
-				<div className="conversation-search-actions">
-					{state.nextCursor && (
-						<Button size="sm" variant="outline" disabled={state.loading} onClick={owner.loadMore}>
-							{state.scanLimited ? l.continue : l.more}
+				{state.refreshFailed && (
+					<p role="alert">
+						{l.refreshFailed}{" "}
+						<Button size="sm" variant="ghost" onClick={owner.refresh}>
+							{l.retry}
 						</Button>
-					)}
-					<Button size="sm" variant="ghost" disabled={state.refreshing} onClick={owner.refresh}>
-						{l.refresh}
+					</p>
+				)}
+				{openError === "stale" && (
+					<Button
+						size="sm"
+						variant="ghost"
+						onClick={() => {
+							setOpenError(undefined);
+							owner.restart();
+						}}
+					>
+						{l.retry}
 					</Button>
-				</div>
+				)}
 			</div>
 		</DialogContent>
 	);

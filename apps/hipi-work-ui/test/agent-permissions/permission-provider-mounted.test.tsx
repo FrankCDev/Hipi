@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import { type AppClient, type Method, type Params, parseResult, type ToolApproval } from "@hipi/work-runtime/contracts";
+import {
+	type AppClient,
+	type Method,
+	type Params,
+	parseResult,
+	type Snapshot,
+	type ToolApproval,
+} from "@hipi/work-runtime/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { useInlineApprovalPresentation } from "../../src/features/agent-permissions/inline-approval.tsx";
 import { PermissionProvider, usePermissionOwner } from "../../src/features/agent-permissions/permission-provider.tsx";
 import { LocalState } from "../../src/features/workbench/local-state.ts";
 
@@ -56,6 +64,29 @@ afterEach(async () => {
 	vi.useRealTimers();
 });
 const scope = { workspaceId: "w", conversationId: "c" };
+const snapshot: Snapshot = {
+	...scope,
+	running: true,
+	messages: [],
+	partial: "",
+	partialLength: 0,
+	partialTruncated: false,
+	historyCursor: null,
+	execution: {
+		ownerTaskId: "11",
+		submissionIds: ["10"],
+		submissionCount: 1,
+		tools: {
+			items: [{ taskId: "12", callId: "call", name: "hipi_files_save", status: "pending" }],
+			total: 1,
+			active: 1,
+		},
+		blockingCompactionCount: 0,
+	},
+};
+function PresentationProbe({ view = snapshot, active = true }: { view?: Snapshot; active?: boolean }) {
+	return <output data-approval-presented={!!useInlineApprovalPresentation(view, active)} />;
+}
 test("real permission session is shared by inline and management consumers, not one per turn", async () => {
 	await act(async () =>
 		root.render(
@@ -173,6 +204,28 @@ test("unknown immutable decisions survive surface replacement without mutation r
 	);
 	assert.ok(current);
 	const session = current.session;
+	async function presentation(view: Snapshot, active = true) {
+		await act(async () =>
+			root.render(
+				<PermissionProvider scope={scope} connected>
+					<Consumer />
+					<PresentationProbe view={view} active={active} />
+				</PermissionProvider>,
+			),
+		);
+		return host.querySelector("output")?.getAttribute("data-approval-presented");
+	}
+	assert.equal(await presentation(snapshot), "true");
+	assert.equal(await presentation({ ...snapshot, conversationId: "other" }), "false");
+	assert.equal(await presentation(snapshot, false), "false");
+	assert.equal(await presentation({ ...snapshot, running: false }), "false");
+	assert.equal(await presentation(snapshot), "true");
+	await act(async () => current?.setNow(approval.expiresAt));
+	assert.equal(host.querySelector("output")?.getAttribute("data-approval-presented"), "false");
+	await act(async () => current?.setNow(approval.createdAt));
+	assert.equal(host.querySelector("output")?.getAttribute("data-approval-presented"), "true");
+	assert.equal(owners.size, 1);
+	assert.equal(calls.filter((call) => call.method === "listPendingToolApprovals").length, 1);
 	// A lost response must leave the exact command retained, not produce another write.
 	await act(async () => session.decide(approval, "approve"));
 	assert.equal(session.getSnapshot().uncertain, true);

@@ -1,6 +1,6 @@
 import { PROTOCOL_VERSION, parseRequest, type Request } from "@hipi/work-runtime/contracts";
 
-// Protocols 8 through 11 schemas match these protocol 12 commands exactly.
+// Protocols 8 through 12 schemas match these protocol 13 commands exactly.
 // Preserve pending data recovery only: this local journal decoder is never a
 // transport compatibility rule or replay authority. Re-audit on the next bump.
 const storedMethods = new Set([
@@ -31,8 +31,12 @@ export function parseStoredRequest(value: unknown): Request {
 		!("version" in value) ||
 		(value.version !== PROTOCOL_VERSION &&
 			!(
-				PROTOCOL_VERSION === 12 &&
-				(value.version === 8 || value.version === 9 || value.version === 10 || value.version === 11)
+				PROTOCOL_VERSION === 13 &&
+				(value.version === 8 ||
+					value.version === 9 ||
+					value.version === 10 ||
+					value.version === 11 ||
+					value.version === 12)
 			)) ||
 		!("method" in value) ||
 		typeof value.method !== "string" ||

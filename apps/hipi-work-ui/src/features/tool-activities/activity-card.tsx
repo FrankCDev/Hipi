@@ -1,8 +1,9 @@
 import type { ToolActivity } from "@hipi/work-runtime/contracts";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "../../components/ui/button.tsx";
 import type { ActivitySession, ActivityState } from "./activity-session.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
+import { RetainedOutputView } from "./retained-output-view.tsx";
 
 export type ToolActivityArtifact = NonNullable<ToolActivity["artifact"]>;
 
@@ -25,19 +26,9 @@ export function ActivityCard({
 }) {
 	const l = activityLabels(locale);
 	const outputId = useId();
-	const slot = sharedOutput ? state.outputs?.get(activity.activityId) : undefined;
-	const expanded = sharedOutput ? activity.textAvailable : state.expanded === activity.activityId;
-	const text = sharedOutput
-		? slot?.page
-		: expanded && state.text?.activityId === activity.activityId
-			? state.text
-			: undefined;
-	const [lease] = useState(() => Symbol("detail-output"));
-	useEffect(() => {
-		if (sharedOutput) return session.outputs.lease(lease, activity.textAvailable ? [activity.activityId] : []);
-	}, [session, lease, sharedOutput, activity.activityId, activity.textAvailable]);
-	const read = (cursor?: string) =>
-		sharedOutput ? session.outputs.read(activity.activityId, cursor) : void session.text(activity.activityId, cursor);
+	const [opened, setOpened] = useState(false);
+	const expanded = sharedOutput ? activity.textAvailable : opened;
+	const slot = state.outputs?.get(activity.activityId);
 	return (
 		<article className="rounded-lg border border-border bg-background p-3 grid gap-2 text-sm break-words">
 			<h3 className="font-medium">{toolLabel(activity.toolName, locale)}</h3>
@@ -106,7 +97,7 @@ export function ActivityCard({
 					disabled={disabled && !expanded}
 					aria-expanded={expanded}
 					aria-controls={outputId}
-					onClick={() => (expanded ? session.collapse() : void session.text(activity.activityId))}
+					onClick={() => setOpened(!expanded)}
 				>
 					{l[expanded ? "activity.collapse" : "activity.original"]}
 				</Button>
@@ -115,26 +106,13 @@ export function ActivityCard({
 				{expanded && (
 					<>
 						<p className="text-muted-foreground">{l["activity.retained"]}</p>
-						{text && (
-							<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-foreground">
-								{text.text}
-							</pre>
-						)}
-						<div className="flex flex-wrap gap-2">
-							<Button size="sm" variant="ghost" disabled={disabled || !!slot?.busy} onClick={() => read()}>
-								{l["activity.text.first"]}
-							</Button>
-							<Button
-								size="sm"
-								variant="ghost"
-								disabled={disabled || !!slot?.busy || !text?.nextCursor}
-								onClick={() => {
-									if (text?.nextCursor) read(text.nextCursor);
-								}}
-							>
-								{l["activity.text.next"]}
-							</Button>
-						</div>
+						<RetainedOutputView
+							activityId={activity.activityId}
+							session={session.outputs}
+							slot={slot}
+							disabled={disabled}
+							locale={locale}
+						/>
 					</>
 				)}
 			</div>

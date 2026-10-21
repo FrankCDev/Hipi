@@ -1,31 +1,55 @@
 import {
 	AppError,
 	type ConversationFilter,
+	type Scope,
 	type SidebarConversation,
 	type SidebarView,
 } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
-import { fetchNavigationWindow, navigationOptions, SIDEBAR_PAGE_LIMIT } from "./navigation-query.ts";
+import type { CatalogReadOwner } from "../catalog/read-page.ts";
+import {
+	fetchNavigationWindow,
+	type NavigationPage,
+	navigationOptions,
+	SIDEBAR_PAGE_LIMIT,
+} from "./navigation-query.ts";
 import { navigationProbeOptions, sameNavigationPublication } from "./navigation-refresh.ts";
 
-export function useNavigation(view: SidebarView, filter: ConversationFilter, enabled: boolean) {
+export function useNavigation(
+	view: SidebarView,
+	filter: ConversationFilter,
+	enabled: boolean,
+	capture: () => readonly Scope[] = () => [],
+) {
 	const client = useAppClient();
 	const cache = useQueryClient();
-	const options = navigationOptions(cache, client, view, filter);
+	const identity = JSON.stringify([view, filter]);
+	const owner = useRef<{ identity: string; reader: CatalogReadOwner<NavigationPage> }>({ identity, reader: {} });
+	if (owner.current.identity !== identity) owner.current = { identity, reader: {} };
+	const readOwner = owner.current.reader;
+	const options = navigationOptions(cache, client, view, filter, "refresh", capture, readOwner);
 	const query = useQuery({ ...options, enabled });
 	const probe = useQuery({
 		...navigationProbeOptions(client, view.kind === "project" || view.kind === "project_recent"),
 		enabled: false,
 	});
-	const [action, setAction] = useState<"refresh" | "more" | "first">("refresh");
+	const [action, setAction] = useState<"refresh" | "more" | "previous" | "first">("refresh");
 	const [loadingMore, setLoadingMore] = useState(false);
 	const pages = query.data?.pages ?? [];
 	const items = new Map<string, SidebarConversation>();
+	const retained = query.data?.retained?.eligible ?? [];
+	for (const { row, placement } of retained)
+		if (placement === "before")
+			items.set(JSON.stringify([row.conversation.workspaceId, row.conversation.conversationId]), row);
 	for (const page of pages)
 		for (const item of page.items)
 			items.set(JSON.stringify([item.conversation.workspaceId, item.conversation.conversationId]), item);
+	for (const { row } of retained) {
+		const key = JSON.stringify([row.conversation.workspaceId, row.conversation.conversationId]);
+		if (!items.has(key)) items.set(key, row);
+	}
 	const published = pages[0]?.coverage;
 	const coverage =
 		published?.state === "building"
@@ -43,7 +67,7 @@ export function useNavigation(view: SidebarView, filter: ConversationFilter, ena
 		setAction(next);
 		setLoadingMore(next === "more");
 		try {
-			await fetchNavigationWindow(cache, client, view, filter, next);
+			await fetchNavigationWindow(cache, client, view, filter, next, capture, readOwner);
 		} catch {
 			// Query owns the visible error and retained coherent rows.
 		} finally {
@@ -60,6 +84,21 @@ export function useNavigation(view: SidebarView, filter: ConversationFilter, ena
 		coverage,
 		hasData: query.data !== undefined,
 		hasMore,
+		hasPrevious: !query.data?.rebuilding && !!pages[0]?.previousCursor,
+		itemKeys: [...items.keys()],
+		windowItemKeys: pages.flatMap((page) =>
+			page.items.map(({ conversation }) => JSON.stringify([conversation.workspaceId, conversation.conversationId])),
+		),
+		preservesFocus: true,
+		cancelLoad: () => {
+			void cache.cancelQueries({ queryKey: options.queryKey, exact: true });
+		},
+		evictedKeys: (direction: "next" | "previous") =>
+			pages.length < SIDEBAR_PAGE_LIMIT
+				? []
+				: ((direction === "next" ? pages[0] : pages.at(-1))?.items.map(({ conversation }) =>
+						JSON.stringify([conversation.workspaceId, conversation.conversationId]),
+					) ?? []),
 		isPending: query.isPending,
 		isSuccess: query.isSuccess,
 		isError: !!error,
@@ -74,6 +113,7 @@ export function useNavigation(view: SidebarView, filter: ConversationFilter, ena
 		isEmpty: query.isSuccess && coverage?.state === "ready" && !hasMore && items.size === 0,
 		restart: () => run("first"),
 		loadMore: () => (hasMore && !query.isError ? run("more") : Promise.resolve()),
+		loadPrevious: () => (pages[0]?.previousCursor && !query.isError ? run("previous") : Promise.resolve()),
 		retry: async () => {
 			if (!enabled) return;
 			await Promise.all([

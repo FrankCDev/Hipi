@@ -3,7 +3,8 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../components/ui/dialog.tsx";
 import { Icon } from "../../components/ui/icon.tsx";
-import { ActivityCard, type ToolActivityArtifact } from "./activity-card.tsx";
+import type { ToolActivityArtifact } from "./activity-card.tsx";
+import { ActivityHistoryWindow } from "./activity-history-window.tsx";
 import { ActivityTranscriptProvider, useActivityTranscript } from "./activity-transcript.tsx";
 import { activityLabels, toolLabel } from "./labels.ts";
 
@@ -114,24 +115,6 @@ export function ActivityHistoryDialog() {
 				<DialogTitle>{l["activity.title"]}</DialogTitle>
 				<DialogDescription>{l["activity.description"]}</DialogDescription>
 				{!connected && <output>{l["activity.offline"]}</output>}
-				<div className="flex flex-wrap gap-2">
-					<Button size="sm" variant="outline" disabled={disabled} onClick={() => void session.page(state.cursor)}>
-						{l["activity.refresh"]}
-					</Button>
-					<Button size="sm" variant="ghost" disabled={disabled || !state.cursor} onClick={() => void session.page()}>
-						{l["activity.first"]}
-					</Button>
-					<Button
-						size="sm"
-						variant="ghost"
-						disabled={disabled || !state.page?.nextCursor}
-						onClick={() => {
-							if (state.page?.nextCursor) void session.page(state.page.nextCursor);
-						}}
-					>
-						{l["activity.next"]}
-					</Button>
-				</div>
 				{state.busy && <output>{l["activity.loading"]}</output>}
 				{!state.page && !state.busy && !state.failed && <p>{l["activity.notLoaded"]}</p>}
 				{state.failed && (
@@ -142,32 +125,20 @@ export function ActivityHistoryDialog() {
 						</Button>
 					</div>
 				)}
-				<div className="min-h-0 overflow-y-auto overscroll-contain grid gap-3">
-					{state.page && (
-						<p className="text-sm text-muted-foreground">
-							{l[state.page.coverage === "tasks" ? "activity.tasks" : "activity.entries"]}
-						</p>
-					)}
-					{state.page?.items.length === 0 && <p>{l["activity.empty"]}</p>}
-					{state.page?.items.map((item) => (
-						<ActivityCard
-							key={item.activityId}
-							activity={item}
-							locale={locale}
-							state={state}
-							session={session}
-							disabled={disabled}
-							onOpenArtifact={
-								onOpenArtifact
-									? (artifact) => {
-											context.setOpen(false);
-											onOpenArtifact(artifact);
-										}
-									: undefined
-							}
-						/>
-					))}
-				</div>
+				<ActivityHistoryWindow
+					session={session}
+					state={state}
+					enabled={open && connected}
+					locale={locale}
+					onOpenArtifact={
+						onOpenArtifact
+							? (artifact) => {
+									context.setOpen(false);
+									onOpenArtifact(artifact);
+								}
+							: undefined
+					}
+				/>
 			</DialogContent>
 		</Dialog>
 	);

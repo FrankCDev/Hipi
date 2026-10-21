@@ -1,9 +1,49 @@
+.inline-file-activity-row {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	gap: var(--ui-conversation-grouped-gap);
+	color: var(--activity-summary-color, var(--muted));
+}
+.inline-file-activity-row > svg {
+	width: var(--ui-icon-size);
+	height: var(--ui-icon-size);
+	flex-shrink: 0;
+}
+.inline-file-action,
+.inline-file-target {
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: start;
+	cursor: pointer;
+}
+.inline-file-action {
+	flex-shrink: 0;
+}
+.inline-file-target {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	/* Reference lC/pC file link treatment. */
+	text-decoration: underline dotted;
+	text-decoration-thickness: 0.5px;
+	text-underline-offset: 2px;
+}
+.inline-file-action:focus-visible,
+.inline-file-target:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: -2px;
+}
+.inline-file-action:hover,
+.inline-file-target:hover {
+	color: var(--text);
+}
 .inline-tool-result {
 	--tool-output-gap: 0.5rem;
-	--tool-output-padding: 0.5rem;
-	--tool-output-radius: 0.5rem;
-	--tool-output-max-height: 12rem;
-	--tool-output-surface: color-mix(in oklab, var(--text) 5%, var(--surface));
 	display: grid;
 	min-width: 0;
 	gap: var(--tool-output-gap);
@@ -64,32 +104,6 @@
 .inline-tool-output-toggle {
 	justify-self: start;
 	padding-inline: 0;
-}
-.inline-tool-text-card {
-	border: 1px solid var(--line);
-	border-radius: var(--tool-output-radius);
-	background: var(--tool-output-surface);
-	overflow: clip;
-	contain: inline-size;
-}
-.inline-tool-text-header {
-	padding: calc(var(--tool-output-padding) / 2) var(--tool-output-padding);
-	font-size: 0.875em;
-	user-select: none;
-}
-.inline-tool-text {
-	margin: 0;
-	max-height: var(--tool-output-max-height);
-	overflow: auto;
-	padding: var(--tool-output-padding);
-	font: inherit;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-.inline-tool-output-pages {
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--tool-output-gap);
 }
 @media (hover: hover) and (pointer: fine) {
 	.inline-tool-details-trigger {

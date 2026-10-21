@@ -106,6 +106,8 @@ nodeTests.push("apps/hipi-work-desktop/scripts/gui-tool-packs.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-long-history-fixture.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-workbench.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-previews.test.mjs");
+nodeTests.push("apps/hipi-work-ui/scripts/message-browser-assertions.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-editor-escape.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/gui-file-reopen.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/linux-maintenance.test.mjs");
@@ -132,10 +134,17 @@ nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
 nodeTests.push("packages/work-runtime/test/office-zip-normalization.test.ts");
 nodeTests.push("packages/work-runtime/test/file-presentation.test.ts");
 nodeTests.push("packages/work-runtime/test/run-metadata.test.ts");
+nodeTests.push("packages/work-runtime/test/public-blocks.test.ts");
+nodeTests.push("packages/work-runtime/test/run-input-refs.test.ts");
+nodeTests.push("packages/work-runtime/test/public-facts-budget.test.ts");
+nodeTests.push("packages/work-runtime/test/catalog-window-contracts.test.ts");
+nodeTests.push("packages/work-runtime/test/catalog-bidirectional.test.ts");
 nodeTests.push("packages/work-runtime/test/external-links.test.ts");
 nodeTests.push("apps/hipi-work-desktop/test/external-links.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/projection.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/history.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/turns/projection.test.ts");
+nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/history-continuous-window.test.ts");
 const storageTests = [
 	"packages/durable/test/harness-compaction.test.ts",
 	"packages/durable/test/harness-generation.test.ts",
@@ -144,6 +153,7 @@ const storageTests = [
 	"packages/durable/test/harness-input-entries.test.ts",
 	"packages/durable/test/harness-run-metadata.test.ts",
 	"packages/durable/test/harness-run-metadata-transactions.test.ts",
+	"packages/durable/test/harness-run-input-refs.test.ts",
 
 	"packages/chord/test/sqlite-readonly.test.ts",
 	"packages/chord/test/sqlite/node.test.ts",
@@ -156,16 +166,23 @@ const uiTests = [
 	"external-link",
 	"workbench/conversation/activity/header-mounted",
 	"workbench/conversation/activity/transcript-mounted",
+	"workbench/conversation/layout-mounted",
+	"workbench/conversation/turns/row-mounted",
+	"workbench/conversation/turns/ordered-body-mounted",
+	"workbench/conversation/turns/reading-anchor-mounted",
+	"workbench/conversation/turns/transcript-mounted",
 
 	"activity-approval-presentation",
 	"activity-transcript",
 	"workbench/conversation/conversation-selection-interaction",
 	"workbench/search/conversation-search-interaction",
 	"workbench/search/search-target-mounted",
+	"workbench/search/conversation-search-scroll-mounted",
 	"workbench/files/file-canvas-presentation",
 	"workbench/composer/work-experience-presentation",
 	"workbench/composer/prepared-task-entry",
 	"workbench/composer/use-home-draft",
+	"workbench/composer/draft-recovery",
 	"workbench/composer/active-composer-mounted",
 	"workbench/composer/editor-mounted",
 	"workbench/composer/project-picker-mounted",
@@ -186,6 +203,8 @@ const uiTests = [
 	"file-tab-actions",
 	"workbench/conversation/markdown/markdown-presentation",
 	"workbench/conversation/markdown/markdown-file-interaction",
+	"workbench/conversation/markdown/file-links/link",
+	"workbench/conversation/markdown/file-links/provider",
 	"file-workspace-layout",
 	"workbench/files/file-splitter-interaction",
 	"file-revocation-interaction",
@@ -200,6 +219,7 @@ const uiTests = [
 	"workbench/conversation/disclosure-scroll-anchor-mounted",
 	"workbench/conversation/header-mounted",
 	"workbench/conversation/history-initial-anchor-mounted",
+	"workbench/conversation/history-viewport-mounted",
 	"workbench/conversation/message-content-markdown-mounted",
 	"workbench/conversation/message-copy-source-mounted",
 	"workbench/conversation/response-status-mounted",
@@ -235,6 +255,8 @@ const uiTests = [
 	"workbench/conversation/archived-conversation",
 	"workbench/conversation/conversation-model-refresh",
 	"document-preview",
+	"document-continuous-preview-mounted",
+	"management-list-mounted",
 	"input-group",
 	"shared-control-primitives",
 	"action-menu",
@@ -242,12 +264,14 @@ const uiTests = [
 	"workbench/sidebar/pin-interactions",
 	"workbench/workspace-navigation-interaction",
 	"workbench/catalog/catalog-pages",
+	"workbench/catalog/pagination-mounted",
 	"workbench/sidebar/sidebar-navigation-callbacks",
 	"workbench/sidebar/workspace-tree-callbacks",
 	"workbench/conversation/markdown/assistant-copy",
 	"workbench/conversation/markdown/code-block-mounted",
 	"workbench/conversation/markdown/conversation-prose-cascade",
 	"workbench/conversation/markdown/message-markdown",
+	"workbench/conversation/markdown/marked-document",
 	"workbench/conversation/markdown/streaming-rich-mounted",
 	"workbench/conversation/markdown/syntax-code",
 	"workbench/conversation/markdown/text-reveal-mounted",
@@ -257,8 +281,10 @@ const uiTests = [
 	"workbench/sidebar/logical-conversation-preview",
 	"tool-activities",
 	"tool-activities/inline-activity-card",
+	"tool-activities/message-activity-owner-mounted",
 	"tool-activities/live-activity-mounted",
 	"tool-activities/output-slots-mounted",
+	"tool-activities/retained-output-view",
 	"tool-activities/turn-activities-mounted",
 	"tool-activities/turn-activity-presentation",
 	"tool-packs-ui",
@@ -269,6 +295,11 @@ uiTests.push("apps/hipi-work-ui/test/agent-permissions/approval-correlation.test
 uiTests.push("apps/hipi-work-ui/test/tool-activities/activity-selection.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-activities/live-activity-association.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-activities/output-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/tool-activities/continuous-output-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/management-cursor-list.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/catalog/read-page.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/conversation/document/owner.test.ts");
+uiTests.push("apps/hipi-work-ui/test/files/tree/directory-window.test.ts");
 uiTests.push("apps/hipi-work-ui/test/presentation-preferences.test.ts");
 uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
@@ -313,6 +344,7 @@ uiTests.push("apps/hipi-work-ui/test/file-tree-adapter.test.ts");
 uiTests.push("apps/hipi-work-ui/test/file-workspace-session.test.ts");
 uiTests.push("apps/hipi-work-ui/test/pierre-editor.test.ts");
 uiTests.push("apps/hipi-work-ui/test/markdown-line-endings.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/conversation/markdown/file-links/navigation.test.ts");
 // Node 24 may silently ignore nonexistent test paths. Check every explicit file first.
 await requireFiles(root, [...nodeTests, ...uiTests, ...storageTests]);
 function run(script, args = [], cwd = root) {

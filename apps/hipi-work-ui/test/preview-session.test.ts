@@ -36,12 +36,12 @@ function fixture() {
 	};
 	return { client, closed, session: new PreviewSession(client) };
 }
-test("preview retains exactly one page and closes on clear", async () => {
+test("preview assembles transport fragments as one bounded document and closes on clear", async () => {
 	const f = fixture();
 	await f.session.open(target);
-	assert.equal(f.session.snapshot().page?.page, 0);
-	await f.session.readPage(2);
-	assert.equal(f.session.snapshot().page?.page, 2);
+	const document = f.session.snapshot().document;
+	assert.equal(document?.kind, "document");
+	assert.equal(document?.kind === "document" && document.text, "Page 0Page 1Page 2");
 	f.session.clear();
 	assert.deepEqual(f.session.snapshot(), {});
 	assert.deepEqual(f.closed, ["first"]);
@@ -64,29 +64,77 @@ test("switching before open returns closes the late handle without publishing", 
 });
 test("late page after disposal cannot resurrect private content", async () => {
 	const f = fixture();
-	await f.session.open(target);
 	let resolve: (value: PreviewPage) => void = () => {};
 	f.client.readPage = async () =>
 		new Promise((done) => {
 			resolve = done;
 		});
-	const pending = f.session.readPage(1);
+	const pending = f.session.open(target);
+	await Promise.resolve();
 	f.session.dispose();
-	resolve(page("first", 1));
+	resolve(page("first", 0));
 	await pending;
 	assert.deepEqual(f.session.snapshot(), {});
 	assert.deepEqual(f.closed, ["first"]);
 });
 test("permission errors release the handle and retained content", async () => {
 	const f = fixture();
-	await f.session.open(target);
 	f.client.readPage = async () => {
 		throw new FileServiceError("UNAUTHORIZED");
 	};
-	await f.session.readPage(1);
+	await f.session.open(target);
 	assert.equal(f.session.snapshot().error, "UNAUTHORIZED");
-	assert.equal(f.session.snapshot().page, undefined);
+	assert.equal(f.session.snapshot().document, undefined);
 	assert.equal(f.session.snapshot().handle, undefined);
+	assert.deepEqual(f.closed, ["first"]);
+});
+
+test("tabular transport chunks preserve one sheet and enforce original whole-document bounds", async () => {
+	const f = fixture();
+	f.client.open = async () => ({ ...handle("table", "csv"), summary: { bytes: 1000, pages: 3, truncated: false } });
+	f.client.readPage = async (id, index) => ({
+		...page(id, index),
+		content: {
+			kind: "spreadsheet",
+			format: "csv",
+			truncated: false,
+			limitations: [],
+			sheets: [{ name: "Sheet", rows: [[{ type: "string", value: String(index), display: String(index) }]] }],
+		},
+	});
+	await f.session.open(target);
+	const document = f.session.snapshot().document;
+	assert.equal(document?.kind, "spreadsheet");
+	if (document?.kind === "spreadsheet") {
+		assert.equal(document.sheets.length, 1);
+		assert.deepEqual(
+			document.sheets[0]?.rows.map((row) => row[0]?.display),
+			["0", "1", "2"],
+		);
+	}
+	f.client.open = async () => ({ ...handle(), summary: { bytes: 100, pages: 2, truncated: false } });
+	f.client.readPage = async (id, index) => ({
+		...page(id, index),
+		content: {
+			kind: "document",
+			format: "docx",
+			text: "x".repeat(70000),
+			truncated: false,
+			limitations: [],
+		},
+	});
+	await f.session.open(target);
+	assert.equal(f.session.snapshot().error, "LIMIT_EXCEEDED");
+	assert.equal(f.session.snapshot().document, undefined);
+	f.session.dispose();
+});
+
+test("a mismatched middle fragment fails closed instead of publishing an incomplete document", async () => {
+	const f = fixture();
+	f.client.readPage = async (id, index) => ({ ...page(id, index), revision: (index === 1 ? "b" : "a").repeat(64) });
+	await f.session.open(target);
+	assert.equal(f.session.snapshot().error, "BLOCKED_RESOURCE");
+	assert.equal(f.session.snapshot().document, undefined);
 	assert.deepEqual(f.closed, ["first"]);
 });
 test("bytes are read sequentially in fixed bounded chunks and cleared on release", async () => {

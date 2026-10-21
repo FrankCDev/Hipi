@@ -78,7 +78,7 @@ test("unsupported browser and unsafe destinations remain inert; unfinished strea
 		"[Read][ref]\n\n[ref]: https://example.test/pa",
 		"[Read](https://example.test/a(b)",
 	]) {
-		assert.doesNotMatch(render(source, true, true), /<a\b|href=/);
+		assert.doesNotMatch(render(source, true, true), /<a\b|href=/, source);
 	}
 	assert.match(render("[Read](https://example.test/a)", true, true), /href="https:\/\/example.test\/a"/);
 	assert.doesNotMatch(
@@ -86,6 +86,35 @@ test("unsupported browser and unsafe destinations remain inert; unfinished strea
 		/<a\b|href=|<img\b|src=/,
 	);
 	assert.match(render("[Read](https://example.test/a)", true), /href="https:\/\/example.test\/a"/);
+	assert.equal(open.mock.calls.length, 0);
+});
+
+test("completed streamed destinations retain nested, escaped, angled and titled link syntax", () => {
+	const open = vi.fn(async () => "opened" as const);
+	for (const [source, href, streaming] of [
+		["[Read](https://example.test/a(b(c)))", "https://example.test/a(b(c))", true],
+		["[Read](https://example.test/a\\(b)", "https://example.test/a(b", true],
+		["[Read](https://example.test/a\\)b)", "https://example.test/a)b", true],
+		['[Read](https://example.test/a(b) "title ) (")', "https://example.test/a(b)", true],
+		["[Read](https://example.test/a(b) 'title ) (')", "https://example.test/a(b)", true],
+		["[Read](https://example.test/a(b) (title))", "https://example.test/a(b)", true],
+		["[Read](<https://example.test/a(b>)", "https://example.test/a(b", true],
+		["[Read (label](https://example.test/a)", "https://example.test/a", true],
+		["<https://example.test/a(b>", "https://example.test/a(b", true],
+		["[Read][ref]\n\n[ref]: https://example.test/a", "https://example.test/a", false],
+		["https://example.test/a", "https://example.test/a", false],
+	] as const) {
+		const host = document.createElement("div");
+		host.innerHTML = renderToStaticMarkup(
+			<PreferencesProvider>
+				<ExternalLinkProvider client={{ supported: true, open }}>
+					<MessageMarkdown source={source} streaming={streaming} />
+				</ExternalLinkProvider>
+			</PreferencesProvider>,
+		);
+		assert.equal(host.querySelectorAll("a").length, 1, source);
+		assert.equal(host.querySelector("a")?.getAttribute("href"), href, source);
+	}
 	assert.equal(open.mock.calls.length, 0);
 });
 
@@ -196,6 +225,13 @@ test("mounted stream enables only real completed destinations and keeps settled 
 		assert.equal(host.querySelectorAll("a").length, 1);
 		await render("[Read](https://example.test/path");
 		assert.equal(host.querySelectorAll("a").length, 1);
+		assert.equal(host.querySelector("a"), stable);
+		await render("[Read](https://example.test/path(nested)");
+		assert.equal(host.querySelectorAll("a").length, 1);
+		assert.equal(host.querySelector("a"), stable);
+		await render("[Read](https://example.test/path(nested))");
+		assert.equal(host.querySelectorAll("a").length, 2);
+		assert.equal(host.querySelectorAll("a")[1]?.getAttribute("href"), "https://example.test/path(nested)");
 		assert.equal(host.querySelector("a"), stable);
 		await render("[Read](https://example.test/path)");
 		assert.equal(host.querySelectorAll("a").length, 2);

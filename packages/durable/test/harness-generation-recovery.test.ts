@@ -197,7 +197,19 @@ describe("generation recovery", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(setup.faux.state.callCount).toBe(1);
 		expect(await opened.harness.snapshot(LiveDoc, opened.root.id, context)).toEqual({
-			run: { taskId, inputs: [id], group: { id: taskId, admittedAt: 1_000 } },
+			run: {
+				taskId,
+				inputs: [id],
+				group: {
+					id: taskId,
+					admittedAt: 1_000,
+					inputRefs: {
+						entryIds: [(await (await opened.harness.submission(id, context))!.status(context)).entry],
+						total: 1,
+						omitted: false,
+					},
+				},
+			},
 			generation: { attempt: 1, retry: { at: 61_000, error: "503 Service Unavailable" } },
 		});
 		now = 61_000;

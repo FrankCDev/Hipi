@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import type { AppClient, Conversation, ProjectListItem, SidebarPage } from "@hipi/work-runtime/contracts";
+import type {
+	AppClient,
+	Conversation,
+	ProjectListItem,
+	SidebarWindowRequest,
+	SidebarWindowResult,
+} from "@hipi/work-runtime/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -28,10 +34,13 @@ const projects: ProjectListItem[] = ["one", "two"].map((id) => ({
 function conversation(id: string, title = `Chat ${id}`): Conversation {
 	return { workspaceId: id, conversationId: id, title, revision: 1, createdAt: 1, archivedAt: null };
 }
-function page(id: string, title?: string): SidebarPage {
+function page(id: string, title?: string): Extract<SidebarWindowResult, { kind: "window" }> {
 	return {
+		kind: "window",
 		items: [{ conversation: conversation(id, title), recencyAt: 1, activityBasis: "creation" }],
+		previousCursor: null,
 		nextCursor: null,
+		retained: { eligible: [], unavailable: [] },
 		coverage: { generation: "one", membershipGeneration: 0, state: "ready", completedAt: 1, nextCursor: null },
 	};
 }
@@ -41,7 +50,10 @@ let catalog: CatalogSession;
 let navigation: ReturnType<typeof createNavigation>;
 let root: Root;
 let host: HTMLDivElement;
-const pending = new Map<string, { resolve: (page: SidebarPage) => void; reject: (error: Error) => void }>();
+const pending = new Map<
+	string,
+	{ resolve: (page: SidebarWindowResult) => void; reject: (error: Error) => void; signal: AbortSignal }
+>();
 function Fixture() {
 	const state = useStore(navigation.store);
 	const region = useRef<HTMLElement>(null);
@@ -97,11 +109,15 @@ beforeEach(async () => {
 	);
 	pending.clear();
 	cache = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-	const call = vi.fn((method: string, input: { view?: { projectId?: string } }) => {
-		assert.equal(method, "listSidebarConversations");
-		const id = input.view?.projectId;
-		assert.ok(id);
-		return new Promise<SidebarPage>((resolve, reject) => pending.set(id, { resolve, reject }));
+	const call = vi.fn((method: string, input: SidebarWindowRequest, signal?: AbortSignal) => {
+		assert.equal(method, "listSidebarWindow");
+		assert.equal(input.filter, "active");
+		assert.deepEqual(input.position, { kind: "head" });
+		assert.equal(input.view.kind, "project");
+		assert.ok(input.view.kind === "project" && input.view.projectId);
+		assert.ok(signal);
+		const id = input.view.projectId;
+		return new Promise<SidebarWindowResult>((resolve, reject) => pending.set(id, { resolve, reject, signal }));
 	});
 	client = { call: call as AppClient["call"], observe: vi.fn() };
 	const local = new LocalState();
@@ -158,6 +174,7 @@ test("project and chat switching retains rows while background publication canno
 	const rows = [...host.querySelectorAll(".conversation-link")];
 	const lists = [...host.querySelectorAll(".conversation-list")];
 	assert.equal(rows.length, 2);
+	assert.equal(host.querySelectorAll(".project-pagination button").length, 0);
 	for (const id of ["one", "two", "one"]) {
 		await click(`[data-project-id='${id}'] .project-open`);
 		await click(`[data-project-id='${id}'] .conversation-link`);
@@ -190,15 +207,25 @@ test("an uncached initial query still exposes loading instead of a false empty s
 		void cache.resetQueries({ queryKey: ["sidebar-navigation"] });
 	});
 	await flush();
+	assert.equal(pending.size, 2);
 	assert.ok(host.querySelector(".sidebar-initial-loading"));
 	assert.equal(feedback().length, 2);
 	assert.ok(feedback().every((element) => element.classList.contains("nav-feedback")));
+	assert.equal(host.querySelectorAll(".nav-empty-state").length, 0);
+	await act(async () => {
+		for (const [id, request] of pending) request.resolve(page(id));
+		pending.clear();
+	});
+	await flush();
+	assert.equal(host.querySelector(".sidebar-initial-loading"), null);
+	assert.equal(host.querySelectorAll(".conversation-link").length, 2);
 	assert.equal(host.querySelectorAll(".nav-empty-state").length, 0);
 });
 
 test("a failed background refresh retains rows and exposes its actual error and retry", async () => {
 	const row = host.querySelector(".conversation-link");
 	await click("[data-project-id='one'] .conversation-link");
+	assert.equal(pending.size, 2, "The failed-read assertions require actual pending transport reads");
 	await act(async () => {
 		for (const request of pending.values()) request.reject(new Error("offline"));
 		pending.clear();
@@ -213,4 +240,36 @@ test("a failed background refresh retains rows and exposes its actual error and 
 	);
 	assert.ok([...host.querySelectorAll("[role='alert']")].every((element) => !element.classList.contains("sr-only")));
 	assert.match(host.textContent ?? "", /刷新列表/);
+	await click("[data-project-id='one'] [role='alert'] button");
+	assert.equal(pending.size, 1, "Retry belongs only to the failed branch");
+	await act(async () => {
+		pending.get("one")?.resolve(page("one", "Recovered one"));
+		pending.clear();
+	});
+	await flush();
+	assert.equal(host.querySelector(".conversation-link"), row);
+	assert.match(row?.textContent ?? "", /Recovered one/);
+	assert.equal(host.querySelector("[data-project-id='one'] [role='alert']"), null);
+	assert.ok(host.querySelector("[data-project-id='two'] [role='alert']"));
+});
+
+test("late background publication cannot replace a newer chat selection or steal editor focus", async () => {
+	await click("[data-project-id='one'] .conversation-link");
+	assert.equal(pending.size, 2);
+	const delayed = [...pending.entries()];
+	await click("[data-project-id='two'] .conversation-link");
+	const editor = document.createElement("textarea");
+	editor.value = "unsaved draft";
+	host.append(editor);
+	editor.focus();
+	await act(async () => {
+		for (const [id, request] of delayed) request.resolve(page(id, `Published ${id}`));
+		pending.clear();
+	});
+	await flush();
+	assert.equal(navigation.store.getState().scope.conversationId, "two");
+	assert.equal(document.activeElement, editor);
+	assert.equal(editor.value, "unsaved draft");
+	assert.match(host.textContent ?? "", /Published one/);
+	assert.match(host.textContent ?? "", /Published two/);
 });

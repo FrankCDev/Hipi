@@ -86,8 +86,8 @@ test("file preview uses the production safe Markdown renderer and never adds act
 			<MarkdownPreview text={"x".repeat(MAX_RICH_TEXT_UNITS + 1)} memory={{}} />
 		</PreferencesProvider>,
 	);
-	assert.match(long, /original-text/);
-	assert.doesNotMatch(long, /markdown-body/);
+	assert.match(long, /markdown-body/);
+	assert.doesNotMatch(long, /original-text|original-pages/);
 	const css = readFileSync(new URL("../../../../src/features/files/markdown-preview.css", import.meta.url), "utf8");
 	assert.match(css, /overflow: auto/);
 	assert.match(css, /var\(--font-ui\)/);

@@ -8,7 +8,10 @@ import {
 	type SearchIndexStatus,
 } from "@hipi/work-runtime/contracts";
 import { afterEach, beforeEach, test, vi } from "vitest";
-import { ConversationSearchController } from "../../../src/features/workbench/search/controller.ts";
+import {
+	ConversationSearchController,
+	SEARCH_RESULT_WINDOW_PAGES,
+} from "../../../src/features/workbench/search/controller.ts";
 
 const ready: SearchIndexStatus = { generation: "g", state: "ready", completedAt: 1, nextCursor: null };
 const hit: ConversationSearchHit = {
@@ -215,4 +218,90 @@ test("a stale cursor at the scan budget boundary starts a fresh bounded first-pa
 	await flush();
 	assert.deepEqual(owner.getSnapshot().items, [hit]);
 	assert.equal(owner.getSnapshot().scanLimited, false);
+});
+
+test("continuous result window stays bounded and backward demand restores evicted results without a cursor ledger", async () => {
+	const { owner, calls, queries } = harness();
+	owner.activate();
+	calls[0]?.resolve(ready);
+	await flush();
+	owner.setQuery("needle");
+	await vi.advanceTimersByTimeAsync(180);
+	for (let index = 0; index < 30; index++) {
+		queries()
+			.at(-1)
+			?.resolve(page([{ ...hit, conversationId: `hit-${index}` }], `page-${index + 1}`));
+		await flush();
+		assert.ok(owner.getSnapshot().items.length <= SEARCH_RESULT_WINDOW_PAGES);
+		if (index < 29) owner.loadMore();
+	}
+	assert.equal(owner.getSnapshot().items[0]?.conversationId, "hit-22");
+	assert.equal(owner.getSnapshot().hasPrevious, true);
+	owner.loadPrevious();
+	for (let index = 0; index < 16; index++) {
+		assert.deepEqual(queries().at(-1)?.params, { query: "needle", ...(index ? { cursor: `page-${index}` } : {}) });
+		queries()
+			.at(-1)
+			?.resolve(page([{ ...hit, conversationId: `hit-${index}` }], `page-${index + 1}`));
+		await flush();
+	}
+	assert.equal(queries().length, 46, "A reverse replay yields after one bounded batch");
+	assert.equal(owner.getSnapshot().scanLimited, true);
+	assert.equal(owner.getSnapshot().items[0]?.conversationId, "hit-22", "Retain visible results while replaying");
+	owner.loadPrevious();
+	for (let index = 16; index < 22; index++) {
+		queries()
+			.at(-1)
+			?.resolve(page([{ ...hit, conversationId: `hit-${index}` }], `page-${index + 1}`));
+		await flush();
+	}
+	assert.deepEqual(
+		owner.getSnapshot().items.map((item) => item.conversationId),
+		Array.from({ length: 8 }, (_, i) => `hit-${i + 21}`),
+	);
+	owner.loadMore();
+	assert.deepEqual(queries().at(-1)?.params, { query: "needle", cursor: "page-29" });
+	queries()
+		.at(-1)
+		?.resolve(page([{ ...hit, conversationId: "hit-29" }], "page-30"));
+	await flush();
+	assert.equal(owner.getSnapshot().items.at(-1)?.conversationId, "hit-29");
+});
+
+test("checkpoint replacement retains visible hits, failures retain recovery, and close fences reverse replay", async () => {
+	const { owner, calls, queries } = harness();
+	owner.activate();
+	calls[0]?.resolve(ready);
+	await flush();
+	owner.setQuery("needle");
+	await vi.advanceTimersByTimeAsync(180);
+	queries()[0]?.resolve(page([hit], "next"));
+	await flush();
+	owner.restart();
+	assert.deepEqual(owner.getSnapshot().items, [hit]);
+	queries()[1]?.reject(new Error("unavailable"));
+	await flush();
+	assert.deepEqual(owner.getSnapshot().items, [hit]);
+	assert.equal(owner.getSnapshot().failed, true);
+	owner.restart();
+	queries()[2]?.resolve(page([], "empty"));
+	await flush();
+	queries()[3]?.resolve(page([hit], "next"));
+	await flush();
+	assert.equal(owner.getSnapshot().hasPrevious, false, "Leading empty storage scans are not earlier result pages");
+	for (let index = 0; index < 8; index++) {
+		owner.loadMore();
+		queries()
+			.at(-1)
+			?.resolve(page([{ ...hit, conversationId: `following-${index}` }], `following-${index}`));
+		await flush();
+	}
+	const visible = owner.getSnapshot().items;
+	owner.loadPrevious();
+	const replay = queries().at(-1);
+	owner.dispose();
+	assert.equal(replay?.signal?.aborted, true);
+	replay?.resolve(page([{ ...hit, conversationId: "late" }], "empty"));
+	await flush();
+	assert.deepEqual(owner.getSnapshot().items, visible);
 });

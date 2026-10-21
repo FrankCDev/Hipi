@@ -17,6 +17,7 @@ import {
 	InlineLiveActivities,
 	InlineMessageActivities,
 	useActivityTranscriptProjection,
+	usePresentedToolActivity,
 } from "../../src/features/tool-activities/activity-transcript.tsx";
 
 const scope = { workspaceId: "w", conversationId: "c" };
@@ -98,14 +99,24 @@ const snapshot: Snapshot = {
 		blockingCompactionCount: 0,
 	},
 };
+let mountTools = true;
+function PresentationStatus() {
+	const visible = usePresentedToolActivity();
+	return <output data-tool-presented={String(visible)} />;
+}
 function Transcript({ value, connected }: { value: Snapshot; connected: boolean }) {
 	useActivityTranscriptProjection(value, value.running && connected);
 	return (
 		<>
-			{value.messages.map((message) => (
-				<InlineMessageActivities key={message.id} messageId={message.id} toolCalls={message.toolCalls} />
-			))}
-			<InlineLiveActivities snapshot={value} active={value.running && connected} />
+			<PresentationStatus />
+			{mountTools && (
+				<>
+					{value.messages.map((message) => (
+						<InlineMessageActivities key={message.id} messageId={message.id} toolCalls={message.toolCalls} />
+					))}
+					<InlineLiveActivities snapshot={value} active={value.running && connected} />
+				</>
+			)}
 		</>
 	);
 }
@@ -124,6 +135,7 @@ beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 	calls.length = 0;
+	mountTools = true;
 	unavailable = false;
 	deferExact = false;
 	releaseExact = undefined;
@@ -263,4 +275,42 @@ test("authoritative round anchor retains unavailable exact detail in the committ
 	assert.equal(host.querySelectorAll(".activity-live-slots").length, 1);
 	assert.equal(calls.filter((call) => call.selector?.kind === "message").length, 0);
 	assert.match(current.textContent ?? "", /Execution state unavailable/);
+});
+
+test("mounted tool presentation leases survive folded summaries but not unmount, completion, disconnect or new generations", async () => {
+	const presented = () => host.querySelector("[data-tool-presented]")?.getAttribute("data-tool-presented");
+	await render(snapshot);
+	assert.equal(presented(), "true");
+	const toggle = host.querySelector<HTMLButtonElement>('[data-activity-message-id="2_0"] button');
+	assert.ok(toggle);
+	await act(async () => toggle.click());
+	assert.equal(presented(), "true");
+	mountTools = false;
+	await render(snapshot);
+	assert.equal(presented(), "false");
+	mountTools = true;
+	await render(snapshot);
+	assert.equal(presented(), "true");
+	await render(snapshot, false);
+	assert.equal(presented(), "false");
+	assert.ok(snapshot.execution);
+	await render({
+		...snapshot,
+		execution: {
+			...snapshot.execution,
+			tools: {
+				...snapshot.execution.tools,
+				items: snapshot.execution.tools.items.map((tool) => ({ ...tool, status: "done" })),
+				active: 0,
+			},
+		},
+	});
+	assert.equal(presented(), "false", "old running metadata must not suppress a newer all-done snapshot");
+	await render({
+		...snapshot,
+		execution: { ...snapshot.execution, ownerTaskId: "next", tools: { items: [], total: 0, active: 0 } },
+	});
+	assert.equal(presented(), "false");
+	await render({ ...snapshot, running: false, execution: undefined });
+	assert.equal(presented(), "false");
 });

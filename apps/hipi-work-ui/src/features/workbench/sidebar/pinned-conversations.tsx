@@ -317,6 +317,15 @@ export function PinnedConversations({
 							<li
 								key={`${conversation.workspaceId}.${conversation.conversationId}`}
 								data-pinned-conversation=""
+								data-catalog-key={
+									mixed
+										? mixedPinKey({
+												kind: "conversation",
+												workspaceId: conversation.workspaceId,
+												conversationId: conversation.conversationId,
+											})
+										: `${conversation.workspaceId}.${conversation.conversationId}`
+								}
 								data-workspace-id={conversation.workspaceId}
 								data-conversation-id={conversation.conversationId}
 							>

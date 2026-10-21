@@ -21,6 +21,7 @@ import {
 	parseProjectResult,
 	projectCommandPayload,
 } from "./contracts.ts";
+import { readProjectWindow } from "./list-window.ts";
 import type { ProjectCreationPorts } from "./ports.ts";
 
 type CatalogPorts = {
@@ -43,11 +44,8 @@ type CommandRow = {
 	stage: string;
 	result: unknown;
 };
-const LIMIT = 50;
-export const PINNED_PROJECT_CANDIDATES =
-	"SELECT s.project_id AS projectId,p.name,p.revision,p.home_workspace_id AS homeWorkspaceId,p.status,s.pin_ordinal AS position FROM project_presentations s INDEXED BY project_pin_order LEFT JOIN projects p ON p.project_id=s.project_id WHERE s.pin_ordinal IS NOT NULL AND s.pin_ordinal>? ORDER BY s.pin_ordinal LIMIT ?";
-export const UNPINNED_PROJECT_CANDIDATES =
-	"SELECT p.project_id AS projectId,p.name,p.revision,p.home_workspace_id AS homeWorkspaceId,p.status,s.pinned,9007199254740991 AS position FROM projects p LEFT JOIN project_presentations s ON s.project_id=p.project_id WHERE p.project_id>? ORDER BY p.project_id LIMIT ?";
+
+export { PINNED_PROJECT_CANDIDATES, UNPINNED_PROJECT_CANDIDATES } from "./list-window.ts";
 export type ProjectFailpoint = "after_reserve" | "after_physical" | "after_commit" | "adoption_batch";
 function number(value: unknown): number {
 	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new AppError("STORE_MISMATCH");
@@ -208,97 +206,7 @@ export class ProjectCatalog {
 		});
 	}
 	list(input: ProjectMethods["listProjects"]["params"]): ProjectMethods["listProjects"]["result"] {
-		const metadataGeneration = number(this.#state().metadata_generation);
-		const orderGeneration = number(
-			this.#db.prepare("SELECT order_generation FROM project_presentation_state WHERE singleton=1").get()
-				?.order_generation,
-		);
-		let after: [number, string] | undefined;
-		if (input.cursor) {
-			try {
-				const p: unknown = JSON.parse(Buffer.from(input.cursor, "base64url").toString("utf8"));
-				if (!p || typeof p !== "object" || Array.isArray(p)) throw new Error();
-				const c = p as Record<string, unknown>;
-				if (
-					Object.keys(c).sort().join() !== "after,metadataGeneration,orderGeneration,storeId,version" ||
-					c.version !== 1 ||
-					c.storeId !== this.#storeId ||
-					!Array.isArray(c.after) ||
-					c.after.length !== 2 ||
-					typeof c.after[0] !== "number" ||
-					!Number.isSafeInteger(c.after[0]) ||
-					c.after[0] < 0 ||
-					typeof c.after[1] !== "string" ||
-					!/^([A-Za-z0-9_-]{1,128})?$/.test(c.after[1])
-				)
-					throw new Error();
-				if (c.metadataGeneration !== metadataGeneration || c.orderGeneration !== orderGeneration)
-					throw new AppError("CURSOR_STALE");
-				after = [c.after[0], c.after[1]];
-			} catch (error) {
-				if (error instanceof AppError) throw error;
-				throw new AppError("INVALID_REQUEST");
-			}
-		}
-		const items: ProjectMethods["listProjects"]["result"]["items"] = [];
-		let remaining = LIMIT;
-		let nextAfter: [number, string] | null = null;
-		// Bound candidates, not just visible rows. Sparse exclusions may produce an empty continuation page.
-		if (!after || after[0] !== Number.MAX_SAFE_INTEGER) {
-			const rows = this.#db.prepare(PINNED_PROJECT_CANDIDATES).all(after?.[0] ?? 0, remaining + 1);
-			for (const row of rows.slice(0, remaining)) {
-				if (row.status === "ready")
-					items.push({
-						project: parseProject({
-							projectId: row.projectId,
-							name: row.name,
-							revision: row.revision,
-							homeWorkspaceId: row.homeWorkspaceId,
-						}),
-						presentation: this.#presentation(string(row.projectId)),
-					});
-				nextAfter = [number(row.position), string(row.projectId)];
-			}
-			if (rows.length > remaining) remaining = 0;
-			else {
-				remaining -= rows.length;
-				after = [Number.MAX_SAFE_INTEGER, ""];
-				nextAfter = remaining ? null : after;
-			}
-		}
-		if (remaining > 0) {
-			const rows = this.#db.prepare(UNPINNED_PROJECT_CANDIDATES).all(after?.[1] ?? "", remaining + 1);
-			const candidates = rows.slice(0, remaining);
-			for (const row of candidates)
-				if (row.status === "ready" && row.pinned !== 1)
-					items.push({
-						project: parseProject({
-							projectId: row.projectId,
-							name: row.name,
-							revision: row.revision,
-							homeWorkspaceId: row.homeWorkspaceId,
-						}),
-						presentation: this.#presentation(string(row.projectId)),
-					});
-			const last = candidates.at(-1);
-			nextAfter = rows.length > remaining && last ? [Number.MAX_SAFE_INTEGER, string(last.projectId)] : null;
-		}
-		return {
-			items,
-			metadataGeneration,
-			orderGeneration,
-			nextCursor: nextAfter
-				? Buffer.from(
-						JSON.stringify({
-							version: 1,
-							storeId: this.#storeId,
-							metadataGeneration,
-							orderGeneration,
-							after: nextAfter,
-						}),
-					).toString("base64url")
-				: null,
-		};
+		return readProjectWindow(this.#db, this.#storeId, (id) => this.#presentation(id), input.cursor);
 	}
 
 	#command(requestId: string): CommandRow | null {

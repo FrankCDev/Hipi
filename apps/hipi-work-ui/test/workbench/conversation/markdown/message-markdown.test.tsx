@@ -387,22 +387,16 @@ test("every incomplete prefix renders; canonical completed/interrupted source is
 	assert.equal(markdownDisplaySource("$x", true), "$x");
 });
 
-test("rich ceiling uses explicit paged fallback with lossless surrogate-safe original", () => {
-	const source = `${"a".repeat(ORIGINAL_PAGE_UNITS - 1)}😀${"中".repeat(MAX_RICH_TEXT_UNITS)}tail`;
-	const pages = Array.from({ length: Math.ceil(source.length / ORIGINAL_PAGE_UNITS) }, (_, index) =>
-		originalPage(source, index),
-	);
-	assert.equal(pages.join(""), source);
-	for (const page of pages) assert.equal(page.isWellFormed(), true);
-	assert.throws(() => markdownDisplaySource(source, true), /ceiling/);
+test("ordinary messages beyond the old rich ceiling remain one continuous Markdown document", () => {
+	const source = `**begin**\n\n${"a".repeat(ORIGINAL_PAGE_UNITS - 1)}😀${"中".repeat(MAX_RICH_TEXT_UNITS)}\n\n**tail**`;
+	assert.equal(markdownDisplaySource(source, false), source);
+	assert.doesNotThrow(() => markdownDisplaySource(source, true));
 	const html = render(source);
-	assert.match(html, /分页原文/);
-	assert.doesNotMatch(html, /markdown-body/);
-	// Bound the actual rendered source, not unrelated shared-control class strings.
-	assert.equal(html.match(/<pre class="message-text">([\s\S]*?)<\/pre>/)?.[1], originalPage(source, 0));
-	assert.equal((html.match(/<pre\b/g) ?? []).length, 1);
-	assert.equal((html.match(/<button\b/g) ?? []).length, 2);
-	assert.doesNotMatch(html, /中|tail/);
+	assert.match(html, /markdown-body/);
+	assert.match(html, /<strong>begin<\/strong>/);
+	assert.match(html, /<strong>tail<\/strong>/);
+	assert.match(html, /😀中/);
+	assert.doesNotMatch(html, /分页原文|original-pages|<button|<pre/);
 });
 
 test("paging preserves unpaired UTF-16 units from incomplete or malformed input", () => {

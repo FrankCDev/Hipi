@@ -97,6 +97,49 @@ async function inspectPdf(cdp, zoom) {
 	return paint;
 }
 
+export function assertContinuousSpreadsheet(state) {
+	assert.equal(state?.path, previewFixture.xlsxName);
+	assert.equal(state.loading, false);
+	assert.deepEqual(state.alerts, []);
+	assert.equal(state.page, undefined);
+	assert.equal(state.previousDisabled, null);
+	assert.equal(state.nextDisabled, null);
+	assert.deepEqual(state.sheets, [previewFixture.sheetName, previewFixture.secondSheetName]);
+	assert.deepEqual(state.cells, [
+		"label",
+		"value",
+		"中文",
+		"42",
+		"cached formula",
+		"999",
+		"second",
+		"page",
+		"fixture",
+		"unchanged",
+	]);
+	assert.equal(state.editableElements, 0);
+	assert.ok(state.note.includes("Formulas are not recalculated"));
+}
+
+export function focusedSheetVisible(document, name) {
+	const roots = document.querySelectorAll('.file-workbench .file-buffer[aria-label="Preview"]');
+	if (roots.length !== 1) return false;
+	const grids = [...roots[0].querySelectorAll(".file-preview-grid")].filter(
+		(node) => node.getAttribute("aria-label") === name,
+	);
+	if (grids.length !== 1 || document.activeElement !== grids[0]) return false;
+	const bounds = roots[0].getBoundingClientRect();
+	const rect = grids[0].getBoundingClientRect();
+	return (
+		rect.width > 0 &&
+		rect.height > 0 &&
+		rect.top >= bounds.top &&
+		rect.bottom <= bounds.bottom &&
+		rect.left >= bounds.left &&
+		rect.right <= bounds.right
+	);
+}
+
 /** Only visible controls and trusted CDP input; no application state or capability injection. */
 export async function exerciseDocumentPreviews({ cdp, directory, selectFile, record }) {
 	await selectFile(cdp, previewFixture.docxName, true);
@@ -115,38 +158,27 @@ export async function exerciseDocumentPreviews({ cdp, directory, selectFile, rec
 	await click(cdp, ".file-buffer button", "Close preview");
 	record({ docxPreview: true });
 	await selectFile(cdp, previewFixture.xlsxName, true);
-	for (const second of [false, true, false]) {
-		if (second) await click(cdp, ".file-buffer button", "Next page");
-		else if (
-			await evaluate(
-				cdp,
-				`document.querySelector('.file-preview-grid')?.getAttribute('aria-label') === ${JSON.stringify(previewFixture.secondSheetName)}`,
-			)
-		)
-			await click(cdp, ".file-buffer button", "Previous page");
-		const expected = second
-			? ["second", "page", "fixture", "unchanged"]
-			: ["label", "value", "中文", "42", "cached formula", "999"];
-		await until(async () => {
-			const page = await evaluate(cdp, `(${documentPreviewState.toString()})(document)`);
-			return (
-				page?.path === previewFixture.xlsxName &&
-				!page.loading &&
-				page.alerts.length === 0 &&
-				page.page === `Page ${second ? 2 : 1} / 2` &&
-				page.previousDisabled === !second &&
-				page.nextDisabled === second &&
-				JSON.stringify(page.sheets) ===
-					JSON.stringify([second ? previewFixture.secondSheetName : previewFixture.sheetName]) &&
-				JSON.stringify(page.cells) === JSON.stringify(expected) &&
-				page.editableElements === 0 &&
-				page.note.includes("Formulas are not recalculated")
-			);
-		}, "XLSX exact saved values and sheet pagination bounds");
+	await until(async () => {
+		const state = await evaluate(cdp, `(${documentPreviewState.toString()})(document)`);
+		try {
+			assertContinuousSpreadsheet(state);
+			return true;
+		} catch {
+			return false;
+		}
+	}, "all XLSX sheets and exact saved values in one continuous preview");
+	// Visit both real sheet surfaces and return, without transport-page controls.
+	for (const name of [previewFixture.sheetName, previewFixture.secondSheetName, previewFixture.sheetName]) {
+		await click(cdp, `.file-preview-grid[aria-label="${name}"]`);
+		await until(
+			() => evaluate(cdp, `(${focusedSheetVisible.toString()})(document, ${JSON.stringify(name)})`),
+			"exact sheet focused and visible inside the preview scroll surface",
+		);
+		assertContinuousSpreadsheet(await evaluate(cdp, `(${documentPreviewState.toString()})(document)`));
 	}
 	await capture(cdp, directory, "file-xlsx-saved-values");
 	await click(cdp, ".file-buffer button", "Close preview");
-	record({ xlsxPreview: true, xlsxSavedValues: true, xlsxPagination: true });
+	record({ xlsxPreview: true, xlsxSavedValues: true, xlsxContinuousSheets: true });
 	await selectFile(cdp, previewFixture.pdfName, true);
 	const initial = await inspectPdf(cdp, 1);
 	await capture(cdp, directory, "file-pdf-preview");
@@ -183,7 +215,7 @@ export async function exerciseDocumentPreviews({ cdp, directory, selectFile, rec
 		docxPreview: true,
 		xlsxPreview: true,
 		xlsxSavedValues: true,
-		xlsxPagination: true,
+		xlsxContinuousSheets: true,
 		pdfPreview: true,
 		pdfZoom: true,
 		pdfReopenResetsZoom: true,

@@ -22,6 +22,7 @@ export type SidebarPinItem =
 	  };
 export type SidebarPinPage = {
 	items: SidebarPinItem[];
+	previousCursor: string | null;
 	nextCursor: string | null;
 	/** First verified eligible pin beyond this page, never a renderer-derived boundary. */
 	nextPinKey: PinKey | null;
@@ -188,7 +189,7 @@ export function parseSidebarPinResult<M extends SidebarPinMethod>(
 	let result: unknown;
 	switch (method) {
 		case "listSidebarPins": {
-			const p = object(value, ["items", "nextCursor", "nextPinKey", "orderRevision"]);
+			const p = object(value, ["items", "previousCursor", "nextCursor", "nextPinKey", "orderRevision"]);
 			if (!Array.isArray(p.items) || p.items.length > SIDEBAR_PIN_LIMITS.page) return invalid();
 			const items = Array.from(p.items, parseSidebarPinItem);
 			const keys = items.map(
@@ -211,6 +212,7 @@ export function parseSidebarPinResult<M extends SidebarPinMethod>(
 				return invalid();
 			result = {
 				items,
+				previousCursor: p.previousCursor === null ? null : string(p.previousCursor, SIDEBAR_PIN_LIMITS.cursor),
 				nextCursor,
 				nextPinKey,
 				orderRevision: integer(p.orderRevision),

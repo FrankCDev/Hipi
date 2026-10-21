@@ -62,15 +62,20 @@ test("presentation protocol validates exact scope, intent, revision and bounded 
 		);
 	const conversation = { ...scope(input), title: "One", revision: 1, createdAt: null, archivedAt: null };
 	const entry = { conversation, presentation };
-	assert.throws(() => parseResult("listPinnedConversations", { items: [entry, entry], nextCursor: null }));
+	const pageBase = { nextCursor: null, previousCursor: null, nextPinnedScope: null, orderGeneration: 0 };
+	assert.deepEqual(parseResult("listPinnedConversations", { ...pageBase, items: [entry] }), {
+		...pageBase,
+		items: [entry],
+	});
+	assert.throws(() => parseResult("listPinnedConversations", { ...pageBase, items: [entry, entry] }));
 	assert.throws(() =>
 		parseResult("listPinnedConversations", {
+			...pageBase,
 			items: [{ ...entry, conversation: { ...conversation, archivedAt: 1 } }],
-			nextCursor: null,
 		}),
 	);
 	assert.throws(() =>
-		parseResult("listPinnedConversations", { items: Array.from({ length: 51 }, () => entry), nextCursor: null }),
+		parseResult("listPinnedConversations", { ...pageBase, items: Array.from({ length: 51 }, () => entry) }),
 	);
 });
 
@@ -262,6 +267,7 @@ test("lost pin reply and caller cancellation retain one atomic receipt, includin
 		assert.equal((await runtime.call("getConversationPresentation", scope(conversation))).pinned, false);
 		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
 			items: [],
+			previousCursor: null,
 			nextCursor: null,
 			orderGeneration: 2,
 			nextPinnedScope: null,
@@ -388,6 +394,7 @@ test("catalog reads remove pending archive cleanup after restart, while the firs
 		runtime = await openTestRuntime(directory);
 		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
 			items: [],
+			previousCursor: null,
 			nextCursor: null,
 			orderGeneration: 2,
 			nextPinnedScope: null,
@@ -405,6 +412,7 @@ test("catalog reads remove pending archive cleanup after restart, while the firs
 		await runtime.call("restoreConversation", { ...scope(conversation), requestId: "restore", expectedRevision: 2 });
 		assert.deepEqual(await runtime.call("listPinnedConversations", {}), {
 			items: [],
+			previousCursor: null,
 			nextCursor: null,
 			orderGeneration: 2,
 			nextPinnedScope: null,
@@ -464,6 +472,12 @@ test("pin pages are bounded and store/generation scoped without invalidating con
 			conversations.slice(50),
 		);
 		assert.equal(second.nextCursor, null);
+		assert.equal(first.previousCursor, null);
+		assert.ok(second.previousCursor);
+		const restoredFirst = await runtime.call("listPinnedConversations", { cursor: second.previousCursor });
+		assert.deepEqual(restoredFirst.items, first.items);
+		assert.deepEqual(restoredFirst.nextPinnedScope, scope(conversations[50]));
+		assert.equal(restoredFirst.previousCursor, null);
 		assert.equal(
 			(await runtime.call("listConversations", { workspaceId: "work", cursor: directoryPage.nextCursor })).items
 				.length,

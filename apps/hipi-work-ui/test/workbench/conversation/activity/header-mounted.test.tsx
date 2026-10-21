@@ -84,6 +84,26 @@ test("source duration thresholds use narrow compound units and subsecond running
 	assert.doesNotMatch(host.textContent ?? "", /0s|0秒/);
 });
 
+test("settled duration fallback keeps English narrow units inside a translated label", async () => {
+	await render({
+		...base,
+		running: false,
+		members: ["message:2_0"],
+		result: {
+			id: "1",
+			terminalEntryId: "9",
+			admittedAtMs: 1000,
+			settledAtMs: 90000,
+			terminalCause: "response",
+			settlement: { status: "done" },
+			responseMessageId: "8_0",
+		},
+	});
+	assert.equal(host.textContent, "用时 1m 29s");
+	assert.match(host.querySelector("button")?.getAttribute("aria-label") ?? "", /包含等待/);
+	assert.equal(vi.getTimerCount(), 0);
+});
+
 test("missing or inverted time is unknown; paused execution never starts a clock", async () => {
 	await render({ ...base, admittedAtMs: undefined });
 	assert.match(host.textContent ?? "", /Activity|活动/);

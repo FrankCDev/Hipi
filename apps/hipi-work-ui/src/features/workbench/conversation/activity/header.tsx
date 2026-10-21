@@ -32,7 +32,10 @@ export function RunActivityHeader({ activity, onToggle }: { activity: RunActivit
 			? runWallElapsedMs({ admittedAtMs: activity.admittedAtMs, settledAtMs: now })
 			: undefined;
 	const zh = locale.startsWith("zh");
-	const time = elapsed === undefined ? undefined : formatRunElapsed(elapsed, locale);
+	// Reference collapsed duration fallback calls qJu(duration) without a locale
+	// (default en); the live worked-for status calls it with the UI locale.
+	// Our settled wall duration is the former, not a fabricated workedForItem.
+	const time = elapsed === undefined ? undefined : formatRunElapsed(elapsed, activity.result ? "en" : locale);
 	const label =
 		activity.running && elapsed !== undefined && elapsed < 1000
 			? zh

@@ -32,7 +32,7 @@ export function viewport(document) {
 	const host = document.querySelector(".message-scroll");
 	if (!host) return null;
 	const box = host.getBoundingClientRect();
-	const rows = [...host.querySelectorAll("[data-message-key]")].map((e) => {
+	const rows = [...host.querySelectorAll('[data-message-key]:not([data-transcript-kind="turn"])')].map((e) => {
 		const r = e.getBoundingClientRect();
 		return {
 			key: e.dataset.messageKey,
@@ -41,7 +41,10 @@ export function viewport(document) {
 			height: r.height,
 			visible: r.bottom > box.top && r.top < box.bottom,
 			text: e.textContent,
-			content: e.querySelector(".message-content > .message-text")?.textContent ?? null,
+			streaming: !!e.querySelector('article.message-assistant[aria-busy="true"]'),
+			content:
+				[...e.querySelectorAll(".message-content .markdown-body > p")].map((node) => node.textContent).join("\n\n") ||
+				null,
 		};
 	});
 	const state = executionState(document);
@@ -55,7 +58,7 @@ export function viewport(document) {
 		loading: !!document.querySelector(".history-status"),
 		running: state === "running",
 		executionState: state,
-		partial: rows.find((r) => r.key === "partial-output")?.content ?? null,
+		partial: rows.find((r) => r.streaming)?.content ?? null,
 	};
 }
 
@@ -221,11 +224,34 @@ export function prependEvidence(samples, before, finalAfter, key) {
 	return { status: "validated", observedBaselineCount: candidates.length, ...anchored(baseline, finalAfter, key) };
 }
 
+/** Read only canonical rendered paragraphs, never runtime or React state. */
+export function continuousDocumentState(document, messageId) {
+	const rows = [...document.querySelectorAll("[data-message-id]")].filter((row) => row.dataset.messageId === messageId);
+	if (rows.length !== 1) return null;
+	const body = rows[0].querySelector('[data-message-document-complete="true"] .markdown-body');
+	const host = document.querySelector(".message-scroll");
+	if (!body || !host) return null;
+	const paragraphs = [...body.querySelectorAll(":scope > p")];
+	if (!paragraphs.length) return null;
+	const bounds = host.getBoundingClientRect();
+	const first = paragraphs[0].getBoundingClientRect(),
+		last = paragraphs.at(-1).getBoundingClientRect();
+	return {
+		text: paragraphs.map((node) => node.textContent).join("\n\n"),
+		startVisible: first.top >= bounds.top && first.top < bounds.bottom,
+		endVisible: last.bottom > bounds.top && last.bottom <= bounds.bottom,
+		startDelta: first.top - bounds.top - 24,
+		endDelta: last.bottom - bounds.bottom + 24,
+	};
+}
+
 export function assertLongHistoryAcceptance(first, reopened) {
 	for (const report of [first, reopened]) {
 		assert.equal(report.prepend.status, "validated", "History prepend geometry was not validated");
 		assert.equal(report.oldestReached, true);
-		assert.equal(report.expansion.status, "validated");
+		assert.equal(report.continuousDocument.status, "validated");
+		assert.equal(report.continuousDocument.exactOriginal, true);
+		assert.equal(report.continuousDocument.startEndStart, true);
 		assert.equal(report.scopeIsolation, true);
 	}
 	assert.equal(first.streamValidation, "validated", "Fewer than three true running partials after leaving bottom");
@@ -382,66 +408,47 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 	);
 	await capture(cdp, directory, reopened ? "history-oldest-reopened" : "history-oldest");
 	const expansionKey = `message:${seed.expansionMessageId}`;
-	const expansionSelector = `[data-message-key=${JSON.stringify(expansionKey)}]`;
-	// Position the actual original-text button with wheel events, never a scrollTop write.
-	const buttonPoint = (label) =>
-		evaluate(
-			cdp,
-			`(() => {
-		const host=document.querySelector('.message-scroll'),box=host.getBoundingClientRect();
-		const buttons=[...document.querySelectorAll(${JSON.stringify(`${expansionSelector} button`)})].filter(e=>e.textContent.trim()===${JSON.stringify(label)}&&!e.disabled);
-		if(buttons.length!==1)return null;
-		const e=buttons[0],r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
-		return {x,y,delta:y-(box.y+box.height/2),hit:y>box.y+4 && y<box.bottom-4 && e.contains(document.elementFromPoint(x,y))};
-	})()`,
-		);
-	let point;
+	const documentState = () =>
+		evaluate(cdp, `(${continuousDocumentState.toString()})(document, ${JSON.stringify(seed.expansionMessageId)})`);
 	for (let n = 0; n < 80; n++) {
-		point = await buttonPoint("Read full original in pages");
-		if (point?.hit) break;
-		await wheel(point ? Math.max(-400, Math.min(400, point.delta)) : 300);
+		const value = await documentState();
+		if (value?.startVisible) break;
+		await wheel(value ? Math.max(-400, Math.min(400, value.startDelta)) : 300);
 	}
-	assert.ok(point?.hit, "Original text control must be visible and reachable");
-	const collapsed = await read();
-	const clickPoint = async (target) => {
-		assert.ok(target?.hit, "No forced or offscreen click");
-		for (const type of ["mousePressed", "mouseReleased"])
-			await cdp.request("Input.dispatchMouseEvent", { type, x: target.x, y: target.y, button: "left", clickCount: 1 });
-	};
-	await clickPoint(point);
-	await until(
-		() =>
-			evaluate(
-				cdp,
-				`document.querySelector(${JSON.stringify(`${expansionSelector} .original-text pre`)})?.textContent===${JSON.stringify(originalText)}`,
-			),
-		"exact full original, including suffix outside preview",
-	);
+	const canonical = await until(async () => {
+		const value = await documentState();
+		return value?.startVisible && value.text === originalText ? value : null;
+	}, "canonical rich document automatically contains exact original including its retained suffix");
+	const beforeDocument = await read();
 	await frames();
-	const expanded = await read();
-	const expansionAnchor = anchored(collapsed, expanded, expansionKey);
-	const heightBefore = collapsed.rows.find((r) => r.key === expansionKey).height;
-	const heightAfter = expanded.rows.find((r) => r.key === expansionKey).height;
-	assert.ok(heightAfter > heightBefore, "Expansion must exercise real changed row height");
-	await capture(cdp, directory, reopened ? "history-expanded-reopened" : "history-expanded");
-	await clickPoint(await buttonPoint("Close"));
-	await until(
-		() => evaluate(cdp, `!document.querySelector(${JSON.stringify(`${expansionSelector} .original-text`)})`),
-		"original text collapsed",
-	);
-	await frames();
-	const closed = await read();
-	const collapseAnchor = anchored(expanded, closed, expansionKey);
-	assert.ok(Math.abs(closed.rows.find((r) => r.key === expansionKey).height - heightBefore) <= 4);
-	const expansion = {
+	const readyAnchor = anchored(beforeDocument, await read(), expansionKey);
+	for (const boundary of ["end", "start"]) {
+		for (let n = 0; n < 80; n++) {
+			const value = await documentState();
+			assert.equal(
+				value?.text,
+				originalText,
+				"Continuous navigation cannot replace the original with a transport chunk",
+			);
+			if (value[boundary === "end" ? "endVisible" : "startVisible"]) break;
+			await wheel(Math.max(-400, Math.min(400, value[boundary === "end" ? "endDelta" : "startDelta"])));
+		}
+		const value = await documentState();
+		assert.equal(value?.text, originalText);
+		assert.equal(
+			value[boundary === "end" ? "endVisible" : "startVisible"],
+			true,
+			"Both canonical document boundaries must be reached by scrolling",
+		);
+	}
+	const continuousDocument = {
 		status: "validated",
-		exactOriginal: true,
-		heightBefore,
-		heightAfter,
-		expansionAnchor,
-		collapseAnchor,
+		exactOriginal: canonical.text === originalText,
+		startEndStart: true,
+		readyAnchor,
 	};
-	record({ oldestReached: true, expansion, visibleDistinctMessageKeys: seen.size });
+	await capture(cdp, directory, reopened ? "history-document-reopened" : "history-document");
+	record({ oldestReached: true, continuousDocument, visibleDistinctMessageKeys: seen.size });
 	await click(cdp, ".jump-latest");
 	await until(async () => {
 		const v = await read();
@@ -552,7 +559,7 @@ export async function exerciseLongHistory({ cdp, directory, seed, reopened, prev
 		prepend,
 		oldestReached: true,
 		markdownBlocks: true,
-		expansion,
+		continuousDocument,
 		persistedProbe,
 		streamValidation,
 		streamPartialSamples,
