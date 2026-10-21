@@ -42,3 +42,46 @@ test("conversation prose rhythm applies to streamed DOM without leaking into the
 		style.remove();
 	}
 });
+
+test("conversation table and inline-code styles leave document previews and fenced code unchanged", () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		new NodeURL("../../../../src/features/workbench/conversation/markdown/markdown.css", import.meta.url),
+		"utf8",
+	);
+	document.head.append(style);
+	const host = document.createElement("div");
+	const content = renderToStaticMarkup(
+		<PreferencesProvider>
+			<MessageMarkdown source={"Inline `code`\n\n| A | B |\n| - | - |\n| One | Two |\n| Three | Four |"} />
+		</PreferencesProvider>,
+	);
+	host.innerHTML = `<article class="message" id="conversation">${content}</article><section id="preview">${content}</section>`;
+	document.body.append(host);
+	const computed = (selector: string) => {
+		const element = host.querySelector(selector);
+		assert.ok(element);
+		return getComputedStyle(element);
+	};
+	try {
+		// jsdom leaves custom-property references unresolved; verify the cascade and role defaults,
+		// not real browser pixel geometry (which requires the separate browser acceptance).
+		const inline = computed("#conversation p code");
+		const resolveRoles = (value: string) =>
+			value.replace(/var\((--[\w-]+)\)/gu, (_match, token: string) => inline.getPropertyValue(token).trim());
+		assert.equal(resolveRoles(inline.paddingBlock), "1px");
+		assert.equal(resolveRoles(inline.paddingInline), "6px");
+		assert.equal(resolveRoles(inline.borderRadius), "6px");
+		assert.equal(computed("#conversation p code").boxDecorationBreak, "clone");
+		assert.equal(computed("#preview p code").padding, "0.15em 0.35em");
+		assert.equal(computed("#conversation table").borderCollapse, "separate");
+		assert.equal(computed("#preview table").borderCollapse, "collapse");
+		assert.equal(computed("#conversation table").fontVariantNumeric, "tabular-nums");
+		assert.equal(Number.parseFloat(computed("#conversation td:last-child").paddingInlineEnd), 0);
+		assert.equal(Number.parseFloat(computed("#conversation tbody tr:last-child td").borderBottomWidth), 0);
+		assert.equal(Number.parseFloat(computed("#preview th").borderBlockEndWidth), 2);
+	} finally {
+		host.remove();
+		style.remove();
+	}
+});

@@ -132,6 +132,8 @@ nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
 nodeTests.push("packages/work-runtime/test/office-zip-normalization.test.ts");
 nodeTests.push("packages/work-runtime/test/file-presentation.test.ts");
 nodeTests.push("packages/work-runtime/test/run-metadata.test.ts");
+nodeTests.push("packages/work-runtime/test/external-links.test.ts");
+nodeTests.push("apps/hipi-work-desktop/test/external-links.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/projection.test.ts");
 nodeTests.push("apps/hipi-work-ui/test/workbench/conversation/activity/history.test.ts");
 const storageTests = [
@@ -151,6 +153,7 @@ const storageTests = [
 	"packages/durable/test/sqlite-migrations.test.ts",
 ];
 const uiTests = [
+	"external-link",
 	"workbench/conversation/activity/header-mounted",
 	"workbench/conversation/activity/transcript-mounted",
 
@@ -249,6 +252,7 @@ const uiTests = [
 	"workbench/conversation/markdown/syntax-code",
 	"workbench/conversation/markdown/text-reveal-mounted",
 	"workbench/conversation/markdown/user-message-content",
+	"workbench/conversation/markdown/user-message-mounted",
 	"workbench/sidebar/conversation-preview",
 	"workbench/sidebar/logical-conversation-preview",
 	"tool-activities",

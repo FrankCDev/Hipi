@@ -907,6 +907,9 @@
 	padding: 10px 16px;
 }
 .user-message-surface {
+	/* Reference disclosure spacing combines gap-1 and mt-1.5. */
+	--user-message-disclosure-gap: calc(var(--spacing) * 2.5);
+	--user-message-disclosure-icon: calc(var(--spacing) * 3);
 	background: color-mix(in oklab, var(--text) 5%, transparent);
 	border-radius: 22px;
 	/* biome-ignore lint/correctness/noUnknownProperty lint/correctness/noUnknownFunction: CSS Borders Level 4; border-radius remains the fallback. */
@@ -915,9 +918,13 @@
 	font-size: var(--font-ui-size);
 	line-height: 1.625;
 }
-.user-message-fold[data-expanded="false"] {
-	max-height: 20lh;
+.user-message-fold[data-collapsed="true"] {
+	/* The twentieth line is the ellipsis outside the clipped content. */
+	max-height: 19lh;
 	overflow: hidden;
+}
+.user-message-ellipsis {
+	display: block;
 }
 .user-message-body {
 	min-width: 0;
@@ -929,13 +936,21 @@
 	border-radius: 0;
 }
 .user-message-expand {
-	display: flex;
-	margin-inline-start: auto;
-	margin-top: 4px;
-	height: 24px;
-	padding: 2px 4px;
-	font-size: 12px;
+	display: inline-flex;
+	margin-inline-start: 0;
+	margin-top: var(--user-message-disclosure-gap);
+	height: auto;
+	padding: 0;
+	font-size: inherit;
+	line-height: inherit;
 	color: var(--muted);
+}
+.user-message-expand > .user-message-expand-icon {
+	width: var(--user-message-disclosure-icon);
+	height: var(--user-message-disclosure-icon);
+}
+.user-message-expand[aria-expanded="true"] > .user-message-expand-icon {
+	transform: rotate(180deg);
 }
 .message-actions {
 	display: flex;

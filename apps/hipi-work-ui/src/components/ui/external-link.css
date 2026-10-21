@@ -1,0 +1,25 @@
+.external-link {
+	--external-link-line-width: 1px;
+	--external-link-line-offset: 2px;
+	--external-link-focus-width: 2px;
+	--external-link-focus-radius: 2px;
+	color: inherit;
+	cursor: pointer;
+	text-decoration: underline dotted var(--muted) var(--external-link-line-width);
+	text-underline-offset: var(--external-link-line-offset);
+	text-decoration-skip-ink: auto;
+}
+.external-link:hover {
+	color: var(--accent-text, var(--text));
+	text-decoration-color: currentColor;
+}
+.external-link:focus-visible {
+	outline: var(--external-link-focus-width) solid var(--focus);
+	outline-offset: var(--external-link-line-offset);
+	border-radius: var(--external-link-focus-radius);
+}
+.external-link-error {
+	color: var(--danger);
+	font-size: 0.875em;
+	margin-inline-start: 0.5em;
+}

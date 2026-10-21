@@ -77,7 +77,8 @@ test("file preview uses the production safe Markdown renderer and never adds act
 	assert.match(html, /file-markdown-preview/);
 	assert.match(html, /<h1>Draft<\/h1>/);
 	assert.match(html, /<strong>bold<\/strong>/);
-	assert.match(html, /https:\/\/example.com/);
+	assert.match(html, /<span>ok<\/span>/);
+	assert.doesNotMatch(html, /title="https:/);
 	// The copy control owns its trusted Lucide SVG; file content must not create resource elements.
 	assert.doesNotMatch(html, /<(?:img|script|a|iframe|style)\b|<[^>]+\s(?:href|src|srcset|onload)=/i);
 	const long = renderToStaticMarkup(

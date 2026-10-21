@@ -341,6 +341,65 @@
 .message .message-text.markdown-body strong {
 	font-weight: var(--message-prose-heading-weight);
 }
+.message .message-text.markdown-body :not(pre) > code {
+	--message-inline-code-inset-block: 1px;
+	--message-inline-code-inset-inline: 6px;
+	--message-inline-code-radius: 6px;
+	--message-inline-code-size: 0.92em;
+	padding-block: var(--message-inline-code-inset-block);
+	padding-inline: var(--message-inline-code-inset-inline);
+	border-radius: var(--message-inline-code-radius);
+	font-size: var(--message-inline-code-size);
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+	word-break: break-word;
+}
+.message .message-text.markdown-body .markdown-table {
+	--message-table-rule-width: 1px;
+	width: 100%;
+	min-width: 100%;
+	margin-block-start: calc(var(--message-prose-space) * 4);
+	scrollbar-width: thin;
+}
+.message .message-text.markdown-body .markdown-table table {
+	width: fit-content;
+	margin: 0;
+	border-collapse: separate;
+	border-spacing: 0;
+	table-layout: auto;
+	font-size: max(var(--font-code-size), calc(var(--font-ui-size) * 0.875));
+	line-height: var(--message-prose-line);
+	font-variant-numeric: tabular-nums;
+}
+.message .message-text.markdown-body .markdown-table :where(th, td) {
+	max-width: calc(var(--reading-width, 40rem) * 18 / 24);
+	padding: 0;
+	padding-inline-end: calc(var(--message-prose-space) * 6);
+	border: 0;
+	white-space: normal;
+	overflow-wrap: break-word;
+	word-break: normal;
+}
+.message .message-text.markdown-body .markdown-table th {
+	padding-block: calc(var(--message-prose-space) * 2);
+	border-block-end: var(--message-table-rule-width) solid var(--line);
+	line-height: calc(var(--message-prose-space) * 4);
+}
+.message .message-text.markdown-body .markdown-table td {
+	padding-block: calc(var(--message-prose-space) * 2.5);
+}
+.message .message-text.markdown-body .markdown-table tbody tr:not(:last-child) td {
+	border-block-end: var(--message-table-rule-width) solid var(--line);
+}
+.message .message-text.markdown-body .markdown-table th:last-child {
+	padding-inline-end: calc(var(--message-prose-space) * 10);
+}
+.message .message-text.markdown-body .markdown-table td:last-child {
+	padding-inline-end: 0;
+}
+.message .message-text.markdown-body .markdown-table tbody tr:last-child td {
+	padding-block-end: calc(var(--message-prose-space) * 6);
+}
 .message .message-text.markdown-body[data-markdown-tone="user"] > p {
 	margin-block: 0;
 }

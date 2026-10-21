@@ -6,6 +6,7 @@ import { usePreferences } from "../../../../app/preferences.tsx";
 import { useCodeBlockWordWrap } from "../../../../app/presentation/provider.tsx";
 import { ActionTooltip } from "../../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../../components/ui/button.tsx";
+import { ExternalLink } from "../../../../components/ui/external-link.tsx";
 import { ReadOnlyCheckbox } from "../../../../components/ui/read-only-checkbox.tsx";
 import { ClipboardCopy } from "./clipboard-copy.tsx";
 import { markdownLabels } from "./labels.ts";
@@ -57,18 +58,22 @@ const allowedElements = [
 const plugins = [remarkGfm];
 const revealPlugins = [revealTextPlugin];
 type MarkdownTone = "user" | "assistant";
-const SourceContext = createContext({ source: "", streaming: false, tone: "assistant" as MarkdownTone });
+const SourceContext = createContext({
+	source: "",
+	unchangedPrefix: 0,
+	streaming: false,
+	tone: "assistant" as MarkdownTone,
+});
 const components: Components = {
 	span: RevealedTextLeaf,
 	li: RevealedListItem,
 	blockquote: (props) => <RevealedStructure tag="blockquote" {...props} />,
 	tr: (props) => <RevealedStructure tag="tr" {...props} />,
 	hr: (props) => <RevealedStructure tag="hr" {...props} />,
-	a: ({ children, href }) => (
-		<span className="markdown-link">
+	a: ({ children, href, title, node }) => (
+		<MarkdownLink href={href} title={title} start={node?.position?.start.offset} end={node?.position?.end.offset}>
 			{children}
-			{href && <span className="markdown-destination"> ({href})</span>}
-		</span>
+		</MarkdownLink>
 	),
 	img: ({ alt }) => <ImagePlaceholder alt={alt ?? ""} />,
 	input: ({ checked }) => <TaskMarker checked={checked ?? false} />,
@@ -100,6 +105,37 @@ const components: Components = {
 		);
 	},
 };
+
+/** A mutable destination is not an actionable URL, even when GFM autolinks its prefix. */
+function MarkdownLink({
+	href,
+	title,
+	start,
+	end,
+	children,
+}: {
+	href?: string;
+	title?: string;
+	start?: number;
+	end?: number;
+	children: ReactNode;
+}) {
+	const { source, streaming, unchangedPrefix } = useContext(SourceContext);
+	let complete = !streaming;
+	if (streaming && start !== undefined && end !== undefined && end <= unchangedPrefix) {
+		const raw = source.slice(start, end);
+		const explicit =
+			(raw.startsWith("[") && raw.includes("](") && raw.endsWith(")")) || (raw.startsWith("<") && raw.endsWith(">"));
+		// Bare autolinks may be fragments of unfinished inline links; references may have mutable definitions.
+		// Both wait for the existing segment-settled boundary instead of guessing a URL terminator.
+		complete = explicit;
+	}
+	return (
+		<ExternalLink key={href} href={complete ? href : undefined} title={title}>
+			{children}
+		</ExternalLink>
+	);
+}
 
 function MarkdownTable({ children }: { children: ReactNode }) {
 	const { locale } = usePreferences();
@@ -252,7 +288,15 @@ const MarkdownBlock = memo(function MarkdownBlock({
 	reveal: boolean;
 	visible: boolean;
 }) {
-	const context = useMemo(() => ({ source, streaming, tone }), [source, streaming, tone]);
+	const displaySource = useMemo(() => markdownDisplaySource(source, streaming), [source, streaming]);
+	const context = useMemo(() => {
+		// Parser offsets are usable only inside the unchanged real-source prefix.
+		// Repair may append/remove syntax, but cannot manufacture an actionable destination.
+		let unchangedPrefix = 0;
+		while (unchangedPrefix < source.length && source[unchangedPrefix] === displaySource[unchangedPrefix])
+			unchangedPrefix++;
+		return { source, unchangedPrefix, streaming, tone };
+	}, [source, displaySource, streaming, tone]);
 	const [decorated, setDecorated] = useState(reveal);
 	if (reveal && !decorated) setDecorated(true);
 	const presentation = useTextReveal(source, reveal && visible);
@@ -267,7 +311,7 @@ const MarkdownBlock = memo(function MarkdownBlock({
 					components={components}
 					urlTransform={inertDestination}
 				>
-					{markdownDisplaySource(source, streaming)}
+					{displaySource}
 				</Markdown>
 			</TextRevealContext.Provider>
 		</SourceContext.Provider>

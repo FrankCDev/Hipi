@@ -4,6 +4,7 @@ import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, test, vi } from "vitest";
 import { AppClientProvider } from "../../../../src/app/client-provider.tsx";
+import { ExternalLinkProvider } from "../../../../src/app/external-link-provider.tsx";
 import { PreferencesProvider } from "../../../../src/app/preferences.tsx";
 import { defaultConfig } from "../../../../src/app/theme/config.ts";
 import { themeStorageKey } from "../../../../src/app/theme/store.ts";
@@ -298,10 +299,17 @@ test("settled blocks keep long ordinary prose rich within the document bound", (
 });
 
 test("reference definitions, containers and multi-paragraph code keep canonical Markdown semantics", () => {
-	assert.match(
-		render("Earlier paragraph.\n\n[linked][target]\n\n[target]: https://example.com"),
-		/https:\/\/example.com/,
+	const open = vi.fn(async () => "opened" as const);
+	const reference = renderToStaticMarkup(
+		<PreferencesProvider>
+			<ExternalLinkProvider client={{ supported: true, open }}>
+				<MessageMarkdown source={"Earlier paragraph.\n\n[linked][target]\n\n[target]: https://example.com"} />
+			</ExternalLinkProvider>
+		</PreferencesProvider>,
 	);
+	assert.match(reference, /<a[^>]*href="https:\/\/example.com\/"[^>]*>linked<\/a>/);
+	assert.match(reference, /rel="noopener noreferrer"/);
+	assert.equal(open.mock.calls.length, 0);
 	assert.equal((render("- first\n\n  second\n\n- third").match(/<ul>/g) ?? []).length, 1);
 	assert.match(render("```\nfirst\n\nsecond\n```\n\nnext"), /first\n\nsecond\n<\/code>/);
 	assert.match(render("Title\n---\n\nparagraph"), /<h2>Title<\/h2>/);
@@ -324,19 +332,34 @@ test("GFM renders tables, lists, fences and task states without active controls"
 	assert.match(html, /&lt;script&gt;/);
 });
 
-test("untrusted markup has no fetch, navigation, HTML, SVG or style surface", () => {
-	const html = render(
-		'<script>alert(1)</script>\n\n<svg onload="bad()"></svg>\n\n<img src="https://bad.test/a">\n\n![remote](https://bad.test/pixel) ![data](data:image/svg+xml,bad)\n\n[ok](https://example.com/a) [bad](javascript:alert%281%29)',
+test("untrusted markup has no fetch, HTML, SVG or style surface; only controlled HTTP links get href", () => {
+	const open = vi.fn(async () => "opened" as const);
+	const html = renderToStaticMarkup(
+		<PreferencesProvider>
+			<ExternalLinkProvider client={{ supported: true, open }}>
+				<MessageMarkdown
+					source={
+						'<script>alert(1)</script>\n\n<svg onload="bad()"></svg>\n\n<img src="https://bad.test/a">\n\n![remote](https://bad.test/pixel) ![data](data:image/svg+xml,bad)\n\n[ok](https://example.com/a) [bad](javascript:alert%281%29)'
+					}
+				/>
+			</ExternalLinkProvider>
+		</PreferencesProvider>,
 	);
 	assert.doesNotMatch(
 		html,
-		/<(?:script|svg|img|iframe|a|link|style|video|audio)\b|<[^>]+\s(?:href|src|srcset|style|onload)=/i,
+		/<(?:script|svg|img|iframe|link|style|video|audio)\b|<[^>]+\s(?:src|srcset|style|onload)=/i,
 	);
 	assert.match(html, /https:\/\/example.com\/a/);
 	assert.match(html, /remote/);
+	assert.deepEqual(
+		[...html.matchAll(/href="([^"]*)"/g)].map((match) => match[1]),
+		["https://example.com/a"],
+	);
+	assert.match(html, /rel="noopener noreferrer"/);
+	assert.equal(open.mock.calls.length, 0);
 });
 
-test("all URL destinations are inert, only explicit credential-free HTTP(S) displayed", () => {
+test("only explicit credential-free HTTP(S) destinations reach the controlled component", () => {
 	for (const url of [
 		"javascript:alert(1)",
 		"data:text/html,x",

@@ -8,6 +8,7 @@ const contracts = new Set([
 	"@hipi/work-runtime/appearance",
 	"@hipi/work-runtime/contracts",
 	"@hipi/work-runtime/credentials",
+	"@hipi/work-runtime/external-links",
 	"@hipi/work-runtime/files",
 	"@hipi/work-runtime/files/protocol",
 	"@hipi/work-runtime/previews/contracts",
@@ -16,6 +17,7 @@ const contracts = new Set([
 const portableLeaves = new Set([
 	"appearance/protocol.ts",
 	"credentials/protocol.ts",
+	"external-links/protocol.ts",
 	"files/protocol.ts",
 	"previews/protocol.ts",
 	"ipc/protocol.ts",

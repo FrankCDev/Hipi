@@ -6,6 +6,7 @@ import {
 	parseFontReply,
 } from "@hipi/work-runtime/appearance";
 import { AppError, parseRequest } from "@hipi/work-runtime/contracts";
+import { parseExternalLinkRequest, parseExternalLinkResult } from "@hipi/work-runtime/external-links";
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { parseFileRequest } from "@hipi/work-runtime/files/protocol";
 import { parsePreviewRequest } from "@hipi/work-runtime/previews/protocol";
@@ -18,6 +19,7 @@ import {
 	FONT_CHANNEL,
 } from "./appearance/protocol.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credentials/protocol.ts";
+import { EXTERNAL_LINK_CHANNEL } from "./external-links/protocol.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL, rootRequest } from "./files/protocol.ts";
 import { InvocationGate } from "./ipc/invocation-gate.ts";
 import { CHANNEL, decode, encode, identifier, MAX_ACTIVE, observation } from "./ipc/protocol.ts";
@@ -31,6 +33,15 @@ const previewCalls = new Set<string>();
 let appearancePending = 0;
 let fontPending: string | undefined;
 const appearanceListeners = new Set<(status: unknown) => void>();
+contextBridge.exposeInMainWorld(
+	"hipiWorkExternalLinks",
+	Object.freeze({
+		async open(raw: unknown): Promise<unknown> {
+			const request = parseExternalLinkRequest(raw);
+			return parseExternalLinkResult(await ipcRenderer.invoke(EXTERNAL_LINK_CHANNEL, JSON.stringify(request)));
+		},
+	}),
+);
 ipcRenderer.on(APPEARANCE_UPDATED, (_event, raw: unknown) => {
 	try {
 		const status = parseAppearanceStatus(raw);

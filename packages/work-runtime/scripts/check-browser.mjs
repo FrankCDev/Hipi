@@ -3,6 +3,7 @@ import { build } from "esbuild";
 // Browser consumers can import only the public contract and browser transport, not Node or PI.
 for (const entry of [
 	"src/contracts.ts",
+	"src/external-links.ts",
 	"src/transport-http-client.ts",
 	"src/credential-contracts.ts",
 	"src/credential-http-client.ts",

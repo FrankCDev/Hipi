@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../../../app/preferences.tsx";
 import { Button } from "../../../../components/ui/button.tsx";
@@ -43,35 +44,69 @@ export function UserMessageContent({ source }: { source: string }) {
 		let restore = () => {};
 		const measure = () => {
 			restore();
-			const height = Number.parseFloat(getComputedStyle(node).lineHeight) * USER_MESSAGE_COLLAPSED_LINES;
-			if (!Number.isFinite(height) || height <= 0) return;
-			setOverflow(bounded || node.getBoundingClientRect().height > height + 1);
-			restore = expanded ? () => {} : constrainClippedControls(node, clip.getBoundingClientRect().top + height);
+			const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight);
+			if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
+			const rect = node.getBoundingClientRect();
+			const scale = node.offsetHeight === 0 ? 1 : rect.height / node.offsetHeight;
+			if (!Number.isFinite(scale) || scale <= 0) return;
+			const overflowing = bounded || rect.height / scale > lineHeight * USER_MESSAGE_COLLAPSED_LINES + 1;
+			setOverflow(overflowing);
+			if (expanded || !overflowing) {
+				clip.style.removeProperty("max-height");
+				return;
+			}
+			// Reserve one of the 20 lines for the separate ellipsis. A rendered card
+			// crossing the cutoff stays whole, but never extend a source-sliced preview.
+			let height = lineHeight * (USER_MESSAGE_COLLAPSED_LINES - 1);
+			const cards = bounded
+				? []
+				: node.querySelectorAll('[data-markdown-copy="code-block"]:not(pre), .markdown-code-block');
+			if (cards.length > 0) {
+				height = Math.ceil(height);
+				for (const card of cards) {
+					const bounds = card.getBoundingClientRect();
+					const top = (bounds.top - rect.top) / scale;
+					const bottom = (bounds.bottom - rect.top) / scale;
+					if (top < height && bottom > height) height = Math.ceil(bottom);
+				}
+			}
+			clip.style.maxHeight = cards.length > 0 ? `${height}px` : `${USER_MESSAGE_COLLAPSED_LINES - 1}lh`;
+			restore = constrainClippedControls(node, clip.getBoundingClientRect().top + height * scale);
 		};
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(node);
+		const mutations = new MutationObserver(measure);
+		mutations.observe(node, { childList: true, subtree: true });
 		return () => {
 			observer.disconnect();
+			mutations.disconnect();
 			restore();
 		};
 	}, [bounded, expanded, displayed]);
 	return (
 		<div className="user-message-surface">
-			<div className="user-message-fold" data-expanded={expanded} ref={viewport}>
+			<div className="user-message-fold" data-collapsed={overflow && !expanded} ref={viewport}>
 				<div ref={content} className="user-message-body">
 					<MessageMarkdown source={displayed} tone="user" />
 				</div>
 			</div>
+			{overflow && !expanded && (
+				<span className="user-message-ellipsis" aria-hidden="true" data-markdown-copy="exclude">
+					…
+				</span>
+			)}
 			{overflow && (
 				<Button
 					className="user-message-expand"
 					variant="ghost"
 					size="sm"
 					aria-expanded={expanded}
+					data-markdown-copy="exclude"
 					onClick={() => setExpanded((value) => !value)}
 				>
 					{t(expanded ? "work.showLess" : "work.showMore")}
+					<ChevronDown className="user-message-expand-icon" aria-hidden="true" />
 				</Button>
 			)}
 		</div>

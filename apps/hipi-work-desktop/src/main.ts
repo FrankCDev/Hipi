@@ -24,6 +24,7 @@ import {
 	type SaveDialogOptions,
 	safeStorage,
 	session,
+	shell,
 	utilityProcess,
 	type WebContentsWillNavigateEventParams,
 } from "electron";
@@ -49,6 +50,8 @@ import {
 	finishFailedStartup,
 	writeDiagnosticFile,
 } from "./diagnostics/service.ts";
+import { EXTERNAL_LINK_CHANNEL } from "./external-links/protocol.ts";
+import { ExternalLinkService } from "./external-links/service.ts";
 import { chooseProjectDirectory, filePickerLabels } from "./files/messages.ts";
 import { manageFileRoots, ProjectFolderSelections } from "./files/picker.ts";
 import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./files/protocol.ts";
@@ -370,6 +373,15 @@ async function start(mode: "production" | "deterministic") {
 		if (!recoveringStartup) exporter.close();
 	});
 	const owner = window.webContents;
+	// Ordinary local Work policy. No renderer-supplied policy or account setting is consulted.
+	const externalLinks = new ExternalLinkService(
+		owner,
+		PAGE,
+		() => "allow",
+		(url) => shell.openExternal(url),
+	);
+	ipcMain.handle(EXTERNAL_LINK_CHANNEL, (event, raw: unknown) => externalLinks.request(event, raw));
+	owner.once("destroyed", () => ipcMain.removeHandler(EXTERNAL_LINK_CHANNEL));
 	const appearance = new WindowAppearanceService(
 		window,
 		process.platform,

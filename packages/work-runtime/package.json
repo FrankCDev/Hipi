@@ -7,6 +7,7 @@
 		".": "./src/core.ts",
 		"./contracts": "./src/contracts.ts",
 		"./appearance": "./src/appearance.ts",
+		"./external-links": "./src/external-links.ts",
 		"./credentials": "./src/credential-contracts.ts",
 		"./credential-http-client": "./src/credential-http-client.ts",
 		"./files": "./src/files/contracts.ts",

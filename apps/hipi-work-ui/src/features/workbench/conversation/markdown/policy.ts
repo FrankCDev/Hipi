@@ -1,3 +1,4 @@
+import { externalLinkUrl } from "@hipi/work-runtime/external-links";
 import remend from "remend";
 
 // Provisional complexity ceiling; benchmark before treating it as a product budget.
@@ -12,17 +13,10 @@ export function markdownDisplaySource(source: string, streaming: boolean): strin
 	return streaming ? remend(source, { katex: false, inlineKatex: false, linkMode: "text-only" }) : source;
 }
 
-// No URL is ever handed to a native link or resource element. This policy also
-// suppresses dangerous destinations in the inert preview; originals remain available.
+// Only validated destinations reach the injected, click-only external-link capability.
+// Unsupported hosts remain inert. Images remain placeholders, never resource elements.
 export function inertDestination(url: string): string {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: Reject control characters in untrusted destinations.
-	if (/[\u0000-\u0020\u007f]/u.test(url) || !/^https?:\/\//iu.test(url)) return "";
-	try {
-		const parsed = new URL(url);
-		return parsed.hostname && !parsed.username && !parsed.password ? url : "";
-	} catch {
-		return "";
-	}
+	return externalLinkUrl(url) ?? "";
 }
 
 /** Fixed pages use a consistent boundary shifted before a UTF-16 surrogate pair. */
