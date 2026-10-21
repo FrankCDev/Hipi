@@ -112,12 +112,15 @@ test("six hundred explicitly loaded rows retain canonical order without eviction
 	assert.equal(windowItems(value)[0]?.conversation.conversationId, "0");
 	assert.equal(presentedWindow(value, { start: 0, end: 250 }, focused).before.length, 0);
 });
-test("sparse action budget is five total reads and pauses without inventing empty completion", async () => {
-	const client = reader(async () => page(0, 0, null, "next"));
+test("initial sparse reads automatically cross multiple batches without a transport control", async () => {
+	let calls = 0;
+	const client = reader(async () => page(0, ++calls === 16 ? 10 : 0, null, `cursor-${calls}`));
 	const value = await readRecentWindow(client, view, "active", signal());
-	assert.equal(vi.mocked(client.call).mock.calls.length, 5);
-	assert.equal(value.paused, true);
-	assert.equal(value.pages.at(-1)?.nextCursor, "next");
+	assert.equal(calls, 16);
+	assert.equal(value.paused, false);
+	assert.equal(value.refreshPaused, undefined);
+	assert.equal(windowItems(value).length, 10);
+	assert.equal(value.pages.length, 1);
 });
 
 test("visibility cancellation stops a sparse action before another bounded read", async () => {
@@ -129,14 +132,14 @@ test("visibility cancellation stops a sparse action before another bounded read"
 	await assert.rejects(readRecentWindow(client, view, "active", controller.signal), { name: "AbortError" });
 	assert.equal(vi.mocked(client.call).mock.calls.length, 1);
 });
-test("stale continuation and unavailable anchor fallbacks share the same finite budget", async () => {
+test("stale continuation and bounded anchor fallbacks automatically reach the coherent head", async () => {
 	let calls = 0;
 	const client = reader(async (request) => {
 		calls++;
 		if (calls === 1) throw new AppError("CURSOR_STALE");
 		if (request.position.kind === "around")
 			return { kind: "anchor_unavailable", coverage, anchor: request.position.anchor, reason: "ineligible" };
-		return page(0, 0, null, "next");
+		return page(1000, calls === 6 ? 50 : 0, null, `cursor-${calls}`);
 	});
 	const anchor = { workspaceId: "physical", conversationId: "anchor" };
 	const old = snapshot([page(0, 50, "previous", "next")]);
@@ -148,12 +151,14 @@ test("stale continuation and unavailable anchor fallbacks share the same finite 
 			{ ...anchor, conversationId: "neighbor2" },
 		],
 	});
-	assert.equal(calls, 5);
-	assert.equal(value.paused, true);
-	assert.deepEqual(value.pages, old.pages);
-	assert.equal(value.refresh?.reset, "anchor_unavailable");
-	assert.equal(value.refreshPaused, "budget");
+	assert.equal(calls, 6);
+	assert.equal(value.paused, false);
+	assert.equal(value.reset, "anchor_unavailable");
+	assert.equal(value.refreshPaused, undefined);
+	assert.equal(windowItems(value)[0]?.conversation.conversationId, "1000");
+	assert.equal(windowItems(old)[0]?.conversation.conversationId, "0");
 });
+
 test("unpublished replacement retains old coherent rows without dispatching another action", async () => {
 	const old = snapshot([page()]);
 	const client = reader(async () => ({ kind: "unpublished", coverage: { ...coverage, state: "building" } }));
@@ -174,7 +179,7 @@ test("an initial unpublished window resumes on the same-generation ready probe w
 	const waiting = await cache.fetchQuery(options);
 	assert.equal(waiting.unpublished, true);
 	assert.equal(waiting.refreshPaused, undefined);
-	assert.equal(waiting.refresh?.attemptReads, 1);
+	assert.deepEqual(waiting.refresh?.recentCursors, []);
 	const observer = new QueryObserver(cache, { ...options, staleTime: Infinity });
 	const unsubscribe = observer.subscribe(() => {});
 	try {
@@ -192,18 +197,24 @@ test("an initial unpublished window resumes on the same-generation ready probe w
 	}
 });
 
-test("unpublished waits do not renew the attempt budget before a real exhaustion pauses probes", async () => {
+test("unpublished probes remain automatic after repeated building responses", async () => {
 	let calls = 0;
 	const client = reader(async () => {
 		calls++;
-		return { kind: "unpublished", coverage: { ...coverage, state: "building" } };
+		return calls === 9 ? page() : { kind: "unpublished", coverage: { ...coverage, state: "building" } };
 	});
 	let value = await readRecentWindow(client, view, "active", signal());
-	for (let index = 0; index < 5; index++) value = await readRecentWindow(client, view, "active", signal(), value);
-	assert.equal(calls, 5);
-	assert.equal(value.refreshPaused, "budget");
-	assert.equal(value.refresh?.attemptReads, 5);
+	for (let index = 0; index < 7; index++) {
+		value = await readRecentWindow(client, view, "active", signal(), value);
+		assert.equal(value.unpublished, true);
+		assert.equal(value.refreshPaused, undefined);
+	}
+	value = await readRecentWindow(client, view, "active", signal(), value);
+	assert.equal(calls, 9);
+	assert.equal(value.paused, false);
+	assert.equal(windowItems(value).length, 50);
 });
+
 test("generation mismatch never appends old rows to a replacement", async () => {
 	let calls = 0;
 	const client = reader(async () => {
@@ -241,29 +252,36 @@ test("terminal presentation includes the single extra row after a bounded expans
 	assert.deepEqual(reconcileWindowSlice(previous, { start: 0, end: 10 }, next), { start: 0, end: 16 });
 });
 
-test("five empty continuation ranges do not evict retained visible rows", async () => {
-	const previous = snapshot(
-		Array.from({ length: 5 }, (_, index) => page(index * 50, 50, index ? String(index - 1) : null, String(index + 1))),
-	);
-	const value = await readRecentWindow(
-		reader(async () => page(0, 0, "previous", "later")),
-		view,
-		"active",
-		signal(),
-		previous,
-		{ action: "next" },
-	);
-	assert.deepEqual(windowItems(value), windowItems(previous));
-	assert.equal(value.pages.length, 5);
-	assert.equal(value.pages.at(-1)?.nextCursor, "later");
-	assert.equal(value.paused, true);
-});
+test.each(["next", "previous"] as const)(
+	"sparse %s ranges continue automatically without evicting visible rows",
+	async (action) => {
+		const previous = snapshot(Array.from({ length: 5 }, (_, index) => page(index * 50, 50, "before", "after")));
+		let calls = 0;
+		const value = await readRecentWindow(
+			reader(async () => {
+				calls++;
+				return page(action === "next" ? 250 : -5, calls === 12 ? 5 : 0, `before-${calls}`, `after-${calls}`);
+			}),
+			view,
+			"active",
+			signal(),
+			previous,
+			{ action },
+		);
+		assert.equal(calls, 12);
+		assert.equal(windowItems(value).length, 255);
+		assert.ok(windowItems(value).some((row) => row.conversation.conversationId === "0"));
+		assert.ok(windowItems(value).some((row) => row.conversation.conversationId === "249"));
+		assert.equal(value.pages.length, 6);
+		assert.equal(value.paused, false);
+	},
+);
 
 test("five sparse one-row ranges cannot evict an entire visible window", async () => {
 	const previous = snapshot(Array.from({ length: 5 }, (_, index) => page(index * 50, 50, "before", "next")));
 	let index = 250;
 	const value = await readRecentWindow(
-		reader(async () => page(index++, 1, "before", "next")),
+		reader(async () => page(index++, 1, "before", `next-${index}`)),
 		view,
 		"active",
 		signal(),
@@ -330,7 +348,7 @@ test("ten thousand loaded rows rebuild in two hundred reads without losing their
 	assert.ok(value.pages.every((part) => part.coverage.generation === "two"));
 });
 
-test("ten-thousand-row sparse rebuild and its one restart share one thousand total reads", async () => {
+test("a large sparse rebuild crosses the old proportional limit without publishing its partial replacement", async () => {
 	const old = snapshot(
 		Array.from({ length: 200 }, (_, index) => page(index * 50, 50, index ? "before" : null, "after")),
 	);
@@ -340,21 +358,23 @@ test("ten-thousand-row sparse rebuild and its one restart share one thousand tot
 		calls++;
 		if (request.position.kind === "head") heads++;
 		if (calls === 500) throw new AppError("CURSOR_STALE");
-		return { ...page(0, 0, null, "sparse"), coverage: { ...coverage, generation: calls < 500 ? "two" : "three" } };
+		return {
+			...page(Math.max(0, calls - 1101) * 50, calls > 1100 ? 50 : 0, null, `cursor-${calls}`),
+			coverage: { ...coverage, generation: calls < 500 ? "two" : "three" },
+		};
 	});
 	const value = await readRecentWindow(client, view, "active", signal(), old, {
 		action: "refresh",
 		targetCount: 10000,
 	});
-	assert.equal(calls, 1000);
+	assert.equal(calls, 1300);
 	assert.equal(heads, 2);
-	assert.equal(value.pages, old.pages);
-	assert.equal(windowItems(value)[0]?.conversation.conversationId, "0");
-	assert.equal(value.refresh?.attemptBudget, 1000);
-	assert.equal(value.refresh?.attemptReads, 1000);
-	assert.equal(value.refresh?.restarts, 1);
-	assert.equal(value.refresh?.pages.length, 1);
-	assert.equal(value.refreshPaused, "budget");
+	assert.equal(windowItems(old)[0]?.conversation.conversationId, "0");
+	assert.equal(windowItems(value).length, 10000);
+	assert.equal(value.pages.length, 200);
+	assert.equal(value.refresh, undefined);
+	assert.equal(value.paused, false);
+	assert.ok(value.pages.every((part) => part.coverage.generation === "three"));
 });
 
 test("refresh stops early at a terminal cursor without fetching unseen catalog rows", async () => {
@@ -366,40 +386,39 @@ test("refresh stops early at a terminal cursor without fetching unseen catalog r
 	assert.equal(value.paused, false);
 });
 
-test("sparse rebuild exhausts its proportional total once, retains the old snapshot, and ignores probes", async () => {
+test("a progressing one-row rebuild completes automatically beyond its former sixty-read cap", async () => {
 	const old = snapshot(
 		Array.from({ length: 12 }, (_, index) => page(index * 50, 50, index ? "before" : null, "after")),
 	);
-	const client = reader(async () => page(0, 0, null, "sparse"));
-	const paused = await readRecentWindow(client, view, "active", signal(), old, { action: "refresh", targetCount: 600 });
-	assert.equal(vi.mocked(client.call).mock.calls.length, 60);
-	assert.equal(paused.pages, old.pages);
-	assert.equal(paused.retained, old.retained);
-	assert.equal(paused.revision, old.revision);
-	assert.equal(paused.refreshPaused, "budget");
-	assert.equal(paused.refresh?.attemptReads, 60);
-	assert.equal(paused.refresh?.attemptBudget, 60);
-	assert.equal(paused.refresh?.pages.length, 1);
-	assert.deepEqual(paused.refresh?.position, { kind: "continue", cursor: "sparse" });
-	for (let index = 0; index < 3; index++)
-		assert.equal(await readRecentWindow(client, view, "active", signal(), paused), paused);
-	assert.equal(vi.mocked(client.call).mock.calls.length, 60);
+	let calls = 0;
+	const client = reader(async () => page(1000 + calls++, 1, null, `cursor-${calls}`));
+	const value = await readRecentWindow(client, view, "active", signal(), old, { action: "refresh", targetCount: 600 });
+	assert.equal(calls, 600);
+	assert.equal(windowItems(value).length, 600);
+	assert.equal(value.pages.length, 12);
+	assert.equal(windowItems(value)[0]?.conversation.conversationId, "1000");
+	assert.equal(windowItems(old)[0]?.conversation.conversationId, "0");
+	assert.equal(value.refreshPaused, undefined);
+	assert.equal(value.paused, false);
 });
 
-test("one publication restart shares the same total budget rather than renewing it", async () => {
+test("one publication restart automatically continues through the next read batch", async () => {
 	let calls = 0;
 	const old = snapshot([page()]);
 	const client = reader(async () => {
 		calls++;
 		if (calls === 20) throw new AppError("CURSOR_STALE");
-		return { ...page(0, 0, null, "next"), coverage: { ...coverage, generation: calls < 20 ? "two" : "three" } };
+		return {
+			...page(1000, calls === 41 ? 50 : 0, null, `cursor-${calls}`),
+			coverage: { ...coverage, generation: calls < 20 ? "two" : "three" },
+		};
 	});
 	const value = await readRecentWindow(client, view, "active", signal(), old);
-	assert.equal(calls, 40);
-	assert.equal(value.pages, old.pages);
-	assert.equal(value.refresh?.restarts, 1);
-	assert.equal(value.refresh?.attemptReads, 40);
-	assert.equal(value.refreshPaused, "budget");
+	assert.equal(calls, 41);
+	assert.equal(value.paused, false);
+	assert.equal(value.refresh, undefined);
+	assert.equal(windowItems(value)[0]?.conversation.conversationId, "1000");
+	assert.ok(value.pages.every((part) => part.coverage.generation === "three"));
 });
 
 test("a second publication change pauses without mixing rows or automatically restarting again", async () => {
@@ -408,7 +427,7 @@ test("a second publication change pauses without mixing rows or automatically re
 	const client = reader(async () => {
 		calls++;
 		const generation = calls === 1 ? "two" : calls < 4 ? "three" : "four";
-		return { ...page(calls * 50, 10, null, "next"), coverage: { ...coverage, generation } };
+		return { ...page(calls * 50, 10, null, `next-${calls}`), coverage: { ...coverage, generation } };
 	});
 	const value = await readRecentWindow(client, view, "active", signal(), old);
 	assert.equal(calls, 4);
@@ -419,22 +438,35 @@ test("a second publication change pauses without mixing rows or automatically re
 	assert.equal(calls, 4);
 });
 
-test("stale pagination cannot replace a five-hundred-row snapshot with an incomplete replacement", async () => {
+test("an unstable first read never exposes its incomplete replacement as committed rows", async () => {
+	let calls = 0;
+	const client = reader(async () => {
+		calls++;
+		return { ...page(calls, 1, null, `cursor-${calls}`), coverage: { ...coverage, generation: String(calls) } };
+	});
+	const value = await readRecentWindow(client, view, "active", signal());
+	assert.equal(calls, 4);
+	assert.equal(value.refreshPaused, "publication");
+	assert.deepEqual(value.pages, []);
+	assert.equal(value.refresh?.pages.flatMap((part) => part.items).length, 1);
+});
+
+test("stale pagination automatically rebuilds the entire captured five-hundred-row extent", async () => {
 	let calls = 0;
 	const old = snapshot(
 		Array.from({ length: 10 }, (_, index) => page(index * 50, 50, index ? "before" : null, "after")),
 	);
 	const client = reader(async () => {
 		if (++calls === 1) throw new AppError("CURSOR_STALE");
-		return { ...page(calls * 50, 50, null, "next"), coverage: { ...coverage, generation: "two" } };
+		return { ...page(calls * 50, 50, null, `next-${calls}`), coverage: { ...coverage, generation: "two" } };
 	});
 	const value = await readRecentWindow(client, view, "active", signal(), old, { action: "next" });
-	assert.equal(calls, 5);
-	assert.equal(value.pages, old.pages);
+	assert.equal(calls, 11);
 	assert.equal(windowItems(value).length, 500);
-	assert.equal(value.refresh?.pages.flatMap((part) => part.items).length, 200);
-	assert.equal(value.refresh?.targetCount, 500);
-	assert.equal(value.refreshPaused, "budget");
+	assert.equal(windowItems(old).length, 500);
+	assert.equal(value.refresh, undefined);
+	assert.equal(value.paused, false);
+	assert.ok(value.pages.every((part) => part.coverage.generation === "two"));
 });
 
 test("supervised refresh yields after five reads and cancellation releases the scheduled next batch", async () => {
@@ -442,7 +474,8 @@ test("supervised refresh yields after five reads and cancellation releases the s
 	try {
 		const controller = new AbortController();
 		const old = snapshot([page()]);
-		const client = reader(async () => page(0, 0, null, "next"));
+		let calls = 0;
+		const client = reader(async () => page(0, 0, null, `next-${++calls}`));
 		const pending = readRecentWindow(client, view, "active", controller.signal, old);
 		const rejected = assert.rejects(pending, { name: "AbortError" });
 		for (let index = 0; index < 20; index++) await Promise.resolve();
@@ -459,47 +492,84 @@ test("supervised refresh yields after five reads and cancellation releases the s
 	}
 });
 
-test("explicit retry resumes the saved sparse cursor without repeating successful reads", async () => {
+test.each([false, true])("explicit publication retry resumes staged rows, with expired cursor=%s", async (expired) => {
 	let calls = 0;
 	const old = snapshot([page()]);
 	const positions: SidebarWindowRequest["position"][] = [];
 	const client = reader(async (request) => {
 		positions.push(request.position);
 		calls++;
-		return calls <= 40 ? page(0, 0, null, `cursor-${calls}`) : page(1000);
+		if (calls === 4 || (calls === 5 && expired)) throw new AppError("CURSOR_STALE");
+		return {
+			...page(
+				calls === 5 ? 2001 : calls === 6 ? 3000 : calls === 3 ? 2000 : 1000,
+				calls >= 5 ? (expired ? 50 : 49) : 1,
+				null,
+				calls >= 5 ? null : `cursor-${calls}`,
+			),
+			coverage: { ...coverage, generation: calls === 1 ? "two" : calls === 6 ? "four" : "three" },
+		};
 	});
 	const paused = await readRecentWindow(client, view, "active", signal(), old);
+	assert.equal(paused.refreshPaused, "publication");
+	assert.equal(paused.pages, old.pages);
 	const value = await readRecentWindow(client, view, "active", signal(), paused, {
 		action: "refresh",
 		explicitRetry: true,
 	});
-	assert.equal(calls, 41);
-	assert.deepEqual(positions[40], { kind: "continue", cursor: "cursor-40" });
+	assert.equal(calls, expired ? 6 : 5);
+	assert.deepEqual(positions[4], { kind: "continue", cursor: "cursor-3" });
+	if (expired) assert.deepEqual(positions[5], { kind: "head" });
 	assert.equal(value.refreshPaused, undefined);
-	assert.equal(windowItems(value)[0]?.conversation.conversationId, "1000");
+	assert.equal(windowItems(value).length, 50);
+	assert.equal(windowItems(value)[0]?.conversation.conversationId, expired ? "3000" : "2000");
 });
 
-test("explicit retry discards an expired staged cursor once and completes under its new finite budget", async () => {
+test.each(["repeat", "cycle"] as const)("a %s cursor rejects without publishing or looping", async (kind) => {
 	let calls = 0;
 	const old = snapshot([page()]);
-	const positions: SidebarWindowRequest["position"][] = [];
-	const client = reader(async (request) => {
-		positions.push(request.position);
-		calls++;
-		if (calls === 41) throw new AppError("CURSOR_STALE");
-		return calls <= 40
-			? page(0, 0, null, `cursor-${calls}`)
-			: { ...page(1000), coverage: { ...coverage, generation: "two" } };
+	const client = reader(async () => page(1000, 0, null, kind === "repeat" ? "same" : `cycle-${++calls % 3}`));
+	await assert.rejects(
+		readRecentWindow(client, view, "active", signal(), old),
+		(error) => error instanceof AppError && error.code === "INVALID_REQUEST",
+	);
+	assert.equal(vi.mocked(client.call).mock.calls.length, kind === "repeat" ? 2 : 4);
+	assert.equal(windowItems(old)[0]?.conversation.conversationId, "0");
+});
+
+test("deadline abort retains the cache and a deliberate retry can read again", async () => {
+	const deadline = new AbortController();
+	const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+	const cache = new QueryClient();
+	const old = snapshot([page()]);
+	cache.setQueryData(windowKey(view, "active"), old);
+	let calls = 0;
+	const client = reader(async () => {
+		if (++calls === 6) deadline.abort(new DOMException("Timed out", "TimeoutError"));
+		return page(1000, 0, null, `cursor-${calls}`);
 	});
-	const paused = await readRecentWindow(client, view, "active", signal(), old);
-	const value = await readRecentWindow(client, view, "active", signal(), paused, {
-		action: "refresh",
-		explicitRetry: true,
-	});
-	assert.equal(calls, 42);
-	assert.deepEqual(positions.slice(40), [{ kind: "continue", cursor: "cursor-40" }, { kind: "head" }]);
-	assert.equal(value.paused, false);
-	assert.equal(value.pages[0]?.coverage.generation, "two");
+	try {
+		await assert.rejects(
+			fetchRecentWindow(cache, client, view, "active", "refresh", () => ({})),
+			{ name: "TimeoutError" },
+		);
+		assert.equal(calls, 6);
+		assert.equal(cache.getQueryData(windowKey(view, "active")), old);
+		assert.equal(cache.getQueryState(windowKey(view, "active"))?.status, "error");
+		spy.mockRestore();
+		const replacement = await fetchRecentWindow(
+			cache,
+			reader(async () => page(1000)),
+			view,
+			"active",
+			"refresh",
+			() => ({}),
+		);
+		assert.equal(windowItems(replacement)[0]?.conversation.conversationId, "1000");
+	} finally {
+		spy.mockRestore();
+		cache.clear();
+	}
 });
 
 test("query refresh keeps cached rows coherent until the entire captured extent is ready", async () => {
@@ -514,7 +584,7 @@ test("query refresh keeps cached rows coherent until the entire captured extent 
 			return new Promise<SidebarWindowResult>((resolve) => {
 				release = resolve;
 			});
-		return { ...page(calls * 50, 50, null, "next"), coverage: { ...coverage, generation: "two" } };
+		return { ...page(calls * 50, 50, null, `next-${calls}`), coverage: { ...coverage, generation: "two" } };
 	});
 	const pending = fetchRecentWindow(cache, client, view, "active", "refresh", () => ({ targetCount: 300 }));
 	await vi.waitFor(() => assert.equal(calls, 6));
@@ -531,12 +601,16 @@ test("query refresh keeps cached rows coherent until the entire captured extent 
 test("automatic query refetch cannot inherit an earlier explicit retry grant", async () => {
 	const cache = new QueryClient();
 	cache.setQueryData(windowKey(view, "active"), snapshot([page()]));
-	const client = reader(async () => page(0, 0, null, "next"));
+	let calls = 0;
+	const client = reader(async () => {
+		calls++;
+		return { ...page(1000, 1, null, `cursor-${calls}`), coverage: { ...coverage, generation: String(calls) } };
+	});
 	const value = await fetchRecentWindow(cache, client, view, "active", "refresh", () => ({}));
-	assert.equal(value.refreshPaused, "budget");
-	assert.equal(vi.mocked(client.call).mock.calls.length, 40);
+	assert.equal(value.refreshPaused, "publication");
+	assert.equal(vi.mocked(client.call).mock.calls.length, 4);
 	await cache.refetchQueries({ queryKey: windowKey(view, "active") });
-	assert.equal(vi.mocked(client.call).mock.calls.length, 40);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 4);
 	assert.equal(recentWindowOptions(cache, client, view, "active", () => ({})).gcTime, 0);
 	cache.clear();
 });
@@ -544,7 +618,11 @@ test("automatic query refetch cannot inherit an earlier explicit retry grant", a
 test("hiding drops staged metadata without losing committed rows or resetting pause authority", async () => {
 	const cache = new QueryClient();
 	const old = snapshot([page()]);
-	const client = reader(async () => page(0, 0, null, "next"));
+	let calls = 0;
+	const client = reader(async () => {
+		calls++;
+		return { ...page(1000, 1, null, `cursor-${calls}`), coverage: { ...coverage, generation: String(calls) } };
+	});
 	const paused = await readRecentWindow(client, view, "active", signal(), old);
 	cache.setQueryData(windowKey(view, "active"), paused);
 	await cache.cancelQueries({ queryKey: windowKey(view, "active") });
@@ -552,10 +630,10 @@ test("hiding drops staged metadata without losing committed rows or resetting pa
 	const released = cache.getQueryData<RecentWindow>(windowKey(view, "active"));
 	assert.ok(released);
 	assert.equal(released.refresh, undefined);
-	assert.equal(released.refreshPaused, "budget");
+	assert.equal(released.refreshPaused, "publication");
 	assert.equal(released.pages, old.pages);
 	assert.equal(await readRecentWindow(client, view, "active", signal(), released), released);
-	assert.equal(vi.mocked(client.call).mock.calls.length, 40);
+	assert.equal(vi.mocked(client.call).mock.calls.length, 4);
 	cache.clear();
 });
 

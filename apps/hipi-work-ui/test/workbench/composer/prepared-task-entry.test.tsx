@@ -6,6 +6,7 @@ import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../../../src/components/ui/button.tsx";
 import {
+	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
 	DropdownMenuRadioGroup,
@@ -18,7 +19,10 @@ import type { StagedProjectConsent } from "../../../src/features/workbench/catal
 import { ComposerEditor } from "../../../src/features/workbench/composer/editor.tsx";
 import { PreparedTaskEntry } from "../../../src/features/workbench/composer/prepared-entry.tsx";
 import { PreparedProjectConsent } from "../../../src/features/workbench/composer/project-consent.tsx";
-import { ConversationModelControls } from "../../../src/features/workbench/conversation/model.tsx";
+import {
+	ConversationModelAttention,
+	ConversationModelControls,
+} from "../../../src/features/workbench/conversation/model.tsx";
 import type { ConversationController } from "../../../src/features/workbench/conversation/use-conversation.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 
@@ -95,12 +99,14 @@ vi.mock("@tanstack/react-query", () => ({
 					},
 					isPending: false,
 					isError: catalogFailed,
+					isFetching: catalogFetching,
 					refetch,
 				},
 }));
 let local = new LocalState();
 let credentialState = "configured";
 let catalogFailed = false;
+let catalogFetching = false;
 let models = [{ provider: "faux", modelId: "one", name: "One" }];
 let draft = "";
 let folder: ProjectFolder;
@@ -166,6 +172,7 @@ beforeEach(() => {
 	draft = "";
 	credentialState = "configured";
 	catalogFailed = false;
+	catalogFetching = false;
 	models = [{ provider: "faux", modelId: "one", name: "One" }];
 	folder = {
 		workspaceId: "project",
@@ -284,18 +291,64 @@ test("unknown or stale model values cannot redirect Send and catalog errors bloc
 	assert.equal(local.read("new-chat-model"), '["faux","two"]');
 });
 
-test("model Refresh retains the open menu, while ordinary dismissal keeps library focus restoration", () => {
+test("healthy and successfully empty model catalogs have no manual refresh action", () => {
+	for (const entries of [models, []]) {
+		models = entries;
+		const node = render();
+		assert.deepEqual(
+			find(node, DropdownMenuItem).map((item) => item.props.className),
+			["new-chat-manage-models"],
+		);
+	}
+	assert.equal(refetch.mock.calls.length, 0);
+});
+
+test("failed model read retry retains the open menu, draft and ordinary focus restoration", () => {
+	change("Keep this model question");
+	catalogFailed = true;
+	only(render(), DropdownMenu).props.onOpenChange?.(true);
 	const node = render();
-	const refresh = find(node, DropdownMenuItem).find((item) => item.props.className !== "new-chat-manage-models");
+	const retry = find(node, DropdownMenuItem).find((item) => item.props.className === "new-chat-model-retry");
 	const preventDefault = vi.fn();
-	assert.ok(refresh?.props.onSelect);
-	Reflect.apply(refresh.props.onSelect, undefined, [{ preventDefault }]);
+	assert.ok(retry?.props.onSelect);
+	assert.equal(retry.props.disabled, false);
+	Reflect.apply(retry.props.onSelect, undefined, [{ preventDefault }]);
 	assert.equal(preventDefault.mock.calls.length, 1);
 	assert.equal(refetch.mock.calls.length, 1);
+	assert.equal(only(render(), DropdownMenu).props.open, true);
+	assert.equal(only(render(), ComposerEditor).props.value, "Keep this model question");
+	assert.equal(local.read("new-chat-model"), null);
+	assert.equal(sent.mock.calls.length, 0);
+	assert.equal(runtimeCall.mock.calls.length, 0);
 	preventDefault.mockClear();
 	only(node, DropdownMenuContent).props.onCloseAutoFocus?.({ preventDefault } as Event);
 	assert.equal(preventDefault.mock.calls.length, 0);
 });
+
+test.each(["disabled", "busy", "fetching", "recovered", "sending"] as const)(
+	"model catalog retry rejects stale callbacks after %s changes without dispatch",
+	async (condition) => {
+		change("Keep me");
+		if (condition === "sending") {
+			sent.mockImplementationOnce(() => new Promise(() => {}));
+			submit();
+		}
+		catalogFailed = true;
+		const retry = find(render(), DropdownMenuItem).find((item) => item.props.className === "new-chat-model-retry");
+		assert.ok(retry?.props.onSelect);
+		if (condition === "fetching") catalogFetching = true;
+		if (condition === "recovered") catalogFailed = false;
+		const node = render({ disabled: condition === "disabled", busy: condition === "busy" });
+		const current = find(node, DropdownMenuItem).find((item) => item.props.className === "new-chat-model-retry");
+		if (condition === "recovered") assert.equal(current, undefined);
+		else if (condition !== "sending") assert.equal(current?.props.disabled, true);
+		Reflect.apply(retry.props.onSelect, undefined, [{ preventDefault() {} }]);
+		assert.equal(refetch.mock.calls.length, 0);
+		assert.equal(sent.mock.calls.length, condition === "sending" ? 1 : 0);
+		assert.equal(runtimeCall.mock.calls.length, 0);
+		assert.equal(draft, "Keep me");
+	},
+);
 
 function renderExistingModel() {
 	hooks.cursor = 0;
@@ -340,10 +393,65 @@ test("an existing conversation opens missing-credential settings without model s
 
 test("configured conversations keep status controls without redundant credential setup", () => {
 	const node = renderExistingModel();
+	assert.equal(find(only(node, PopoverContent), Button).length, 0, "Healthy status is not a manual refresh menu");
 	assert.equal(find(node, Button).filter((item) => item.props.className === "conversation-manage-models").length, 0);
 	assert.equal(manageModels.mock.calls.length, 0);
 	assert.equal(runtimeCall.mock.calls.length, 0);
 });
+
+function recoveryController() {
+	return {
+		model: { isError: true, isFetching: false, refetch },
+		execution: { isError: false, isPending: false, mutate: runtimeCall, reset: runtimeCall },
+		observation: { connection: "connected" },
+		storeMismatch: false,
+	} as unknown as ConversationController;
+}
+function renderRecovery(controller: ConversationController) {
+	hooks.cursor = 0;
+	return ConversationModelAttention({ controller });
+}
+
+test.each(["read", "execution"] as const)("%s error recovery only reads state and retains command errors", (kind) => {
+	const controller = recoveryController();
+	controller.model.isError = kind === "read";
+	controller.execution.isError = kind === "execution";
+	const retry = only(renderRecovery(controller), Button);
+	assert.equal(retry.props.children, "model.retryRead");
+	assert.equal(retry.props.disabled, false);
+	assert.ok(retry.props.onClick);
+	Reflect.apply(retry.props.onClick, undefined, []);
+	assert.equal(refetch.mock.calls.length, 1);
+	assert.equal(controller.execution.isError, kind === "execution");
+	assert.equal(runtimeCall.mock.calls.length, 0, "Retry must neither execute nor clear an uncertain mutation");
+	assert.equal(sent.mock.calls.length, 0);
+});
+
+test.each(["connecting", "stale", "paused", "fetching", "pending", "storeMismatch", "recovered"] as const)(
+	"conversation read retry has UI and latest-state handler guards for %s",
+	(condition) => {
+		const controller = recoveryController();
+		const staleRetry = only(renderRecovery(controller), Button);
+		assert.ok(staleRetry.props.onClick);
+		const next = {
+			...controller,
+			model: { ...controller.model },
+			execution: { ...controller.execution },
+			observation: { ...controller.observation },
+		};
+		if (condition === "fetching") next.model.isFetching = true;
+		else if (condition === "pending") next.execution.isPending = true;
+		else if (condition === "storeMismatch") next.storeMismatch = true;
+		else if (condition === "recovered") next.model.isError = false;
+		else next.observation.connection = condition;
+		const node = renderRecovery(next);
+		if (condition === "recovered") assert.equal(find(node, Button).length, 0);
+		else assert.equal(only(node, Button).props.disabled, true);
+		Reflect.apply(staleRetry.props.onClick, undefined, []);
+		assert.equal(refetch.mock.calls.length, 0);
+		assert.equal(runtimeCall.mock.calls.length, 0);
+	},
+);
 
 function consentIntent(): StagedProjectConsent {
 	assert.ok(folder.bindingId && folder.root);

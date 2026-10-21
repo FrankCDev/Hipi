@@ -5,9 +5,28 @@ import {
 	type CatalogPage,
 	type CatalogReadOwner,
 	readCatalogPage,
+	yieldCatalogRead,
 } from "../../../src/features/workbench/catalog/read-page.ts";
 
 type P = CatalogPage<number>;
+test("cancelling a scheduled read batch removes its timer and abort listener", async () => {
+	vi.useFakeTimers();
+	const controller = new AbortController();
+	const remove = vi.spyOn(controller.signal, "removeEventListener");
+	try {
+		const waiting = yieldCatalogRead(controller.signal);
+		const rejected = assert.rejects(waiting, { name: "AbortError" });
+		assert.equal(vi.getTimerCount(), 1);
+		controller.abort();
+		await rejected;
+		assert.equal(vi.getTimerCount(), 0);
+		await vi.runAllTimersAsync();
+		assert.equal(remove.mock.calls.length, 0, "The once-only abort listener removes itself");
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
 test("sparse ranges do not consume visible page slots and preserve opposite boundary", async () => {
 	const reads: (string | undefined)[] = [];
 	const page = await readCatalogPage(

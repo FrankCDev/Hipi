@@ -75,6 +75,8 @@ export function PreparedTaskEntry({
 		queryKey: ["models"],
 		queryFn: ({ signal }) => client.call("listModels", {}, signal),
 	});
+	const currentCatalog = useRef({ catalog, disabled, busy });
+	currentCatalog.current = { catalog, disabled, busy };
 	const configured = (provider: string) =>
 		catalog.data?.providers.some((item) => item.provider === provider && item.credentialState === "configured");
 	// A removed selection must not silently redirect the user's next message to another service.
@@ -258,16 +260,28 @@ export function PreparedTaskEntry({
 									<p role="alert">{t(catalog.isError ? "model.failed" : "model.empty")}</p>
 								)}
 								<DropdownMenuSeparator />
-								<DropdownMenuItem
-									disabled={catalog.isFetching}
-									onSelect={(event) => {
-										event.preventDefault();
-										void catalog.refetch();
-									}}
-								>
-									<Icon name="refresh" size={15} />
-									{t("model.refresh")}
-								</DropdownMenuItem>
+								{catalog.isError && (
+									<DropdownMenuItem
+										className="new-chat-model-retry"
+										disabled={disabled || busy || catalog.isFetching}
+										onSelect={(event) => {
+											event.preventDefault();
+											const current = currentCatalog.current;
+											if (
+												current.disabled ||
+												current.busy ||
+												sending.current ||
+												!current.catalog.isError ||
+												current.catalog.isFetching
+											)
+												return;
+											void current.catalog.refetch();
+										}}
+									>
+										<Icon name="refresh" size={15} />
+										{t("model.retryRead")}
+									</DropdownMenuItem>
+								)}
 								<DropdownMenuItem
 									className="new-chat-manage-models"
 									onSelect={() => {

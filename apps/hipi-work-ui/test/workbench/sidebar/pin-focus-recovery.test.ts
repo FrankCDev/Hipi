@@ -351,7 +351,7 @@ test("Recent window focus settlement requires its committed generation and exclu
 	cache.setQueryData(key, { ...data, unpublished: true }, { updatedAt: 3 });
 	region.dataset.sidebarUpdatedAt = "3";
 	assert.equal(navigationFocusSettled(dom(root), cache, scope), false);
-	cache.setQueryData(key, { ...data, refreshPaused: "budget" }, { updatedAt: 4 });
+	cache.setQueryData(key, { ...data, refreshPaused: "publication" }, { updatedAt: 4 });
 	region.dataset.sidebarUpdatedAt = "4";
 	assert.equal(
 		navigationFocusSettled(dom(root), cache, scope),

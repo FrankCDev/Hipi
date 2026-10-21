@@ -92,6 +92,22 @@ function setup() {
 	};
 }
 
+test("production model query keeps connected two-second polling without a manual refresh control", () => {
+	const h = setup();
+	try {
+		for (const connection of ["connected", "connecting", "stale", "paused", "connected"] as const) {
+			h.drive(scopeA, undefined, connection);
+			const options = h.cache.getQueryCache().find({ queryKey: key(scopeA), exact: true })?.options;
+			assert.ok(options);
+			// Query configuration coverage, not a substitute for a mounted timer/transport test.
+			assert.equal(Reflect.get(options, "refetchInterval"), connection === "connected" ? 2000 : false);
+		}
+		assert.equal(call.mock.calls.length, 0, "No read is invented for an unknown observation transition");
+	} finally {
+		h.close();
+	}
+});
+
 test("authoritative running/terminal/reconnect transitions refresh immediately without per-token storms", async () => {
 	const h = setup();
 	try {

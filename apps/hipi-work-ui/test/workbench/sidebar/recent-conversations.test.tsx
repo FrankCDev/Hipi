@@ -353,7 +353,7 @@ function harness(extra: Partial<React.ComponentProps<typeof RecentConversations>
 				}
 			for (const [label, element] of [
 				["work.showMore", control],
-				["nav.refresh", retryControl],
+				["history.retry", retryControl],
 			] as const) {
 				element.isConnected = elements(output, Button).some((button) => button.props.children === label);
 				if (!element.isConnected && documentStub.activeElement === element)
@@ -375,7 +375,7 @@ function harness(extra: Partial<React.ComponentProps<typeof RecentConversations>
 		fixture.query.data = fixture.cache?.getQueryData(key);
 		return render();
 	};
-	const click = async (label: "work.showMore" | "nav.refresh") => {
+	const click = async (label: "work.showMore" | "history.retry") => {
 		const matches = elements(output, Button).filter((button) => button.props.children === label);
 		assert.equal(matches.length, 1);
 		assert.ok(matches[0]);
@@ -445,7 +445,7 @@ beforeEach(() => {
 		refetch: vi.fn(),
 	};
 	fixture.cache = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-	fixture.client = { call: vi.fn(async () => page(50)) as AppClient["call"], observe: vi.fn() };
+	fixture.client = { call: vi.fn(async () => page(50, 50, "100")) as AppClient["call"], observe: vi.fn() };
 	const body = node("body");
 	documentStub = Object.assign(new EventTarget(), { visibilityState: "visible", body, activeElement: body });
 	observers.length = 0;
@@ -904,12 +904,12 @@ test("virtual rows expose canonical measurement keys and measured extent without
 	}
 });
 
-function pausedWindow(previous: RecentWindow, reason: "budget" | "publication" = "budget"): RecentWindow {
+function pausedWindow(previous: RecentWindow): RecentWindow {
 	const candidate = page(100, 5, "105");
 	return {
 		...previous,
 		paused: true,
-		refreshPaused: reason,
+		refreshPaused: "publication",
 		refresh: {
 			pages: [candidate],
 			retained: candidate.retained,
@@ -917,9 +917,8 @@ function pausedWindow(previous: RecentWindow, reason: "budget" | "publication" =
 			start: { kind: "head" },
 			fallbacks: [],
 			targetCount: previous.pages.flatMap((entry) => entry.items).length,
-			attemptReads: 40,
-			attemptBudget: 40,
-			restarts: reason === "publication" ? 1 : 0,
+			recentCursors: ["105"],
+			restarts: 1,
 		},
 	};
 }
@@ -938,14 +937,14 @@ test("paused replacement preserves the revealed slice and allows only already-lo
 	);
 	assert.deepEqual(
 		elements(ui.output, Button).map((button) => button.props.children),
-		["nav.refresh", "work.showMore"],
+		["history.retry", "work.showMore"],
 	);
 	await ui.more();
 	await ui.more();
 	assert.equal(fixture.virtualizer?.options.count, 50);
 	assert.deepEqual(
 		elements(ui.output, Button).map((button) => button.props.children),
-		["nav.refresh"],
+		["history.retry"],
 	);
 	assert.equal(ui.rows.has(scopeKey({ workspaceId: "physical", conversationId: "100" })), false);
 	assert.ok(fixture.client);
@@ -956,41 +955,38 @@ test("paused replacement preserves the revealed slice and allows only already-lo
 	);
 });
 
-test.each(["budget", "publication"] as const)(
-	"explicit Refresh resumes %s staging and only publishes a complete coherent replacement",
-	async (reason) => {
-		const call = vi.fn(async (_method: string, request: SidebarWindowRequest) => {
-			assert.deepEqual(request.position, { kind: "continue", cursor: "105" });
-			return page(105, 45, null);
-		});
-		fixture.client = { call: call as AppClient["call"], observe: vi.fn() };
-		const ui = harness();
-		ui.publish(pausedWindow(snapshot([page()]), reason));
-		documentStub.activeElement = ui.retryControl;
-		await ui.click("nav.refresh");
-		assert.equal(call.mock.calls.length, 1);
-		assert.equal(fixture.query.data?.refreshPaused, undefined);
-		assert.equal(fixture.query.data?.refresh, undefined);
-		assert.equal(fixture.query.data?.pages.flatMap((entry) => entry.items).length, 50);
-		assert.equal(fixture.query.data?.pages[0]?.items[0]?.conversation.conversationId, "100");
-		assert.equal(ui.rows.has(scopeKey({ workspaceId: "physical", conversationId: "0" })), false);
-		assert.equal(ui.retryControl.isConnected, false);
-		assert.equal(documentStub.activeElement, ui.region);
-		assert.equal(
-			fixture.query.refetch.mock.calls.length,
-			0,
-			"Explicit retry must use the query's renewed-budget operation",
-		);
-	},
-);
+test("explicit Retry resumes publication staging and only publishes a complete coherent replacement", async () => {
+	const call = vi.fn(async (_method: string, request: SidebarWindowRequest) => {
+		assert.deepEqual(request.position, { kind: "continue", cursor: "105" });
+		return page(105, 45, null);
+	});
+	fixture.client = { call: call as AppClient["call"], observe: vi.fn() };
+	const ui = harness();
+	ui.publish(pausedWindow(snapshot([page()])));
+	documentStub.activeElement = ui.retryControl;
+	await ui.click("history.retry");
+	assert.equal(call.mock.calls.length, 1);
+	assert.equal(fixture.query.data?.refreshPaused, undefined);
+	assert.equal(fixture.query.data?.refresh, undefined);
+	assert.equal(fixture.query.data?.pages.flatMap((entry) => entry.items).length, 50);
+	assert.equal(fixture.query.data?.pages[0]?.items[0]?.conversation.conversationId, "100");
+	assert.equal(ui.rows.has(scopeKey({ workspaceId: "physical", conversationId: "0" })), false);
+	assert.equal(ui.retryControl.isConnected, false);
+	assert.equal(documentStub.activeElement, ui.region);
+	assert.equal(
+		fixture.query.refetch.mock.calls.length,
+		0,
+		"Explicit retry must use the query's deliberate publication recovery",
+	);
+});
 
 test.each(["document", "surface", "collapsed", "dragging", "menu", "fetching"] as const)(
-	"%s blocks a stale paused Refresh callback",
+	"%s blocks a stale paused Retry callback",
 	(fence) => {
 		const ui = harness();
 		ui.publish(pausedWindow(snapshot([page(0, 10, null)])));
 		const refresh = only(ui.output, Button);
-		assert.equal(refresh.props.children, "nav.refresh");
+		assert.equal(refresh.props.children, "history.retry");
 		if (fence === "document") {
 			documentStub.visibilityState = "hidden";
 			documentStub.dispatchEvent(new Event("visibilitychange"));
@@ -1009,7 +1005,7 @@ test.each(["document", "surface", "collapsed", "dragging", "menu", "fetching"] a
 );
 
 test.each(["surface", "collapsed"] as const)(
-	"%s releases query and local committed staging without renewing its paused budget",
+	"%s releases query and local committed staging without clearing its publication failure",
 	async (fence) => {
 		const ui = harness();
 		ui.publish(pausedWindow(snapshot([page(0, 10, null)])));
@@ -1029,7 +1025,7 @@ test.each(["surface", "collapsed"] as const)(
 		const saved = fixture.cache?.getQueryData<RecentWindow>(key);
 		assert.ok(saved);
 		assert.equal(saved.refresh, undefined);
-		assert.equal(saved.refreshPaused, "budget");
+		assert.equal(saved.refreshPaused, "publication");
 		assert.equal(saved.revision, before.revision);
 		assert.equal(saved.pages.flatMap((entry) => entry.items).length, 10);
 		assert.equal(saved.pages[0]?.items[0]?.conversation.conversationId, "0");
@@ -1046,7 +1042,7 @@ test.each(["surface", "collapsed"] as const)(
 		if (fence === "surface") ui.props.visible = true;
 		else fixture.collapsed = false;
 		ui.render();
-		assert.equal(only(ui.output, Button).props.children, "nav.refresh");
+		assert.equal(only(ui.output, Button).props.children, "history.retry");
 		assert.equal(ui.rows.size, 10);
 	},
 );
@@ -1274,7 +1270,63 @@ for (const strategy of ["anchor", "newest"] as const) {
 	);
 }
 
-test("real-cache missing focused proof may pause once without a refetch loop and leaves explicit Retry visible", async () => {
+test("a progressing multi-batch refresh exposes no transport controls and keeps its focused row", async () => {
+	let releaseBatch: (() => void) | undefined;
+	const batch = new Promise<void>((resolve) => {
+		releaseBatch = resolve;
+	});
+	let calls = 0;
+	const call = vi.fn(async () => {
+		const index = calls++;
+		if (index === 5) await batch;
+		return { ...page(index, 1, `cursor-${index + 1}`), coverage: { ...coverage, generation: "two" } };
+	});
+	fixture.client = { call: call as AppClient["call"], observe: vi.fn() };
+	const ui = harness({ last: true });
+	ui.publish(snapshot([page()]));
+	const focused = { workspaceId: "physical", conversationId: "0" };
+	const original = ui.focus(focused);
+	assert.ok(fixture.cache && fixture.options);
+	const observer = new QueryObserver<RecentWindow>(fixture.cache, {
+		...fixture.options,
+		enabled: false,
+		gcTime: Infinity,
+	});
+	const unsubscribe = observer.subscribe((result) => {
+		fixture.query.data = result.data;
+		fixture.query.isFetching = result.isFetching;
+		fixture.query.isError = result.isError;
+		fixture.query.isPending = result.isPending;
+		fixture.query.dataUpdatedAt = result.dataUpdatedAt;
+	});
+	try {
+		const pending = observer.refetch({ cancelRefetch: false });
+		await vi.waitFor(() => assert.equal(calls, 6));
+		ui.render();
+		assert.equal(fixture.query.isFetching, true);
+		assert.equal(fixture.query.data?.pages[0]?.coverage.generation, "one");
+		assert.equal(elements(ui.output, Button).length, 0);
+		assert.equal(ui.rows.get(scopeKey(focused)), original.row);
+		assert.equal(documentStub.activeElement, original.link);
+		releaseBatch?.();
+		await pending;
+		ui.render();
+		assert.equal(calls, 50, "The former forty-read limit cannot add a user action");
+		assert.equal(fixture.query.data?.pages[0]?.coverage.generation, "two");
+		assert.equal(fixture.query.data?.paused, false);
+		assert.equal(fixture.query.isFetching, false);
+		assert.equal(elements(ui.output, Button).length, 0);
+		assert.equal(ui.rows.get(scopeKey(focused)), original.row);
+		assert.equal(documentStub.activeElement, original.link);
+		assert.equal(fixture.query.refetch.mock.calls.length, 0);
+	} finally {
+		releaseBatch?.();
+		unsubscribe();
+		observer.destroy();
+	}
+});
+
+test("real-cache missing focused proof fails on a repeated cursor without a refetch loop and leaves Retry visible", async () => {
 	let resolveCandidate: ((value: SidebarWindowResult) => void) | undefined;
 	let phase: "candidate" | "sparse" | "retry" = "candidate";
 	const focused = { workspaceId: "physical", conversationId: "0" };
@@ -1326,10 +1378,11 @@ test("real-cache missing focused proof may pause once without a refetch loop and
 		assert.ok(proofRequests[0]);
 		await proofRequests[0];
 		ui.render();
-		assert.equal(fixture.query.data?.refreshPaused, "budget");
+		assert.equal(fixture.query.data?.refreshPaused, undefined);
+		assert.equal(fixture.query.isError, true);
 		assert.equal(fixture.query.data?.pages[0]?.items[0]?.conversation.conversationId, "100");
 		assert.equal(fixture.query.isFetching, false);
-		assert.equal(call.mock.calls.length, 41);
+		assert.equal(call.mock.calls.length, 3);
 		for (let index = 0; index < 10; index++) {
 			ui.render();
 			await Promise.resolve();
@@ -1337,18 +1390,18 @@ test("real-cache missing focused proof may pause once without a refetch loop and
 		assert.equal(
 			fixture.query.refetch.mock.calls.length,
 			1,
-			"A paused missing-proof candidate cannot restart its own proof request",
+			"A failed missing-proof candidate cannot restart its own proof request",
 		);
-		assert.equal(call.mock.calls.length, 41);
+		assert.equal(call.mock.calls.length, 3);
 		assert.equal(fixture.query.isFetching, false);
 		assert.equal(ui.rows.get(scopeKey(focused)), original.row);
 		assert.equal(original.link.isConnected, true);
 		assert.equal(documentStub.activeElement, original.link);
-		assert.ok(elements(ui.output, Button).some((button) => button.props.children === "nav.refresh"));
+		assert.ok(elements(ui.output, Button).some((button) => button.props.children === "history.retry"));
 		assert.ok(elements(ui.output, Button).some((button) => button.props.children === "work.showMore"));
 		for (let index = 0; index < 8; index++) await ui.more();
 		assert.equal(fixture.virtualizer?.options.count, 50);
-		assert.equal(call.mock.calls.length, 41, "Paused local reveals cannot resume a cursor or proof request");
+		assert.equal(call.mock.calls.length, 3, "Loaded local reveals cannot resume a failed cursor or proof request");
 		assert.equal(fixture.query.refetch.mock.calls.length, 1);
 		assert.equal(ui.rows.get(scopeKey(focused)), original.row);
 		assert.equal(documentStub.activeElement, original.link);
@@ -1357,15 +1410,15 @@ test("real-cache missing focused proof may pause once without a refetch loop and
 			false,
 		);
 		phase = "retry";
-		await ui.click("nav.refresh");
-		assert.equal(call.mock.calls.length, 42);
+		await ui.click("history.retry");
+		assert.equal(call.mock.calls.length, 4);
 		assert.equal(fixture.query.data?.refreshPaused, undefined);
 		assert.equal(fixture.query.isFetching, false);
 		assert.equal(fixture.query.refetch.mock.calls.length, 1);
 		assert.equal(ui.rows.get(scopeKey(focused)), original.row);
 		assert.equal(documentStub.activeElement, original.link);
 		assert.equal(
-			elements(ui.output, Button).some((button) => button.props.children === "nav.refresh"),
+			elements(ui.output, Button).some((button) => button.props.children === "history.retry"),
 			false,
 		);
 	} finally {

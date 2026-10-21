@@ -52,6 +52,7 @@ const approval = parseToolApproval({
 const submit = vi.fn();
 const cancel = vi.fn();
 const manageModels = vi.fn();
+const modelRefetch = vi.fn(async () => {});
 const permissionActivation = vi.spyOn(PermissionSession.prototype, "activate");
 const calls: Method[] = [];
 const client: AppClient = {
@@ -186,6 +187,14 @@ async function resize(value: number) {
 		for (const observer of [...ObservedResize.active]) observer.emit();
 	});
 }
+async function pointer(node: HTMLElement, type: string, relatedTarget: EventTarget | null = null) {
+	await act(async () => {
+		node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "mouse", relatedTarget }));
+	});
+}
+async function tick(ms: number) {
+	await act(async () => vi.advanceTimersByTimeAsync(ms));
+}
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("ResizeObserver", ObservedResize);
@@ -215,6 +224,7 @@ beforeEach(() => {
 	submit.mockClear();
 	cancel.mockClear();
 	manageModels.mockClear();
+	modelRefetch.mockClear();
 	state = {
 		workspaceId: conversation.workspaceId,
 		draft: "Draft survives layout",
@@ -227,8 +237,10 @@ beforeEach(() => {
 		model: {
 			data: { model: selectedModel, credentialState: "configured", executionState: "ready" },
 			isError: false,
-			refetch: async () => {},
+			isFetching: false,
+			refetch: modelRefetch,
 		},
+		storeMismatch: false,
 		receipt: { isError: false },
 		storageAvailable: true,
 		observation: {
@@ -251,6 +263,7 @@ afterEach(async () => {
 	if (clientWidthDescriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", clientWidthDescriptor);
 	else Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
 	document.documentElement.style.removeProperty("--font-ui-size");
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
@@ -322,6 +335,14 @@ test("failed permission/model recovery stays outside width calculation and permi
 	assert.ok(find(".composer-attention .permission-attention [role=alert]"));
 	assert.ok(find(".composer-attention .conversation-model-attention [role=alert]"));
 	assert.equal(find(".composer-footer-grid").querySelector(".permission-attention"), null);
+	assert.equal(find<HTMLDivElement>(".composer-inline-control").hidden, true);
+	const retry = find<HTMLButtonElement>(".composer-attention .conversation-model-attention button");
+	assert.equal(retry.textContent, "model.retryRead");
+	assert.equal(retry.disabled, false);
+	await act(async () => retry.click());
+	assert.equal(modelRefetch.mock.calls.length, 1);
+	assert.equal(state.execution.isError, true, "Reading state does not acknowledge an uncertain command outcome");
+	assert.equal(cancel.mock.calls.length, 0);
 	const permission = find<HTMLButtonElement>(".permission-mode-trigger");
 	await act(async () => permission.click());
 	const dialog = find<HTMLElement>(".conversation-options-dialog", document);
@@ -329,6 +350,72 @@ test("failed permission/model recovery stays outside width calculation and permi
 	assert.equal(submit.mock.calls.length, 0);
 	assert.equal(permissionActivation.mock.calls.length, 1);
 	assert.ok(calls.every((method) => method.startsWith("list")));
+});
+
+test("healthy model status has no refresh and its compact tooltip retires when the popup owns interaction", async () => {
+	await render();
+	vi.useFakeTimers();
+	await resize(150);
+	const trigger = find<HTMLButtonElement>(".model-status-trigger");
+	const editor = find('[role="textbox"]');
+	assert.equal(trigger.getAttribute("data-compact"), "true");
+	assert.equal(host.querySelector(".conversation-model-attention button"), null);
+	await pointer(trigger, "pointermove");
+	await tick(199);
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	await tick(1);
+	assert.equal(document.querySelector('[role="tooltip"]')?.textContent, "Model status");
+	assert.equal(trigger.getAttribute("data-state"), "closed");
+	await act(async () => trigger.click());
+	const popup = find<HTMLElement>(".model-status-popover", document);
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	assert.equal(trigger.getAttribute("data-state"), "open");
+	assert.equal(trigger.getAttribute("data-slot"), "popover-trigger");
+	assert.equal(popup.querySelector("button"), null, "Healthy status is read-only, not a refresh or model picker");
+	await pointer(trigger, "pointerout", document.body);
+	await act(async () => popup.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+	await tick(1);
+	assert.equal(document.querySelector(".model-status-popover"), null);
+	assert.equal(document.activeElement, trigger);
+	assert.equal(document.querySelector('[role="tooltip"]'), null, "Popup focus restoration is not a new hover");
+	await act(async () => find<HTMLButtonElement>(".composer-submit").focus());
+	await resize(50);
+	await pointer(document.body, "pointermove");
+	await tick(500);
+	assert.equal(find<HTMLDivElement>(".composer-inline-control").hidden, true);
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	assert.equal(find('[role="textbox"]'), editor);
+	assert.equal(find(".model-status-trigger"), trigger);
+	assert.equal(modelRefetch.mock.calls.length, 0);
+	assert.equal(submit.mock.calls.length, 0);
+	assert.equal(cancel.mock.calls.length, 0);
+});
+
+test("hiding a model control cancels pending and mounted tooltips without reopening on resize", async () => {
+	locale = "zh-CN";
+	await render();
+	vi.useFakeTimers();
+	const trigger = find<HTMLButtonElement>(".model-status-trigger");
+	await pointer(trigger, "pointermove");
+	await tick(100);
+	await resize(50);
+	await resize(320);
+	await tick(200);
+	assert.equal(document.querySelector('[role="tooltip"]'), null, "The pre-resize delay must not reopen a hint");
+	await pointer(trigger, "pointerout", document.body);
+	await pointer(trigger, "pointermove");
+	await tick(200);
+	assert.equal(document.querySelector('[role="tooltip"]')?.textContent, "模型状态");
+	await resize(50);
+	assert.equal(find<HTMLDivElement>(".composer-inline-control").hidden, true);
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	await pointer(document.body, "pointermove");
+	await resize(320);
+	await tick(500);
+	assert.equal(document.querySelector('[role="tooltip"]'), null);
+	assert.equal(find(".model-status-trigger"), trigger);
+	assert.equal(modelRefetch.mock.calls.length, 0);
+	assert.equal(submit.mock.calls.length, 0);
 });
 
 test("closing a narrow model popup restores its trigger before later blur releases the width reservation", async () => {

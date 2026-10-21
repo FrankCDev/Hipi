@@ -3,6 +3,7 @@ import { ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
+import { ActionTooltip } from "../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
 	Dialog,
@@ -67,30 +68,35 @@ export function ConversationModelControls({
 						setModelOpen(value);
 					}}
 				>
-					<PopoverTrigger asChild>
-						<Button
-							ref={modelTrigger}
-							variant="ghost"
-							size="sm"
-							className="model-status-trigger"
-							data-compact={presentation?.hideLabel ?? false}
-							onFocus={() => {
-								modelSettingsHandoff.current = false;
-								setFocusRestorePending(false);
-								setFocused(true);
-							}}
-							onBlur={() => setFocused(false)}
-							aria-label={workbenchLabels(locale)["workbench.modelStatus"]}
-							aria-description={modelName ?? info?.model.modelId}
-						>
-							<span hidden={presentation?.hideLabel}>
-								{modelName ??
-									info?.model.modelId ??
-									(model.isPending ? t("common.loading") : workbenchLabels(locale)["workbench.modelStatus"])}
-							</span>
-							<ChevronDown size={14} aria-hidden="true" />
-						</Button>
-					</PopoverTrigger>
+					<ActionTooltip
+						label={workbenchLabels(locale)["workbench.modelStatus"]}
+						disabled={modelOpen || presentation?.hideControl || focusRestorePending}
+					>
+						<PopoverTrigger asChild>
+							<Button
+								ref={modelTrigger}
+								variant="ghost"
+								size="sm"
+								className="model-status-trigger"
+								data-compact={presentation?.hideLabel ?? false}
+								onFocus={() => {
+									modelSettingsHandoff.current = false;
+									setFocusRestorePending(false);
+									setFocused(true);
+								}}
+								onBlur={() => setFocused(false)}
+								aria-label={workbenchLabels(locale)["workbench.modelStatus"]}
+								aria-description={modelName ?? info?.model.modelId}
+							>
+								<span hidden={presentation?.hideLabel}>
+									{modelName ??
+										info?.model.modelId ??
+										(model.isPending ? t("common.loading") : workbenchLabels(locale)["workbench.modelStatus"])}
+								</span>
+								<ChevronDown size={14} aria-hidden="true" />
+							</Button>
+						</PopoverTrigger>
+					</ActionTooltip>
 					<PopoverContent
 						className="model-status-popover"
 						align="start"
@@ -140,9 +146,6 @@ export function ConversationModelControls({
 									{t("model.settings")}
 								</Button>
 							)}
-							<Button variant="outline" size="sm" disabled={model.isFetching} onClick={() => void model.refetch()}>
-								{t("model.refresh")}
-							</Button>
 							{info && info.executionState !== "ready" && (
 								<p className="text-muted-foreground">{t("model.cancelNote")}</p>
 							)}
@@ -159,6 +162,13 @@ export function ConversationModelAttention({ controller }: { controller: Convers
 	const { t } = usePreferences();
 	const [open, setOpen] = useState(false);
 	const { model, execution } = controller;
+	const current = useRef(controller);
+	current.current = controller;
+	const retryDisabled =
+		controller.observation.connection !== "connected" ||
+		model.isFetching ||
+		execution.isPending ||
+		controller.storeMismatch;
 	const info = model.data;
 	return (
 		<div className="conversation-model-attention">
@@ -170,6 +180,28 @@ export function ConversationModelAttention({ controller }: { controller: Convers
 			)}
 			{model.isError && <p role="alert">{t("model.failed")}</p>}
 			{execution.isError && <p role="alert">{t("model.actionFailed")}</p>}
+			{(model.isError || execution.isError) && (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={retryDisabled}
+					onClick={() => {
+						const state = current.current;
+						if (
+							(!state.model.isError && !state.execution.isError) ||
+							state.observation.connection !== "connected" ||
+							state.model.isFetching ||
+							state.execution.isPending ||
+							state.storeMismatch
+						)
+							return;
+						void state.model.refetch();
+					}}
+				>
+					{t("model.retryRead")}
+				</Button>
+			)}
 			{(info?.executionState === "paused" || info?.executionState === "cancellation_pending") && (
 				<Dialog
 					open={open}

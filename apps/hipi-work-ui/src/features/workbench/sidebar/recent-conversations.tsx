@@ -309,7 +309,7 @@ export function RecentConversations({
 		}
 		const cursor =
 			direction === "next" ? current.committed?.pages.at(-1)?.nextCursor : current.committed?.pages[0]?.previousCursor;
-		if (!cursor || query.data?.refreshPaused || current.committed?.refreshPaused) return;
+		if (!cursor || query.isError || query.data?.refreshPaused || current.committed?.refreshPaused) return;
 		pendingAction.current = true;
 		try {
 			await fetchRecentWindow(cache, client, view, filter, direction, capture);
@@ -323,9 +323,10 @@ export function RecentConversations({
 	run.current = advance;
 	const rows = useMemo(() => windowItems(committed), [committed]);
 	const refreshPaused = query.data?.refreshPaused ?? committed?.refreshPaused;
-	const paused = query.data?.paused || committed?.paused;
-	const canPrevious = slice.start > 0 || (!refreshPaused && !!committed?.pages[0]?.previousCursor);
-	const canNext = slice.end < rows.length || (!refreshPaused && !!committed?.pages.at(-1)?.nextCursor);
+	const paused = query.isError || query.data?.paused || committed?.paused;
+	const canPrevious = slice.start > 0 || (!query.isError && !refreshPaused && !!committed?.pages[0]?.previousCursor);
+	const canNext =
+		slice.end < rows.length || (!query.isError && !refreshPaused && !!committed?.pages.at(-1)?.nextCursor);
 	const [observerAvailable, setObserverAvailable] = useState(true);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Each committed slice or interaction release re-arms the one-shot sentinel.
 	useEffect(() => {
@@ -523,8 +524,8 @@ export function RecentConversations({
 									{query.isError
 										? labels.refreshFailed
 										: locale.startsWith("zh")
-											? "刷新已暂停，现有会话仍保留。"
-											: "Refresh paused. Existing chats remain available."}
+											? "读取期间列表多次变化，现有会话仍保留。"
+											: "The list changed repeatedly while reading. Existing chats remain available."}
 								</p>
 								<Button
 									variant="ghost"
@@ -537,7 +538,7 @@ export function RecentConversations({
 										void retry();
 									}}
 								>
-									{t("nav.refresh")}
+									{t("history.retry")}
 								</Button>
 							</div>
 						)}

@@ -11,6 +11,23 @@ export type CatalogReadProgress<P> = {
 };
 export type CatalogReadOwner<P> = { progress?: CatalogReadProgress<P> };
 
+/** The read owner removes its scheduled continuation on cancellation. */
+export async function yieldCatalogRead(signal: AbortSignal) {
+	signal.throwIfAborted();
+	await new Promise<void>((resolve, reject) => {
+		const abort = () => {
+			clearTimeout(timer);
+			reject(signal.reason);
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", abort);
+			resolve();
+		}, 0);
+		signal.addEventListener("abort", abort, { once: true });
+	});
+	signal.throwIfAborted();
+}
+
 /** Empty candidate ranges do not consume the five visible page slots. A timed-out demand resumes its last verified cursor. */
 export async function readCatalogPage<T, P extends CatalogPage<T>>(
 	read: (cursor: string | undefined, signal: AbortSignal) => Promise<P>,
@@ -58,18 +75,7 @@ export async function readCatalogPage<T, P extends CatalogPage<T>>(
 		}
 		progress.cursor = next;
 		progress.recent = [...progress.recent, next].slice(-16);
-		if (++reads % 5 === 0)
-			await new Promise<void>((resolve, reject) => {
-				const abort = () => {
-					clearTimeout(timer);
-					reject(demand.reason);
-				};
-				const timer = setTimeout(() => {
-					demand.removeEventListener("abort", abort);
-					resolve();
-				}, 0);
-				demand.addEventListener("abort", abort, { once: true });
-			});
+		if (++reads % 5 === 0) await yieldCatalogRead(demand);
 	}
 }
 

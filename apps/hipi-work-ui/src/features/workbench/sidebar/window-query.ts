@@ -8,6 +8,7 @@ import {
 	type SidebarWindowResult,
 } from "@hipi/work-runtime/contracts";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
+import { CATALOG_READ_DEADLINE_MS, yieldCatalogRead } from "../catalog/read-page.ts";
 import { sameNavigationPublication } from "./navigation-refresh.ts";
 
 export type WindowPage = Extract<SidebarWindowResult, { kind: "window" }>;
@@ -20,8 +21,7 @@ export type WindowRefresh = {
 	start: WindowPosition;
 	fallbacks: Scope[];
 	targetCount: number;
-	attemptReads: number;
-	attemptBudget: number;
+	recentCursors: string[];
 	restarts: number;
 	reset?: "anchor_unavailable";
 };
@@ -35,7 +35,7 @@ export type RecentWindow = {
 	reset?: "anchor_unavailable";
 	/** Paused replacement work never becomes the committed row set. */
 	refresh?: WindowRefresh;
-	refreshPaused?: "budget" | "publication";
+	refreshPaused?: "publication";
 };
 export type WindowAction = "refresh" | "next" | "previous";
 export type WindowIntent = {
@@ -77,24 +77,7 @@ function mergePage(pages: WindowPage[], keys: Set<string>, result: WindowPage, d
 	else pages.push({ ...result, items });
 }
 
-/** The query owns the timer and removes it on cancellation before another batch can start. */
-async function yieldRefresh(signal: AbortSignal) {
-	signal.throwIfAborted();
-	await new Promise<void>((resolve, reject) => {
-		const abort = () => {
-			clearTimeout(timer);
-			reject(signal.reason);
-		};
-		const timer = setTimeout(() => {
-			signal.removeEventListener("abort", abort);
-			resolve();
-		}, 0);
-		signal.addEventListener("abort", abort, { once: true });
-	});
-	signal.throwIfAborted();
-}
-
-/** A single query supervises finite batches; only an explicit retry renews a paused budget. */
+/** One deadline-bound query scans serial batches until the requested visible extent is coherent. */
 export async function readRecentWindow(
 	client: AppClient,
 	view: SidebarView,
@@ -108,12 +91,6 @@ export async function readRecentWindow(
 	const resume =
 		intent.action === "refresh" && (intent.explicitRetry || previous?.unpublished) ? previous?.refresh : undefined;
 	const targetCount = resume?.targetCount ?? Math.max(10, intent.targetCount ?? windowItems(previous).length);
-	const budget =
-		resume && !intent.explicitRetry
-			? resume.attemptBudget
-			: intent.action === "refresh" && previous
-				? Math.max(40, 5 * Math.ceil(targetCount / 50))
-				: 5;
 	const headOrigin = previous?.pages[0] && !previous.pages[0].previousCursor;
 	// A viewport anchor near the bottom must not erase the earlier, explicitly loaded extent.
 	const start: WindowPosition =
@@ -125,6 +102,7 @@ export async function readRecentWindow(
 	let action = intent.action;
 	const cursor = action === "previous" ? pages[0]?.previousCursor : pages.at(-1)?.nextCursor;
 	if (action !== "refresh" && previous && !cursor) return previous;
+	const demand = AbortSignal.any([signal, AbortSignal.timeout(CATALOG_READ_DEADLINE_MS)]);
 	let position: WindowPosition =
 		resume?.position ?? (action === "refresh" ? start : { kind: "continue", cursor: cursor ?? "" });
 	let fallbacks = [...(resume?.fallbacks ?? intent.neighbors ?? []).slice(0, 2)];
@@ -132,20 +110,21 @@ export async function readRecentWindow(
 		...new Map((intent.retainedScopes ?? []).map((scope) => [scopeKey(scope), scope])).values(),
 	].slice(0, 2);
 	let restarts = resume && !intent.explicitRetry ? resume.restarts : 0;
-	let reads = resume && !intent.explicitRetry ? resume.attemptReads : 0;
+	let recentCursors = [...(resume?.recentCursors ?? [])];
+	let reads = 0;
 	let reset = resume?.reset;
 	let found = 0;
-	const commit = (paused: boolean): RecentWindow => ({
+	const commit = (): RecentWindow => ({
 		pages,
 		retained,
-		paused,
+		paused: false,
 		unpublished: false,
 		action,
 		reset,
 		revision: (previous?.revision ?? 0) + 1,
 	});
 	const pause = (reason: NonNullable<RecentWindow["refreshPaused"]> | "unpublished"): RecentWindow => ({
-		...(previous ?? commit(true)),
+		...(previous ?? { ...commit(), pages: [], retained: emptyRetained }),
 		paused: true,
 		unpublished: reason === "unpublished",
 		refreshPaused: reason === "unpublished" ? undefined : reason,
@@ -157,8 +136,7 @@ export async function readRecentWindow(
 			start,
 			fallbacks,
 			targetCount,
-			attemptReads: reads,
-			attemptBudget: budget,
+			recentCursors,
 			restarts,
 			reset,
 		},
@@ -171,23 +149,24 @@ export async function readRecentWindow(
 		retained = emptyRetained;
 		position = start;
 		fallbacks = [...(intent.neighbors ?? []).slice(0, 2)];
+		recentCursors = [];
 		found = 0;
 		if (publicationChanged) restarts++;
 	};
-	while (reads < budget) {
-		if (reads && reads % 5 === 0) await yieldRefresh(signal);
-		signal.throwIfAborted();
+	for (;;) {
+		if (reads && reads % 5 === 0) await yieldCatalogRead(demand);
+		demand.throwIfAborted();
 		reads++;
 		let result: SidebarWindowResult;
 		try {
 			result = await client.call(
 				"listSidebarWindow",
 				{ view, filter, position, ...(retainedScopes.length ? { retainedScopes } : {}) },
-				signal,
+				demand,
 			);
-			signal.throwIfAborted();
+			demand.throwIfAborted();
 		} catch (error) {
-			signal.throwIfAborted();
+			demand.throwIfAborted();
 			if (!(error instanceof AppError) || error.code !== "CURSOR_STALE") throw error;
 			if (restarts) return pause("publication");
 			restart();
@@ -195,7 +174,7 @@ export async function readRecentWindow(
 		}
 		if (result.kind === "unpublished") {
 			if (action !== "refresh") restart(false);
-			return pause(reads === budget ? "budget" : "unpublished");
+			return pause("unpublished");
 		}
 		if (publication && !sameNavigationPublication(publication, result.coverage)) {
 			if (restarts) return pause("publication");
@@ -204,20 +183,24 @@ export async function readRecentWindow(
 		}
 		publication = result.coverage;
 		if (result.kind === "anchor_unavailable") {
+			if (position.kind !== "around") throw new AppError("INVALID_REQUEST");
 			reset = "anchor_unavailable";
 			const anchor = fallbacks.shift();
 			position = anchor ? { kind: "around", anchor } : { kind: "head" };
 			continue;
 		}
+		const next = action === "previous" ? result.previousCursor : result.nextCursor;
+		if (next && ((position.kind === "continue" && next === position.cursor) || recentCursors.includes(next)))
+			throw new AppError("INVALID_REQUEST");
 		retained = result.retained;
 		const count = keys.size;
 		mergePage(pages, keys, result, action === "previous" ? "previous" : "next");
 		found += keys.size - count;
-		const next = action === "previous" ? result.previousCursor : result.nextCursor;
-		if ((action === "refresh" ? keys.size >= targetCount : found >= 5) || !next) return commit(false);
+		if ((action === "refresh" ? keys.size >= targetCount : found >= 5) || !next) return commit();
+		// Short cursor cycles fail immediately; the deadline also bounds longer malformed streams.
+		recentCursors = [...recentCursors, next].slice(-16);
 		position = { kind: "continue", cursor: next };
 	}
-	return action === "refresh" ? pause("budget") : commit(true);
 }
 
 /** Call after cancelling the query when hidden; pause authority survives releasing staged metadata. */
