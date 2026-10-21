@@ -11,7 +11,6 @@ import { ActivityTranscriptProvider } from "../../tool-activities/activity-trans
 import {
 	ActivityHistoryAction,
 	ActivityHistoryDialog,
-	ToolActivities,
 	type ToolActivityArtifact,
 } from "../../tool-activities/tool-activities.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
@@ -150,14 +149,6 @@ export function ConversationPane({
 					<div className="conversation-footer" ref={footer}>
 						<ConversationComposer
 							controller={controller}
-							activity={
-								<ToolActivities
-									scope={conversation}
-									connected={observation.connection === "connected"}
-									running={observation.snapshot?.running ?? false}
-									onOpenArtifact={onOpenArtifact}
-								/>
-							}
 							controls={
 								<div className="conversation-tools">
 									<ConversationCapabilities

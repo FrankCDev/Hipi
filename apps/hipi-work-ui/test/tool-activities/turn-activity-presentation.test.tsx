@@ -58,6 +58,7 @@ test("tool disclosure keeps a stable labelled body, inert collapse and separate 
 		const heading = host.querySelector<HTMLElement>(".activity-disclosure-heading");
 		const summary = host.querySelector<HTMLElement>(".activity-disclosure-summary");
 		assert.ok(heading && summary);
+		assert.ok(heading.querySelector('svg.lucide-puzzle[aria-hidden="true"]'));
 		assert.equal(Number.parseFloat(getComputedStyle(heading).minWidth), 0);
 		assert.equal(getComputedStyle(summary).textOverflow, "ellipsis");
 		assert.notEqual(getComputedStyle(button).gap, getComputedStyle(heading).gap);
@@ -76,7 +77,10 @@ test("tool disclosure keeps a stable labelled body, inert collapse and separate 
 		const details = host.querySelector(".inline-activity-details");
 		assert.ok(details);
 		assert.equal(getComputedStyle(details).getPropertyValue("--activity-body-indent"), "0");
-		assert.equal(getComputedStyle(details).getPropertyValue("--activity-body-padding-start"), "0.25rem");
+		assert.equal(
+			getComputedStyle(details).getPropertyValue("--activity-body-padding-start"),
+			"var(--ui-conversation-grouped-gap)",
+		);
 		assert.equal(body.hasAttribute("inert"), false);
 	} finally {
 		await act(async () => root.unmount());

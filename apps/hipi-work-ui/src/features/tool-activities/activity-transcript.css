@@ -9,7 +9,7 @@
 	--activity-body-padding-end: 0.25rem;
 	--activity-disclosure-duration: 0.3s;
 	--activity-summary-color: color-mix(in oklab, var(--text) 60%, transparent);
-	margin-block: 12px;
+	margin-block: 0;
 	color: var(--muted);
 	font-size: var(--font-ui-size);
 }
@@ -37,8 +37,8 @@
 	padding: 8px;
 }
 .inline-activity-details[data-variant="grouped"] {
-	--activity-body-gap: 0.25rem;
-	--activity-body-padding-start: 0.25rem;
+	--activity-body-gap: var(--ui-conversation-grouped-gap);
+	--activity-body-padding-start: var(--ui-conversation-grouped-gap);
 	--activity-body-padding-end: 0;
 	--activity-body-indent: 0;
 }

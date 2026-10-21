@@ -11,6 +11,8 @@ import {
 	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./contracts.ts";
+import type { FilePresentation } from "./file-presentation.ts";
+import { projectFilePresentation } from "./file-projection.ts";
 import { object, projectEntry, projectTask, resultEvidence, type StoredTask } from "./projection.ts";
 import { taskSelection } from "./selection.ts";
 
@@ -154,7 +156,7 @@ async function taskActivity(read: Reader, scope: ActivityReadScope, task: Stored
 			}
 		}
 	}
-	return { activity, entry };
+	return { activity, entry, assistant };
 }
 
 export async function readToolActivities(
@@ -333,10 +335,22 @@ export async function readToolActivityText(
 	if (!match || !positive(Number(match[2]))) throw new AppError("INVALID_REQUEST");
 	const read = reader(storage, scope);
 	let entry: EntryRecord | undefined;
+	let presentation: FilePresentation | undefined;
 	if (match[1] === "task") {
 		const task = await read.task(Number(match[2]));
 		if (!task) throw new AppError("NOT_FOUND");
-		entry = (await taskActivity(read, scope, task)).entry;
+		const evidence = await taskActivity(read, scope, task);
+		entry = evidence.entry;
+		if (!cursor) {
+			// Both records came from the existing conversation-scoped entry reader. The pure proof
+			// checks their exact local ownership; no extra history reads or nested ancestry scans.
+			presentation = projectFilePresentation(task, evidence.assistant, entry);
+			if (
+				presentation?.result.kind === "save" &&
+				presentation.result.operationId !== evidence.activity.effect?.operationId
+			)
+				presentation = undefined;
+		}
 	} else entry = await read.entry(Number(match[2]));
 	const result = resultEvidence(entry);
 	if (!entry || result?.text === undefined) throw new AppError("NOT_FOUND");
@@ -366,6 +380,7 @@ export async function readToolActivityText(
 	const end = offset + text.length;
 	return {
 		activityId,
+		...(presentation ? { presentation } : {}),
 		text,
 		nextCursor:
 			end < result.text.length

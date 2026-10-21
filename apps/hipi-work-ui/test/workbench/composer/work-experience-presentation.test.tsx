@@ -43,7 +43,6 @@ function Fixture({ draft, blocked, snapshot }: { draft: string; blocked: boolean
 	return (
 		<ConversationComposer
 			controller={{ ...controller, draft, blocked, observation: { ...controller.observation, snapshot } }}
-			activity={<button type="button">Inspect activity</button>}
 			controls={
 				<form id="permission-form">
 					<button type="submit">Authorize context</button>
@@ -79,7 +78,7 @@ test("composer isolates permission form events while the named send action targe
 	assert.match(send, /type="submit"/);
 	assert.match(send, /aria-label="提交任务"/);
 	assert.doesNotMatch(send, /disabled=""/);
-	assert.ok(html.indexOf("Inspect activity") < html.indexOf("composer-form"));
+	assert.doesNotMatch(html, /composer-context|Inspect activity|上次读取|查看活动/);
 });
 test("empty or blocked drafts retain a disabled submit, including whitespace-only text", () => {
 	for (const [draft, blocked] of [

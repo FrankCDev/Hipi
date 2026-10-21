@@ -1,0 +1,14 @@
+/* Padding is part of TanStack's measured border box. The logical last row,
+   not the last mounted row in a virtual window, has no trailing block gap. */
+.virtual-message-row[data-transcript-last="false"] {
+	padding-block-end: var(--ui-conversation-item-gap);
+}
+.virtual-message-row[data-transcript-last="true"] {
+	padding-block-end: 0;
+}
+/* Empty assistant messages can carry tools without text. Their hidden role
+   heading and empty Markdown root must not introduce another block gap. */
+.message[data-has-message-text="true"] > .message-content > .inline-activity,
+.message > .message-content > .response-status ~ .inline-activity {
+	margin-block-start: var(--ui-conversation-item-gap);
+}

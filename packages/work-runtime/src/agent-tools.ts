@@ -18,6 +18,7 @@ import {
 	ToolTask,
 	type Tx,
 } from "@earendil-works/pi-durable";
+import { filePresentationDetails } from "./activities/file-presentation.ts";
 import {
 	ApprovalDoc,
 	type AuthorizationState,
@@ -1260,9 +1261,11 @@ export function agentRegistry(broker: AgentToolBroker) {
 		callers: ["model"],
 		replay: "safe",
 		outputLimits: { maxBytes: 20000 },
-		execute: async (args, api) => ({
-			output: [{ type: "text", text: JSON.stringify(await broker.read(api, args)) }],
-		}),
+		execute: async (args, api) => {
+			const value = await broker.read(api, args);
+			const details = filePresentationDetails({ rootId: args.rootId, path: args.path }, { kind: "read", ...value });
+			return { output: [{ type: "text" as const, text: JSON.stringify(value) }], ...(details ? { details } : {}) };
+		},
 	});
 	const list = defineTool({
 		name: "hipi_files_list",
@@ -1274,9 +1277,14 @@ export function agentRegistry(broker: AgentToolBroker) {
 		callers: ["model"],
 		replay: "safe",
 		outputLimits: { maxBytes: 16384 },
-		execute: async (args, api) => ({
-			output: [{ type: "text", text: JSON.stringify(await broker.list(api, args)) }],
-		}),
+		execute: async (args, api) => {
+			const value = await broker.list(api, args);
+			const details = filePresentationDetails(
+				{ rootId: args.rootId, path: args.path },
+				{ kind: "directory", entries: value.entries, hasMore: value.nextCursor !== null },
+			);
+			return { output: [{ type: "text" as const, text: JSON.stringify(value) }], ...(details ? { details } : {}) };
+		},
 	});
 	const save = defineTool({
 		name: "hipi_files_save",
@@ -1289,9 +1297,14 @@ export function agentRegistry(broker: AgentToolBroker) {
 		callers: ["model"],
 		replay: "unsafe",
 		outputLimits: { maxBytes: 2048 },
-		execute: async (args, api, context) => ({
-			output: [{ type: "text", text: JSON.stringify(await broker.save(api, args, context)) }],
-		}),
+		execute: async (args, api, context) => {
+			const value = await broker.save(api, args, context);
+			const details = filePresentationDetails(
+				{ rootId: args.rootId, path: args.path },
+				{ kind: "save", operationId: value.operationId, revision: value.revision, bytes: value.bytes },
+			);
+			return { output: [{ type: "text" as const, text: JSON.stringify(value) }], ...(details ? { details } : {}) };
+		},
 	});
 	const registry = createRegistry();
 	registry.install(

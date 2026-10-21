@@ -1,5 +1,7 @@
 const en = {
 	"markdown.code": "Code",
+	"markdown.enableWrap": "Enable word wrap",
+	"markdown.disableWrap": "Disable word wrap",
 	"markdown.table": "Table",
 	"markdown.copyCode": "Copy code",
 	"markdown.copying": "Copying…",
@@ -8,6 +10,8 @@ const en = {
 type Labels = { [Key in keyof typeof en]: string };
 const zh: Labels = {
 	"markdown.code": "代码",
+	"markdown.enableWrap": "启用自动换行",
+	"markdown.disableWrap": "禁用自动换行",
 	"markdown.table": "表格",
 	"markdown.copyCode": "复制代码",
 	"markdown.copying": "正在复制…",

@@ -11,11 +11,9 @@ import { ComposerEditor } from "./editor.tsx";
 export function ConversationComposer({
 	controller,
 	controls,
-	activity,
 }: {
 	controller: ConversationController;
 	controls?: ReactNode;
-	activity?: ReactNode;
 }) {
 	const { t } = usePreferences();
 	const inputId = useId();
@@ -55,7 +53,6 @@ export function ConversationComposer({
 				</p>
 			)}
 			<ReceiptRecovery controller={controller} />
-			{activity && <div className="composer-context">{activity}</div>}
 			<div className="composer" data-has-draft={draft.length > 0} aria-busy={mutation.isPending}>
 				<form
 					id={`${inputId}-form`}

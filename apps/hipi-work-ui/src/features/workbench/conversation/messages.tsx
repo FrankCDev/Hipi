@@ -24,6 +24,7 @@ import {
 	useActivityTranscriptProjection,
 } from "../../tool-activities/activity-transcript.tsx";
 import type { ConversationFailure } from "./failure.ts";
+import { AssistantClipboardCopy } from "./markdown/assistant-clipboard-copy.tsx";
 import { ClipboardCopy } from "./markdown/clipboard-copy.tsx";
 import { MessageMeasurementPolicy } from "./message-measurement-policy.ts";
 import { MessageProjection, prefersReducedMotion, selectionIntersects } from "./message-projection.ts";
@@ -41,15 +42,11 @@ import {
 	nativeScrollDirection,
 	TOUCH_INTENT_THRESHOLD,
 } from "./scroll-intent.ts";
-import {
-	projectTranscript,
-	TRANSCRIPT_GAP,
-	TRANSCRIPT_OVERSCAN,
-	type TranscriptRow,
-	transcriptEstimate,
-} from "./transcript.ts";
+import { projectTranscript, TRANSCRIPT_OVERSCAN, type TranscriptRow, transcriptEstimate } from "./transcript.ts";
 import { ConversationTurnFailure } from "./turn-failure.tsx";
+import { useMessageCopyText } from "./use-message-copy-text.ts";
 import { virtualMessageRange } from "./virtual-message-range.ts";
+import "./conversation-block-spacing.css";
 
 export const HISTORY_LOAD_THRESHOLD = CONVERSATION_HISTORY_THRESHOLD;
 type DisplaySnapshot = Snapshot & { requestFailure?: ConversationFailure };
@@ -147,7 +144,9 @@ export function ConversationMessages({
 		// disables that path without disabling stable-key prepend anchoring.
 		scrollEndThreshold: !searchAnchor && followIntent && selectionRange === null ? CONVERSATION_END_THRESHOLD : -1,
 		overscan: TRANSCRIPT_OVERSCAN,
-		gap: TRANSCRIPT_GAP,
+		// CSS spacing belongs to each measured row, so theme changes and reflow
+		// use the same measurement/scroll compensation as message content.
+		gap: 0,
 		paddingEnd: footerRef ? footerHeight + 16 : 32,
 		onChange: (instance) => {
 			setNearEnd(instance.isAtEnd(CONVERSATION_END_THRESHOLD));
@@ -515,6 +514,7 @@ export function ConversationMessages({
 									data-message-id={row.message?.id}
 									data-turn-key={row.key}
 									data-transcript-kind={row.kind}
+									data-transcript-last={item.index === rows.length - 1}
 									className="virtual-message-row"
 									style={{ transform: `translateY(${item.start}px)` }}
 								>
@@ -581,6 +581,8 @@ const TranscriptMessage = memo(
 		searchAnchor?: SearchHistoryWindow;
 	}) {
 		const { t } = usePreferences();
+		const article = useRef<HTMLElement>(null);
+		const CopyAction = row.message?.role === "assistant" ? AssistantClipboardCopy : ClipboardCopy;
 		const message: Message = row.message ?? {
 			id: row.key,
 			role: "assistant",
@@ -588,6 +590,7 @@ const TranscriptMessage = memo(
 			textLength: stream?.partialLength ?? 0,
 			truncated: stream?.partialTruncated ?? false,
 		};
+		const copySource = useMessageCopyText(scope, message);
 		const active = !!stream?.running && responseActive !== false;
 		const phase = stream ? responsePhase(stream, active) : undefined;
 		if (stream && !stream.partial) {
@@ -604,7 +607,9 @@ const TranscriptMessage = memo(
 		}
 		return (
 			<article
+				ref={article}
 				className={`message message-${message.role}`}
+				data-has-message-text={message.text.length > 0}
 				data-content-search-unit-key={row.key}
 				aria-busy={stream ? active : undefined}
 			>
@@ -612,6 +617,7 @@ const TranscriptMessage = memo(
 					<h4 className="sr-only">{t(message.role === "user" ? "work.you" : "work.assistant")}</h4>
 					<MessageContent
 						message={message}
+						onHydratedText={copySource.accept}
 						scope={scope}
 						offset={offset}
 						streaming={stream?.running}
@@ -633,11 +639,12 @@ const TranscriptMessage = memo(
 						<InlineMessageActivities messageId={message.id} toolCalls={message.toolCalls} />
 					)}
 					{message.interrupted && <span className="status-pill">{t("work.interrupted")}</span>}
-					{!stream && !message.truncated && message.text && (
+					{!stream && copySource.text && (
 						<div className="message-actions">
-							<ClipboardCopy
+							<CopyAction
+								article={article}
 								key={row.key}
-								text={message.text}
+								text={copySource.text}
 								label={t("common.copy")}
 								iconOnly
 								className="message-copy"

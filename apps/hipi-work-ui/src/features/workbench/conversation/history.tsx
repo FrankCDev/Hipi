@@ -6,6 +6,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { conversationSearchLabels } from "../search/labels.ts";
 import type { ConversationFailure } from "./failure.ts";
 import {
+	anchoredHistorySnapshot,
 	ConversationHistoryController,
 	type ConversationHistoryState,
 	type SearchHistoryAnchor,
@@ -52,14 +53,15 @@ function ScopedHistory({
 	const positions = readingPositionsFor(client);
 	const { t, locale } = usePreferences();
 	const l = conversationSearchLabels(locale);
-	const [state, setState] = useState<ConversationHistoryState>({
-		snapshot,
+	const [state, setState] = useState<ConversationHistoryState>(() => ({
+		snapshot: searchAnchor ? anchoredHistorySnapshot(scope, searchAnchor) : snapshot,
+		anchor: searchAnchor,
 		loading: false,
 		failed: false,
 		reconciling: false,
 		capacity: false,
 		blocked: null,
-	});
+	}));
 	const [displayGeneration, setDisplayGeneration] = useState(0);
 	const controller = useRef<ConversationHistoryController | null>(null);
 	const appliedAnchor = useRef<SearchHistoryAnchor | undefined>(undefined);

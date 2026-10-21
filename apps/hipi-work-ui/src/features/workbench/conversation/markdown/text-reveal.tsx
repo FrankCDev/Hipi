@@ -4,7 +4,7 @@ import type { ExtraProps } from "react-markdown";
 import { useReducedMotionPreference } from "../../../../app/theme/use-reduced-motion.ts";
 import "./text-reveal.css";
 
-type RevealedText = { source: string; leaves: Map<number, string> };
+type RevealedText = { source: string; leaves: Map<number, string>; structures: Set<string> };
 type RevealContextValue = { previous: RevealedText; preserved: number; active: boolean };
 export const TextRevealContext = createContext<RevealContextValue | null>(null);
 
@@ -15,7 +15,7 @@ function commonPrefix(left: string, right: string) {
 }
 
 export function useTextReveal(source: string, active: boolean) {
-	const [previous] = useState<RevealedText>(() => ({ source: "", leaves: new Map() }));
+	const [previous] = useState<RevealedText>(() => ({ source: "", leaves: new Map(), structures: new Set() }));
 	const context = useMemo(
 		() => ({ previous, preserved: commonPrefix(previous.source, source), active }),
 		[previous, source, active],
@@ -83,15 +83,20 @@ export function RevealedTextLeaf({ node }: ExtraProps) {
 	));
 }
 
-function RevealedWord({ children, active, fresh }: { children: string; active: boolean; fresh: boolean }) {
+export function useOneShotReveal(active: boolean, fresh: boolean) {
 	const [revealing, setRevealing] = useState(active && fresh);
 	// A hidden, completed or reduced-motion segment is settled, never restarted on return.
 	if (!active && revealing) setRevealing(false);
+	return { revealing: revealing && active, settle: () => setRevealing(false) };
+}
+
+function RevealedWord({ children, active, fresh }: { children: string; active: boolean; fresh: boolean }) {
+	const { revealing, settle } = useOneShotReveal(active, fresh);
 	return (
 		<span
-			className={revealing && active ? "markdown-word-reveal" : undefined}
+			className={revealing ? "markdown-word-reveal" : undefined}
 			onAnimationEnd={(event) => {
-				if (event.target === event.currentTarget) setRevealing(false);
+				if (event.target === event.currentTarget) settle();
 			}}
 		>
 			{children}

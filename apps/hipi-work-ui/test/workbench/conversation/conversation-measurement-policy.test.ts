@@ -150,3 +150,19 @@ test("production default measurement records an estimate-equal DOM read before l
 	assert.equal(model.instance.scrollOffset, 2025);
 	assert.equal(model.instance.getVirtualItems().find((item) => item.index === 20)?.size, 500);
 });
+
+test("row border-box spacing is counted once and reflow retains selection compensation rules", () => {
+	const model = fixture();
+	assert.equal(model.instance.options.gap, 0);
+	// A 24px tool row plus the theme's 16px block padding, measured together.
+	model.measure(18, 40);
+	assert.equal(model.instance.getMeasurements()[19]?.start, 1840);
+	model.block(true);
+	const heldOffset = model.instance.scrollOffset;
+	model.measure(18, 48);
+	assert.equal(model.instance.scrollOffset, heldOffset);
+	assert.equal(model.instance.getMeasurements()[19]?.start, 1848);
+	model.block(false);
+	model.measure(18, 56);
+	assert.equal(model.instance.scrollOffset, (heldOffset ?? 0) + 8);
+});

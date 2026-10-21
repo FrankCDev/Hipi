@@ -1,5 +1,5 @@
 import { CodeXml, File } from "lucide-react";
-import { type ComponentProps, useId, useState } from "react";
+import { type ComponentProps, useEffect, useId, useState } from "react";
 import { ActionTooltip } from "../../components/ui/action-tooltip.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -22,8 +22,14 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 	const inline = inlineActivityLabels(locale);
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const outputId = useId();
-	const expanded = state.expanded === activity.activityId;
-	const output = expanded && state.text?.activityId === activity.activityId ? state.text : undefined;
+	const slot = state.outputs?.get(activity.activityId);
+	const output = slot?.page;
+	const expanded = activity.textAvailable;
+	const [lease] = useState(() => Symbol("inline-output"));
+	useEffect(
+		() => session.outputs.lease(lease, activity.textAvailable ? [activity.activityId] : []),
+		[session, lease, activity.activityId, activity.textAvailable],
+	);
 	const failed = activity.toolResult === "error" || activity.outcome === "failed" || activity.outcome === "faulted";
 	return (
 		<section className="inline-tool-result" data-outcome={failed ? "error" : undefined}>
@@ -50,7 +56,7 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 						<DialogDescription>{inline["inline.description"]}</DialogDescription>
 						<DialogBody>
 							{!expanded && <p className="inline-tool-note">{l["activity.retained"]}</p>}
-							<ActivityCard {...props} />
+							<ActivityCard {...props} sharedOutput />
 						</DialogBody>
 					</DialogContent>
 				</Dialog>
@@ -92,22 +98,23 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 				</div>
 			)}
 			{activity.outputTruncated && <p className="inline-tool-note">{l["activity.truncated"]}</p>}
-			{activity.textAvailable && (
-				<Button
-					variant="ghost"
-					size="sm"
-					className="inline-tool-output-toggle"
-					disabled={disabled && !expanded}
-					aria-expanded={expanded}
-					aria-controls={outputId}
-					onClick={() => (expanded ? session.collapse() : void session.text(activity.activityId))}
-				>
-					{l[expanded ? "activity.collapse" : "activity.original"]}
-				</Button>
-			)}
 			<div id={outputId} hidden={!expanded}>
 				{expanded && (
 					<>
+						{slot?.busy && !output && <output>{l["activity.loading"]}</output>}
+						{slot?.failed && (
+							<div>
+								<p role="alert">{l["activity.failed"]}</p>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={disabled || slot.busy}
+									onClick={() => session.outputs.retry(activity.activityId)}
+								>
+									{l["activity.retry"]}
+								</Button>
+							</div>
+						)}
 						{output && (
 							<div className="inline-tool-text-card">
 								<div className="inline-tool-text-header">{inline["inline.plaintext"]}</div>
@@ -116,12 +123,12 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 							</div>
 						)}
 						<div className="inline-tool-output-pages">
-							{output && state.textCursor !== undefined && (
+							{output && slot?.cursor !== undefined && (
 								<Button
 									variant="ghost"
 									size="sm"
-									disabled={disabled}
-									onClick={() => void session.text(activity.activityId)}
+									disabled={disabled || !!slot?.busy}
+									onClick={() => session.outputs.read(activity.activityId)}
 								>
 									{l["activity.text.first"]}
 								</Button>
@@ -130,9 +137,9 @@ export function InlineActivityCard(props: ComponentProps<typeof ActivityCard>) {
 								<Button
 									variant="ghost"
 									size="sm"
-									disabled={disabled}
+									disabled={disabled || !!slot?.busy}
 									onClick={() => {
-										if (output.nextCursor) void session.text(activity.activityId, output.nextCursor);
+										if (output.nextCursor) session.outputs.read(activity.activityId, output.nextCursor);
 									}}
 								>
 									{l["activity.text.next"]}

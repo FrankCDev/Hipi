@@ -68,11 +68,13 @@ function word(text: string) {
 	assert.ok(result, `Missing word ${JSON.stringify(text)}`);
 	return result;
 }
-async function finish(target: HTMLElement) {
+async function finish(target: HTMLElement, animationName = "markdown-word-reveal", pseudoElement = "") {
 	await act(async () => {
-		target.dispatchEvent(new Event("animationend", { bubbles: true }));
 		// React detects jsdom's prefixed CSS surface without a native AnimationEvent.
-		target.dispatchEvent(new Event("webkitAnimationEnd", { bubbles: true }));
+		for (const type of ["animationend", "webkitAnimationEnd"]) {
+			const event = Object.assign(new Event(type, { bubbles: true }), { animationName, pseudoElement });
+			target.dispatchEvent(event);
+		}
 	});
 }
 
@@ -243,4 +245,149 @@ test("explicit motion preferences override the system without changing text or i
 	await render("Explicit on `inline code`");
 	assert.equal(host.querySelectorAll(".markdown-word-reveal").length, 0);
 	assert.equal(host.querySelector("code")?.innerHTML, "inline code");
+});
+
+test("list row and marker clocks settle independently and appended items retain earlier DOM", async () => {
+	await render("- First item");
+	const first = host.querySelector("li");
+	assert.ok(first);
+	assert.ok(first.classList.contains("markdown-structure-reveal"));
+	assert.ok(first.classList.contains("markdown-marker-reveal"));
+	await finish(first, "markdown-structure-reveal");
+	assert.ok(!first.classList.contains("markdown-structure-reveal"));
+	assert.ok(first.classList.contains("markdown-marker-reveal"), "150ms row end must not end the 700ms marker");
+	await finish(word("First "));
+	assert.ok(first.classList.contains("markdown-marker-reveal"), "bubbled word end is not the marker clock");
+	await finish(first, "markdown-marker-reveal");
+	assert.ok(first.classList.contains("markdown-marker-reveal"), "only the actual ::marker event settles the marker");
+	await finish(first, "markdown-marker-reveal", "::marker");
+	assert.ok(!first.classList.contains("markdown-marker-reveal"));
+	await arrive("- First item\n- Second item");
+	assert.equal(host.querySelector("li"), first);
+	assert.equal(first.className, "");
+	const second = host.querySelectorAll("li")[1];
+	assert.ok(second?.classList.contains("markdown-structure-reveal"));
+	assert.ok(second.classList.contains("markdown-marker-reveal"));
+});
+
+test("task marker has its own text-duration clock, not the ordinary list marker or row clock", async () => {
+	await render("- [x] Done\n- [ ] Pending");
+	const first = host.querySelector("li");
+	const marker = first?.querySelector<HTMLElement>(".markdown-task-marker");
+	assert.ok(first && marker);
+	assert.ok(first.classList.contains("task-list-item"));
+	assert.ok(!first.classList.contains("markdown-marker-reveal"));
+	assert.ok(marker.classList.contains("markdown-task-reveal"));
+	const checkbox = marker.querySelector<HTMLButtonElement>('[role="checkbox"]');
+	assert.ok(checkbox);
+	assert.equal(checkbox.getAttribute("aria-label"), "已勾选");
+	assert.equal(checkbox.getAttribute("aria-checked"), "true");
+	assert.equal(checkbox.disabled, true);
+	assert.equal(checkbox.tabIndex, -1);
+	await act(async () => {
+		checkbox.click();
+		checkbox.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+	});
+	assert.equal(checkbox.getAttribute("aria-checked"), "true");
+	assert.equal(host.querySelectorAll('[role="checkbox"]')[1]?.getAttribute("aria-checked"), "false");
+	await finish(first, "markdown-structure-reveal");
+	assert.ok(marker.classList.contains("markdown-task-reveal"));
+	await finish(marker, "markdown-task-reveal");
+	assert.equal(marker.className, "markdown-task-marker");
+	await arrive("- [x] Done\n- [ ] Pending\n- [x] Another");
+	assert.equal(host.querySelector("li"), first);
+	assert.equal(first.querySelector(".markdown-task-marker"), marker);
+	assert.equal(marker.className, "markdown-task-marker");
+	assert.ok(host.querySelectorAll(".markdown-task-marker")[2]?.classList.contains("markdown-task-reveal"));
+});
+
+test("quote, rule and table rows reveal once without remounting earlier rows during append", async () => {
+	const source = "> Quote\n\n---\n\n| Header |\n| --- |\n| First |";
+	await render(source);
+	const original = [...host.querySelectorAll<HTMLElement>("blockquote, hr, tr")];
+	assert.equal(original.length, 4);
+	for (const element of original) {
+		assert.ok(element.classList.contains("markdown-structure-reveal"));
+		await finish(element, "markdown-structure-reveal");
+	}
+	await arrive(`${source}\n| Second |`);
+	const current = [...host.querySelectorAll<HTMLElement>("blockquote, hr, tr")];
+	assert.equal(current.length, 5);
+	for (const [index, element] of original.entries()) {
+		assert.equal(current[index], element);
+		assert.ok(!element.classList.contains("markdown-structure-reveal"));
+	}
+	assert.ok(current[4]?.classList.contains("markdown-structure-reveal"));
+	await render(`${source}\n| Second |`, { streaming: false });
+	assert.equal(host.querySelectorAll(".markdown-structure-reveal").length, 0);
+	assert.equal(host.querySelector("blockquote"), original[0]);
+});
+
+test("parser restructuring cannot replay a table made from an already visible paragraph", async () => {
+	await render("| Heading |");
+	await arrive("| Heading |\n| --- |\n| New row |");
+	const header = host.querySelector("thead tr");
+	const body = host.querySelector("tbody tr");
+	assert.ok(header && body);
+	assert.ok(!header.classList.contains("markdown-structure-reveal"));
+	assert.ok(body.classList.contains("markdown-structure-reveal"));
+	assert.equal(header.querySelectorAll(".markdown-word-reveal").length, 0);
+});
+
+test("nested list and quote growth retain code identity and selection through final flush", async () => {
+	const source = "- Item\n\n  > Quote\n\n  ```unknown\n  code\n  ```";
+	await render(source);
+	const item = host.querySelector("li");
+	const quote = host.querySelector("blockquote");
+	const code = host.querySelector("pre code");
+	assert.ok(item && quote && code);
+	const range = document.createRange();
+	range.selectNodeContents(quote);
+	document.getSelection()?.addRange(range);
+	await render(`${source}\n- Another`, { streaming: false });
+	assert.equal(host.querySelectorAll("li").length, 1);
+	assert.equal(host.querySelector("pre code"), code);
+	await act(async () => {
+		document.getSelection()?.removeAllRanges();
+		document.dispatchEvent(new Event("selectionchange"));
+	});
+	assert.equal(host.querySelectorAll("li").length, 2);
+	assert.equal(host.querySelector("li"), item);
+	assert.equal(host.querySelector("blockquote"), quote);
+	assert.equal(host.querySelector("pre code"), code);
+	assert.equal(host.querySelectorAll(".markdown-structure-reveal, .markdown-marker-reveal").length, 0);
+});
+
+test("visibility and motion changes settle every structural decoration without replay", async () => {
+	const source = "- Ordinary\n- [x] Task\n\n> Quote\n\n---";
+	await render(source);
+	assert.ok(
+		host.querySelectorAll(".markdown-structure-reveal, .markdown-marker-reveal, .markdown-task-reveal").length > 0,
+	);
+	await act(async () => {
+		Object.defineProperty(document, "hidden", { configurable: true, value: true });
+		document.dispatchEvent(new Event("visibilitychange"));
+	});
+	assert.equal(
+		host.querySelectorAll(".markdown-structure-reveal, .markdown-marker-reveal, .markdown-task-reveal").length,
+		0,
+	);
+	await act(async () => {
+		Object.defineProperty(document, "hidden", { configurable: true, value: false });
+		document.dispatchEvent(new Event("visibilitychange"));
+	});
+	assert.equal(
+		host.querySelectorAll(".markdown-structure-reveal, .markdown-marker-reveal, .markdown-task-reveal").length,
+		0,
+	);
+	await arrive(`${source}\n\n> New quote`);
+	assert.ok(host.querySelectorAll(".markdown-structure-reveal").length > 0);
+	await act(async () => {
+		reduced = true;
+		for (const listener of [...motionListeners]) listener();
+	});
+	assert.equal(
+		host.querySelectorAll(".markdown-structure-reveal, .markdown-marker-reveal, .markdown-task-reveal").length,
+		0,
+	);
 });

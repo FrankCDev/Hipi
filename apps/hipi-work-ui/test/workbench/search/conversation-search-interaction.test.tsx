@@ -8,12 +8,10 @@ import {
 } from "@hipi/work-runtime/contracts";
 import type * as React from "react";
 import { isValidElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { Button } from "../../../src/components/ui/button.tsx";
 import { DialogContent } from "../../../src/components/ui/dialog.tsx";
 import { InputGroupInput } from "../../../src/components/ui/input-group.tsx";
-import { MessageContent } from "../../../src/features/workbench/conversation/message-text-reader.tsx";
 import { ConversationSearch } from "../../../src/features/workbench/search/search.tsx";
 
 type Cell = { value: unknown; deps?: React.DependencyList; cleanup?: () => void };
@@ -232,42 +230,4 @@ test("failed activation releases the whole read group before closing can lose it
 			(item) => item.props.role === "alert" && String(item.props.children).includes("changed"),
 		),
 	);
-});
-
-test("hydrated target renders the actual original UTF-16 match beyond the preview without requesting text", () => {
-	const message = {
-		id: "1_0",
-		role: "user" as const,
-		text: "preview without match",
-		textLength: 20000,
-		truncated: true,
-	};
-	const scope = { workspaceId: "closed", conversationId: "unloaded" };
-	const markup = renderToStaticMarkup(
-		MessageContent({
-			message,
-			scope,
-			offset: undefined,
-			onOffsetChange: () => {},
-			searchAnchor: {
-				...scope,
-				messages: [message],
-				target: {
-					...scope,
-					messageId: "1_0",
-					text: "😀 NeEdLe 中文",
-					offset: 9000,
-					nextOffset: 9012,
-					textLength: 20000,
-				},
-				matchStart: 9003,
-				matchEnd: 9009,
-				olderCursor: null,
-				newerCursor: "opaque",
-			},
-		}),
-	);
-	assert.match(markup, /😀 <mark data-search-match="">NeEdLe<\/mark> 中文/);
-	assert.doesNotMatch(markup, /preview without match/);
-	assert.equal(vi.mocked(client.call).mock.calls.length, 0);
 });

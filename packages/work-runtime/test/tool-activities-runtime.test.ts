@@ -117,6 +117,13 @@ test("real faux save projects approval and artifact then cold read does not resu
 		faux.setResponses([
 			fauxAssistantMessage(
 				[
+					fauxToolCall("hipi_files_read", { rootId: root.rootId, path: "note.txt" }, { id: "read" }),
+					fauxToolCall("hipi_files_list", { rootId: root.rootId, path: "" }, { id: "list" }),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage(
+				[
 					fauxToolCall(
 						"hipi_files_save",
 						{ rootId: root.rootId, path: "note.txt", text: "after", ifMatch: before.revision },
@@ -167,7 +174,9 @@ test("real faux save projects approval and artifact then cold read does not resu
 			decision: "approve",
 		});
 		const completed = await until(async () => {
-			const value = (await runtime.call("getToolActivities", scope)).items.find((item) => item.phase === "terminal");
+			const value = (await runtime.call("getToolActivities", scope)).items.find(
+				(item) => item.phase === "terminal" && item.taskId === pending.taskId,
+			);
 			return value;
 		});
 		assert.equal(completed.activityId, pending.activityId);
@@ -253,6 +262,24 @@ test("real faux save projects approval and artifact then cold read does not resu
 			await runtime.call("getToolActivityText", { ...scope, activityId: cold.activityId }),
 		);
 		assert.equal(output.retainedOutputOnly, true);
+		assert.equal(output.presentation?.result.kind, "save");
+		assert.equal(output.presentation?.target.path, "note.txt");
+		const activities = await runtime.call("getToolActivities", scope);
+		for (const [name, kind] of [
+			["hipi_files_read", "read"],
+			["hipi_files_list", "directory"],
+		] as const) {
+			const activity = activities.items.find((item) => item.toolName === name);
+			assert.ok(activity);
+			const page = parseResult(
+				"getToolActivityText",
+				await runtime.call("getToolActivityText", { ...scope, activityId: activity.activityId }),
+			);
+			assert.equal(page.presentation?.result.kind, kind);
+			if (page.presentation?.result.kind === "read") assert.equal(page.presentation.result.text, "before");
+			if (page.presentation?.result.kind === "directory")
+				assert.ok(page.presentation.result.entries.some((item) => item.name === "note.txt"));
+		}
 		assert.match(output.text, /confirmed/);
 		assert.throws(() => parseResult("getToolActivityText", { ...output, retainedOutputOnly: false }), {
 			code: "INVALID_REQUEST",

@@ -33,7 +33,11 @@ import {
 	type ToolActivitySelector,
 	type ToolActivityTextPage,
 } from "./activities/contracts.ts";
+import { type FilePresentation, parseFilePresentation } from "./activities/file-presentation.ts";
 import { type ConversationExecution, parseExecution } from "./execution/contracts.ts";
+
+export type { FilePresentation } from "./activities/file-presentation.ts";
+
 import { validateRelativePath } from "./files/contracts.ts";
 
 export { type ConversationExecution, EXECUTION_LIMITS, type ExecutionTool } from "./execution/contracts.ts";
@@ -103,6 +107,7 @@ import {
 export {
 	ACTIVITY_LIMITS,
 	type MessageToolCalls,
+	TOOL_ACTIVITY_TEXT_PAGE_BYTES,
 	type ToolActivity,
 	type ToolActivityPage,
 	type ToolActivitySelector,
@@ -134,7 +139,7 @@ export {
 } from "./extensions/contracts.ts";
 
 /** Browser-safe protocol; no PI handles, absolute filesystem paths, credentials, or host imports. */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 // JSON uses at most six bytes per UTF-16 code unit. A full page plus partial text costs
 // 6 * (32 * 2048 + 16384) = 491520 bytes before bounded metadata, well below one MiB.
 export const LIMITS = {
@@ -1784,7 +1789,15 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 		};
 	} else if (method === "getToolActivityText") {
 		const p = object(value);
-		fields(p, ["activityId", "text", "nextCursor", "retainedOutputOnly"]);
+		fields(p, ["activityId", "text", "nextCursor", "retainedOutputOnly", "presentation"]);
+		let presentation: FilePresentation | undefined;
+		if (p.presentation !== undefined) {
+			try {
+				presentation = parseFilePresentation(p.presentation);
+			} catch {
+				throw new AppError("INVALID_REQUEST");
+			}
+		}
 		if (p.retainedOutputOnly !== true) throw new AppError("INVALID_REQUEST");
 		const output = text(p.text, ACTIVITY_LIMITS.textBytes);
 		if (/[\ud800-\udfff]/u.test(output) || new TextEncoder().encode(output).byteLength > ACTIVITY_LIMITS.textBytes)
@@ -1794,6 +1807,7 @@ export function parseResult<M extends Method>(method: M, value: unknown): Result
 			text: output,
 			nextCursor: cursor(p.nextCursor),
 			retainedOutputOnly: p.retainedOutputOnly,
+			...(presentation ? { presentation } : {}),
 		};
 	} else if (
 		method === "authorizeAgentContext" ||

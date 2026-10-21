@@ -28,6 +28,7 @@
 		"aria-hidden": "1.2.6",
 		"class-variance-authority": "0.7.1",
 		"clsx": "2.1.1",
+		"dompurify": "3.4.17",
 		"framer-motion": "14.4.0",
 		"lucide-react": "1.59.0",
 		"pdfjs-dist": "6.4.299",

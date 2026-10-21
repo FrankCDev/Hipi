@@ -22,6 +22,34 @@ export type ConversationHistoryState = {
 export type SearchHistoryAnchor = { locator: string; window: SearchHistoryWindow };
 type Bridge = { snapshot: Snapshot; messages: Message[]; cursor: string | null; seen: Set<string> };
 
+/** Validate and project the hydrated window before the first child layout effect can follow the live tail. */
+export function anchoredHistorySnapshot(scope: Scope, anchor: SearchHistoryAnchor): Snapshot {
+	const { window } = anchor;
+	const target = window.messages.find((message) => message.id === window.target.messageId);
+	if (
+		window.workspaceId !== scope.workspaceId ||
+		window.conversationId !== scope.conversationId ||
+		window.target.workspaceId !== scope.workspaceId ||
+		window.target.conversationId !== scope.conversationId ||
+		!target ||
+		target.textLength !== window.target.textLength ||
+		window.matchStart < window.target.offset ||
+		window.matchEnd <= window.matchStart ||
+		window.matchEnd > window.target.offset + window.target.text.length ||
+		!fitsHistory(window.messages)
+	)
+		throw new AppError("INVALID_REQUEST");
+	return {
+		...scope,
+		messages: unique(window.messages),
+		historyCursor: null,
+		partial: "",
+		partialLength: 0,
+		partialTruncated: false,
+		running: false,
+	};
+}
+
 /** One mounted scope owns previews, its original older fence, and at most one cancellable read.
  * Live gaps are staged separately until the retained tail is found. Capacity stops growth rather
  * than discarding messages the user may be reading. Disposal releases the complete cache.
@@ -134,34 +162,14 @@ export class ConversationHistoryController {
 
 	openAnchor(anchor: SearchHistoryAnchor) {
 		if (this.disposed) return;
-		const { window } = anchor;
-		this.validateScope(window);
-		this.validateScope(window.target);
-		const target = window.messages.find((message) => message.id === window.target.messageId);
-		if (
-			!target ||
-			target.textLength !== window.target.textLength ||
-			window.matchStart < window.target.offset ||
-			window.matchEnd <= window.matchStart ||
-			window.matchEnd > window.target.offset + window.target.text.length ||
-			!this.fits(window.messages)
-		)
-			throw new AppError("INVALID_REQUEST");
+		const snapshot = anchoredHistorySnapshot(this.scope, anchor);
 		this.request?.abort();
 		this.request = undefined;
 		this.anchor = anchor;
 		this.anchorDirection = undefined;
 		this.anchorSeen.older.clear();
 		this.anchorSeen.newer.clear();
-		this.snapshot = {
-			...this.scope,
-			messages: unique(window.messages),
-			historyCursor: null,
-			partial: "",
-			partialLength: 0,
-			partialTruncated: false,
-			running: false,
-		};
+		this.snapshot = snapshot;
 		this.bridge = undefined;
 		this.queued = undefined;
 		this.pages = 0;
@@ -210,17 +218,7 @@ export class ConversationHistoryController {
 	}
 
 	private fits(...groups: Message[][]): boolean {
-		let count = 0;
-		let units = 0;
-		for (const messages of groups) {
-			count += messages.length;
-			for (const message of messages) units += message.text.length;
-		}
-		// Reserve one contract-sized latest snapshot so reset remains available at capacity.
-		return (
-			count <= HISTORY_CAPACITY.messages - LIMITS.historyMessages &&
-			units <= HISTORY_CAPACITY.textUnits - LIMITS.historyMessages * LIMITS.messagePreview
-		);
+		return fitsHistory(...groups);
 	}
 
 	private acceptLive(incoming: Snapshot) {
@@ -390,6 +388,20 @@ export class ConversationHistoryController {
 	private emit() {
 		if (!this.disposed) this.publish(this.state);
 	}
+}
+
+function fitsHistory(...groups: Message[][]): boolean {
+	let count = 0;
+	let units = 0;
+	for (const messages of groups) {
+		count += messages.length;
+		for (const message of messages) units += message.text.length;
+	}
+	// Reserve one contract-sized latest snapshot so reset remains available at capacity.
+	return (
+		count <= HISTORY_CAPACITY.messages - LIMITS.historyMessages &&
+		units <= HISTORY_CAPACITY.textUnits - LIMITS.historyMessages * LIMITS.messagePreview
+	);
 }
 
 function unique(messages: Message[]): Message[] {

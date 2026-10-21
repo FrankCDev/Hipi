@@ -5,10 +5,11 @@ import type {
 	ToolActivitySelector,
 	ToolActivityTextPage,
 } from "@hipi/work-runtime/contracts";
-
 import { validateActivitySelection } from "./activity-selection.ts";
+import { ActivityOutputSession, type ActivityOutputSlot } from "./output-session.ts";
 
 export type ActivityState = {
+	outputs?: ReadonlyMap<string, ActivityOutputSlot>;
 	page?: ToolActivityPage;
 	cursor?: string;
 	text?: ToolActivityTextPage;
@@ -20,7 +21,7 @@ export type ActivityState = {
 };
 type Read = { kind: "page"; cursor?: string } | { kind: "text"; activityId: string; cursor?: string };
 
-/** One visible page and one retained-output chunk. No transcript or raw-output cache survives disposal. */
+/** One metadata page and subordinate leased output slots; the global history keeps its explicit single-chunk reader. */
 export class ActivitySession {
 	private state: ActivityState = { busy: false, failed: false };
 	private listeners = new Set<() => void>();
@@ -32,6 +33,7 @@ export class ActivitySession {
 	private scope: Scope;
 	private selector?: ToolActivitySelector;
 	private expectedCalls?: ReadonlyMap<string, string>;
+	readonly outputs: ActivityOutputSession;
 	constructor(
 		client: AppClient,
 		scope: Scope,
@@ -42,6 +44,7 @@ export class ActivitySession {
 		this.selector = selector ? structuredClone(selector) : undefined;
 		this.expectedCalls = expectedCalls ? new Map(expectedCalls) : undefined;
 		this.scope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
+		this.outputs = new ActivityOutputSession(client, this.scope, (outputs) => this.publish({ ...this.state, outputs }));
 	}
 	snapshot = () => this.state;
 	subscribe = (listener: () => void) => {
@@ -50,12 +53,14 @@ export class ActivitySession {
 	};
 	activate() {
 		this.active = true;
+		this.outputs.activate();
 	}
 	private publish(state: ActivityState) {
 		this.state = state;
 		for (const listener of this.listeners) listener();
 	}
 	cancel() {
+		this.outputs.pause();
 		this.generation++;
 		this.request?.abort();
 		this.request = undefined;
@@ -71,6 +76,7 @@ export class ActivitySession {
 		this.active = false;
 		this.cancel();
 		this.retryRead = undefined;
+		this.outputs.dispose();
 		this.publish({ busy: false, failed: false });
 	}
 	page(cursor?: string) {
@@ -125,7 +131,8 @@ export class ActivitySession {
 				if (!this.active || generation !== this.generation) return;
 				if (controller.signal.aborted) throw new Error("Read timed out");
 				validateActivitySelection(page, this.selector, this.expectedCalls);
-				this.publish({ page, cursor: read.cursor, busy: false, failed: false });
+				this.publish({ page, cursor: read.cursor, busy: false, failed: false, outputs: this.outputs.snapshot() });
+				this.outputs.validate(page.items);
 			} else {
 				const text = await Promise.race([
 					this.client.call(

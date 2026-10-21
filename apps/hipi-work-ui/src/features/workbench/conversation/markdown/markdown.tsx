@@ -1,20 +1,24 @@
+import { Code, Text, WrapText } from "lucide-react";
 import { Component, createContext, memo, type ReactNode, useContext, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { usePreferences } from "../../../../app/preferences.tsx";
+import { useCodeBlockWordWrap } from "../../../../app/presentation/provider.tsx";
+import { ActionTooltip } from "../../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../../components/ui/button.tsx";
+import { ReadOnlyCheckbox } from "../../../../components/ui/read-only-checkbox.tsx";
 import { ClipboardCopy } from "./clipboard-copy.tsx";
 import { markdownLabels } from "./labels.ts";
 import {
 	inertDestination,
 	MAX_RICH_TEXT_UNITS,
-	MAX_STREAMING_RICH_TEXT_UNITS,
 	markdownDisplaySource,
 	ORIGINAL_PAGE_UNITS,
 	originalPage,
 } from "./policy.ts";
 import { revealTextPlugin } from "./reveal-plugin.ts";
 import { isOpenCodeFence, markdownSegments } from "./segments.ts";
+import { RevealedListItem, RevealedStructure, useTaskDecorationReveal } from "./structure-reveal.tsx";
 import { SyntaxCode } from "./syntax-code.tsx";
 import { RevealedTextLeaf, TextRevealContext, useTextReveal, useTextRevealVisible } from "./text-reveal.tsx";
 import { useStreamingText } from "./use-streaming-text.ts";
@@ -56,6 +60,10 @@ type MarkdownTone = "user" | "assistant";
 const SourceContext = createContext({ source: "", streaming: false, tone: "assistant" as MarkdownTone });
 const components: Components = {
 	span: RevealedTextLeaf,
+	li: RevealedListItem,
+	blockquote: (props) => <RevealedStructure tag="blockquote" {...props} />,
+	tr: (props) => <RevealedStructure tag="tr" {...props} />,
+	hr: (props) => <RevealedStructure tag="hr" {...props} />,
 	a: ({ children, href }) => (
 		<span className="markdown-link">
 			{children}
@@ -119,26 +127,44 @@ function CodeBlock({
 	const { locale } = usePreferences();
 	const labels = markdownLabels(locale);
 	const context = useContext(SourceContext);
+	const wrap = useCodeBlockWordWrap();
 	if (context.tone === "user") return <pre className="markdown-user-code">{children}</pre>;
 	const unfinished =
 		context.streaming && (!startLine || !endLine || isOpenCodeFence(context.source, startLine, endLine));
+	const title = language ?? (unfinished ? "" : undefined);
+	const wrapLabel = labels[wrap.wrapped ? "markdown.disableWrap" : "markdown.enableWrap"];
 	return (
-		<div className="markdown-code-block">
-			<div className="markdown-code-header">
-				<span className="markdown-code-language">{language ?? labels["markdown.code"]}</span>
-				<ClipboardCopy
-					text={text}
-					label={labels["markdown.copyCode"]}
-					disabled={unfinished}
-					disabledLabel={labels["markdown.copyAfterStreaming"]}
-					className="markdown-code-copy"
-					containerClassName="markdown-code-actions"
-					errorClassName="markdown-code-error"
-					iconOnly
-				/>
+		<div className="markdown-code-block" data-wrapped={wrap.wrapped}>
+			<div className="markdown-code-header" data-markdown-copy="exclude">
+				{title !== undefined && <Code size={20} aria-hidden="true" className="markdown-code-glyph" />}
+				<span className="markdown-code-language">{title}</span>
+				<div className="markdown-code-controls">
+					<ActionTooltip label={wrapLabel}>
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							className="markdown-code-wrap"
+							aria-label={wrapLabel}
+							aria-pressed={wrap.wrapped}
+							onClick={wrap.toggle}
+						>
+							{wrap.wrapped ? <WrapText size={16} aria-hidden="true" /> : <Text size={16} aria-hidden="true" />}
+						</Button>
+					</ActionTooltip>
+					{!unfinished && (
+						<ClipboardCopy
+							text={text}
+							label={labels["markdown.copyCode"]}
+							className="markdown-code-copy"
+							containerClassName="markdown-code-actions"
+							errorClassName="markdown-code-error"
+							iconOnly
+						/>
+					)}
+				</div>
 			</div>
 			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll long code lines. */}
-			<section className="markdown-code-scroll" aria-label={labels["markdown.code"]} tabIndex={0}>
+			<section className="markdown-code-scroll" aria-label={labels["markdown.code"]} tabIndex={0} dir="ltr">
 				<pre>
 					<SyntaxCode text={text} language={language} />
 				</pre>
@@ -149,9 +175,15 @@ function CodeBlock({
 
 function TaskMarker({ checked }: { checked: boolean }) {
 	const { t } = usePreferences();
+	const { revealing, settle } = useTaskDecorationReveal();
 	return (
-		<span role="img" aria-label={t(checked ? "markdown.checked" : "markdown.unchecked")}>
-			{checked ? "☑ " : "☐ "}
+		<span
+			className={`markdown-task-marker${revealing ? " markdown-task-reveal" : ""}`}
+			onAnimationEnd={(event) => {
+				if (event.target === event.currentTarget && event.animationName === "markdown-task-reveal") settle();
+			}}
+		>
+			<ReadOnlyCheckbox checked={checked} label={t(checked ? "markdown.checked" : "markdown.unchecked")} />
 		</span>
 	);
 }
@@ -267,10 +299,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({
 			<OriginalText source={display.source} />
 		</>
 	);
-	const overCeiling =
-		display.source.length > MAX_RICH_TEXT_UNITS ||
-		(display.streaming &&
-			segments.some((segment) => !segment.settled && segment.source.length > MAX_STREAMING_RICH_TEXT_UNITS));
+	const overCeiling = display.source.length > MAX_RICH_TEXT_UNITS;
 	return (
 		<div ref={root} className={overCeiling ? undefined : "message-text markdown-body"} data-markdown-tone={tone}>
 			{overCeiling ? (

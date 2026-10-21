@@ -3,14 +3,15 @@ import type { CatalogCommand, ProjectCatalogCommand } from "../command-recovery.
 import type { LocalState } from "../local-state.ts";
 import { defaultRoleEvidence } from "./identity.ts";
 
-/** Protocol 9 logical journals retain identical commands in 10; protocol 8 had none. */
+/** Protocol 9 and 10 logical journals retain identical commands in 11; protocol 8 had none. */
 export function parseProjectCommand(value: unknown): ProjectCatalogCommand {
 	if (
 		!value ||
 		typeof value !== "object" ||
 		Array.isArray(value) ||
 		!("version" in value) ||
-		(value.version !== PROTOCOL_VERSION && !(PROTOCOL_VERSION === 10 && value.version === 9)) ||
+		(value.version !== PROTOCOL_VERSION &&
+			!(PROTOCOL_VERSION === 11 && (value.version === 9 || value.version === 10))) ||
 		Object.keys(value).some((key) => !["version", "method", "params"].includes(key))
 	)
 		throw new Error("INVALID_PROJECT_COMMAND");

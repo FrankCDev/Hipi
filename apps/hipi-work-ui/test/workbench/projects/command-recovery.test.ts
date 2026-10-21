@@ -45,6 +45,66 @@ const initialJournal = {
 	},
 };
 
+test("protocol 10 reload remains receipt-only and finishes only its byte-exact owned journal", async () => {
+	const prior = { ...legacy, version: 10 };
+	const journal = { ...commandJournal, request: prior };
+	const raw = JSON.stringify(journal);
+	const local = new LocalState();
+	local.write("command.catalog", raw);
+	const command = parseProjectCommand(prior);
+	assert.deepEqual(command, { ...prior, version: PROTOCOL_VERSION });
+	assert.throws(() => parseRequest(prior));
+	const calls: string[] = [];
+	const client: AppClient = {
+		call: async (method) => {
+			calls.push(method);
+			assert.equal(method, "getProjectCommandResult");
+			return parseResult(method, null);
+		},
+		observe: async () => {
+			throw new Error("Recovery must not execute or observe");
+		},
+	};
+	for (let mount = 0; mount < 2; mount++) {
+		const session = new CatalogSession(client, local);
+		try {
+			await session.check();
+			assert.deepEqual(session.getSnapshot().pending, command);
+			assert.equal(session.getSnapshot().notFound, true);
+			assert.equal(local.read("command.catalog"), raw);
+		} finally {
+			session.dispose();
+		}
+	}
+	assert.deepEqual(calls, ["getProjectCommandResult", "getProjectCommandResult"]);
+	local.write("command.catalog", JSON.stringify(journal, null, 2));
+	await assert.rejects(finishProjectCommand(local, command, new AbortController().signal));
+	local.write("command.catalog", raw);
+	await finishProjectCommand(local, command, new AbortController().signal);
+	assert.equal(local.read("command.catalog"), JSON.stringify({ version: 2, request: null }));
+
+	const initial = {
+		...initialJournal,
+		request: prior,
+		initialSend: { ...initialJournal.initialSend, conversationCommand: prior },
+	};
+	const initialRaw = JSON.stringify(initial);
+	local.write("command.catalog", initialRaw);
+	const expected = readInitialSendRecovery(initial);
+	assert.deepEqual(currentInitialSend(local, expected), expected);
+	assert.equal(local.read("command.catalog"), initialRaw);
+	const next = await finishLogicalInitialConversation(
+		local,
+		expected,
+		{ workspaceId: "physical", conversationId: "conversation" },
+		new AbortController().signal,
+	);
+	assert.equal(next.initialSend.submissionId, initial.initialSend.submissionId);
+	assert.equal(next.initialSend.text, initial.initialSend.text);
+	assert.equal(next.initialSend.sourceRevision, initial.initialSend.sourceRevision);
+	assert.equal(local.pending("physical.conversation"), null);
+});
+
 test("all six protocol 9 logical commands preserve the exact digest payload through recovery", () => {
 	for (const value of [
 		legacy,

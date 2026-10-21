@@ -2,11 +2,13 @@ import { Check, Copy } from "lucide-react";
 import { usePreferences } from "../../../../app/preferences.tsx";
 import { ActionTooltip } from "../../../../components/ui/action-tooltip.tsx";
 import { Button } from "../../../../components/ui/button.tsx";
+import type { ClipboardWriter } from "./clipboard-feedback.ts";
 import { markdownLabels } from "./labels.ts";
 import { useClipboardFeedback } from "./use-clipboard-feedback.ts";
 
-type ClipboardCopyProps = {
+export type ClipboardCopyProps = {
 	text: string;
+	write?: ClipboardWriter;
 	label: string;
 	disabled?: boolean;
 	disabledLabel?: string;
@@ -24,6 +26,7 @@ export function ClipboardCopy(props: ClipboardCopyProps) {
 
 function ClipboardCopyAction({
 	text,
+	write,
 	label,
 	disabled = false,
 	disabledLabel,
@@ -34,7 +37,7 @@ function ClipboardCopyAction({
 	iconOnly = false,
 }: ClipboardCopyProps) {
 	const { t, locale } = usePreferences();
-	const clipboard = useClipboardFeedback();
+	const clipboard = useClipboardFeedback(write);
 	const copied = clipboard.status === "copied";
 	const pending = clipboard.status === "copying";
 	const feedback = pending ? markdownLabels(locale)["markdown.copying"] : copied ? t("common.copied") : label;

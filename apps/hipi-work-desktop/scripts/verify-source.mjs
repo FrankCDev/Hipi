@@ -130,6 +130,7 @@ nodeTests.push("packages/work-runtime/test/store-cli.test.ts");
 nodeTests.push("packages/work-runtime/test/sqlite-durability.test.ts");
 nodeTests.push("packages/work-runtime/test/transport-backpressure.test.ts");
 nodeTests.push("packages/work-runtime/test/office-zip-normalization.test.ts");
+nodeTests.push("packages/work-runtime/test/file-presentation.test.ts");
 const storageTests = [
 	"packages/chord/test/sqlite-readonly.test.ts",
 	"packages/chord/test/sqlite/node.test.ts",
@@ -143,6 +144,7 @@ const uiTests = [
 	"activity-transcript",
 	"workbench/conversation/conversation-selection-interaction",
 	"workbench/search/conversation-search-interaction",
+	"workbench/search/search-target-mounted",
 	"workbench/files/file-canvas-presentation",
 	"workbench/composer/work-experience-presentation",
 	"workbench/composer/prepared-task-entry",
@@ -176,7 +178,12 @@ const uiTests = [
 	"custom-provider-settings",
 	"legacy-provider-editor",
 	"workbench/conversation/conversation-turn-failure",
+	"workbench/conversation/conversation-block-spacing",
 	"workbench/conversation/disclosure-scroll-anchor-mounted",
+	"workbench/conversation/header-mounted",
+	"workbench/conversation/history-initial-anchor-mounted",
+	"workbench/conversation/message-content-markdown-mounted",
+	"workbench/conversation/message-copy-source-mounted",
 	"workbench/conversation/response-status-mounted",
 	"workbench/conversation/markdown/clipboard-copy-mounted",
 	"workbench/conversation/conversation-draft-recovery",
@@ -219,8 +226,11 @@ const uiTests = [
 	"workbench/catalog/catalog-pages",
 	"workbench/sidebar/sidebar-navigation-callbacks",
 	"workbench/sidebar/workspace-tree-callbacks",
+	"workbench/conversation/markdown/assistant-copy",
+	"workbench/conversation/markdown/code-block-mounted",
 	"workbench/conversation/markdown/conversation-prose-cascade",
 	"workbench/conversation/markdown/message-markdown",
+	"workbench/conversation/markdown/streaming-rich-mounted",
 	"workbench/conversation/markdown/syntax-code",
 	"workbench/conversation/markdown/text-reveal-mounted",
 	"workbench/conversation/markdown/user-message-content",
@@ -229,6 +239,7 @@ const uiTests = [
 	"tool-activities",
 	"tool-activities/inline-activity-card",
 	"tool-activities/live-activity-mounted",
+	"tool-activities/output-slots-mounted",
 	"tool-activities/turn-activities-mounted",
 	"tool-activities/turn-activity-presentation",
 	"tool-packs-ui",
@@ -238,6 +249,8 @@ uiTests.push("apps/hipi-work-ui/test/agent-permissions.test.ts");
 uiTests.push("apps/hipi-work-ui/test/agent-permissions/approval-correlation.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-activities/activity-selection.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-activities/live-activity-association.test.ts");
+uiTests.push("apps/hipi-work-ui/test/tool-activities/output-session.test.ts");
+uiTests.push("apps/hipi-work-ui/test/presentation-preferences.test.ts");
 uiTests.push("apps/hipi-work-ui/test/font-fallback.test.ts");
 uiTests.push("apps/hipi-work-ui/test/appearance-client.test.ts");
 uiTests.push("apps/hipi-work-ui/test/theme-settings.test.ts");

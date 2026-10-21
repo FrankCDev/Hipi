@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, test, vi } from "vitest";
+import { AppClientProvider } from "../../../../src/app/client-provider.tsx";
 import { PreferencesProvider } from "../../../../src/app/preferences.tsx";
 import { defaultConfig } from "../../../../src/app/theme/config.ts";
 import { themeStorageKey } from "../../../../src/app/theme/store.ts";
@@ -16,7 +17,6 @@ import { MessageMarkdown } from "../../../../src/features/workbench/conversation
 import {
 	inertDestination,
 	MAX_RICH_TEXT_UNITS,
-	MAX_STREAMING_RICH_TEXT_UNITS,
 	markdownDisplaySource,
 	ORIGINAL_PAGE_UNITS,
 	originalPage,
@@ -97,14 +97,14 @@ test("fenced and indented code have safe language headers and a real copy contro
 	const html = render("```typescript\nconst a = '<script>';\n```\n\n    plain text\n\n```c++\nint n = 2;\n```");
 	assert.equal((html.match(/class="markdown-code-block"/g) ?? []).length, 3);
 	assert.match(html, /class="markdown-code-language">typescript<\/span>/);
-	assert.match(html, /class="markdown-code-language">代码<\/span>/);
+	assert.match(html, /class="markdown-code-language"><\/span>/);
 	assert.match(html, /class="markdown-code-language">c\+\+<\/span>/);
 	assert.match(html, /aria-label="复制代码"/);
-	assert.match(html, /<section class="markdown-code-scroll" aria-label="代码" tabindex="0"><pre>/);
+	assert.match(html, /<section class="markdown-code-scroll" aria-label="代码" tabindex="0" dir="ltr"><pre>/);
 	assert.match(html, /const a = &#x27;&lt;script&gt;&#x27;;/);
 	assert.doesNotMatch(html, /Execute|Run code|Download|Artifact|运行代码|下载|<script/);
 	const invalid = render("```<img/src=x>\nnot markup\n```");
-	assert.match(invalid, /class="markdown-code-language">代码<\/span>/);
+	assert.match(invalid, /class="markdown-code-language"><\/span>/);
 	assert.doesNotMatch(invalid, /<img|<script/);
 });
 
@@ -134,7 +134,7 @@ test("streaming code stays readable but copying repaired or unfinished content i
 	const source = "```ts\nconst incomplete = '<script>';";
 	const html = render(source, true);
 	assert.match(html, /markdown-code-header/);
-	assert.match(html, /disabled="" aria-label="代码块完成后可复制"/);
+	assert.doesNotMatch(html, /aria-label="复制代码"|代码块完成后可复制/);
 	assert.match(html, /const incomplete = &#x27;&lt;script&gt;&#x27;;/);
 	assert.doesNotMatch(html, /<script|original-text/);
 	const completed = render(source, false);
@@ -144,7 +144,7 @@ test("streaming code stays readable but copying repaired or unfinished content i
 
 test("copy writes only code content and reports success after the clipboard resolves", async () => {
 	copies.active = true;
-	const writeText = vi.fn(async (_text: string) => {});
+	const writeText = vi.fn(async (_text: string): Promise<void> => {});
 	vi.stubGlobal("navigator", { clipboard: { writeText } });
 	const source = "Surrounding prose.\n\n```ts\nconst value = '<script>';\n\n```";
 	render(source);
@@ -158,17 +158,15 @@ test("copy writes only code content and reports success after the clipboard reso
 	assert.match(render(source), /已复制/);
 });
 
-test("streaming never invokes the clipboard, even if a disabled callback is invoked", () => {
+test("streaming has no copy owner or callback while wrapping remains available", () => {
 	copies.active = true;
-	const writeText = vi.fn(async (_text: string) => {});
-	vi.stubGlobal("navigator", { clipboard: { writeText } });
 	render("```ts\nunfinished", true);
-	const button = copies.buttons[0];
-	assert.ok(button?.onClick);
-	assert.equal(button.disabled, true);
-	Reflect.apply(button.onClick, undefined, [{}]);
-	assert.equal(writeText.mock.calls.length, 0);
-	assert.equal(copies.state, "idle");
+	assert.equal(
+		copies.buttons.some((props) => props["aria-label"] === "复制代码"),
+		false,
+	);
+	assert.equal(copies.controllers.length, 0);
+	assert.ok(copies.buttons.some((props) => props["aria-label"] === "启用自动换行"));
 });
 
 test("a missing clipboard API preserves selectable code and reports manual-copy recovery", async () => {
@@ -176,7 +174,7 @@ test("a missing clipboard API preserves selectable code and reports manual-copy 
 	vi.stubGlobal("navigator", {});
 	const source = "```\nselectable value\n```";
 	render(source);
-	const button = copies.buttons[0];
+	const button = copies.buttons.find((props) => props["aria-label"] === "复制代码");
 	assert.ok(button?.onClick);
 	Reflect.apply(button.onClick, undefined, [{}]);
 	await vi.waitFor(() => assert.equal(copies.state, "failed"));
@@ -187,13 +185,13 @@ test("a missing clipboard API preserves selectable code and reports manual-copy 
 
 test("clipboard rejection is recoverable and disposing the owner ignores a late completion", async () => {
 	copies.active = true;
-	const writeText = vi.fn(async (_text: string) => {
+	const writeText = vi.fn(async (_text: string): Promise<void> => {
 		throw new Error("Denied");
 	});
 	vi.stubGlobal("navigator", { clipboard: { writeText } });
 	const source = "```\nvalue\n```";
 	render(source);
-	const button = copies.buttons[0];
+	const button = copies.buttons.find((props) => props["aria-label"] === "复制代码");
 	assert.ok(button?.onClick);
 	Reflect.apply(button.onClick, undefined, [{}]);
 	await vi.waitFor(() => assert.equal(copies.state, "failed"));
@@ -236,7 +234,7 @@ test("code and typography styles preserve region colors, configured code fonts a
 	);
 	assert.match(css, /font-family: var\(--font-code\)/);
 	assert.match(css, /font-size: var\(--font-code-size\)/);
-	assert.match(css, /font-family: var\(--messages-font, var\(--font-ui\)\)/);
+	assert.match(css, /font-family: var\(--font-ui\)/);
 	assert.match(css, /background: var\(--canvas\)/);
 	assert.match(css, /\.markdown-code-scroll\s*\{[^}]*overflow-x: auto;[^}]*white-space: pre;/);
 	assert.match(css, /\.markdown-table\s*\{[^}]*overflow-x: auto;/);
@@ -278,19 +276,19 @@ test("user code uses a simple escaped pre without assistant code actions", () =>
 	assert.doesNotMatch(html, /markdown-code-header|复制代码|<script/);
 });
 
-test("a closed code block remains copyable while only the final open block is disabled", () => {
+test("a closed code block remains copyable while the final open block omits copy", () => {
 	const html = render("```ts\nclosed();\n```\n\n```ts\nopen();", true);
 	assert.equal((html.match(/aria-label="复制代码"/g) ?? []).length, 1);
-	assert.equal((html.match(/disabled="" aria-label="代码块完成后可复制"/g) ?? []).length, 1);
+	assert.equal((html.match(/代码块完成后可复制/g) ?? []).length, 0);
 	for (const source of ["> ```ts\n> open();", "- ```ts\n  open();", "> - ```ts\n>   open();"]) {
-		assert.match(render(source, true), /disabled="" aria-label="代码块完成后可复制"/);
+		assert.doesNotMatch(render(source, true), /aria-label="复制代码"|代码块完成后可复制/);
 	}
 	for (const source of ["> ```ts\n> closed();\n> ```", "- ```ts\n  closed();\n  ```"]) {
 		assert.doesNotMatch(render(source, true), /disabled=""/);
 	}
 });
 
-test("settled blocks keep long ordinary prose rich while the mutable-tail ceiling remains bounded", () => {
+test("settled blocks keep long ordinary prose rich within the document bound", () => {
 	const source = `${"A **settled** paragraph.\n\n".repeat(140)}A **mutable`;
 	const html = render(source, true);
 	assert.match(html, /markdown-body/);
@@ -315,7 +313,14 @@ test("GFM renders tables, lists, fences and task states without active controls"
 	);
 	for (const tag of ["h1", "ul", "li", "table", "th", "td", "pre", "code", "del"])
 		assert.match(html, new RegExp(`<${tag}[ >]`));
-	assert.doesNotMatch(html, /<input|<script/);
+	assert.doesNotMatch(html, /<script/);
+	// Radix may SSR a disabled form mirror; neither it nor the visible status is editable.
+	for (const [input] of html.matchAll(/<input\b[^>]*>/gu)) {
+		assert.match(input, /disabled=""/);
+		assert.match(input, /aria-hidden="true"/);
+		assert.match(input, /tabindex="-1"/);
+	}
+	assert.match(html, /role="checkbox" aria-checked="true"[^>]*disabled=""/);
 	assert.match(html, /&lt;script&gt;/);
 });
 
@@ -382,13 +387,13 @@ test("paging preserves unpaired UTF-16 units from incomplete or malformed input"
 	assert.equal(originalPage(source, 0) + originalPage(source, 1), source);
 });
 
-test("long streaming display avoids repeated rich parsing without changing canonical content", () => {
-	const source = `**complete**\n${"x".repeat(MAX_STREAMING_RICH_TEXT_UNITS)}`;
+test("ordinary long streaming paragraphs remain rich without changing canonical content", () => {
+	const source = `**complete**\n${"x".repeat(3364)}`;
 	const streaming = render(source, true);
-	assert.doesNotMatch(streaming, /markdown-body/);
-	assert.match(streaming, /\*\*complete\*\*/);
-	assert.match(streaming, /分页原文/);
-	assert.throws(() => markdownDisplaySource(source, true), /ceiling/);
+	assert.match(streaming, /markdown-body/);
+	assert.match(streaming, /<strong>/);
+	assert.doesNotMatch(streaming, /分页原文/);
+	assert.equal(markdownDisplaySource(source, true), source);
 	assert.equal(markdownDisplaySource(source, false), source);
 	assert.match(render(source, false), /<strong>complete<\/strong>/);
 });
@@ -416,32 +421,41 @@ test("empty intermediate history remains navigable and is never presented as a n
 	assert.doesNotMatch(html, /这次，你想完成什么/);
 });
 
-test("truncated committed and live previews are labeled plain text, never completed Markdown", () => {
+test("committed and live assistant previews retain Markdown while full content is pending", () => {
 	const html = renderToStaticMarkup(
-		<PreferencesProvider>
-			<MessageContent
-				scope={{ workspaceId: "w", conversationId: "c" }}
-				offset={undefined}
-				onOffsetChange={() => {}}
-				message={{ id: "m", role: "assistant", text: "**preview**", textLength: 4000, truncated: true }}
-			/>
-			<StreamingMessage
-				snapshot={{
-					workspaceId: "w",
-					conversationId: "c",
-					messages: [],
-					partial: "**stream**",
-					partialLength: 50000,
-					partialTruncated: true,
-					running: true,
-					historyCursor: null,
-				}}
-			/>
-		</PreferencesProvider>,
+		<AppClientProvider
+			client={{
+				call: async () => {
+					throw new Error("SSR must not read");
+				},
+				observe: async () => {
+					throw new Error("SSR must not observe");
+				},
+			}}
+		>
+			<PreferencesProvider>
+				<MessageContent
+					scope={{ workspaceId: "w", conversationId: "c" }}
+					offset={undefined}
+					onOffsetChange={() => {}}
+					message={{ id: "m", role: "assistant", text: "**preview**", textLength: 4000, truncated: true }}
+				/>
+				<StreamingMessage
+					snapshot={{
+						workspaceId: "w",
+						conversationId: "c",
+						messages: [],
+						partial: "**stream**",
+						partialLength: 50000,
+						partialTruncated: true,
+						running: true,
+						historyCursor: null,
+					}}
+				/>
+			</PreferencesProvider>
+		</AppClientProvider>,
 	);
-	assert.match(html, /截断预览/);
-	assert.match(html, /分页读取完整原文/);
-	assert.match(html, /11 \/ 4000/);
-	assert.match(html, /10 \/ 50000/);
-	assert.doesNotMatch(html, /<strong>preview|<strong>stream/);
+	assert.doesNotMatch(html, /截断预览|分页读取完整原文|11 \/ 4000|10 \/ 50000/);
+	assert.match(html, /<strong>preview<\/strong>/);
+	assert.match(html, /<strong><span[^>]*>stream<\/span><\/strong>/);
 });

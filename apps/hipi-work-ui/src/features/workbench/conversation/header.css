@@ -1,0 +1,76 @@
+@layer components {
+	.conversation-header-identity {
+		--conversation-header-title-max: 20rem;
+		--conversation-header-title-size: var(--font-ui-size);
+		--conversation-header-title-height: calc(var(--spacing) * 6);
+		--conversation-header-title-radius: calc(var(--spacing) * 1.5);
+		--conversation-header-title-padding: calc(var(--spacing) * 1.5);
+		display: flex;
+		align-items: center;
+		gap: var(--spacing);
+		min-width: 0;
+		color: var(--text);
+	}
+	.conversation-header-project {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		width: var(--ui-control-toolbar-size);
+		height: var(--ui-control-toolbar-size);
+		-webkit-app-region: no-drag;
+	}
+	.conversation-header-title-owner {
+		position: relative;
+		min-width: 0;
+		max-width: var(--conversation-header-title-max);
+	}
+	.conversation-header-title {
+		display: block;
+		max-width: 100%;
+		min-width: 2ch;
+		height: var(--conversation-header-title-height);
+		margin-inline-start: calc(var(--spacing) * -0.5);
+		padding: 0 var(--conversation-header-title-padding);
+		border: 0;
+		border-radius: var(--conversation-header-title-radius);
+		background: transparent;
+		color: var(--text);
+		font-family: var(--font-ui);
+		font-size: var(--conversation-header-title-size);
+		font-weight: 500;
+		line-height: var(--conversation-header-title-height);
+		text-align: start;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		-webkit-app-region: no-drag;
+	}
+	.conversation-header-title:not(:disabled):hover,
+	.conversation-header-title:focus-visible {
+		background: var(--brand-soft);
+	}
+	.conversation-header-title:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 0;
+	}
+	.conversation-header-title-input {
+		border: 1px solid var(--focus);
+		background: var(--brand-soft);
+		outline: none;
+	}
+	.conversation-header-rename-feedback {
+		position: absolute;
+		top: 100%;
+		inset-inline-start: 0;
+		z-index: 4;
+		width: max-content;
+		max-width: min(var(--conversation-header-title-max), calc(100vw - var(--spacing) * 8));
+		padding: calc(var(--spacing) * 2);
+		border: 1px solid var(--line);
+		border-radius: var(--conversation-header-title-radius);
+		background: var(--raised);
+		color: var(--muted);
+		font-size: var(--font-ui-size);
+	}
+}

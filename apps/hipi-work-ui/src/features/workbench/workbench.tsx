@@ -9,7 +9,7 @@ import {
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Settings } from "lucide-react";
+import { PanelRight, PanelRightClose, Settings } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
@@ -40,6 +40,7 @@ import { PreparedTaskEntry } from "./composer/prepared-entry.tsx";
 import { HomeProjectPicker } from "./composer/project-picker.tsx";
 import { useHomeDraft } from "./composer/use-home-draft.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
+import { ConversationHeaderIdentity } from "./conversation/header.tsx";
 import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
 import { ConversationPane } from "./conversation/pane.tsx";
 import { artifactNavigation } from "./files/artifact-navigation.ts";
@@ -1190,42 +1191,41 @@ export function Workbench({
 									<SidebarIcon name="panel" />
 								</Button>
 							</ActionTooltip>
-							<div className="toolbar-context">
-								{selected ? (
-									<span className="toolbar-conversation" title={selected.title}>
-										{selected.title}
-									</span>
-								) : (
+							{selected ? (
+								<ConversationHeaderIdentity
+									conversation={selected}
+									projectName={currentProject?.name}
+									session={catalog}
+								/>
+							) : (
+								<div className="toolbar-context">
 									<span className="toolbar-project-title">{currentProject?.name ?? "Hipi Work"}</span>
-								)}
-								{currentProject && selected && (
-									<button
-										type="button"
-										className="toolbar-project-link"
-										aria-label={`${wl["workbench.projectHome"]}: ${currentProject.name}`}
-										onClick={() => selectProject(currentProject.projectId)}
-									>
-										<Icon name="folder" size={12} />
-										<span>{currentProject.name}</span>
-									</button>
-								)}
-							</div>
+								</div>
+							)}
 						</div>
 						<div className="toolbar-actions">
-							<Button
-								ref={panelTrigger}
-								className="file-panel-toggle"
-								data-active={panelState.open}
-								aria-label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
-								variant="ghost"
-								size="sm"
-								aria-expanded={panelState.open}
-								aria-controls={panelState.open ? panelId : undefined}
-								onClick={() => panel.setOpen(!panelState.open)}
+							<ActionTooltip
+								label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
+								side="bottom"
 							>
-								<Icon name="folder" size={15} />
-								{filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
-							</Button>
+								<Button
+									ref={panelTrigger}
+									className="file-panel-toggle size-[var(--ui-control-toolbar-size)]"
+									data-active={panelState.open}
+									aria-label={filePanelLabels(locale)[panelState.open ? "filePanel.hide" : "filePanel.show"]}
+									variant="ghost"
+									size="icon-sm"
+									aria-expanded={panelState.open}
+									aria-controls={panelState.open ? panelId : undefined}
+									onClick={() => panel.setOpen(!panelState.open)}
+								>
+									{panelState.open ? (
+										<PanelRightClose size={16} aria-hidden="true" />
+									) : (
+										<PanelRight size={16} aria-hidden="true" />
+									)}
+								</Button>
+							</ActionTooltip>
 							{selected && (
 								<ConversationActions
 									conversation={selected}

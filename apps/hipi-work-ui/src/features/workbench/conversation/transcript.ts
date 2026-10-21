@@ -2,7 +2,6 @@ import type { Message, Snapshot } from "@hipi/work-runtime/contracts";
 import type { ConversationFailure } from "./failure.ts";
 
 export const STREAM_ROW_KEY = "partial-output";
-export const TRANSCRIPT_GAP = 12;
 // These are individual semantic message blocks, not reference turn rows. Keep
 // five blocks of overscan until realistic mixed-turn browser evidence says less.
 export const TRANSCRIPT_OVERSCAN = 5;

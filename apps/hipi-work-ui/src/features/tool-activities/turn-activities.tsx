@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { selectionIntersects } from "../workbench/conversation/message-projection.ts";
+import { MessageProjection, selectionIntersects } from "../workbench/conversation/message-projection.ts";
 import type { ToolActivityArtifact } from "./activity-card.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { InlineActivityCard } from "./inline-activity-card.tsx";
@@ -257,11 +257,36 @@ function ActivityDetailsView({
 }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
+
+	const root = useRef<HTMLDivElement>(null);
+	const [display, setDisplay] = useState({ session, outputs: state.outputs });
+	const projection = useMemo(
+		() =>
+			new MessageProjection<ActivityState["outputs"]>(
+				undefined,
+				(outputs) => setDisplay({ session, outputs }),
+				() =>
+					selectionIntersects(root.current?.closest(".conversation-panel") ?? root.current, document.getSelection()),
+			),
+		[session],
+	);
+	useEffect(() => {
+		projection.update(state.outputs, false);
+	}, [projection, state.outputs]);
+	useEffect(() => {
+		const flush = () => projection.flush();
+		document.addEventListener("selectionchange", flush);
+		return () => {
+			document.removeEventListener("selectionchange", flush);
+			projection.dispose();
+		};
+	}, [projection]);
+	const presented = { ...state, outputs: display.session === session ? display.outputs : undefined };
 	const disabled = state.busy || !connected;
 	return (
-		<div className="grid gap-2">
+		<div className="grid gap-2" ref={root}>
 			{!connected && <output>{l["activity.offline"]}</output>}
-			{state.busy && <output>{l["activity.loading"]}</output>}
+			{state.busy && !state.page && <output>{l["activity.loading"]}</output>}
 			{items
 				.toSorted((a, b) => (a.anchor?.contentIndex ?? 0) - (b.anchor?.contentIndex ?? 0))
 				.map((item) => (
@@ -269,7 +294,7 @@ function ActivityDetailsView({
 						key={item.activityId}
 						activity={item}
 						locale={locale}
-						state={state}
+						state={presented}
 						session={session}
 						disabled={disabled}
 						onOpenArtifact={onOpenArtifact}

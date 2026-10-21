@@ -46,12 +46,7 @@ vi.mock("../../../src/features/workbench/conversation/use-conversation.ts", () =
 }));
 vi.mock("../../../src/features/workbench/conversation/history.tsx", () => ({ ConversationHistory: () => null }));
 vi.mock("../../../src/features/workbench/composer/input.tsx", () => ({
-	ConversationComposer: ({ controls, activity }: { controls: ReactNode; activity: ReactNode }) => (
-		<>
-			{activity}
-			{controls}
-		</>
-	),
+	ConversationComposer: ({ controls }: { controls: ReactNode }) => <>{controls}</>,
 }));
 vi.mock("../../../src/features/workbench/conversation/receipt.tsx", () => ({ ConversationReceipt: () => null }));
 vi.mock("../../../src/features/conversation-capabilities/conversation-capabilities.tsx", () => ({

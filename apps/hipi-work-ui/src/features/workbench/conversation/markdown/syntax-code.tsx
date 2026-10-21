@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
+import { type ClipboardEvent, type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useThemeSettings } from "../../../../app/theme/index.ts";
 import { selectionIntersects } from "../message-projection.ts";
 import { type CodeHighlight, CodeHighlightProjection } from "./syntax-highlight.ts";
@@ -42,7 +42,7 @@ export function SyntaxCode({ text, language }: { text: string; language?: string
 		owner.current?.update(text, language ?? "", config.codeTheme);
 	}, [text, language, config.codeTheme]);
 	return (
-		<code ref={root}>
+		<code ref={root} onCopy={copyCodeSelection}>
 			<SyntaxCodeContent text={text} highlight={highlight?.language === (language ?? "") ? highlight : undefined} />
 		</code>
 	);
@@ -75,4 +75,22 @@ export function SyntaxCodeContent({ text, highlight }: { text: string; highlight
 	}
 	children.push(text.slice(offset));
 	return <>{children}</>;
+}
+
+/** Only code-contained selections override native copy; surrounding prose/user-message copy is untouched. */
+export function copyCodeSelection(event: ClipboardEvent<HTMLElement>) {
+	if (event.defaultPrevented || !event.clipboardData) return;
+	const selection = event.currentTarget.ownerDocument.getSelection();
+	if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
+	const range = selection.getRangeAt(0);
+	if (!event.currentTarget.contains(range.startContainer) || !event.currentTarget.contains(range.endContainer)) return;
+	const text = selection.toString();
+	if (!text) return;
+	try {
+		event.clipboardData.setData("text/plain", text);
+		event.preventDefault();
+		event.stopPropagation();
+	} catch {
+		// A platform without writable clipboard event data keeps its normal copy behavior.
+	}
 }

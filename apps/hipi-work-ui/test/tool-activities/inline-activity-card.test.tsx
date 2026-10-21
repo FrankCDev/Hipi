@@ -87,12 +87,11 @@ function button(label: string, target: ParentNode = host) {
 	assert.ok(result, label);
 	return result;
 }
-test("inline tool output is explicitly read, escaped and bounded through the same session", async () => {
+test("expanded inline tool output is directly read, escaped and bounded through the same session", async () => {
 	await act(async () => root.render(<View />));
-	assert.equal(calls.length, 1);
+	assert.equal(calls.length, 2);
 	assert.doesNotMatch(host.textContent ?? "", /operation-private|receipt-private|Source: task record/);
 	assert.match(host.textContent ?? "", /original write is not confirmed|content may differ/);
-	await act(async () => button("Read retained output").click());
 	assert.equal(calls[1]?.method, "getToolActivityText");
 	assert.match(host.querySelector("pre")?.textContent ?? "", /<img src='unsafe'>/);
 	assert.equal(host.querySelector("img"), null);
@@ -102,17 +101,16 @@ test("inline tool output is explicitly read, escaped and bounded through the sam
 	await act(async () => button("Next output chunk").click());
 	assert.equal(host.querySelector("pre")?.textContent, "second chunk");
 	assert.equal((calls[2]?.params as Params<"getToolActivityText">).cursor, "next");
-	assert.equal(session.snapshot().textCursor, "next");
+	assert.equal(session.snapshot().outputs?.get(item.activityId)?.cursor, "next");
 	await act(async () => button("First output chunk").click());
-	assert.equal(session.snapshot().textCursor, undefined);
+	assert.equal(session.snapshot().outputs?.get(item.activityId)?.cursor, undefined);
 	assert.doesNotMatch(host.textContent ?? "", /First output chunk/);
 	await act(async () => button("src/example.ts").click());
 	assert.deepEqual(opened, ["src/example.ts"]);
 });
 test("technical detail dialog keeps identifiers off the primary body and closing does not clear retained text", async () => {
 	await act(async () => root.render(<View />));
-	await act(async () => button("Read retained output").click());
-	const text = session.snapshot().text;
+	const text = session.snapshot().outputs?.get(item.activityId)?.page;
 	const count = calls.length;
 	await act(async () => button("Tool call details").click());
 	const dialog = document.querySelector('[role="dialog"]');
@@ -122,7 +120,7 @@ test("technical detail dialog keeps identifiers off the primary body and closing
 	assert.equal(calls.length, count, "details reuse existing evidence without a second reader");
 	await act(async () => button("Close tool call details", document).click());
 	assert.equal(document.querySelector('[role="dialog"]'), null);
-	assert.equal(session.snapshot().text, text);
+	assert.equal(session.snapshot().outputs?.get(item.activityId)?.page, text);
 	assert.ok(host.querySelector("pre"));
 });
 test("unavailable retained output has no pretend read control and failed execution is not a fabricated tool result", async () => {

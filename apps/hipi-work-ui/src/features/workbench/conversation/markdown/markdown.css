@@ -91,6 +91,10 @@
 	overflow-wrap: anywhere;
 }
 .message-text.markdown-body .markdown-code-block {
+	--code-block-inset: calc(var(--spacing) * 4);
+	--code-block-control: calc(var(--spacing) * 9);
+	--code-block-header-height: calc(var(--spacing) * 12);
+	--code-block-gap: calc(var(--spacing) * 2);
 	min-width: 0;
 	max-width: 100%;
 	border: 1px solid var(--line);
@@ -102,46 +106,51 @@
 }
 .markdown-code-block .markdown-code-header {
 	display: flex;
-	flex-wrap: wrap;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
+	gap: var(--code-block-gap);
 	min-width: 0;
-	min-height: 48px;
-	padding: 6px 6px 6px 16px;
-	color: var(--muted);
-	font-family: var(--messages-font, var(--font-ui));
-	font-size: 13px;
+	min-height: var(--code-block-header-height);
+	padding: calc(var(--spacing) * 1.5);
+	padding-inline-start: var(--code-block-inset);
+	color: var(--text);
+	font-family: var(--font-ui);
+	font-size: calc(var(--font-ui-size) - 1px);
 	font-weight: 500;
+	user-select: none;
+}
+.markdown-code-glyph {
+	flex-shrink: 0;
 }
 .markdown-code-language {
 	min-width: 0;
-	overflow-wrap: anywhere;
+	flex: 1;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
 }
-.markdown-code-actions {
+.markdown-code-controls {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	justify-content: flex-end;
-	gap: 0.35em;
+	gap: calc(var(--spacing) / 4);
 	min-width: 0;
 	max-width: 100%;
 	margin-inline-start: auto;
 }
-.markdown-code-header .markdown-code-copy {
-	height: auto;
-	min-height: 2em;
-	padding: 0.3em 0.5em;
+.markdown-code-actions {
+	position: relative;
+}
+.markdown-code-header :is(.markdown-code-copy, .markdown-code-wrap) {
+	width: var(--code-block-control);
+	height: var(--code-block-control);
+	padding: 0;
+	border-radius: 50%;
 	font: inherit;
-	color: var(--muted);
-}
-.markdown-code-header .markdown-code-copy:hover:not(:disabled) {
 	color: var(--text);
-	background: var(--brand-soft);
 }
-.markdown-code-header .markdown-code-copy:disabled {
-	color: var(--muted);
-	background: transparent;
+.markdown-code-header :is(.markdown-code-copy, .markdown-code-wrap):hover:not(:disabled) {
+	background: var(--brand-soft);
 }
 .markdown-code-header .markdown-code-error {
 	flex-basis: 100%;
@@ -152,7 +161,7 @@
 .message-text.markdown-body .markdown-code-scroll {
 	max-width: 100%;
 	margin: 0;
-	padding: 0 16px 12px;
+	padding: 0 var(--code-block-inset) calc(var(--spacing) * 3);
 	border: 0;
 	border-radius: 0 0 20px 20px;
 	background: transparent;
@@ -171,6 +180,10 @@
 	background: transparent;
 	overflow: visible;
 }
+.message-text.markdown-body .markdown-code-block[data-wrapped="true"] .markdown-code-scroll pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
 .message-text.markdown-body .markdown-code-scroll code {
 	padding: 0;
 	border-radius: 0;
@@ -180,11 +193,8 @@
 	line-height: max(1.5em, 20px);
 }
 @media (min-width: 768px) {
-	.markdown-code-block .markdown-code-header {
-		padding-inline-start: 20px;
-	}
-	.message-text.markdown-body .markdown-code-scroll {
-		padding-inline: 20px;
+	.message-text.markdown-body .markdown-code-block {
+		--code-block-inset: calc(var(--spacing) * 5);
 	}
 }
 .message-text.markdown-body .markdown-table {

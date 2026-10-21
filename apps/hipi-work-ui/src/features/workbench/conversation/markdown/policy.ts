@@ -1,15 +1,14 @@
 import remend from "remend";
 
-// Provisional complexity ceilings; benchmark before treating these as product budgets.
+// Provisional complexity ceiling; benchmark before treating it as a product budget.
+// Streaming uses this same document bound. A small mutable-tail limit must not
+// switch an ordinary paragraph, list or open fence back to raw Markdown.
+// The existing cadence and settled-block memoization bound update work.
 export const MAX_RICH_TEXT_UNITS = 32 * 1024;
-// Limit the mutable tail, rather than reparsing every already-settled block.
-// This provisional ceiling is a mitigation, not a browser frame-time guarantee.
-export const MAX_STREAMING_RICH_TEXT_UNITS = 2 * 1024;
 export const ORIGINAL_PAGE_UNITS = 16 * 1024;
 
 export function markdownDisplaySource(source: string, streaming: boolean): string {
-	if (source.length > (streaming ? MAX_STREAMING_RICH_TEXT_UNITS : MAX_RICH_TEXT_UNITS))
-		throw new Error("Rich display ceiling exceeded");
+	if (source.length > MAX_RICH_TEXT_UNITS) throw new Error("Rich display ceiling exceeded");
 	return streaming ? remend(source, { katex: false, inlineKatex: false, linkMode: "text-only" }) : source;
 }
 

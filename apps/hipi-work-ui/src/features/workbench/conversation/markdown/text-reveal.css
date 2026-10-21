@@ -1,5 +1,46 @@
+.markdown-task-marker {
+	position: relative;
+	display: inline-flex;
+	margin-inline-end: var(--ui-markdown-task-gap);
+	vertical-align: var(--ui-markdown-task-baseline);
+	cursor: default;
+}
+.message-text.markdown-body li.task-list-item {
+	padding-inline-start: 0;
+	list-style-type: none;
+}
 .markdown-word-reveal {
 	animation: markdown-word-reveal var(--ui-streaming-text-duration) var(--ui-streaming-text-easing) both;
+}
+.markdown-structure-reveal {
+	animation: markdown-structure-reveal var(--ui-streaming-structure-duration) var(--ui-streaming-text-easing) both;
+}
+.markdown-task-reveal {
+	animation: markdown-task-reveal var(--ui-streaming-text-duration) var(--ui-streaming-text-easing) both;
+}
+.markdown-marker-reveal::marker {
+	animation: markdown-marker-reveal var(--ui-streaming-text-duration) var(--ui-streaming-text-easing) forwards;
+}
+@keyframes markdown-marker-reveal {
+	from {
+		color: transparent;
+	}
+}
+@keyframes markdown-structure-reveal {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes markdown-task-reveal {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
 }
 @keyframes markdown-word-reveal {
 	from {
@@ -9,11 +50,13 @@
 		opacity: 1;
 	}
 }
-:root[data-reduced-motion="on"] .markdown-word-reveal {
+:root[data-reduced-motion="on"] :is(.markdown-word-reveal, .markdown-structure-reveal, .markdown-task-reveal),
+:root[data-reduced-motion="on"] .markdown-marker-reveal::marker {
 	animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
-	:root:not([data-reduced-motion="off"]) .markdown-word-reveal {
+	:root:not([data-reduced-motion="off"]) :is(.markdown-word-reveal, .markdown-structure-reveal, .markdown-task-reveal),
+	:root:not([data-reduced-motion="off"]) .markdown-marker-reveal::marker {
 		animation: none;
 	}
 }

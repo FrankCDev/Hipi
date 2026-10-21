@@ -1,5 +1,11 @@
-import { LIMITS, type Message, type Scope, type SearchHistoryWindow } from "@hipi/work-runtime/contracts";
-import { useCallback, useEffect } from "react";
+import {
+	LIMITS,
+	type Message,
+	type MessageTextChunk,
+	type Scope,
+	type SearchHistoryWindow,
+} from "@hipi/work-runtime/contracts";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAppClient } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -10,6 +16,8 @@ import { readMessagePage } from "./history-reads.ts";
 import { ClipboardCopy } from "./markdown/clipboard-copy.tsx";
 import { MessageMarkdown } from "./markdown/markdown.tsx";
 import { UserMessageContent } from "./markdown/user-message-content.tsx";
+import { messageContentLabels } from "./message-content-labels.ts";
+import { MessageProjection, selectionIntersects } from "./message-projection.ts";
 
 export function MessageContent({
 	message,
@@ -19,6 +27,7 @@ export function MessageContent({
 	streaming,
 	streamId,
 	searchAnchor,
+	onHydratedText,
 }: {
 	message: Message;
 	scope: Scope;
@@ -28,9 +37,23 @@ export function MessageContent({
 	streaming?: boolean;
 	streamId?: string;
 	searchAnchor?: SearchHistoryWindow;
+	/** Complete, displayed first-page text only; never a truncated preview or later page. */
+	onHydratedText?: (text: string | undefined) => void;
 }) {
 	const { t, locale } = usePreferences();
 	const opened = offset !== undefined;
+	const prior = useRef<{ identity: string; text: string; workspaceId: string; conversationId: string } | undefined>(
+		undefined,
+	);
+	useLayoutEffect(() => {
+		if (streaming !== undefined && streamId && message.role === "assistant")
+			prior.current = {
+				identity: streamId,
+				text: message.text,
+				workspaceId: scope.workspaceId,
+				conversationId: scope.conversationId,
+			};
+	}, [streaming, streamId, message.role, message.text, scope.workspaceId, scope.conversationId]);
 	if (searchAnchor?.target.messageId === message.id) {
 		const { target, matchStart, matchEnd } = searchAnchor;
 		return (
@@ -45,6 +68,31 @@ export function MessageContent({
 				<ClipboardCopy text={target.text} label={t("history.copyPage")} variant="outline" />
 			</div>
 		);
+	}
+	if (message.role === "assistant") {
+		if (message.truncated && streaming === undefined)
+			return (
+				<RetainedAssistantContent
+					key={JSON.stringify([scope.workspaceId, scope.conversationId, message.id, message.textLength])}
+					message={message}
+					scope={scope}
+					offset={offset}
+					onOffsetChange={onOffsetChange}
+					onHydratedText={onHydratedText}
+					streamId={streamId}
+					initialSource={
+						prior.current &&
+						prior.current.identity === streamId &&
+						prior.current.workspaceId === scope.workspaceId &&
+						prior.current.conversationId === scope.conversationId &&
+						prior.current.text.startsWith(message.text) &&
+						prior.current.text.length <= message.textLength
+							? prior.current.text
+							: message.text
+					}
+				/>
+			);
+		return <MessageMarkdown source={message.text} streaming={streaming} streamId={streamId} />;
 	}
 	return (
 		<>
@@ -70,12 +118,115 @@ export function MessageContent({
 						/>
 					)}
 				</>
-			) : message.role === "assistant" ? (
-				<MessageMarkdown source={message.text} streaming={streaming} streamId={streamId} />
 			) : (
 				<UserMessageContent key={message.id} source={message.text} />
 			)}
 		</>
+	);
+}
+
+/** One mounted committed assistant reads one bounded first page, never the whole history. */
+function RetainedAssistantContent({
+	message,
+	scope,
+	offset,
+	onOffsetChange,
+	streamId,
+	initialSource,
+	onHydratedText,
+}: {
+	message: Message;
+	scope: Scope;
+	offset?: number;
+	onOffsetChange: (offset: number | undefined) => void;
+	streamId?: string;
+	initialSource: string;
+	onHydratedText?: (text: string | undefined) => void;
+}) {
+	const client = useAppClient();
+	const { t, locale } = usePreferences();
+	const labels = messageContentLabels(locale);
+	const root = useRef<HTMLDivElement>(null);
+	const projection = useRef<MessageProjection<MessageTextChunk | undefined> | null>(null);
+	const [page, setPage] = useState<MessageTextChunk>();
+	const read = useCallback(
+		(start: number, signal: AbortSignal) =>
+			readMessagePage(
+				client,
+				{ workspaceId: scope.workspaceId, conversationId: scope.conversationId },
+				message.id,
+				message.textLength,
+				start,
+				signal,
+			),
+		[client, scope.workspaceId, scope.conversationId, message.id, message.textLength],
+	);
+	const reader = useBoundedRead(read, 0);
+	useEffect(() => {
+		const owner = new MessageProjection<MessageTextChunk | undefined>(undefined, setPage, () =>
+			selectionIntersects(root.current, document.getSelection()),
+		);
+		projection.current = owner;
+		const flush = () => owner.flush();
+		document.addEventListener("selectionchange", flush);
+		return () => {
+			owner.dispose();
+			projection.current = null;
+			document.removeEventListener("selectionchange", flush);
+		};
+	}, []);
+	useEffect(() => {
+		projection.current?.update(reader.value, false);
+	}, [reader.value]);
+	useEffect(() => {
+		onHydratedText?.(
+			page?.offset === 0 && page.nextOffset === null && page.text.length === message.textLength ? page.text : undefined,
+		);
+		return () => onHydratedText?.(undefined);
+	}, [page, message.textLength, onHydratedText]);
+	return (
+		<div ref={root} data-assistant-message-body="">
+			<MessageMarkdown source={page?.text ?? initialSource} streamId={streamId} />
+			{reader.failed && (
+				<div className="original-pages">
+					<span role="alert">{labels.unavailable}</span>
+					<Button size="sm" variant="ghost" onClick={reader.retry}>
+						{t("history.retry")}
+					</Button>
+				</div>
+			)}
+			{reader.loading && (
+				<Button size="sm" variant="ghost" onClick={reader.cancel}>
+					{labels.cancel}
+				</Button>
+			)}
+			{!page && !reader.loading && !reader.failed && (
+				<Button size="sm" variant="ghost" onClick={reader.retry}>
+					{labels.continue}
+				</Button>
+			)}
+			{page?.nextOffset !== null && page?.nextOffset !== undefined && (
+				<div className="original-pages">
+					<span>{labels.long}</span>
+					<Button
+						size="sm"
+						variant="ghost"
+						onClick={() => onOffsetChange(offset === undefined ? (page.nextOffset ?? 0) : undefined)}
+					>
+						{offset === undefined ? labels.continue : t("common.close")}
+					</Button>
+				</div>
+			)}
+			{offset !== undefined && (
+				<MessageTextReader
+					scope={scope}
+					messageId={message.id}
+					textLength={message.textLength}
+					offset={offset}
+					onOffsetChange={onOffsetChange}
+				/>
+			)}
+		</div>
 	);
 }
 

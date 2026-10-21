@@ -1,4 +1,9 @@
 import type { FileOperationStatus, Scope, ToolApprovalStatus } from "../contracts.ts";
+import { FILE_PRESENTATION_BYTES, type FilePresentation } from "./file-presentation.ts";
+
+/** Serialized JSON only, not JS heap: framing85 + two2048-unit IDs/cursors +8KiB text,
+ * at worst6 escaped bytes per unit, plus the independently measured presentation envelope. */
+export const TOOL_ACTIVITY_TEXT_PAGE_BYTES = 85 + 2 * 2048 * 6 + 8192 * 6 + FILE_PRESENTATION_BYTES;
 
 export const ACTIVITY_LIMITS = {
 	page: 16,
@@ -60,6 +65,8 @@ export type ToolActivityPage = {
 	membershipFence: string;
 };
 export type ToolActivityTextPage = {
+	/** One retained invocation result, not the current filesystem. Only on the first page. */
+	presentation?: FilePresentation;
 	activityId: string;
 	text: string;
 	nextCursor: string | null;

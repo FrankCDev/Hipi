@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ChevronRight, Wrench } from "lucide-react";
+import { ChevronRight, Puzzle } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { usePreferences } from "../../app/preferences.tsx";
 import { useReducedMotionPreference } from "../../app/theme/use-reduced-motion.ts";
@@ -47,7 +47,7 @@ export function ActivityDisclosure({
 				onClick={onToggle}
 			>
 				<span className="activity-disclosure-heading">
-					<Wrench aria-hidden="true" />
+					<Puzzle aria-hidden="true" />
 					<span className="activity-disclosure-summary">
 						<CadencedText active={active}>{title}</CadencedText>
 					</span>

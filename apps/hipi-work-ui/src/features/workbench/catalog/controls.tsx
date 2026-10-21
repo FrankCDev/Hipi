@@ -30,6 +30,7 @@ import { SidebarIcon } from "../sidebar/icon.tsx";
 import { PinConversationButton, PinConversationItem } from "../sidebar/pin-conversation.tsx";
 import type { PresentationSession } from "../sidebar/presentation-session.ts";
 import type { PreviewActions } from "../sidebar/preview-row.tsx";
+import { executeConversationCommand } from "./conversation-command.ts";
 import { catalogLabels } from "./labels.ts";
 import type { CatalogSession } from "./session.ts";
 import "./rename.css";
@@ -174,37 +175,8 @@ export function ConversationActions({
 	};
 	const execute = (command: LegacyCatalogCommand) => {
 		guard(() => {
-			const previous = session.getSnapshot();
-			if (previous.busy || previous.pending || previous.initialSend || previous.incompatible) return;
-			void session.execute(command).then(() => {
-				const resultState = session.getSnapshot();
-				if (
-					resultState === previous ||
-					resultState.pending ||
-					resultState.failed ||
-					resultState.resultMethod !== command.method
-				)
-					return;
-				const result = resultState.result;
-				if (
-					result &&
-					"conversationId" in result &&
-					result.workspaceId === command.params.workspaceId &&
-					"conversationId" in command.params &&
-					result.conversationId === command.params.conversationId
-				) {
-					cache.setQueryData(["conversation", result.workspaceId, result.conversationId], result);
-					void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
-					if (presentation) {
-						void cache.invalidateQueries({ queryKey: ["pinned-conversations"] });
-						void cache.invalidateQueries({
-							queryKey: ["conversation-presentation", result.workspaceId, result.conversationId],
-						});
-					}
-					if (command.method === "renameConversation") {
-						closeRename();
-					}
-				}
+			void executeConversationCommand(session, cache, command, !!presentation).then((result) => {
+				if (result && command.method === "renameConversation") closeRename();
 			});
 		});
 	};

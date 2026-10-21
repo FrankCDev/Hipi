@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext } from "react";
+import { PresentationPreferencesProvider } from "./presentation/provider.tsx";
 import { ThemeProvider, useThemeSettings } from "./theme/index.ts";
 
 const zh = {
@@ -413,7 +414,9 @@ const Context = createContext<Preferences | null>(null);
 export function PreferencesProvider({ children }: { children: ReactNode }) {
 	return (
 		<ThemeProvider>
-			<PreferenceStrings>{children}</PreferenceStrings>
+			<PresentationPreferencesProvider>
+				<PreferenceStrings>{children}</PreferenceStrings>
+			</PresentationPreferencesProvider>
 		</ThemeProvider>
 	);
 }

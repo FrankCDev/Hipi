@@ -1,5 +1,5 @@
 import type { ToolActivity } from "@hipi/work-runtime/contracts";
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "../../components/ui/button.tsx";
 import type { ActivitySession, ActivityState } from "./activity-session.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
@@ -13,8 +13,10 @@ export function ActivityCard({
 	session,
 	disabled,
 	onOpenArtifact,
+	sharedOutput = false,
 }: {
 	activity: ToolActivity;
+	sharedOutput?: boolean;
 	locale: string;
 	state: ActivityState;
 	session: ActivitySession;
@@ -23,8 +25,19 @@ export function ActivityCard({
 }) {
 	const l = activityLabels(locale);
 	const outputId = useId();
-	const expanded = state.expanded === activity.activityId;
-	const text = expanded && state.text?.activityId === activity.activityId ? state.text : undefined;
+	const slot = sharedOutput ? state.outputs?.get(activity.activityId) : undefined;
+	const expanded = sharedOutput ? activity.textAvailable : state.expanded === activity.activityId;
+	const text = sharedOutput
+		? slot?.page
+		: expanded && state.text?.activityId === activity.activityId
+			? state.text
+			: undefined;
+	const [lease] = useState(() => Symbol("detail-output"));
+	useEffect(() => {
+		if (sharedOutput) return session.outputs.lease(lease, activity.textAvailable ? [activity.activityId] : []);
+	}, [session, lease, sharedOutput, activity.activityId, activity.textAvailable]);
+	const read = (cursor?: string) =>
+		sharedOutput ? session.outputs.read(activity.activityId, cursor) : void session.text(activity.activityId, cursor);
 	return (
 		<article className="rounded-lg border border-border bg-background p-3 grid gap-2 text-sm break-words">
 			<h3 className="font-medium">{toolLabel(activity.toolName, locale)}</h3>
@@ -85,7 +98,7 @@ export function ActivityCard({
 				)}
 			</details>
 			{activity.outputTruncated && <p className="text-muted-foreground">{l["activity.truncated"]}</p>}
-			{activity.textAvailable && (
+			{activity.textAvailable && !sharedOutput && (
 				<Button
 					variant="outline"
 					size="sm"
@@ -108,20 +121,15 @@ export function ActivityCard({
 							</pre>
 						)}
 						<div className="flex flex-wrap gap-2">
-							<Button
-								size="sm"
-								variant="ghost"
-								disabled={disabled}
-								onClick={() => void session.text(activity.activityId)}
-							>
+							<Button size="sm" variant="ghost" disabled={disabled || !!slot?.busy} onClick={() => read()}>
 								{l["activity.text.first"]}
 							</Button>
 							<Button
 								size="sm"
 								variant="ghost"
-								disabled={disabled || !text?.nextCursor}
+								disabled={disabled || !!slot?.busy || !text?.nextCursor}
 								onClick={() => {
-									if (text?.nextCursor) void session.text(activity.activityId, text.nextCursor);
+									if (text?.nextCursor) read(text.nextCursor);
 								}}
 							>
 								{l["activity.text.next"]}
