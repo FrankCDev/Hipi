@@ -233,6 +233,35 @@ if (process.send && process.argv.includes("--protocol-admission-fixture")) {
 		},
 	});
 }
+if (process.send && process.argv.includes("--snapshot-burst-fixture")) {
+	const runtime = fixtureRuntime();
+	const stop = serveNodeIpc({
+		execute: (request) => runtime.execute(request),
+		async observe(scope, listener) {
+			for (let version = 1; version <= (scope.conversationId === "single" ? 1 : 10); version++) {
+				await listener({
+					kind: "snapshot",
+					epoch: "burst",
+					version,
+					snapshot: {
+						...scope,
+						messages: [],
+						partial: String(version),
+						partialLength: String(version).length,
+						partialTruncated: false,
+						historyCursor: null,
+						running: true,
+					},
+				});
+			}
+			return { async dispose() {} };
+		},
+	});
+	process.once("disconnect", () => {
+		stop();
+		void runtime.close();
+	});
+}
 if (process.send && process.argv.includes("--stale-protocol-fixture")) {
 	const methods: string[] = [];
 	process.on("message", (raw) => {

@@ -1,16 +1,8 @@
 import { AnimatePresence, motion } from "framer-motion";
-import {
-	createContext,
-	type ReactNode,
-	type RefObject,
-	useContext,
-	useId,
-	useLayoutEffect,
-	useRef,
-	useSyncExternalStore,
-} from "react";
+import { createContext, type ReactNode, type RefObject, useContext, useId, useLayoutEffect, useRef } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
-import { useThemeSettings } from "../../../app/theme/index.ts";
+import { useReducedMotionPreference } from "../../../app/theme/use-reduced-motion.ts";
+import { disclosureTransition } from "../../../components/ui/disclosure-motion.ts";
 import { type SidebarOrderAction, useSidebarSortable } from "./drag-provider.tsx";
 import { SidebarIcon } from "./icon.tsx";
 import { sidebarSectionLabels } from "./section-labels.ts";
@@ -26,15 +18,6 @@ type SectionContext = {
 };
 const Context = createContext<SectionContext | null>(null);
 export const useSidebarSection = () => useContext(Context);
-const systemMotion = () =>
-	typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-const serverMotion = () => false;
-function subscribeMotion(changed: () => void) {
-	const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-	media?.addEventListener("change", changed);
-	return () => media?.removeEventListener("change", changed);
-}
-
 /** Ordering measures the whole section; its existing disclosure button is the only activator. */
 export function SidebarOrderSection({
 	action,
@@ -155,11 +138,7 @@ export function SidebarSectionHeading({
 
 export function SidebarSectionContent({ children }: { children: ReactNode }) {
 	const section = useSidebarSection();
-	const { config } = useThemeSettings();
-	// Motion's current hook captures its initial media value. Subscribe explicitly
-	// so the app's system/on/off preference remains live while this section stays mounted.
-	const systemReduced = useSyncExternalStore(subscribeMotion, systemMotion, serverMotion);
-	const reduced = config.reducedMotion === "on" || (config.reducedMotion === "system" && systemReduced);
+	const reduced = useReducedMotionPreference();
 	if (!section) return <>{children}</>;
 	return (
 		<section
@@ -176,7 +155,7 @@ export function SidebarSectionContent({ children }: { children: ReactNode }) {
 						initial={{ height: 0, opacity: 0 }}
 						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
 						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
-						transition={reduced ? { duration: 0 } : { duration: 0.3, ease: [0.19, 1, 0.22, 1] }}
+						transition={reduced ? { duration: 0 } : disclosureTransition}
 						style={{ overflow: "hidden" }}
 					>
 						{children}

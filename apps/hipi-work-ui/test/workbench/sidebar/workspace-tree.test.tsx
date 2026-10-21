@@ -174,7 +174,11 @@ test("collapsed projects retain their row preview entry and expansion semantics"
 	assert.match(html, /class="project-toggle" aria-expanded="false"/);
 	assert.match(html, />展开项目<\/span>/);
 	assert.match(html, /class="project-open"/);
-	assert.match(html, /hidden="" class="project-conversations"/);
+	const region = html.match(/<section\b[^>]*class="project-conversations"[^>]*>/)?.[0];
+	assert.ok(region);
+	assert.match(region, /hidden=""/);
+	assert.match(region, /inert=""/);
+	assert.match(region, /aria-hidden="true"/);
 	assert.equal((html.match(/lucide-ellipsis/g) ?? []).length, 1);
 	assert.doesNotMatch(html, /conversation-preview-row/);
 });

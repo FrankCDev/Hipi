@@ -147,7 +147,11 @@ async function click(selector: string) {
 	await flush();
 }
 function feedback() {
-	return [...host.querySelectorAll<HTMLElement>(".project-conversations > output")];
+	return [
+		...host.querySelectorAll<HTMLElement>(
+			".project-conversations > [data-disclosure-motion] > [data-disclosure-content] > output",
+		),
+	];
 }
 
 test("project and chat switching retains rows while background publication cannot insert layout feedback", async () => {
@@ -201,7 +205,12 @@ test("a failed background refresh retains rows and exposes its actual error and 
 	});
 	await flush();
 	assert.equal(host.querySelector(".conversation-link"), row);
-	assert.equal(host.querySelectorAll(".project-conversations > [role='alert']").length, 2);
+	assert.equal(
+		host.querySelectorAll(
+			".project-conversations > [data-disclosure-motion] > [data-disclosure-content] > [role='alert']",
+		).length,
+		2,
+	);
 	assert.ok([...host.querySelectorAll("[role='alert']")].every((element) => !element.classList.contains("sr-only")));
 	assert.match(host.textContent ?? "", /刷新列表/);
 });

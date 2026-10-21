@@ -38,6 +38,7 @@ export function sidebarTooltipState(document) {
 			hovered: node.matches(":hover"),
 			box: { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom },
 			expanded: node.getAttribute("aria-expanded"),
+			tooltipState: node.getAttribute("data-tooltip-state"),
 		};
 	};
 	return {
@@ -52,6 +53,81 @@ export function sidebarTooltipState(document) {
 				return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
 			})(),
 		})),
+	};
+}
+
+/** Bounded read-only chronology for keyboard handoff, including browser scroll
+ * that can retire a public tooltip without changing focused element identity. */
+export function observeTooltipLifecycle(document, read) {
+	const view = document.defaultView;
+	const started = view.performance.now();
+	const events = [];
+	let dropped = 0;
+	const describe = (node) => {
+		const element = node === document ? document.scrollingElement : node;
+		return {
+			tag: node?.nodeName ?? null,
+			class: element?.getAttribute?.("class") ?? null,
+			scrollLeft: element?.scrollLeft ?? null,
+			scrollTop: element?.scrollTop ?? null,
+			containsCollapse: !!node?.contains?.(document.querySelector(".sidebar-collapse")),
+			containsToggle: !!node?.contains?.(document.querySelector(".navigation-toggle")),
+		};
+	};
+	const append = (entry) => {
+		if (events.length >= 256) {
+			dropped++;
+			return;
+		}
+		events.push({ elapsed: view.performance.now() - started, ...entry, state: read(document) });
+	};
+	const input = (event) =>
+		append({
+			type: event.type,
+			trusted: event.isTrusted,
+			key: event.key ?? null,
+			target: describe(event.target),
+			relatedTarget: describe(event.relatedTarget),
+		});
+	const types = ["focusin", "focusout", "keydown", "keyup", "scroll"];
+	for (const type of types) document.addEventListener(type, input, true);
+	const relevant = '.sidebar-collapse,.navigation-toggle,[data-slot="tooltip-content"]';
+	const mutations = (records) => {
+		for (const record of records) {
+			if (record.type === "attributes" && record.target.matches(relevant))
+				append({
+					type: "attribute",
+					target: describe(record.target),
+					attribute: record.attributeName,
+					oldValue: record.oldValue,
+					value: record.target.getAttribute(record.attributeName),
+				});
+			if (record.type === "childList")
+				for (const [change, nodes] of [
+					["added", record.addedNodes],
+					["removed", record.removedNodes],
+				])
+					for (const node of nodes)
+						if (node.matches?.(relevant) || node.querySelector?.(relevant))
+							append({ type: "content", change, target: describe(node) });
+		}
+	};
+	const observer = new view.MutationObserver(mutations);
+	observer.observe(document.documentElement, {
+		subtree: true,
+		childList: true,
+		attributes: true,
+		attributeOldValue: true,
+		attributeFilter: ["data-tooltip-state", "data-state", "aria-expanded"],
+	});
+	append({ type: "start" });
+	return {
+		stop: () => {
+			mutations(observer.takeRecords());
+			observer.disconnect();
+			for (const type of types) document.removeEventListener(type, input, true);
+			return { events, dropped, final: read(document), surface: describe(document.querySelector(".sidebar-surface")) };
+		},
 	};
 }
 
@@ -248,12 +324,14 @@ export async function exerciseSidebarTooltipHandoff({ cdp, directory }) {
 		for (const event of nativeKeyEvents(value, modifiers)) await cdp.request("Input.dispatchKeyEvent", event);
 	};
 	const waitHint = async (owner, keyboard = false) => {
+		evidence.pendingHint = { owner, keyboard };
 		const state = await until(async () => {
 			const state = await read();
 			return state.tooltips.some((tip) => tip.state !== "closed" && tip.label === state[owner].label) ? state : null;
 		}, `${owner} tooltip appears through actual input`);
 		assertOwnedTooltip(state, owner, keyboard);
 		evidence.states.push({ owner, keyboard, state });
+		delete evidence.pendingHint;
 	};
 	try {
 		assert.equal((await read()).toggle.expanded, "true", "Tooltip journey starts with expanded desktop sidebar");
@@ -290,6 +368,10 @@ export async function exerciseSidebarTooltipHandoff({ cdp, directory }) {
 		await waitHint("toggle");
 		await capture(cdp, directory, "sidebar-tooltip-fresh-hover");
 		await leaveTooltip(cdp, read, evidence);
+		await evaluate(
+			cdp,
+			`void(window.__sidebarTooltipLifecycle=(${observeTooltipLifecycle.toString()})(document,${sidebarTooltipState.toString()}))`,
+		);
 		// Leave pointer-restored focus, then return with actual keyboard traversal.
 		await key("Tab");
 		await key("Tab", 8);
@@ -314,8 +396,13 @@ export async function exerciseSidebarTooltipHandoff({ cdp, directory }) {
 		evidence.failure = error.message;
 		throw error;
 	} finally {
+		evidence.final = await read();
+		evidence.lifecycle = await evaluate(cdp, "window.__sidebarTooltipLifecycle?.stop()");
 		if (!evidence.trace) evidence.trace = await evaluate(cdp, "window.__sidebarTooltipTrace?.stop()");
 		await writeFile(join(directory, "sidebar-tooltip-handoff.json"), `${JSON.stringify(evidence, null, 2)}\n`);
-		await evaluate(cdp, "delete window.__sidebarTooltipTrace;delete window.__sidebarTooltipOwners");
+		await evaluate(
+			cdp,
+			"delete window.__sidebarTooltipTrace;delete window.__sidebarTooltipOwners;delete window.__sidebarTooltipLifecycle",
+		);
 	}
 }

@@ -319,14 +319,20 @@ export function createNodeIpcClient(child: ChildProcess): AppClient & { close():
 							accept?.();
 						}
 						busy = true;
-						void Promise.resolve(listener(frame))
-							.catch(() => {
-								notify({ state: "closed", reason: "error", code: "INTERNAL" });
-								abort();
-							})
-							.finally(() => {
-								busy = false;
-							});
+						const delivery = listener(frame);
+						// Node may dispatch several valid IPC messages in one callback batch. A void
+						// listener has already finished; deferring its release to a microtask falsely
+						// treats the next frame as an overlapping asynchronous delivery.
+						if (delivery === undefined) busy = false;
+						else
+							void Promise.resolve(delivery)
+								.catch(() => {
+									notify({ state: "closed", reason: "error", code: "INTERNAL" });
+									abort();
+								})
+								.finally(() => {
+									busy = false;
+								});
 					} catch (error) {
 						notify({
 							state: "closed",

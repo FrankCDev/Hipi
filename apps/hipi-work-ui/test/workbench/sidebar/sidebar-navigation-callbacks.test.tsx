@@ -121,7 +121,7 @@ vi.mock("@dnd-kit/core", async () => {
 vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
-vi.mock("../../../src/app/theme/index.ts", () => ({
+vi.mock("../../../src/app/theme/provider.tsx", () => ({
 	useThemeSettings: () => ({ config: { reducedMotion: hooks.motionPreference } }),
 }));
 vi.mock("@tanstack/react-query", () => ({
@@ -1337,7 +1337,8 @@ test("First page retains origin focus while busy and restores list focus when th
 	vi.stubGlobal("document", document);
 	const focus = vi.fn();
 	const listRef: React.RefObject<HTMLElement | null> = { current: null };
-	Object.assign(listRef, { current: { focus } });
+	const closest = vi.fn(() => null); // This fixture models a visible, non-inert list.
+	Object.assign(listRef, { current: { focus, closest } });
 	const pages = {
 		hasMore: false,
 		canRestart: true,
@@ -1371,6 +1372,7 @@ test("First page retains origin focus while busy and restores list focus when th
 	pages.isFetching = false;
 	assert.equal(render(), null);
 	assert.deepEqual(focus.mock.calls, [[{ preventScroll: true }]]);
+	assert.deepEqual(closest.mock.calls, [["[inert], [hidden]"]]);
 });
 
 test("bounded pagination labels disclose eviction and an error blocks Load more without removing First page", () => {

@@ -243,7 +243,7 @@ function NavigationHandoffFixture() {
 	const restore = useRef(false);
 	useLayoutEffect(() => {
 		if (!restore.current) return;
-		(collapsed ? expand : collapse).current?.focus();
+		(collapsed ? expand : collapse).current?.focus({ preventScroll: true });
 		restore.current = false;
 	}, [collapsed]);
 	return (
@@ -310,6 +310,7 @@ test.each(["pointer", "keyboard"] as const)(
 			[collapse, expand],
 			[expand, collapse],
 		] as const) {
+			const focused = vi.spyOn(target, "focus");
 			await act(async () => {
 				if (origin === "pointer") {
 					source.dispatchEvent(new PointerEvent("pointerdown", { pointerType: "mouse", bubbles: true, button: 0 }));
@@ -320,6 +321,8 @@ test.each(["pointer", "keyboard"] as const)(
 				source.click();
 			});
 			assert.equal(document.activeElement, target, "Restoration must retain the newly visible button");
+			assert.deepEqual(focused.mock.calls, [[{ preventScroll: true }]]);
+			focused.mockRestore();
 			assert.equal(button("Collapse navigation"), collapse);
 			assert.equal(button("Toggle navigation"), expand);
 			if (origin === "pointer")
@@ -336,6 +339,57 @@ test.each(["pointer", "keyboard"] as const)(
 		}
 	},
 );
+
+test("desktop focus restoration wiring requests viewport preservation in both directions", async () => {
+	// Wiring coverage only; the mounted fixture verifies actual focus/options, not
+	// browser layout or automatic scrolling. Native regression owns that evidence.
+	const source = await readFile(new NodeURL("../../../src/features/workbench/workbench.tsx", import.meta.url), "utf8");
+	assert.match(
+		source,
+		/navigationFocus.current === "header" && navigationCollapsed\)\s*navigationToggle.current\?\.focus\(\{ preventScroll: true \}\)/,
+	);
+	assert.match(
+		source,
+		/navigationFocus.current === "sidebar" && !navigationCollapsed\)\s*sidebarCollapse.current\?\.focus\(\{ preventScroll: true \}\)/,
+	);
+});
+
+test("mixed pointer and keyboard restoration retains focus while deliberate ancestor scrolling dismisses hints", async () => {
+	await render(<NavigationHandoffFixture />);
+	const collapse = button("Collapse navigation");
+	const expand = button("Toggle navigation");
+	let keyboard = false;
+	for (const target of [collapse, expand]) {
+		const matches = target.matches.bind(target);
+		vi.spyOn(target, "matches").mockImplementation((selector) =>
+			selector === ":focus-visible" ? keyboard && document.activeElement === target : matches(selector),
+		);
+	}
+	await act(async () => {
+		collapse.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }));
+		collapse.focus();
+		collapse.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse" }));
+		collapse.click();
+	});
+	assert.equal(document.activeElement, expand);
+	assert.equal(Boolean(tooltip()), false);
+	keyboard = true;
+	await act(async () => {
+		expand.blur();
+		expand.focus();
+	});
+	assert.equal(tooltip()?.textContent, "Toggle navigation");
+	await act(async () => expand.click());
+	assert.equal(document.activeElement, collapse);
+	assert.equal(tooltip()?.textContent, "Collapse navigation");
+	// Explicit ancestor scrolling must still dismiss through Radix. Do not reopen
+	// a hint merely because the restored control remains keyboard-focused.
+	await act(async () => host.dispatchEvent(new Event("scroll")));
+	assert.equal(document.activeElement, collapse);
+	assert.equal(Boolean(tooltip()), false);
+	await tick(500);
+	assert.equal(Boolean(tooltip()), false);
+});
 
 function RowFixture({
 	disabled = false,

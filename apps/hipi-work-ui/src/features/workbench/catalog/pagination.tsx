@@ -26,7 +26,11 @@ export function CatalogPagination({ pages, listRef }: { pages: Pagination; listR
 		if (pages.isFetching || !origin.current) return;
 		const previous = origin.current;
 		origin.current = null;
-		if (!previous.isConnected && document.activeElement === document.body) {
+		if (
+			!previous.isConnected &&
+			document.activeElement === document.body &&
+			!listRef.current?.closest("[inert], [hidden]")
+		) {
 			const remainingControl = pages.canRestart ? first.current : pages.hasMore ? more.current : null;
 			(remainingControl ?? listRef.current)?.focus({ preventScroll: true });
 		}

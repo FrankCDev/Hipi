@@ -5,6 +5,7 @@ import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { ActionMenuContent, ActionMenuItem, ActionMenuRadioGroup } from "../../../src/components/ui/action-menu.tsx";
 import { Button } from "../../../src/components/ui/button.tsx";
+import { DisclosureSurface } from "../../../src/components/ui/disclosure-surface.tsx";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 import { ProjectActions } from "../../../src/features/workbench/projects/actions.tsx";
@@ -61,6 +62,9 @@ vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => fixture.cache })
 vi.mock("../../../src/app/preferences.tsx", () => ({
 	usePreferences: () => ({ locale: "en", t: (key: string) => key }),
 }));
+// This callback-only fixture supplies the preference; actual Motion and live
+// preference changes are exercised by the mounted disclosure tests.
+vi.mock("../../../src/app/theme/use-reduced-motion.ts", () => ({ useReducedMotionPreference: () => false }));
 vi.mock("../../../src/app/client-provider.tsx", () => ({ useAppClient: () => ({ call: fixture.call }) }));
 vi.mock("../../../src/features/workbench/sidebar/use-navigation.ts", () => ({
 	useNavigation: (view: SidebarView, filter: string, enabled: boolean) => {
@@ -133,8 +137,8 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 test("removing a focused conversation after a delayed refresh restores the surviving list only at actual removal", () => {
-	const ui = fixtureTree();
-	const region = only(ui.render(), "section");
+	const ui = fixtureTree(undefined, { isExpanded: () => true });
+	const region = only(ui.render(), DisclosureSurface);
 	assert.ok(region.props.ref && typeof region.props.ref === "object");
 	const focus = vi.fn();
 	Object.assign(region.props.ref, { current: { focus } });
@@ -212,8 +216,8 @@ test.each([false, true])("shared folder/disclosure slot retains native keyboard 
 		"Enter/Space activation remains native, without duplicate dispatch",
 	);
 	assert.equal(disclosure.props["aria-expanded"], expanded);
-	assert.equal(disclosure.props["aria-controls"], only(tree, "section").props.id);
-	assert.equal(only(tree, "section").props.hidden, !expanded);
+	assert.equal(disclosure.props["aria-controls"], only(tree, DisclosureSurface).props.id);
+	assert.equal(only(tree, DisclosureSurface).props.expanded, expanded);
 	const icons = elements(disclosure, "span").filter((entry) => entry.props.className !== "sr-only");
 	assert.deepEqual(
 		icons.map((entry) => entry.props.className),

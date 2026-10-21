@@ -7,6 +7,7 @@ import {
 	assertOwnedTooltip,
 	assertPointerTooltipHandoff,
 	assertTooltipPointerExit,
+	observeTooltipLifecycle,
 	observeTooltipPointer,
 	sidebarTooltipOwners,
 	sidebarTooltipOwnersRetained,
@@ -30,6 +31,66 @@ const state = () => ({
 const trace = () => ({
 	events: [{ type: "pointerdown", trusted: true }],
 	frames: [0, 100, 300, 700].map((elapsed) => ({ elapsed, pointer: { x: 250, y: 20 }, ...state() })),
+});
+
+test("lifecycle diagnostics retain focus, key, ancestor scroll and tooltip mutation chronology without changing DOM", async () => {
+	const dom = new JSDOM(
+		`<section class="sidebar-surface"><button class="sidebar-collapse" data-tooltip-state="closed" aria-label="Hide"></button></section><button class="navigation-toggle" aria-label="Toggle"></button>`,
+	);
+	try {
+		const { document } = dom.window;
+		const surface = document.querySelector("section");
+		const collapse = document.querySelector(".sidebar-collapse");
+		const observer = runInNewContext(`(${observeTooltipLifecycle.toString()})(document,read)`, {
+			document,
+			read: sidebarTooltipState,
+		});
+		collapse.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true }));
+		collapse.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		Object.defineProperty(surface, "scrollLeft", { value: 24 });
+		surface.dispatchEvent(new dom.window.Event("scroll"));
+		collapse.setAttribute("data-tooltip-state", "instant-open");
+		await Promise.resolve();
+		collapse.setAttribute("data-tooltip-state", "closed");
+		const markup = document.body.innerHTML;
+		const result = observer.stop();
+		assert.equal(document.body.innerHTML, markup);
+		assert.deepEqual(
+			Array.from(result.events, (event) => event.type),
+			["start", "focusin", "keydown", "scroll", "attribute", "attribute"],
+		);
+		assert.equal(result.events[2].key, "Enter");
+		assert.equal(result.events[1].trusted, false, "Model events must never be claimed as native evidence");
+		assert.equal(result.events[3].target.scrollLeft, 24);
+		assert.equal(result.events[3].target.containsCollapse, true);
+		assert.equal(result.events[3].target.containsToggle, false);
+		assert.equal(result.events[4].oldValue, "closed");
+		assert.equal(result.events[4].state.collapse.tooltipState, "instant-open");
+		assert.equal(result.events[5].oldValue, "instant-open");
+		assert.equal(result.final.collapse.tooltipState, "closed");
+		assert.equal(result.surface.scrollLeft, 24);
+		collapse.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true }));
+		collapse.setAttribute("data-tooltip-state", "delayed-open");
+		await Promise.resolve();
+		assert.equal(result.events.length, 6, "stop removes listeners and disconnects mutations");
+	} finally {
+		dom.window.close();
+	}
+});
+
+test("lifecycle diagnostics bound event storage and explicitly report overflow", () => {
+	const dom = new JSDOM(`<button class="sidebar-collapse"></button><button class="navigation-toggle"></button>`);
+	try {
+		const { document } = dom.window;
+		const observer = observeTooltipLifecycle(document, sidebarTooltipState);
+		for (let index = 0; index < 300; index++) document.dispatchEvent(new dom.window.Event("scroll"));
+		const result = observer.stop();
+		assert.equal(result.events.length, 256);
+		assert.equal(result.dropped, 45);
+		assert.ok(result.final.collapse);
+	} finally {
+		dom.window.close();
+	}
 });
 
 test("measured continuous exit ends beyond both rectangles and previous padded grace hull", () => {

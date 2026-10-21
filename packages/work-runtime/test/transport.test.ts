@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fork } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import { request } from "node:http";
 import { test } from "node:test";
@@ -158,6 +158,84 @@ test("Node child IPC uses the same semantics; disconnect rejects pending waits",
 		}
 	}
 });
+
+for (const behavior of ["sync-burst", "async-busy", "sync-throw", "async-reject", "cancel"] as const) {
+	test(`Node child IPC snapshot delivery handles ${behavior}`, { timeout: 5000 }, async (context) => {
+		const child = fork(new URL("./transport-fixture.ts", import.meta.url), ["--snapshot-burst-fixture"], {
+			stdio: ["ignore", "ignore", "inherit", "ipc"],
+		});
+		const burst = behavior === "sync-burst" || behavior === "async-busy" || behavior === "cancel";
+		if (burst) {
+			// Keep the real child, protocol and frames, but deterministically dispatch one OS-like
+			// receive batch. Whether a real pipe naturally batches messages varies by platform/load.
+			const emit = child.emit;
+			const frames: unknown[][] = [];
+			context.mock.method(child, "emit", function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+				if (event === "message" && typeof args[0] === "string") {
+					const message: unknown = JSON.parse(args[0]);
+					if (message && typeof message === "object" && "kind" in message && message.kind === "frame") {
+						frames.push(args);
+						if (frames.length === 10) for (const frame of frames) Reflect.apply(emit, this, [event, ...frame]);
+						return true;
+					}
+				}
+				return Reflect.apply(emit, this, [event, ...args]) as boolean;
+			});
+		}
+		const client = createNodeIpcClient(child);
+		const states: ObservationStatus[] = [];
+		const versions: number[] = [];
+		const terminal = Promise.withResolvers<ObservationStatus>();
+		const delivery = Promise.withResolvers<void>();
+		const signal = new AbortController();
+		try {
+			const watcher = await client.observe(
+				{ ...scope, conversationId: burst ? "conversation" : "single" },
+				(frame) => {
+					versions.push(frame.version);
+					if (behavior === "sync-throw") throw new Error("Consumer failed");
+					if (behavior === "async-busy" || behavior === "async-reject") return delivery.promise;
+					if (behavior === "cancel") signal.abort();
+				},
+				signal.signal,
+				(status) => {
+					states.push(status);
+					if (status.state === "closed") terminal.resolve(status);
+				},
+			);
+			if (behavior === "sync-burst") {
+				assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+				assert.deepEqual(states, [{ state: "connected" }]);
+				await watcher.dispose();
+				assert.deepEqual(await terminal.promise, { state: "closed", reason: "disposed" });
+			} else {
+				if (behavior === "async-reject") delivery.reject(new Error("Async consumer failed"));
+				const expected: ObservationStatus =
+					behavior === "cancel"
+						? { state: "closed", reason: "disposed" }
+						: {
+								state: "closed",
+								reason: "error",
+								code: behavior === "async-busy" ? "INVALID_REQUEST" : "INTERNAL",
+							};
+				assert.deepEqual(await terminal.promise, expected);
+				assert.deepEqual(versions, [1]);
+				await watcher.dispose();
+				delivery.resolve();
+				await Promise.resolve();
+				assert.deepEqual(states, [{ state: "connected" }, expected]);
+			}
+		} finally {
+			delivery.resolve();
+			client.close();
+			if (child.exitCode === null && child.signalCode === null) {
+				const exited = once(child, "exit");
+				child.kill();
+				await exited;
+			}
+		}
+	});
+}
 
 test(
 	"HTTP rejects missing auth, malicious Origin, malformed payload, excessive body and Host",

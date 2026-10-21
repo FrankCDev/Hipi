@@ -10,7 +10,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type AssistantMessageEvent, normalizeContext } from "@earendil-works/pi-ai";
 import { LiveDoc, type LiveState, type SubmissionId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorageReadOnly } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { AppClient, Frame, Scope } from "../src/contracts.ts";
+import type { AppClient, Frame, ObservationStatus, Scope } from "../src/contracts.ts";
 import { openRuntime } from "../src/node.ts";
 import { serveLoopback } from "../src/transport-http.ts";
 import { createHttpClient } from "../src/transport-http-client.ts";
@@ -256,12 +256,26 @@ test(
 				scope.conversationId,
 			);
 			const frames: Frame[] = [];
-			const watcher = await connection.client.observe(scope, (frame) => {
-				frames.push(frame);
-			});
+			let observationClosed: Extract<ObservationStatus, { state: "closed" }> | undefined;
+			const watcher = await connection.client.observe(
+				scope,
+				(frame) => {
+					frames.push(frame);
+				},
+				undefined,
+				(status) => {
+					if (status.state === "closed") observationClosed = status;
+				},
+			);
 			const input = { ...scope, requestId: "ipc_completed", text: "Complete before process death" };
 			const receipt = await connection.client.call("submit", input);
-			await until(async () => (frames.some((frame) => frame.snapshot.partial.length > 0) ? true : undefined));
+			await until(async () => {
+				if (observationClosed)
+					throw new Error(
+						`IPC initial partial observation closed: ${observationClosed.reason} (${observationClosed.code ?? "none"})`,
+					);
+				return frames.some((frame) => frame.snapshot.partial.length > 0) ? true : undefined;
+			});
 			// The normal committed snapshot must still contain the held partial before release.
 			assert.equal((await connection.client.call("snapshot", scope)).partial, "Hipi Work ");
 			assert.notEqual(

@@ -7,6 +7,7 @@ import {
 } from "../../../components/ui/action-menu.tsx";
 import { Popover, PopoverAnchor, PopoverContent } from "../../../components/ui/popover.tsx";
 import { SidebarTooltipBoundary } from "./action-tooltip.tsx";
+import { useSidebarBranchAvailability } from "./branch-availability.tsx";
 import {
 	ConversationPreviewInteraction,
 	inPreviewCorridor,
@@ -69,7 +70,10 @@ export function SidebarPreviewRow({
 	const surfaceState = useRef(surfaceDisabled);
 	surfaceState.current = surfaceDisabled;
 	const section = useSidebarSection();
-	const hidden = surfaceDisabled || (section?.collapsed ?? false);
+	const branch = useSidebarBranchAvailability();
+	const hidden = surfaceDisabled || (section?.collapsed ?? false) || (branch?.collapsed ?? false);
+	const branchOwner = useRef(branch);
+	branchOwner.current = branch;
 	const sectionOwner = useRef(section);
 	sectionOwner.current = section;
 	const coordinator = useSidebarPreviewCoordinator();
@@ -208,6 +212,17 @@ export function SidebarPreviewRow({
 				heading.focus({ preventScroll: true });
 			return;
 		}
+		if (branchOwner.current?.collapsed) {
+			const heading = branchOwner.current.heading.current;
+			const active = heading?.ownerDocument.activeElement;
+			if (
+				heading &&
+				!heading.closest("[inert], [hidden]") &&
+				(active === heading.ownerDocument.body || active === focusOwner.current)
+			)
+				heading.focus({ preventScroll: true });
+			return;
+		}
 		const doc = menuSource.current?.ownerDocument ?? trigger.current?.ownerDocument;
 		const active = doc?.activeElement;
 		if (
@@ -226,9 +241,20 @@ export function SidebarPreviewRow({
 		restoringFocus.current = false;
 	};
 	const returnPreviewFocus = () => {
+		if (surfaceState.current) return;
 		if (sectionOwner.current?.collapsed) {
 			const heading = sectionOwner.current.heading.current;
 			if (heading?.ownerDocument.activeElement === heading?.ownerDocument.body) heading?.focus({ preventScroll: true });
+			return;
+		}
+		if (branchOwner.current?.collapsed) {
+			const heading = branchOwner.current.heading.current;
+			if (
+				heading &&
+				!heading.closest("[inert], [hidden]") &&
+				heading.ownerDocument.activeElement === heading.ownerDocument.body
+			)
+				heading.focus({ preventScroll: true });
 			return;
 		}
 		restoringFocus.current = true;

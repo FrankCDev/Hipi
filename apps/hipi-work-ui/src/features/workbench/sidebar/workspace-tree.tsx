@@ -6,8 +6,9 @@ import {
 	type Workspace,
 } from "@hipi/work-runtime/contracts";
 import { Archive, MessageCircle } from "lucide-react";
-import { type RefObject, useId, useLayoutEffect, useRef, useState } from "react";
+import { type ComponentPropsWithRef, type RefObject, useId, useLayoutEffect, useRef, useState } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
+import { useReducedMotionPreference } from "../../../app/theme/use-reduced-motion.ts";
 import {
 	ActionMenu,
 	ActionMenuContent,
@@ -18,6 +19,7 @@ import {
 	ActionMenuTrigger,
 } from "../../../components/ui/action-menu.tsx";
 import { Button } from "../../../components/ui/button.tsx";
+import { DisclosureSurface } from "../../../components/ui/disclosure-surface.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
 import { ConversationActions } from "../catalog/controls.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
@@ -28,6 +30,7 @@ import { ProjectActions } from "../projects/actions.tsx";
 import { projectFolderLabels } from "../projects/folder-labels.ts";
 import { projectLabels } from "../projects/labels.ts";
 import { SidebarActionTooltip } from "./action-tooltip.tsx";
+import { SidebarBranchAvailability, useBranchFocus } from "./branch-availability.tsx";
 import { ConversationPreview } from "./conversation-preview.tsx";
 import type { SidebarOrderAction } from "./drag-provider.tsx";
 import { SidebarIcon } from "./icon.tsx";
@@ -165,9 +168,12 @@ export function WorkspaceBranch({
 			: undefined;
 	const expanded = recent || props.isExpanded(branchId);
 	const region = useRef<HTMLElement>(null);
+	const heading = useRef<HTMLButtonElement>(null);
+	const branchFocus = useBranchFocus(!expanded, heading);
+	const reduced = useReducedMotionPreference();
 	const focusedRow = useRef<HTMLElement | null>(null);
 	useLayoutEffect(() => {
-		if (sectionCollapsed) {
+		if (sectionCollapsed || !expanded) {
 			focusedRow.current = null;
 			return;
 		}
@@ -202,108 +208,120 @@ export function WorkspaceBranch({
 		!recent &&
 		(projectItem ? props.selectedProjectId === branchId : props.selectedWorkspace === branchId) &&
 		!props.selectedConversation;
-	const conversationsContent = fenced ? (
-		<section hidden={!expanded} id={regionId} aria-labelledby={headingId} className="project-conversations">
-			<output className="nav-feedback">{cl.refreshing}</output>
+	const regionProps: ComponentPropsWithRef<"section"> = {
+		ref: region,
+		id: regionId,
+		"aria-labelledby": headingId,
+		className: "project-conversations",
+		tabIndex: -1,
+		"aria-busy": expanded && conversations.isFetching,
+		onBlurCapture: branchFocus.onBlurCapture,
+		onFocusCapture: (event) => {
+			branchFocus.onFocusCapture(event);
+			if (event.currentTarget.contains(event.target) && event.target.closest(".conversation-preview-row"))
+				focusedRow.current = event.target;
+		},
+	};
+	const queryAttributes = {
+		"data-sidebar-query": conversations.queryIdentity,
+		"data-sidebar-updated-at": conversations.dataUpdatedAt,
+		"data-sidebar-fetching": conversations.isFetching,
+	};
+	const conversationsBody = (
+		<>
+			{fenced ? (
+				<output className="nav-feedback">{cl.refreshing}</output>
+			) : (
+				<>
+					{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
+					{(conversations.isPending || conversations.coverage?.state === "building") && (
+						<output className="nav-feedback">{t("common.loading")}</output>
+					)}
+					{conversations.hasData &&
+						conversations.coverage?.state !== "building" &&
+						(conversations.isFetching || conversations.coverage?.state === "refreshing") &&
+						!conversations.isLoadingMore && (
+							<output className="sr-only" aria-live="off">
+								{cl.refreshing}
+							</output>
+						)}
+					{conversations.isError && (
+						<div className="nav-feedback" role="alert">
+							<p>
+								{conversations.error instanceof AppError && conversations.error.code === "STORE_MISMATCH"
+									? t("connection.storeMismatch")
+									: conversations.staleCursor
+										? cl.staleList
+										: conversations.isLoadMoreError
+											? cl.loadMoreFailed
+											: conversations.hasData
+												? cl.refreshFailed
+												: t("nav.loadError")}
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={conversations.isFetching}
+								onClick={() => void conversations.retry()}
+							>
+								<Icon name="refresh" size={14} />
+								{t("nav.refresh")}
+							</Button>
+						</div>
+					)}
+					<ul className="conversation-list">
+						{conversations.items.map((conversation) => (
+							<li
+								key={JSON.stringify([conversation.workspaceId, conversation.conversationId])}
+								className="conversation-nav-item"
+							>
+								<ConversationPreview
+									conversation={conversation}
+									projectId={
+										logicalReady
+											? (conversations.memberships?.get(
+													JSON.stringify([conversation.workspaceId, conversation.conversationId]),
+												)?.projectId ?? null)
+											: undefined
+									}
+									workspaceName={recent ? undefined : branchName}
+									location={location}
+									onSelect={() => props.onSelect(conversation, location)}
+									renderActions={
+										fenced
+											? undefined
+											: (controls) => (
+													<ConversationActions
+														conversation={conversation}
+														session={props.catalog}
+														presentation={props.presentation}
+														guard={props.guard}
+														{...controls}
+													/>
+												)
+									}
+								/>
+							</li>
+						))}
+					</ul>
+					{conversations.isEmpty && (
+						<div className="nav-feedback nav-empty-state">
+							<p>{filter === "archived" ? cl.emptyArchived : t("nav.empty")}</p>
+						</div>
+					)}
+					<CatalogPagination pages={conversations} listRef={region} />
+				</>
+			)}
+		</>
+	);
+	const conversationsContent = recent ? (
+		<section {...regionProps} {...queryAttributes}>
+			{conversationsBody}
 		</section>
 	) : (
-		<section
-			ref={region}
-			id={regionId}
-			aria-labelledby={headingId}
-			hidden={!expanded}
-			className="project-conversations"
-			data-sidebar-query={conversations.queryIdentity}
-			data-sidebar-updated-at={conversations.dataUpdatedAt}
-			data-sidebar-fetching={conversations.isFetching}
-			tabIndex={-1}
-			aria-busy={expanded && conversations.isFetching}
-			onFocusCapture={(event) => {
-				if (event.currentTarget.contains(event.target) && event.target.closest(".conversation-preview-row"))
-					focusedRow.current = event.target;
-			}}
-		>
-			{filter === "archived" && <p className="project-archive-label">{cl.archived}</p>}
-			{expanded && (conversations.isPending || conversations.coverage?.state === "building") && (
-				<output className="nav-feedback">{t("common.loading")}</output>
-			)}
-			{expanded &&
-				conversations.hasData &&
-				conversations.coverage?.state !== "building" &&
-				(conversations.isFetching || conversations.coverage?.state === "refreshing") &&
-				!conversations.isLoadingMore && (
-					<output className="sr-only" aria-live="off">
-						{cl.refreshing}
-					</output>
-				)}
-			{expanded && conversations.isError && (
-				<div className="nav-feedback" role="alert">
-					<p>
-						{conversations.error instanceof AppError && conversations.error.code === "STORE_MISMATCH"
-							? t("connection.storeMismatch")
-							: conversations.staleCursor
-								? cl.staleList
-								: conversations.isLoadMoreError
-									? cl.loadMoreFailed
-									: conversations.hasData
-										? cl.refreshFailed
-										: t("nav.loadError")}
-					</p>
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={conversations.isFetching}
-						onClick={() => void conversations.retry()}
-					>
-						<Icon name="refresh" size={14} />
-						{t("nav.refresh")}
-					</Button>
-				</div>
-			)}
-			{expanded && (
-				<ul className="conversation-list">
-					{conversations.items.map((conversation) => (
-						<li
-							key={JSON.stringify([conversation.workspaceId, conversation.conversationId])}
-							className="conversation-nav-item"
-						>
-							<ConversationPreview
-								conversation={conversation}
-								projectId={
-									logicalReady
-										? (conversations.memberships?.get(
-												JSON.stringify([conversation.workspaceId, conversation.conversationId]),
-											)?.projectId ?? null)
-										: undefined
-								}
-								workspaceName={recent ? undefined : branchName}
-								location={location}
-								onSelect={() => props.onSelect(conversation, location)}
-								renderActions={
-									fenced
-										? undefined
-										: (controls) => (
-												<ConversationActions
-													conversation={conversation}
-													session={props.catalog}
-													presentation={props.presentation}
-													guard={props.guard}
-													{...controls}
-												/>
-											)
-								}
-							/>
-						</li>
-					))}
-				</ul>
-			)}
-			{expanded && conversations.isEmpty && (
-				<div className="nav-feedback nav-empty-state">
-					<p>{filter === "archived" ? cl.emptyArchived : t("nav.empty")}</p>
-				</div>
-			)}
-			{expanded && <CatalogPagination pages={conversations} listRef={region} />}
-		</section>
+		<DisclosureSurface {...regionProps} {...queryAttributes} expanded={expanded} reduced={reduced}>
+			{conversationsBody}
+		</DisclosureSurface>
 	);
 	return (
 		<li
@@ -421,6 +439,7 @@ export function WorkspaceBranch({
 							<SidebarActionTooltip label={expanded ? cl.collapseProject : cl.expandProject}>
 								<button
 									type="button"
+									ref={heading}
 									className="project-toggle"
 									aria-expanded={expanded}
 									aria-controls={regionId}
@@ -459,7 +478,13 @@ export function WorkspaceBranch({
 					)}
 				</SidebarPreviewRow>
 			)}
-			{recent ? <SidebarSectionContent>{conversationsContent}</SidebarSectionContent> : conversationsContent}
+			{recent ? (
+				<SidebarSectionContent>{conversationsContent}</SidebarSectionContent>
+			) : (
+				<SidebarBranchAvailability.Provider value={{ collapsed: !expanded, heading }}>
+					{conversationsContent}
+				</SidebarBranchAvailability.Provider>
+			)}
 		</li>
 	);
 }

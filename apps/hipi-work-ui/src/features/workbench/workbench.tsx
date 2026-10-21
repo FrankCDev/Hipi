@@ -300,8 +300,11 @@ export function Workbench({
 	const navigationFocus = useRef<"sidebar" | "header" | null>(null);
 	const navigationClose = useRef<HTMLButtonElement>(null);
 	useLayoutEffect(() => {
-		if (navigationFocus.current === "header" && navigationCollapsed) navigationToggle.current?.focus();
-		if (navigationFocus.current === "sidebar" && !navigationCollapsed) sidebarCollapse.current?.focus();
+		// Restore the control without scrolling its still-clipped animated surface or content.
+		if (navigationFocus.current === "header" && navigationCollapsed)
+			navigationToggle.current?.focus({ preventScroll: true });
+		if (navigationFocus.current === "sidebar" && !navigationCollapsed)
+			sidebarCollapse.current?.focus({ preventScroll: true });
 		navigationFocus.current = null;
 	}, [navigationCollapsed]);
 	useEffect(() => {
