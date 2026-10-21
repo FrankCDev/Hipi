@@ -1,6 +1,6 @@
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { type PreviewRequest, parsePreviewRequest, parsePreviewResponse } from "@hipi/work-runtime/previews/protocol";
-import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "../ipc/protocol.ts";
 
 type Pending = {
 	request: PreviewRequest;

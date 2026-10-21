@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { WorkRuntime } from "@hipi/work-runtime";
 import { type Frame, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
-import { HostConnection } from "../src/host-connection.ts";
-import { decode, encode, record, WAIT_MS } from "../src/protocol.ts";
-import { createRuntimeRouter } from "../src/runtime-router.ts";
+import { decode, encode, record, WAIT_MS } from "../src/ipc/protocol.ts";
+import { HostConnection } from "../src/runtime/connection.ts";
+import { createRuntimeRouter } from "../src/runtime/router.ts";
 
 const generation = "generation";
 const input = { scope: { workspaceId: "workspace", conversationId: "conversation" }, expectedStoreId: "store" };

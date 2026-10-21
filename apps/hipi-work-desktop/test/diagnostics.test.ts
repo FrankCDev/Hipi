@@ -5,23 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
-import { diagnosticMessages } from "../src/diagnostic-messages.ts";
+import { diagnosticMessages } from "../src/diagnostics/messages.ts";
+import {
+	diagnoseRuntimeOperation,
+	RUNTIME_DIAGNOSTICS,
+	runtimeDiagnostic,
+	runtimeDiagnosticReporter,
+} from "../src/diagnostics/runtime.ts";
 import {
 	DesktopDiagnostics,
 	DIAGNOSTIC_LIMITS,
 	DiagnosticExporter,
 	finishFailedStartup,
 	writeDiagnosticFile,
-} from "../src/diagnostics.ts";
-import { decode, encode } from "../src/protocol.ts";
-import {
-	diagnoseRuntimeOperation,
-	RUNTIME_DIAGNOSTICS,
-	runtimeDiagnostic,
-	runtimeDiagnosticReporter,
-} from "../src/runtime-diagnostics.ts";
-import { createRuntimeRouter } from "../src/runtime-router.ts";
-import { RuntimeSupervisor } from "../src/supervisor.ts";
+} from "../src/diagnostics/service.ts";
+import { decode, encode } from "../src/ipc/protocol.ts";
+import { createRuntimeRouter } from "../src/runtime/router.ts";
+import { RuntimeSupervisor } from "../src/runtime/supervisor.ts";
 
 const metadata = {
 	productVersion: "0.0.1",

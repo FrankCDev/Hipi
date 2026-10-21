@@ -16,12 +16,12 @@ import {
 	decodeFontRequest,
 	FONT_CANCEL_CHANNEL,
 	FONT_CHANNEL,
-} from "./appearance-protocol.ts";
-import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
-import { FILE_CHANNEL, FILE_ROOT_CHANNEL, rootRequest } from "./file-protocol.ts";
-import { InvocationGate } from "./invocation-gate.ts";
-import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL } from "./preview-protocol.ts";
-import { CHANNEL, decode, encode, identifier, MAX_ACTIVE, observation } from "./protocol.ts";
+} from "./appearance/protocol.ts";
+import { CREDENTIAL_CHANNEL, credentialRequest } from "./credentials/protocol.ts";
+import { FILE_CHANNEL, FILE_ROOT_CHANNEL, rootRequest } from "./files/protocol.ts";
+import { InvocationGate } from "./ipc/invocation-gate.ts";
+import { CHANNEL, decode, encode, identifier, MAX_ACTIVE, observation } from "./ipc/protocol.ts";
+import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL } from "./previews/protocol.ts";
 
 const subscriptions = new Map<string, (value: unknown) => void | Promise<void>>();
 const gate = new InvocationGate();

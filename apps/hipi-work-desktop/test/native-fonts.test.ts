@@ -3,9 +3,10 @@ import type { ExecFileException } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { AppearanceError, parseFontReply, parseInstalledFontCatalog } from "@hipi/work-runtime/appearance";
-import { decodeFontRequest } from "../src/appearance-protocol.ts";
-import { FontRequests } from "../src/font-requests.ts";
-import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "../src/font-scripts.ts";
+import { decodeFontRequest } from "../src/appearance/protocol.ts";
+import { openTypeFontNames } from "../src/fonts/opentype-names.ts";
+import { FontRequests } from "../src/fonts/requests.ts";
+import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "../src/fonts/scripts.ts";
 import {
 	type FontDiagnostic,
 	fontCommand,
@@ -13,8 +14,7 @@ import {
 	NativeFontService,
 	parseNativeFonts,
 	runFontProcess,
-} from "../src/native-fonts.ts";
-import { openTypeFontNames } from "../src/opentype-font-names.ts";
+} from "../src/fonts/service.ts";
 
 const face = {
 	family: "Example Mono",

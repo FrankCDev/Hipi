@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { providerMode } from "../src/provider-mode.ts";
-import { createRendererAssetHandler, RENDERER_CSP } from "../src/renderer-assets.ts";
+import { providerMode } from "../src/launch/provider-mode.ts";
+import { createRendererAssetHandler, RENDERER_CSP } from "../src/shell/renderer-assets.ts";
 
 test("OS launch defaults to production; deterministic store is explicit and malformed overrides fail", () => {
 	assert.equal(providerMode(["/Applications/Hipi Work"]), "production");

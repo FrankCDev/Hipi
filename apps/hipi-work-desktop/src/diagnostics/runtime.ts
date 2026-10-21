@@ -1,5 +1,5 @@
 import { AppError } from "@hipi/work-runtime/contracts";
-import { encode, exact, identifier } from "./protocol.ts";
+import { encode, exact, identifier } from "../ipc/protocol.ts";
 
 export const RUNTIME_DIAGNOSTICS = [
 	{ category: "startup", phase: "runtime-open" },

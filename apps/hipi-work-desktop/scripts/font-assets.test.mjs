@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createRendererAssetHandler } from "../src/renderer-assets.ts";
+import { createRendererAssetHandler } from "../src/shell/renderer-assets.ts";
 import { assertFontAsset, fontAssets } from "./font-assets.mjs";
 import { allowedPayload, requiredFiles } from "./release-policy.mjs";
 

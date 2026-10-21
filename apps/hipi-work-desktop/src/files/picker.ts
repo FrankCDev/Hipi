@@ -1,7 +1,7 @@
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { parseProjectFolderSelection } from "@hipi/work-runtime/files/protocol";
-import type { FileConnection } from "./file-connection.ts";
-import { rootRequest } from "./file-protocol.ts";
+import type { FileConnection } from "./connection.ts";
+import { rootRequest } from "./protocol.ts";
 
 /** Main-process ownership fence. A token never survives renderer teardown or a utility replacement. */
 export class ProjectFolderSelections {

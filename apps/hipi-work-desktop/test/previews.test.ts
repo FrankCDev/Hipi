@@ -8,12 +8,12 @@ import { AppError } from "@hipi/work-runtime/contracts";
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { parseFileRoots } from "@hipi/work-runtime/files/protocol";
 import { createPreviewClient, parsePreviewRequest } from "@hipi/work-runtime/previews/protocol";
-import { createFileRuntime } from "../src/file-runtime.ts";
-import { HostConnection } from "../src/host-connection.ts";
-import { PreviewConnection } from "../src/preview-connection.ts";
-import { previewInvocation } from "../src/preview-protocol.ts";
-import { createPreviewRuntime } from "../src/preview-runtime.ts";
-import { decode, encode } from "../src/protocol.ts";
+import { createFileRuntime } from "../src/files/runtime.ts";
+import { decode, encode } from "../src/ipc/protocol.ts";
+import { PreviewConnection } from "../src/previews/connection.ts";
+import { previewInvocation } from "../src/previews/protocol.ts";
+import { createPreviewRuntime } from "../src/previews/runtime.ts";
+import { HostConnection } from "../src/runtime/connection.ts";
 
 const request = parsePreviewRequest({
 	version: 1,

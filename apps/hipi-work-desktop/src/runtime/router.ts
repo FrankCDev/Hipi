@@ -1,7 +1,7 @@
 import type { WorkRuntime } from "@hipi/work-runtime";
 import { AppError, PROTOCOL_VERSION, parseFrame, parseResult, type Subscription } from "@hipi/work-runtime/contracts";
-import { command, encode, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
-import { diagnoseRuntimeOperation, type RuntimeDiagnostic } from "./runtime-diagnostics.ts";
+import { diagnoseRuntimeOperation, type RuntimeDiagnostic } from "../diagnostics/runtime.ts";
+import { command, encode, MAX_ACTIVE, WAIT_MS } from "../ipc/protocol.ts";
 
 type Active = { controller: AbortController; ack?: () => void; subscription?: Subscription };
 /** One trusted host connection. Cancel releases observation/wait only, never accepted execution. */

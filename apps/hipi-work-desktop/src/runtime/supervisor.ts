@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "@hipi/work-runtime/contracts";
-import { credentialReply, type RuntimeCredentials } from "./credential-rpc.ts";
-import type { DiagnosticRuntimeState } from "./diagnostics.ts";
-import { HostConnection } from "./host-connection.ts";
-import { decode, encode, exact, WAIT_MS } from "./protocol.ts";
-import { type RuntimeDiagnostic, runtimeDiagnostic } from "./runtime-diagnostics.ts";
+import { credentialReply, type RuntimeCredentials } from "../credentials/rpc.ts";
+import { type RuntimeDiagnostic, runtimeDiagnostic } from "../diagnostics/runtime.ts";
+import type { DiagnosticRuntimeState } from "../diagnostics/service.ts";
+import { decode, encode, exact, WAIT_MS } from "../ipc/protocol.ts";
+import { HostConnection } from "./connection.ts";
 
 type Child = {
 	postMessage(raw: string): void;

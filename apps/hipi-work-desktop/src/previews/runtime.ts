@@ -1,6 +1,6 @@
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { type PreviewRequestHandler, parsePreviewRequest } from "@hipi/work-runtime/previews/protocol";
-import { decode, encode, exact, identifier, MAX_ACTIVE } from "./protocol.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE } from "../ipc/protocol.ts";
 
 /** Cancellation belongs to the utility generation; close drains callers before cache teardown. */
 export function createPreviewRuntime(handler: PreviewRequestHandler, generation: string, post: (raw: string) => void) {

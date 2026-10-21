@@ -1,7 +1,7 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { DeterministicResponseFixture } from "@hipi/work-runtime/testing";
-import { smokeProfile } from "./smoke-profile.ts";
+import { smokeProfile } from "./profile.ts";
 
 const response = "--smoke-response=baseline-stream";
 const scenario = "--smoke-scenario=baseline";

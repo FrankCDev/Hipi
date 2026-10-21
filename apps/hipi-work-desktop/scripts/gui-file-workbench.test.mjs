@@ -8,7 +8,7 @@ import { crc32, inflateSync } from "node:zlib";
 import { createFileAuthority } from "@hipi/work-runtime/files/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
 import { createPreviewClient } from "@hipi/work-runtime/previews/protocol";
-import { smokeProfile } from "../src/smoke-profile.ts";
+import { smokeProfile } from "../src/launch/profile.ts";
 import { chooseOwnedFileFolder } from "./gui-file-picker.mjs";
 import { maxPickerImageBytes, pickerOpenTarget, pickerXwdToPng } from "./gui-file-picker-image.mjs";
 import { createPreviewFixtureFiles, previewFixture } from "./gui-file-preview-fixtures.mjs";

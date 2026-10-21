@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runtimeResource } from "../src/runtime-resource.ts";
+import { runtimeResource } from "../src/runtime/resource.ts";
 
 test("utility entry relocates ASAR only; parser stays adjacent to unpacked runtime", () => {
 	for (const root of [

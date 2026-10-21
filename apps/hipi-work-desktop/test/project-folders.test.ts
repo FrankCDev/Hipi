@@ -5,11 +5,11 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { test } from "node:test";
 import { createFileClient, parseProjectFolder, parseProjectFolderSelection } from "@hipi/work-runtime/files/protocol";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
-import { FileConnection } from "../src/file-connection.ts";
-import { chooseProjectDirectory } from "../src/file-messages.ts";
-import { manageFileRoots, ProjectFolderSelections } from "../src/file-picker.ts";
-import { rootRequest } from "../src/file-protocol.ts";
-import { createFileRuntime } from "../src/file-runtime.ts";
+import { FileConnection } from "../src/files/connection.ts";
+import { chooseProjectDirectory } from "../src/files/messages.ts";
+import { manageFileRoots, ProjectFolderSelections } from "../src/files/picker.ts";
+import { rootRequest } from "../src/files/protocol.ts";
+import { createFileRuntime } from "../src/files/runtime.ts";
 
 async function expectedHostPath(path: string): Promise<string> {
 	const canonical = await realpath(path);

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createRendererAssetHandler } from "../src/renderer-assets.ts";
+import { createRendererAssetHandler } from "../src/shell/renderer-assets.ts";
 import { assertFontAsset, fontAssets } from "./font-assets.mjs";
 
 const root = new URL("../dist/renderer/", import.meta.url);

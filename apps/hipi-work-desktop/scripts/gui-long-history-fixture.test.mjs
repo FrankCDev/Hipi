@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { LIMITS } from "@hipi/work-runtime/contracts";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
-import { smokeProfile } from "../src/smoke-profile.ts";
+import { smokeProfile } from "../src/launch/profile.ts";
 import { fixture } from "./gui-flow.mjs";
 import {
 	historyAnswer,

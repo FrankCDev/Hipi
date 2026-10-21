@@ -41,6 +41,7 @@ const groups = [
 const nodeTests = groups.flatMap(([directory, names]) =>
 	names.split(" ").map((name) => `${directory}/${name}.test.ts`),
 );
+nodeTests.push("apps/hipi-work-desktop/scripts/boundary-graph.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/production-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-artifacts.test.mjs");

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AppError, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
-import { HostConnection } from "../src/host-connection.ts";
-import { CHANNEL, command, decode, encode } from "../src/protocol.ts";
-import { createRuntimeRouter } from "../src/runtime-router.ts";
-import { trustedSender } from "../src/sender.ts";
+import { CHANNEL, command, decode, encode } from "../src/ipc/protocol.ts";
+import { trustedSender } from "../src/ipc/sender.ts";
+import { HostConnection } from "../src/runtime/connection.ts";
+import { createRuntimeRouter } from "../src/runtime/router.ts";
 
 const generation = "generation-1";
 const handshake = { version: PROTOCOL_VERSION, method: "handshake", params: {} };

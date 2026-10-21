@@ -4,10 +4,10 @@ import { mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { credentialRequest, MAX_CREDENTIAL_PROVIDERS } from "../src/credential-protocol.ts";
-import { CredentialRpc, credentialReply } from "../src/credential-rpc.ts";
-import { type CredentialStatusStage, CredentialStore } from "../src/credential-store.ts";
-import { decode, encode } from "../src/protocol.ts";
+import { credentialRequest, MAX_CREDENTIAL_PROVIDERS } from "../src/credentials/protocol.ts";
+import { CredentialRpc, credentialReply } from "../src/credentials/rpc.ts";
+import { type CredentialStatusStage, CredentialStore } from "../src/credentials/store.ts";
+import { decode, encode } from "../src/ipc/protocol.ts";
 
 const customA = "custom_5e00d2f1-1301-4b56-bd5e-d32eff18d67a";
 const customB = "custom_9fef7182-ecf4-46ad-81f5-a71cbba81541";

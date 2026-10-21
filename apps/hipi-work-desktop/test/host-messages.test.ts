@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hostMessages } from "../src/host-messages.ts";
+import { hostMessages } from "../src/shell/messages.ts";
 
 test("native host messages retain failure and unknown-outcome semantics across locales", () => {
 	assert.match(hostMessages("en-US")["host.shutdown.unknown"], /unknown/);

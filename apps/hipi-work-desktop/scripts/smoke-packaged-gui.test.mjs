@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { smokeProfile } from "../src/smoke-profile.ts";
+import { smokeProfile } from "../src/launch/profile.ts";
 import { sidebarWorkspaceIds } from "./gui/sidebar/manifest.mjs";
 import { virtualizationWorkspaceIds } from "./gui/sidebar/virtualization-manifest.mjs";
 import { fileFixture } from "./gui-file-fixture-data.mjs";

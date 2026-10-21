@@ -1,5 +1,5 @@
 import { parsePreviewRequest } from "@hipi/work-runtime/previews/protocol";
-import { exact, identifier, record } from "./protocol.ts";
+import { exact, identifier, record } from "../ipc/protocol.ts";
 
 export const PREVIEW_CHANNEL = "hipi-work:previews:v1";
 export const PREVIEW_CANCEL_CHANNEL = "hipi-work:preview-cancel:v1";

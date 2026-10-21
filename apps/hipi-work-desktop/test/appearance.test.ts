@@ -8,9 +8,9 @@ import {
 	parseAppearanceStatus,
 	parseInstalledFontFace,
 } from "@hipi/work-runtime/appearance";
-import { decodeAppearanceRequest } from "../src/appearance-protocol.ts";
-import { backdropSupport, WindowAppearanceService } from "../src/appearance-service.ts";
-import { trustedSender } from "../src/sender.ts";
+import { decodeAppearanceRequest } from "../src/appearance/protocol.ts";
+import { backdropSupport, WindowAppearanceService } from "../src/appearance/service.ts";
+import { trustedSender } from "../src/ipc/sender.ts";
 
 test("appearance IPC rejects extra capabilities, oversized payloads and malformed font/CSS metadata", () => {
 	for (const input of [

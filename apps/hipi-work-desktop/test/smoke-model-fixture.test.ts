@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { deterministicModels } from "@hipi/work-runtime/testing";
-import { runtimeSmokeFixture, smokeRuntimeArguments } from "../src/smoke-model-fixture.ts";
+import { runtimeSmokeFixture, smokeRuntimeArguments } from "../src/launch/smoke-fixture.ts";
 
 test("normal, long-history, and file-workbench launches retain the exact default arguments", () => {
 	for (const provider of ["production", "deterministic"] as const) {

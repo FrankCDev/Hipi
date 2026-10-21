@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
-import { InvocationGate } from "../src/invocation-gate.ts";
-import { decode, encode } from "../src/protocol.ts";
-import { RuntimeSupervisor } from "../src/supervisor.ts";
-import { WindowLifecycle } from "../src/window-lifecycle.ts";
+import { InvocationGate } from "../src/ipc/invocation-gate.ts";
+import { decode, encode } from "../src/ipc/protocol.ts";
+import { RuntimeSupervisor } from "../src/runtime/supervisor.ts";
+import { WindowLifecycle } from "../src/shell/window-lifecycle.ts";
 
 class Child extends EventEmitter {
 	generation: string;

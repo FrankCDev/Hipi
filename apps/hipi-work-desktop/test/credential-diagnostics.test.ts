@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
-import { WindowLifecycle } from "../src/window-lifecycle.ts";
+import { WindowLifecycle } from "../src/shell/window-lifecycle.ts";
 
 test("main emits only bounded fixed status markers for an isolated deterministic smoke launch", () => {
 	const source = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");

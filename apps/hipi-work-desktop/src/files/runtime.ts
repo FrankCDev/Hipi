@@ -3,9 +3,9 @@ import { FileServiceError } from "@hipi/work-runtime/files";
 import { createRuntimeFileHost } from "@hipi/work-runtime/files/host";
 import { createRuntimeProjectFolders } from "@hipi/work-runtime/node";
 import { createRuntimePreviewHost } from "@hipi/work-runtime/previews/host";
-import { fileOperation } from "./file-protocol.ts";
-import { createPreviewRuntime } from "./preview-runtime.ts";
-import { decode, encode, exact, identifier, MAX_ACTIVE } from "./protocol.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE } from "../ipc/protocol.ts";
+import { createPreviewRuntime } from "../previews/runtime.ts";
+import { fileOperation } from "./protocol.ts";
 
 /** Grants belong to this utility incarnation only; catalog reads never open a workspace. */
 export async function createFileRuntime(

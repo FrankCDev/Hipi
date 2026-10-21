@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { RUNTIME_DIAGNOSTICS, type RuntimeDiagnostic } from "./runtime-diagnostics.ts";
+import { RUNTIME_DIAGNOSTICS, type RuntimeDiagnostic } from "./runtime.ts";
 
 export const DIAGNOSTIC_LIMITS = { bytes: 4096, count: 9999, writeWaitMs: 10000 } as const;
 const codes = [

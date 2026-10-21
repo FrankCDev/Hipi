@@ -124,7 +124,7 @@ export async function runPackagedGui({ scenario = "baseline", prepare, run, veri
 	const sourceEvidence = sourceProvenanceEvidence(provenance);
 	await assertSourceSnapshot(root, provenance.sourceSnapshot);
 	// Do not run against a pre-isolation package, which would silently ignore the testing flag.
-	for (const name of ["smoke-profile.ts", "main.ts", "provider-mode.ts"]) {
+	for (const name of ["launch/profile.ts", "main.ts", "launch/provider-mode.ts"]) {
 		const file = `apps/hipi-work-desktop/src/${name}`;
 		assert.equal(
 			provenance.sourceSnapshot.find((item) => item.file === file)?.sha256,

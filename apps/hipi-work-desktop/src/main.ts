@@ -30,29 +30,34 @@ import {
 	decodeFontRequest,
 	FONT_CANCEL_CHANNEL,
 	FONT_CHANNEL,
-} from "./appearance-protocol.ts";
-import { WindowAppearanceService } from "./appearance-service.ts";
-import { type CredentialCryptoStage, createCredentialCrypto } from "./credential-crypto.ts";
-import { CREDENTIAL_CHANNEL, credentialRequest } from "./credential-protocol.ts";
-import { type CredentialStatusStage, CredentialStore } from "./credential-store.ts";
-import { diagnosticMessages } from "./diagnostic-messages.ts";
-import { DesktopDiagnostics, DiagnosticExporter, finishFailedStartup, writeDiagnosticFile } from "./diagnostics.ts";
-import { chooseProjectDirectory, filePickerLabels } from "./file-messages.ts";
-import { manageFileRoots, ProjectFolderSelections } from "./file-picker.ts";
-import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./file-protocol.ts";
-import { FontRequests } from "./font-requests.ts";
-import type { HostConnection } from "./host-connection.ts";
-import { hostMessages } from "./host-messages.ts";
-import { NativeFontService } from "./native-fonts.ts";
-import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL, previewInvocation } from "./preview-protocol.ts";
-import { CHANNEL, decode, encode, exact, identifier, MAX_ACTIVE, observation } from "./protocol.ts";
-import { createRendererAssetHandler } from "./renderer-assets.ts";
-import { runtimeResource } from "./runtime-resource.ts";
-import { trustedSender } from "./sender.ts";
-import { smokeRuntimeArguments } from "./smoke-model-fixture.ts";
-import { prepareDesktopLaunch } from "./smoke-profile.ts";
-import { RuntimeSupervisor } from "./supervisor.ts";
-import { WindowLifecycle } from "./window-lifecycle.ts";
+} from "./appearance/protocol.ts";
+import { WindowAppearanceService } from "./appearance/service.ts";
+import { type CredentialCryptoStage, createCredentialCrypto } from "./credentials/crypto.ts";
+import { CREDENTIAL_CHANNEL, credentialRequest } from "./credentials/protocol.ts";
+import { type CredentialStatusStage, CredentialStore } from "./credentials/store.ts";
+import { diagnosticMessages } from "./diagnostics/messages.ts";
+import {
+	DesktopDiagnostics,
+	DiagnosticExporter,
+	finishFailedStartup,
+	writeDiagnosticFile,
+} from "./diagnostics/service.ts";
+import { chooseProjectDirectory, filePickerLabels } from "./files/messages.ts";
+import { manageFileRoots, ProjectFolderSelections } from "./files/picker.ts";
+import { FILE_CHANNEL, FILE_ROOT_CHANNEL } from "./files/protocol.ts";
+import { FontRequests } from "./fonts/requests.ts";
+import { NativeFontService } from "./fonts/service.ts";
+import { CHANNEL, decode, encode, exact, identifier, MAX_ACTIVE, observation } from "./ipc/protocol.ts";
+import { trustedSender } from "./ipc/sender.ts";
+import { prepareDesktopLaunch } from "./launch/profile.ts";
+import { smokeRuntimeArguments } from "./launch/smoke-fixture.ts";
+import { PREVIEW_CANCEL_CHANNEL, PREVIEW_CHANNEL, previewInvocation } from "./previews/protocol.ts";
+import type { HostConnection } from "./runtime/connection.ts";
+import { runtimeResource } from "./runtime/resource.ts";
+import { RuntimeSupervisor } from "./runtime/supervisor.ts";
+import { hostMessages } from "./shell/messages.ts";
+import { createRendererAssetHandler } from "./shell/renderer-assets.ts";
+import { WindowLifecycle } from "./shell/window-lifecycle.ts";
 
 const PAGE = "hipi-work://app/index.html";
 const root = dirname(fileURLToPath(import.meta.url));

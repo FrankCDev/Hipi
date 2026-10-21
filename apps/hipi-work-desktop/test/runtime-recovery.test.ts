@@ -13,9 +13,9 @@ import {
 	parseResult,
 } from "@hipi/work-runtime/contracts";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
-import { HostConnection } from "../src/host-connection.ts";
-import { decode, record } from "../src/protocol.ts";
-import { createRuntimeRouter } from "../src/runtime-router.ts";
+import { decode, record } from "../src/ipc/protocol.ts";
+import { HostConnection } from "../src/runtime/connection.ts";
+import { createRuntimeRouter } from "../src/runtime/router.ts";
 
 function connection(runtime: WorkRuntime, generation: string) {
 	let dropReply = false;

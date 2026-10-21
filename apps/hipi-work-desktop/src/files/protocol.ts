@@ -1,6 +1,6 @@
 import { FileServiceError } from "@hipi/work-runtime/files";
 import { type FileRequest, fileIdentifier, parseFileRequest } from "@hipi/work-runtime/files/protocol";
-import { exact, record } from "./protocol.ts";
+import { exact, record } from "../ipc/protocol.ts";
 
 export const FILE_CHANNEL = "hipi-work:files:v1";
 export const FILE_ROOT_CHANNEL = "hipi-work:file-roots:v1";

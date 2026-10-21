@@ -2,6 +2,12 @@
 
 A real Electron host for the durable Node core and shared browser-safe UI. Production mode uses the official OpenAI adapter and explicitly configured credentials; deterministic acceptance mode remains separate. This source slice is not a signed or qualified production release.
 
+## Source organization
+
+The three explicit process roots remain `src/main.ts`, `src/preload.ts` and `src/runtime-entry.ts`. Capability implementations live in `appearance`, `credentials`, `diagnostics`, `files`, `fonts`, `ipc`, `launch`, `previews`, `runtime` and `shell`. Imports target named leaf modules rather than catch-all barrels. Main owns native services and utility supervision; preload owns only validated bridges; the utility owns runtime and database execution. Feature directories may contain both host and utility leaves, so the transitive dependency checker enforces process ownership independently of directory placement.
+
+`launch/profile.ts` also owns production single-instance acquisition; its smoke profile override remains explicitly deterministic-only. Source moves do not change emitted entrypoints, parser-relative resources or ASAR unpack paths.
+
 ## Ownership and security
 
 - The sandboxed renderer has no Node integration. Context isolation is enabled. The preload exposes only validated application requests and observations, never raw IPC, filesystem access, or Electron objects.

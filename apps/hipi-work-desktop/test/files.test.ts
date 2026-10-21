@@ -6,11 +6,11 @@ import { test } from "node:test";
 import { WorkRuntime } from "@hipi/work-runtime";
 import { AppError } from "@hipi/work-runtime/contracts";
 import { createFileClient, parseFileRoots } from "@hipi/work-runtime/files/protocol";
-import { FileConnection } from "../src/file-connection.ts";
-import { manageFileRoots } from "../src/file-picker.ts";
-import { rootRequest } from "../src/file-protocol.ts";
-import { createFileRuntime } from "../src/file-runtime.ts";
-import { decode, encode } from "../src/protocol.ts";
+import { FileConnection } from "../src/files/connection.ts";
+import { manageFileRoots } from "../src/files/picker.ts";
+import { rootRequest } from "../src/files/protocol.ts";
+import { createFileRuntime } from "../src/files/runtime.ts";
+import { decode, encode } from "../src/ipc/protocol.ts";
 
 function catalog() {
 	const rejectFeatureRead = async () => {

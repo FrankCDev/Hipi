@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { prepareDesktopLaunch, smokeProfile } from "../src/smoke-profile.ts";
+import { prepareDesktopLaunch, smokeProfile } from "../src/launch/profile.ts";
 
 test("production defaults are untouched and test flags are rejected", () => {
 	assert.equal(smokeProfile([], "production"), undefined);

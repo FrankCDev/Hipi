@@ -7,9 +7,9 @@ import {
 	parseResult,
 	type Request,
 } from "@hipi/work-runtime/contracts";
-import { FileConnection } from "./file-connection.ts";
-import { PreviewConnection } from "./preview-connection.ts";
-import { decode, encode, exact, identifier, MAX_ACTIVE, observation, WAIT_MS } from "./protocol.ts";
+import { FileConnection } from "../files/connection.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE, observation, WAIT_MS } from "../ipc/protocol.ts";
+import { PreviewConnection } from "../previews/connection.ts";
 
 type Pending = {
 	awaitingAck?: boolean;

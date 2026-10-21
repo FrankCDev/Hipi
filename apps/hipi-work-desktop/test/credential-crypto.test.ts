@@ -4,9 +4,9 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createCredentialCrypto } from "../src/credential-crypto.ts";
-import { CredentialStore } from "../src/credential-store.ts";
-import { InvocationGate } from "../src/invocation-gate.ts";
+import { createCredentialCrypto } from "../src/credentials/crypto.ts";
+import { CredentialStore } from "../src/credentials/store.ts";
+import { InvocationGate } from "../src/ipc/invocation-gate.ts";
 
 // Contract fixture only: native Keychain availability and ciphertext compatibility require macOS acceptance.
 // Simulate the crypto adapter separately from filesystem integration, which uses the real host platform.

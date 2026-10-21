@@ -5,8 +5,8 @@ import {
 	parseProjectFolder,
 	parseProjectFolderSelection,
 } from "@hipi/work-runtime/files/protocol";
-import { type FileOperation, fileOperation } from "./file-protocol.ts";
-import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "../ipc/protocol.ts";
+import { type FileOperation, fileOperation } from "./protocol.ts";
 
 const codes: FileErrorCode[] = [
 	"INVALID_PATH",

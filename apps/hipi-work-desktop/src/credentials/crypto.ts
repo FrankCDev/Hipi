@@ -1,5 +1,5 @@
 import type { SafeStorage } from "electron";
-import type { SafeStoragePort } from "./credential-store.ts";
+import type { SafeStoragePort } from "./store.ts";
 
 type NativeStorage = Pick<
 	SafeStorage,

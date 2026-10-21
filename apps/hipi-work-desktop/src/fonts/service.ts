@@ -11,8 +11,8 @@ import {
 	buildInstalledFontCatalog,
 	type InstalledFontCatalog,
 } from "@hipi/work-runtime/appearance";
-import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "./font-scripts.ts";
-import { openTypeFontNames } from "./opentype-font-names.ts";
+import { openTypeFontNames } from "./opentype-names.ts";
+import { FONTCONFIG_FORMAT, MAC_FONT_SCRIPT, WINDOWS_FONT_SCRIPT } from "./scripts.ts";
 
 export const NATIVE_FONT_LIMITS = { timeoutMs: 10000, outputBytes: 4 * 1024 * 1024 } as const;
 const scriptStages = ["assembly", "enumeration", "glyph", "local-uri", "font-stream", "serialization"] as const;

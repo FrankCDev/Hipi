@@ -1,6 +1,6 @@
 import { AppError, type CredentialState } from "@hipi/work-runtime/contracts";
-import { credentialProvider, credentialSecret, credentialState } from "./credential-protocol.ts";
-import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "./protocol.ts";
+import { decode, encode, exact, identifier, MAX_ACTIVE, WAIT_MS } from "../ipc/protocol.ts";
+import { credentialProvider, credentialSecret, credentialState } from "./protocol.ts";
 
 export interface RuntimeCredentials {
 	get(provider: string): Promise<string | undefined>;

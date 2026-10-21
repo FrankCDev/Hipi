@@ -4,12 +4,7 @@ import { type FileHandle, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { AppError, type CredentialState } from "@hipi/work-runtime/contracts";
 
-import {
-	type CredentialProvider,
-	credentialProvider,
-	credentialSecret,
-	MAX_CREDENTIAL_PROVIDERS,
-} from "./credential-protocol.ts";
+import { type CredentialProvider, credentialProvider, credentialSecret, MAX_CREDENTIAL_PROVIDERS } from "./protocol.ts";
 
 export interface SafeStoragePort {
 	isEncryptionAvailable(): boolean | Promise<boolean>;

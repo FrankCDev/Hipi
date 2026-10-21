@@ -2,12 +2,12 @@ import type { TrustedAgentFileService } from "@hipi/work-runtime/files/node";
 import { createProductionModels } from "@hipi/work-runtime/model-provider";
 import { openRuntime } from "@hipi/work-runtime/node";
 import { openTestRuntime } from "@hipi/work-runtime/testing";
-import { CredentialRpc } from "./credential-rpc.ts";
-import { createFileRuntime } from "./file-runtime.ts";
-import { command, encode, identifier } from "./protocol.ts";
-import { diagnoseRuntimeOperation, runtimeDiagnosticReporter } from "./runtime-diagnostics.ts";
-import { createRuntimeRouter } from "./runtime-router.ts";
-import { runtimeSmokeFixture } from "./smoke-model-fixture.ts";
+import { CredentialRpc } from "./credentials/rpc.ts";
+import { diagnoseRuntimeOperation, runtimeDiagnosticReporter } from "./diagnostics/runtime.ts";
+import { createFileRuntime } from "./files/runtime.ts";
+import { command, encode, identifier } from "./ipc/protocol.ts";
+import { runtimeSmokeFixture } from "./launch/smoke-fixture.ts";
+import { createRuntimeRouter } from "./runtime/router.ts";
 
 const [directory, rawGeneration, provider, ...fixtureArguments] = process.argv.slice(2);
 if (!directory || (provider !== "deterministic" && provider !== "production"))
