@@ -8,6 +8,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, test } from "vitest";
 import { themeVariables } from "../../../src/app/theme/application.ts";
 import { defaultConfig } from "../../../src/app/theme/config.ts";
+import {
+	ActionMenuBoundary,
+	ActionMenuContextTrigger,
+	ActionMenuTrigger,
+} from "../../../src/components/ui/action-menu.tsx";
 import { SidebarIcon } from "../../../src/features/workbench/sidebar/icon.tsx";
 
 afterEach(() => {
@@ -95,6 +100,81 @@ function computed(selector: string) {
 	assert.ok(element);
 	return getComputedStyle(element);
 }
+
+test("pointer selection hides rails while hover, keyboard focus and either real menu trigger retain them", async () => {
+	const { theme, sidebar } = await styles();
+	// jsdom does not synthesize pointer modality or evaluate fine-pointer media.
+	// Adapt only those browser inputs; retain emitted selectors/declarations.
+	const adapted = sidebar
+		.replaceAll(":focus-visible", ".test-keyboard-focus")
+		.replaceAll(":focus-within", ".test-focus-within")
+		.replaceAll(":hover", ".test-hover");
+	const style = document.createElement("style");
+	style.textContent = optimize(`${theme}\n${adapted}`, { minify: true }).code;
+	document.head.append(style);
+	assert.ok(style.sheet);
+	function desktopRules(rules: CSSRuleList): string {
+		return Array.from(rules, (rule) => {
+			if (rule instanceof CSSMediaRule) {
+				return /hover:\s*hover/.test(rule.conditionText) ? desktopRules(rule.cssRules) : "";
+			}
+			return rule.cssText;
+		}).join("\n");
+	}
+	const css = desktopRules(style.sheet.cssRules);
+	for (const railClass of ["conversation-hover-actions", "sidebar-row-actions"]) {
+		for (const entry of ["ellipsis", "context"] as const) {
+			for (const open of [false, true]) {
+				mount(css);
+				const tree = document.querySelector(".workspace-tree");
+				assert.ok(tree);
+				const menu = createElement(
+					ActionMenuTrigger,
+					{ asChild: true },
+					createElement("button", { type: "button", className: "conversation-actions-trigger" }, "More"),
+				);
+				const rowMarkup = createElement(
+					"div",
+					{ className: "sidebar-preview-row", "data-selected": "true" },
+					createElement("button", { type: "button", className: "conversation-link" }, "Selected"),
+					createElement("div", { className: railClass }, menu),
+				);
+				tree.innerHTML = renderToStaticMarkup(
+					createElement(ActionMenuBoundary, {
+						state: { entry, open, onOpenChange: () => {} },
+						// biome-ignore lint/correctness/noChildrenProp: createElement must satisfy this component's required children prop in a .ts test.
+						children: createElement(ActionMenuContextTrigger, { asChild: true }, rowMarkup),
+					}),
+				);
+				const row = tree.querySelector<HTMLElement>(".sidebar-preview-row");
+				const title = tree.querySelector<HTMLButtonElement>(".conversation-link");
+				const rail = tree.querySelector<HTMLElement>(`.${railClass}`);
+				const trigger = tree.querySelector<HTMLButtonElement>(".conversation-actions-trigger");
+				assert.ok(row && title && rail && trigger);
+				assert.equal(getComputedStyle(rail).gap, "var(--sidebar-content-gap)");
+				assert.equal(row.dataset.state, open && entry === "context" ? "open" : "closed");
+				assert.equal(trigger.getAttribute("aria-expanded"), String(open && entry === "ellipsis"));
+				title.focus();
+				row.classList.add("test-focus-within");
+				assert.equal(document.activeElement, title);
+				assert.equal(getComputedStyle(rail).opacity, open ? "1" : "0", "pointer focus alone is not keyboard focus");
+				assert.equal(getComputedStyle(rail).width, open ? "auto" : "0px");
+				row.classList.add("test-hover");
+				assert.equal(getComputedStyle(rail).opacity, "1");
+				row.classList.remove("test-hover");
+				title.classList.add("test-keyboard-focus");
+				assert.equal(getComputedStyle(rail).opacity, "1");
+				title.classList.remove("test-keyboard-focus");
+				trigger.classList.add("test-keyboard-focus");
+				assert.equal(getComputedStyle(rail).opacity, "1", "tabbing into an action keeps its parent visible");
+				trigger.classList.remove("test-keyboard-focus");
+				trigger.dataset.state = "open";
+				assert.equal(getComputedStyle(rail).opacity, open ? "1" : "0", "unrelated tooltip state cannot pin actions");
+				assert.equal(row.dataset.selected, "true");
+			}
+		}
+	}
+});
 
 test("sidebar geometry wins over later legacy theme rules in either emitted stylesheet order", async () => {
 	const { theme, sidebar } = await styles();

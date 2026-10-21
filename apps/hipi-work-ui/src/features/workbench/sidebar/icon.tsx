@@ -1,4 +1,4 @@
-import { ChevronRight, Ellipsis, Folder, PanelLeft, Search, SquarePen } from "lucide-react";
+import { ChevronRight, Ellipsis, Folder, PanelLeft, Pin, Search, SquarePen } from "lucide-react";
 
 const icons = {
 	newChat: SquarePen,
@@ -7,11 +7,20 @@ const icons = {
 	search: Search,
 	disclosure: ChevronRight,
 	more: Ellipsis,
+	pin: Pin,
+	pinned: Pin,
 };
 
 /** Public icon library, with one lightweight desktop-navigation optical role.
  * These are semantic equivalents, not copied application artwork. */
 export function SidebarIcon({ name }: { name: keyof typeof icons }) {
 	const Glyph = icons[name];
-	return <Glyph aria-hidden="true" className="sidebar-icon" data-sidebar-icon={name} />;
+	return (
+		<Glyph
+			aria-hidden="true"
+			className="sidebar-icon"
+			data-sidebar-icon={name}
+			fill={name === "pinned" ? "currentColor" : "none"}
+		/>
+	);
 }

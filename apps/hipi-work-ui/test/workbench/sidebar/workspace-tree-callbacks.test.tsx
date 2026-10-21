@@ -249,11 +249,11 @@ test("archive visibility is changed by the project menu and opens only that coll
 	assert.ok(Array.isArray(children));
 	const menu = invoke(children[0]);
 	const content = only(menu, ActionMenuContent);
-	assert.equal(content.props.side, "right");
+	assert.equal(content.props.side, "bottom");
 	assert.equal(content.props.align, "start");
-	assert.equal(content.props.sideOffset, 40);
-	assert.equal(content.props.alignOffset, -4);
-	assert.equal(content.props.collisionPadding, 12);
+	assert.equal(content.props.sideOffset, 1);
+	assert.equal(content.props.alignOffset, 0);
+	assert.equal(content.props.collisionPadding, 6);
 	only(menu, ActionMenuRadioGroup).props.onValueChange?.("archived");
 	ui.render();
 	assert.deepEqual(fixture.options?.view, { kind: "workspace", workspaceId: "project" });

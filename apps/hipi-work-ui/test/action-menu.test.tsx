@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { ContextMenu, DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { isValidElement } from "react";
@@ -16,6 +17,21 @@ import {
 import * as Dropdown from "../src/components/ui/dropdown-menu.tsx";
 
 const fixture = vi.hoisted(() => ({ state: null as ActionMenuState | null }));
+
+test("sidebar menu paint remains scoped, content-sized and distinct from hover cards", async () => {
+	const styles = await readFile(new URL("../src/features/workbench/sidebar/action-menu.css", import.meta.url), "utf8");
+	const layout = await readFile(new URL("../src/features/workbench/sidebar/layout.css", import.meta.url), "utf8");
+	assert.match(styles, /width: max-content/);
+	assert.match(styles, /--sidebar-menu-min-width: calc\(var\(--spacing\) \* 40\)/);
+	assert.match(styles, /--sidebar-menu-context-min-width: calc\(var\(--spacing\) \* 45\)/);
+	assert.match(styles, /var\(--ui-hover-foreground\) var\(--ui-hover-opacity\)/);
+	assert.match(
+		styles,
+		/\[data-slot="context-menu-content"\][^{]+\{[^}]+background: var\(--raised\);[^}]+backdrop-filter: none/s,
+	);
+	assert.doesNotMatch(layout, /\[data-slot="(?:dropdown|context)-menu-content"\]\.conversation-action-menu/);
+	assert.match(layout, /\[data-slot="popover-content"\]\.conversation-preview-card/);
+});
 vi.mock("react", async () => ({
 	...(await vi.importActual<typeof React>("react")),
 	useContext: () => fixture.state,

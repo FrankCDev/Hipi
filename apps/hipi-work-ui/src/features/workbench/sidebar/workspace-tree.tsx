@@ -12,7 +12,6 @@ import {
 	ActionMenu,
 	ActionMenuContent,
 	ActionMenuItem,
-	ActionMenuLabel,
 	ActionMenuRadioGroup,
 	ActionMenuRadioItem,
 	ActionMenuSeparator,
@@ -41,6 +40,7 @@ import type { SidebarLocation } from "./selection-owner.ts";
 import { SidebarTitle } from "./title.tsx";
 import { useNavigation } from "./use-navigation.ts";
 import "./layout.css";
+import "./action-menu.css";
 
 type TreeProps = {
 	onProjectPinNotice?: (notice: ProjectPinNotice) => void;
@@ -514,11 +514,11 @@ function ProjectConversationMenu({
 				</ActionMenuTrigger>
 			</SidebarActionTooltip>
 			<ActionMenuContent
-				side={controls ? "right" : "bottom"}
-				align={controls ? "start" : "end"}
-				sideOffset={controls?.menuPosition.sideOffset}
-				alignOffset={controls?.menuPosition.alignOffset}
-				collisionPadding={12}
+				side="bottom"
+				align="start"
+				sideOffset={1}
+				alignOffset={0}
+				collisionPadding={6}
 				className="project-action-menu"
 				data-sidebar-row-portal={controls ? "" : undefined}
 				onCloseAutoFocus={(event) => {
@@ -527,8 +527,6 @@ function ProjectConversationMenu({
 					controls.onReturnFocus();
 				}}
 			>
-				<ActionMenuLabel className="sidebar-menu-preview">{controls?.previewContent ?? name}</ActionMenuLabel>
-				<ActionMenuSeparator />
 				{onManageFolder && (
 					<>
 						<ActionMenuItem onSelect={onManageFolder}>

@@ -24,7 +24,52 @@ export function contextMenuState(document, retained) {
 	const railStyle = rail && document.defaultView.getComputedStyle(rail);
 	const railWidth = railStyle ? Number.parseFloat(railStyle.width) : NaN;
 	const railOpacity = railStyle ? Number.parseFloat(railStyle.opacity) : NaN;
-	const previewStyle = preview && document.defaultView.getComputedStyle(preview);
+	const menuRect = menu?.getBoundingClientRect();
+	const triggerRect = retained.trigger?.getBoundingClientRect?.();
+	let intrinsicMenuWidth = 0;
+	let itemsFit = !!menu;
+	if (menu) {
+		const measure = document.createElement("canvas").getContext("2d");
+		if (!measure) throw new Error("Menu width probe needs independent text metrics");
+		const number = (value) => Number.parseFloat(value) || 0;
+		for (const item of menu.querySelectorAll('[role="menuitem"]')) {
+			const style = document.defaultView.getComputedStyle(item);
+			const label = item.textContent.trim();
+			measure.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+			const icons = [...item.children];
+			const content = measure.measureText(label).width + number(style.letterSpacing) * label.length;
+			const leading = icons.reduce((sum, node) => sum + node.getBoundingClientRect().width, 0);
+			intrinsicMenuWidth = Math.max(
+				intrinsicMenuWidth,
+				content +
+					leading +
+					number(style.columnGap) * icons.length +
+					number(style.paddingLeft) +
+					number(style.paddingRight) +
+					number(style.borderLeftWidth) +
+					number(style.borderRightWidth),
+			);
+		}
+		const style = document.defaultView.getComputedStyle(menu);
+		intrinsicMenuWidth +=
+			number(style.paddingLeft) +
+			number(style.paddingRight) +
+			number(style.borderLeftWidth) +
+			number(style.borderRightWidth);
+		let previousBottom = menuRect.top;
+		for (const item of menu.querySelectorAll('[role="menuitem"], [role="separator"]')) {
+			const rect = item.getBoundingClientRect();
+			itemsFit &&=
+				rect.width > 0 &&
+				rect.height > 0 &&
+				rect.top >= previousBottom - 0.5 &&
+				rect.left >= menuRect.left &&
+				rect.right <= menuRect.right + 0.5 &&
+				rect.bottom <= menuRect.bottom + 0.5 &&
+				item.scrollWidth <= item.clientWidth + 1;
+			previousBottom = rect.bottom;
+		}
+	}
 	const messages = all("[data-message-id]");
 	const rows = all(".sidebar-preview-row");
 	const triggers = all(".conversation-actions-trigger");
@@ -77,10 +122,21 @@ export function contextMenuState(document, retained) {
 		menuOpen: menu?.dataset.state === "open",
 		menuSlot: menu?.dataset.slot ?? null,
 		menuVisible: !!menu?.getClientRects().length,
-		menuWidth: menu?.getBoundingClientRect().width ?? 0,
-		previewPadding: previewStyle
-			? [previewStyle.paddingTop, previewStyle.paddingRight, previewStyle.paddingBottom, previewStyle.paddingLeft]
-			: [],
+		menuWidth: menuRect?.width ?? 0,
+		menuLeft: menuRect?.left ?? 0,
+		menuRight: menuRect?.right ?? 0,
+		menuTop: menuRect?.top ?? 0,
+		menuBottom: menuRect?.bottom ?? 0,
+		menuSide: menu?.dataset.side,
+		triggerRect: triggerRect && {
+			left: triggerRect.left,
+			right: triggerRect.right,
+			top: triggerRect.top,
+			bottom: triggerRect.bottom,
+		},
+		intrinsicMenuWidth,
+		itemsFit,
+		menuHeader: !!preview,
 		rowBackground,
 		rowAnimations,
 		sourceHovered: sourceRow?.matches(":hover") === true,
@@ -93,6 +149,9 @@ export function contextMenuState(document, retained) {
 			rail.getBoundingClientRect().width > 0 &&
 			document.defaultView.getComputedStyle(rail).opacity === "1",
 		labels: [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].map((node) => node.textContent.trim()),
+		structure: [...(menu?.querySelectorAll('[role="menuitem"], [role="separator"]') ?? [])].map((node) =>
+			node.getAttribute("role"),
+		),
 		itemsReady:
 			!!menu &&
 			[...menu.querySelectorAll('[role="menuitem"]')].every((node) => node.getAttribute("aria-disabled") !== "true"),
@@ -162,10 +221,31 @@ export function assertContextMenuOpen(value, baseline, expected, entry) {
 	assert.equal(value.menuOpen, true);
 	assert.equal(value.menuVisible, true);
 	assert.ok(
-		Math.abs(value.menuWidth - expected.menuWidth) <= 1,
-		"Both native entries must use the reference menu width",
+		value.menuWidth >= (entry === "context" ? 180 : 160) - 1 &&
+			value.menuWidth <= expected.viewportWidth - 12 + 1 &&
+			value.menuLeft >= 5 &&
+			value.menuRight <= expected.viewportWidth - 5,
+		"Content-driven menu must retain its entry minimum and viewport collision bounds",
 	);
-	assert.deepEqual(value.previewPadding, ["8px", "8px", "8px", "8px"]);
+	assert.equal(value.menuHeader, false, "Actions must not duplicate the standalone hover preview");
+	assert.equal(value.itemsFit, true, "Menu items must remain visible without horizontal clipping");
+	const preferredWidth = Math.min(
+		expected.viewportWidth - 16,
+		Math.max(entry === "context" ? 180 : 160, value.intrinsicMenuWidth),
+	);
+	assert.ok(
+		Math.abs(value.menuWidth - preferredWidth) <= 2,
+		"Menu width must follow independently measured content, not a fixed preview width",
+	);
+	assert.deepEqual(value.structure, ["menuitem", "menuitem", "separator", "menuitem"]);
+	if (entry === "ellipsis") {
+		assert.ok(["bottom", "top"].includes(value.menuSide), "Ellipsis anchors vertically to its trigger");
+		const edge =
+			value.menuSide === "bottom" ? value.menuTop - value.triggerRect.bottom : value.triggerRect.top - value.menuBottom;
+		assert.ok(edge >= 0 && edge <= 3, "Dropdown keeps the reference trigger offset, including its surface margin");
+		const left = Math.max(6, Math.min(value.triggerRect.left, expected.viewportWidth - value.menuWidth - 6));
+		assert.ok(Math.abs(value.menuLeft - left) <= 2, "Dropdown starts at its own trigger, subject to collision shift");
+	}
 	assert.equal(value.sourceHovered, false, "Measure persistent menu state after leaving the row");
 	assert.equal(contextRowSurfaceSettled(value), true, "Menu-open row surface must finish transitioning");
 	assert.equal(value.rowBackground, expected.hoverSurface, "Menu-open row must retain the hover surface");
@@ -181,8 +261,8 @@ export function assertContextMenuOpen(value, baseline, expected, entry) {
 	assert.equal(value.freshMenu, true, "Opening cannot reuse stale menu evidence");
 	assert.equal(value.itemsReady, true, "Pin status must resolve from the runtime");
 	assert.deepEqual(value.labels, expected.labels);
-	assert.deepEqual(value.titles, [expected.title]);
-	assert.deepEqual(value.created, [expected.created]);
+	assert.deepEqual(value.titles, []);
+	assert.deepEqual(value.created, []);
 }
 
 export function assertContextMenuClosed(value, baseline, entry) {
@@ -258,17 +338,15 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 			assertContextContinuity(baseline, baseline);
 			const english = await evaluate(cdp, "document.documentElement.lang.startsWith('en')");
 			const expected = {
-				menuWidth: await evaluate(cdp, "Math.min(320,innerWidth-24)"),
+				viewportWidth: await evaluate(cdp, "innerWidth"),
 				hoverSurface: "",
-				title: conversation.title,
-				created: new Date(conversation.createdAt).toISOString(),
 				labels: english
 					? [
-							location === "pinned" ? "Unpin conversation" : "Pin conversation",
 							"Rename conversation",
+							location === "pinned" ? "Unpin conversation" : "Pin conversation",
 							"Archive conversation",
 						]
-					: [location === "pinned" ? "取消固定会话" : "固定会话", "重命名会话", "归档会话"],
+					: ["重命名会话", location === "pinned" ? "取消固定会话" : "固定会话", "归档会话"],
 			};
 			let contextLabels;
 			let hoverSample;
@@ -330,7 +408,7 @@ export async function exerciseSidebarContextMenus({ cdp, seed, directory }) {
 						!value.sourceHovered &&
 						value.railVisible &&
 						contextRowSurfaceSettled(value) &&
-						Math.abs(value.menuWidth - expected.menuWidth) <= 1
+						value.menuWidth >= (entry === "context" ? 180 : 160) - 1
 					);
 				}, `${entry} menu geometry and retained rail settle`);
 				const opened = await read();

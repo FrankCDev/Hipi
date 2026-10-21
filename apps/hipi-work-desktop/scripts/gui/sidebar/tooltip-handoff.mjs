@@ -41,13 +41,120 @@ export function sidebarTooltipState(document) {
 		};
 	};
 	return {
+		viewport: { width: document.defaultView.innerWidth, height: document.defaultView.innerHeight },
 		collapse: control(".sidebar-collapse"),
 		toggle: control(".navigation-toggle"),
 		tooltips: [...document.querySelectorAll('[data-slot="tooltip-content"]')].map((node) => ({
 			label: node.querySelector(":scope > span:not([role])")?.textContent ?? node.textContent,
 			state: node.getAttribute("data-state"),
+			box: (() => {
+				const r = node.getBoundingClientRect();
+				return { x: r.x, y: r.y, right: r.right, bottom: r.bottom };
+			})(),
 		})),
 	};
+}
+
+/** The last move goes beyond both measured boxes AND the previous leave point's
+ * padded grace hull. Separate input frames let the public tooltip subscribe to
+ * its normal document pointer tracking; no timing/closing rule is replaced. */
+export function tooltipExitPath(state, owner) {
+	assert.ok(
+		Number.isFinite(state.viewport?.width) &&
+			state.viewport.width > 0 &&
+			Number.isFinite(state.viewport?.height) &&
+			state.viewport.height > 0,
+		"Pointer exit needs the actual viewport",
+	);
+	const trigger = state[owner]?.box;
+	const tips = state.tooltips.filter((tip) => tip.state !== "closed" && tip.label === state[owner]?.label);
+	assert.equal(tips.length, 1, "Pointer exit needs the actual open tooltip owner");
+	const boxes = [trigger, tips[0].box];
+	for (const box of boxes)
+		assert.ok(
+			box && Object.values(box).every(Number.isFinite) && box.right > box.x && box.bottom > box.y,
+			"Pointer exit needs nonempty measured rectangles",
+		);
+	const union = {
+		x: Math.min(...boxes.map((box) => box.x)),
+		y: Math.min(...boxes.map((box) => box.y)),
+		right: Math.max(...boxes.map((box) => box.right)),
+		bottom: Math.max(...boxes.map((box) => box.bottom)),
+	};
+	const start = { x: Math.round((trigger.x + trigger.right) / 2), y: Math.round((trigger.y + trigger.bottom) / 2) };
+	const directions = [
+		{ axis: "x", sign: 1, edge: union.right, room: state.viewport.width - union.right },
+		{ axis: "x", sign: -1, edge: union.x, room: union.x },
+		{ axis: "y", sign: 1, edge: union.bottom, room: state.viewport.height - union.bottom },
+		{ axis: "y", sign: -1, edge: union.y, room: union.y },
+	].sort((a, b) => b.room - a.room);
+	const direction = directions[0];
+	assert.ok(direction.room > 32, "Measured tooltip must have room for a continuous outside path");
+	const roundOutside = direction.sign > 0 ? Math.ceil : Math.floor;
+	const outside = { ...start, [direction.axis]: roundOutside(direction.edge + direction.sign * 12) };
+	return [
+		...[1 / 3, 2 / 3, 1].map((fraction) => ({
+			x: start.x + (outside.x - start.x) * fraction,
+			y: start.y + (outside.y - start.y) * fraction,
+		})),
+		{ ...outside, [direction.axis]: roundOutside(direction.edge + direction.sign * 28) },
+	];
+}
+
+export function observeTooltipPointer(document) {
+	const events = [];
+	let pointer = null;
+	const observe = (event) => {
+		pointer = { x: event.clientX, y: event.clientY };
+		if (events.length < 128)
+			events.push({
+				type: event.type,
+				trusted: event.isTrusted,
+				...pointer,
+				target: event.target?.getAttribute?.("class") ?? null,
+			});
+	};
+	const types = ["pointermove", "pointerout", "pointerleave"];
+	for (const type of types) document.addEventListener(type, observe, true);
+	return {
+		stop: () => {
+			for (const type of types) document.removeEventListener(type, observe, true);
+			return { pointer, events };
+		},
+	};
+}
+
+export function assertTooltipPointerExit(entry) {
+	assert.deepEqual(entry.input.pointer, entry.path.at(-1), "Actual final pointer must match the measured outside path");
+	assert.ok(
+		entry.input.events.filter((event) => event.type === "pointermove").length >= 2 &&
+			entry.input.events.every((event) => event.trusted),
+		"Continuous exit requires multiple trusted pointer moves",
+	);
+	assert.equal(entry.final.toggle.focused, true, "Pointer exit must retain the restored trigger focus");
+	assert.equal(entry.final.toggle.focusVisible, false, "Pointer exit must not change input modality");
+	assert.equal(entry.final.toggle.hovered, false, "Final pointer must leave the trigger");
+	assert.equal(entry.final.tooltips.length, 0, "Continuous pointer exit must actually close the hint");
+}
+
+async function leaveTooltip(cdp, read, evidence) {
+	const entry = { before: await read(), steps: [] };
+	evidence.pointerExit = entry;
+	entry.path = tooltipExitPath(entry.before, "toggle");
+	await evaluate(cdp, `void(window.__sidebarTooltipPointer=(${observeTooltipPointer.toString()})(document))`);
+	try {
+		for (const point of entry.path) {
+			await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+			await evaluate(cdp, "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))");
+			entry.steps.push({ point, state: await read() });
+		}
+		await until(async () => (await read()).tooltips.length === 0, "fresh hover closes after pointer leaves");
+	} finally {
+		entry.final = await read();
+		entry.input = await evaluate(cdp, "window.__sidebarTooltipPointer.stop()");
+		await evaluate(cdp, "delete window.__sidebarTooltipPointer");
+	}
+	assertTooltipPointerExit(entry);
 }
 
 /** Frame observer only. CDP owns input; this does not synthesize page events. */
@@ -182,8 +289,7 @@ export async function exerciseSidebarTooltipHandoff({ cdp, directory }) {
 		await hover(cdp, ".navigation-toggle");
 		await waitHint("toggle");
 		await capture(cdp, directory, "sidebar-tooltip-fresh-hover");
-		await hover(cdp, ".app-toolbar");
-		await until(async () => (await read()).tooltips.length === 0, "fresh hover closes after pointer leaves");
+		await leaveTooltip(cdp, read, evidence);
 		// Leave pointer-restored focus, then return with actual keyboard traversal.
 		await key("Tab");
 		await key("Tab", 8);

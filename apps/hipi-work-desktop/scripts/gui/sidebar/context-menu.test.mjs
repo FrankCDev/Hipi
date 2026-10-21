@@ -51,9 +51,9 @@ const baseline = {
 	],
 };
 const expected = {
-	menuWidth: 320,
+	viewportWidth: 1024,
 	hoverSurface: "rgb(240, 240, 240)",
-	labels: ["Unpin conversation", "Rename conversation", "Archive conversation"],
+	labels: ["Rename conversation", "Unpin conversation", "Archive conversation"],
 	title: "Identical title",
 	created: "2026-10-20T00:00:00.000Z",
 };
@@ -75,8 +75,17 @@ const opened = (entry = "context") => ({
 	menuCount: 1,
 	menuOpen: true,
 	menuVisible: true,
-	menuWidth: 320,
-	previewPadding: ["8px", "8px", "8px", "8px"],
+	menuWidth: 250,
+	menuLeft: 300,
+	menuRight: 550,
+	menuTop: 81,
+	menuBottom: 181,
+	menuSide: "bottom",
+	triggerRect: { left: 300, right: 320, top: 60, bottom: 80 },
+	intrinsicMenuWidth: 250,
+	itemsFit: true,
+	structure: ["menuitem", "menuitem", "separator", "menuitem"],
+	menuHeader: false,
 	rowBackground: expected.hoverSurface,
 	rowAnimations: [],
 	sourceHovered: false,
@@ -92,8 +101,8 @@ const opened = (entry = "context") => ({
 	freshMenu: true,
 	itemsReady: true,
 	labels: [...expected.labels],
-	titles: [expected.title],
-	created: [expected.created],
+	titles: [],
+	created: [],
 });
 
 test("surface observation flushes the genuine row style and reads its animations without altering them", () => {
@@ -316,7 +325,13 @@ test("open oracle rejects stale menus, duplicate owners, hover leakage and wrong
 		["menuOpen", false],
 		["menuVisible", false],
 		["menuWidth", 160],
-		["previewPadding", ["5px", "8px", "5px", "8px"]],
+		["menuWidth", 320],
+		["structure", ["menuitem", "menuitem", "menuitem"]],
+		["structure", ["menuitem", "separator", "menuitem", "menuitem"]],
+		["menuHeader", true],
+		["menuWidth", 1024],
+		["menuLeft", 0],
+		["menuRight", 1024],
 		["rowBackground", "transparent"],
 		["rowBackground", "oklab(0.928879 -0.0000321567 -0.000340641 / 0.162903)"],
 		["rowAnimations", [{ pending: false, playState: "running" }]],
@@ -384,4 +399,66 @@ test("probe uses real right mouse and Escape input without synthetic or destruct
 	);
 	assert.match(source, /await revealRecentConversation\(cdp, scope, revealEvidence\)/);
 	assert.match(source, /keyboardContextMenu:.*verified: false/s);
+});
+
+test("ellipsis rejects whole-row right placement and wrong trigger anchors", () => {
+	for (const delta of [{ menuSide: "right" }, { menuTop: 180 }, { menuLeft: 400 }])
+		assert.throws(() => assertContextMenuOpen({ ...opened("ellipsis"), ...delta }, baseline, expected, "ellipsis"));
+});
+
+test("menu observation independently measures text and rejects overlapping or clipped item geometry", () => {
+	const rect = (top, height) => ({ left: 10, right: 190, top, bottom: top + height, width: 180, height });
+	const rows = ["Rename", "Pin", "", "Archive"].map((text, index) => ({
+		textContent: text,
+		children: text ? [{ getBoundingClientRect: () => ({ width: 16 }) }] : [],
+		getAttribute: () => (text ? "menuitem" : "separator"),
+		getBoundingClientRect: () => rect(10 + index * 24, text ? 20 : 1),
+		scrollWidth: 180,
+		clientWidth: 180,
+	}));
+	const menu = {
+		dataset: { state: "open", slot: "context-menu-content" },
+		getBoundingClientRect: () => ({ left: 0, right: 200, top: 0, bottom: 120, width: 200, height: 120 }),
+		getClientRects: () => [{}],
+		querySelector: () => null,
+		querySelectorAll: (selector) =>
+			selector.includes("separator")
+				? rows
+				: selector.includes("menuitem")
+					? rows.filter((row) => row.textContent)
+					: [],
+		contains: () => false,
+	};
+	const document = {
+		querySelector: () => null,
+		querySelectorAll: (selector) => (selector === '[role="menu"]' ? [menu] : []),
+		createElement: (tag) => {
+			assert.equal(tag, "canvas");
+			return { getContext: () => ({ measureText: (text) => ({ width: text.length * 7 }) }) };
+		},
+		defaultView: {
+			location: { href: baseline.route },
+			getComputedStyle: (node) => ({
+				fontWeight: "430",
+				fontSize: "13px",
+				fontFamily: "system-ui",
+				letterSpacing: "0px",
+				columnGap: "6px",
+				paddingLeft: node === menu ? "4px" : "8px",
+				paddingRight: node === menu ? "4px" : "8px",
+				borderLeftWidth: node === menu ? "0.5px" : "0px",
+				borderRightWidth: node === menu ? "0.5px" : "0px",
+			}),
+		},
+	};
+	const retained = { messages: [], rows: [], triggers: [], staticRows: [], staticTriggers: [] };
+	const value = contextMenuState(document, retained);
+	assert.equal(value.intrinsicMenuWidth, 7 * 7 + 16 + 6 + 16 + 9);
+	assert.deepEqual(value.structure, ["menuitem", "menuitem", "separator", "menuitem"]);
+	assert.equal(value.itemsFit, true);
+	rows[1].getBoundingClientRect = () => rect(10, 20);
+	assert.equal(contextMenuState(document, retained).itemsFit, false);
+	rows[1].getBoundingClientRect = () => rect(34, 20);
+	rows[3].getBoundingClientRect = () => rect(110, 20);
+	assert.equal(contextMenuState(document, retained).itemsFit, false);
 });

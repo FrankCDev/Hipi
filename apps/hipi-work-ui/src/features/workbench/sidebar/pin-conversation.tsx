@@ -7,6 +7,7 @@ import { usePreferences } from "../../../app/preferences.tsx";
 import { ActionMenuItem } from "../../../components/ui/action-menu.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { SidebarActionTooltip } from "./action-tooltip.tsx";
+import { SidebarIcon } from "./icon.tsx";
 import { pinLabels } from "./pin-labels.ts";
 import type { PresentationSession } from "./presentation-session.ts";
 
@@ -108,7 +109,7 @@ export function PinConversationButton(props: PinProps) {
 				disabled={action.isError ? action.isFetching : action.disabled}
 				onClick={action.isError ? action.reload : action.toggle}
 			>
-				{action.current?.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+				<SidebarIcon name={action.current?.pinned ? "pinned" : "pin"} />
 			</Button>
 		</SidebarActionTooltip>
 	);

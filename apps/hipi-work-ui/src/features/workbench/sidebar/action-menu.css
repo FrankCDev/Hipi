@@ -1,0 +1,42 @@
+/* Sidebar action menus use the reference's compact dropdown and custom context
+   surfaces. The OS-native context menu is not reproduced by these web controls. */
+:is(.conversation-action-menu, .project-action-menu) {
+	--sidebar-menu-min-width: calc(var(--spacing) * 40);
+	--sidebar-menu-context-min-width: calc(var(--spacing) * 45);
+	--sidebar-menu-context-padding: calc(var(--spacing) * 1.5);
+	width: max-content;
+	min-width: min(var(--sidebar-menu-min-width), calc(100vw - 16px));
+}
+
+:is(.conversation-action-menu, .project-action-menu) .ui-menu-row {
+	cursor: pointer;
+}
+
+:is(.conversation-action-menu, .project-action-menu) .ui-menu-row > svg {
+	color: inherit;
+	width: var(--ui-icon-size);
+	height: var(--ui-icon-size);
+}
+
+:is(.conversation-action-menu, .project-action-menu) .ui-menu-row[data-disabled] {
+	cursor: default;
+}
+
+:is(.conversation-action-menu, .project-action-menu)
+	.ui-menu-row:not([data-disabled], [data-variant="destructive"]):is(:focus, [data-highlighted]) {
+	background: color-mix(in oklab, var(--ui-hover-foreground) var(--ui-hover-opacity), transparent);
+}
+
+[data-slot="context-menu-content"]:is(.conversation-action-menu, .project-action-menu) {
+	min-width: min(var(--sidebar-menu-context-min-width), calc(100vw - 16px));
+	background: var(--raised);
+	backdrop-filter: none;
+}
+
+[data-slot="context-menu-content"]:is(.conversation-action-menu, .project-action-menu) .ui-menu-row {
+	padding: var(--sidebar-menu-context-padding);
+}
+
+[data-slot="context-menu-content"]:is(.conversation-action-menu, .project-action-menu) [role="separator"] {
+	margin-inline: var(--spacing);
+}

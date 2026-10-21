@@ -1,13 +1,12 @@
 import type { Project, ProjectListItem } from "@hipi/work-runtime/contracts";
 import { usePresence } from "framer-motion";
-import { Archive, Ellipsis, MessageCircle, Pencil, Pin, PinOff } from "lucide-react";
+import { Archive, MessageCircle, Pencil, Pin, PinOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePreferences } from "../../../app/preferences.tsx";
 import {
 	ActionMenu,
 	ActionMenuContent,
 	ActionMenuItem,
-	ActionMenuLabel,
 	ActionMenuRadioGroup,
 	ActionMenuRadioItem,
 	ActionMenuSeparator,
@@ -18,12 +17,14 @@ import { Icon } from "../../../components/ui/icon.tsx";
 import { catalogLabels } from "../catalog/labels.ts";
 import type { ProjectCatalogCommand } from "../command-recovery.ts";
 import { SidebarActionTooltip } from "../sidebar/action-tooltip.tsx";
+import { SidebarIcon } from "../sidebar/icon.tsx";
 import type { PreviewActions } from "../sidebar/preview-row.tsx";
 import type { ProjectActionOwner } from "./action-owner.ts";
 import { matchesProjectCommand } from "./commands.ts";
 import { projectFolderLabels } from "./folder-labels.ts";
 import { projectLabels } from "./labels.ts";
 import { ProjectRenameDialog } from "./rename.tsx";
+import "../sidebar/action-menu.css";
 
 /** One logical project action owner, regardless of the row's menu entry mechanism. */
 export function ProjectActions({
@@ -89,16 +90,16 @@ export function ProjectActions({
 							className="project-actions-trigger"
 							aria-label={`${cl.projectActions}: ${item.project.name}`}
 						>
-							<Ellipsis size={16} aria-hidden="true" />
+							<SidebarIcon name="more" />
 						</Button>
 					</ActionMenuTrigger>
 				</SidebarActionTooltip>
 				<ActionMenuContent
-					side="right"
+					side="bottom"
 					align="start"
-					sideOffset={controls.menuPosition.sideOffset}
-					alignOffset={controls.menuPosition.alignOffset}
-					collisionPadding={12}
+					sideOffset={1}
+					alignOffset={0}
+					collisionPadding={6}
 					className="project-action-menu"
 					data-sidebar-row-portal=""
 					onCloseAutoFocus={(event) => {
@@ -106,8 +107,6 @@ export function ProjectActions({
 						if (!renameTarget.current) controls.onReturnFocus();
 					}}
 				>
-					<ActionMenuLabel className="sidebar-menu-preview">{controls.previewContent}</ActionMenuLabel>
-					<ActionMenuSeparator />
 					{projectPinEnabled && (
 						<ActionMenuItem disabled={owner.pinDisabled} onSelect={owner.togglePin}>
 							{item.presentation.pinned ? (

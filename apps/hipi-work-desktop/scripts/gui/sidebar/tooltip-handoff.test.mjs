@@ -6,10 +6,13 @@ import { JSDOM } from "jsdom";
 import {
 	assertOwnedTooltip,
 	assertPointerTooltipHandoff,
+	assertTooltipPointerExit,
+	observeTooltipPointer,
 	sidebarTooltipOwners,
 	sidebarTooltipOwnersRetained,
 	sidebarTooltipState,
 	startSidebarTooltipTrace,
+	tooltipExitPath,
 } from "./tooltip-handoff.mjs";
 
 const state = () => ({
@@ -27,6 +30,118 @@ const state = () => ({
 const trace = () => ({
 	events: [{ type: "pointerdown", trusted: true }],
 	frames: [0, 100, 300, 700].map((elapsed) => ({ elapsed, pointer: { x: 250, y: 20 }, ...state() })),
+});
+
+test("measured continuous exit ends beyond both rectangles and previous padded grace hull", () => {
+	for (const [viewport, trigger, tip] of [
+		[
+			{ width: 1400, height: 900 },
+			{ x: 12, y: 4.5, right: 48, bottom: 40.5 },
+			{ x: 50, y: 8, right: 126, bottom: 38 },
+		],
+		[
+			{ width: 300, height: 900 },
+			{ x: 12, y: 4.5, right: 48, bottom: 40.5 },
+			{ x: 50, y: 8, right: 126, bottom: 38 },
+		],
+		[
+			{ width: 1400, height: 900 },
+			{ x: 1300, y: 850, right: 1330, bottom: 880 },
+			{ x: 1150, y: 840, right: 1290, bottom: 880 },
+		],
+	]) {
+		const value = {
+			viewport,
+			toggle: { label: "Toggle navigation", box: trigger },
+			tooltips: [{ label: "Toggle navigation", state: "instant-open", box: tip }],
+		};
+		const path = tooltipExitPath(value, "toggle");
+		assert.equal(path.length, 4);
+		const final = path.at(-1),
+			prior = path.at(-2);
+		assert.ok(final.x >= 0 && final.x < viewport.width && final.y >= 0 && final.y < viewport.height);
+		// Convex hull is contained in this conservative bounding rectangle, including
+		// the public primitive's5px padding around the preceding leave destination.
+		const hull = {
+			x: Math.min(trigger.x, tip.x, prior.x - 5),
+			right: Math.max(trigger.right, tip.right, prior.x + 5),
+			y: Math.min(trigger.y, tip.y, prior.y - 5),
+			bottom: Math.max(trigger.bottom, tip.bottom, prior.y + 5),
+		};
+		assert.ok(final.x < hull.x || final.x > hull.right || final.y < hull.y || final.y > hull.bottom);
+		assert.ok(Number.isInteger(final.x) && Number.isInteger(final.y));
+		assert.throws(() => tooltipExitPath({ ...value, tooltips: [] }, "toggle"));
+		assert.throws(() => tooltipExitPath({ ...value, viewport: { width: NaN, height: 900 } }, "toggle"));
+	}
+});
+
+test("pointer diagnostics retain trusted leave/move coordinates and remove listeners", () => {
+	const listeners = new Map();
+	const document = {
+		addEventListener: (type, fn) => listeners.set(type, fn),
+		removeEventListener: (type) => listeners.delete(type),
+	};
+	const trace = observeTooltipPointer(document);
+	for (const [type, x] of [
+		["pointerleave", 138],
+		["pointermove", 154],
+	])
+		listeners.get(type)({ type, clientX: x, clientY: 23, isTrusted: true });
+	const result = trace.stop();
+	assert.deepEqual(result.pointer, { x: 154, y: 23 });
+	assert.deepEqual(
+		result.events.map(({ type, trusted, x }) => ({ type, trusted, x })),
+		[
+			{ type: "pointerleave", trusted: true, x: 138 },
+			{ type: "pointermove", trusted: true, x: 154 },
+		],
+	);
+	assert.equal(listeners.size, 0);
+});
+
+test("continuous exit must close the tooltip without blurring or changing pointer-restored focus", () => {
+	const entry = {
+		path: [
+			{ x: 138, y: 23 },
+			{ x: 154, y: 23 },
+		],
+		input: {
+			pointer: { x: 154, y: 23 },
+			events: [
+				{ type: "pointermove", trusted: true },
+				{ type: "pointermove", trusted: true },
+			],
+		},
+		final: state(),
+	};
+	assertTooltipPointerExit(entry);
+	for (const mutate of [
+		(v) => {
+			v.final.toggle.focused = false;
+		},
+		(v) => {
+			v.final.toggle.focusVisible = true;
+		},
+		(v) => {
+			v.final.toggle.hovered = true;
+		},
+		(v) => {
+			v.final.tooltips = [{ state: "instant-open" }];
+		},
+		(v) => {
+			v.input.pointer.x = 138;
+		},
+		(v) => {
+			v.input.events.pop();
+		},
+		(v) => {
+			v.input.events[0].trusted = false;
+		},
+	]) {
+		const changed = structuredClone(entry);
+		mutate(changed);
+		assert.throws(() => assertTooltipPointerExit(changed));
+	}
 });
 
 test("content continuity cannot pass with absent, disconnected or replaced owners", () => {

@@ -1,7 +1,7 @@
 import { type Conversation, PROTOCOL_VERSION } from "@hipi/work-runtime/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePresence } from "framer-motion";
-import { Archive, ArchiveRestore, Ellipsis, Pencil } from "lucide-react";
+import { Archive, ArchiveRestore, Pencil } from "lucide-react";
 import {
 	type ReactNode,
 	type RefObject,
@@ -17,7 +17,6 @@ import {
 	ActionMenu,
 	ActionMenuContent,
 	ActionMenuItem,
-	ActionMenuLabel,
 	ActionMenuSeparator,
 	ActionMenuTrigger,
 } from "../../../components/ui/action-menu.tsx";
@@ -27,12 +26,14 @@ import { Input } from "../../../components/ui/input.tsx";
 import type { LegacyCatalogCommand } from "../command-recovery.ts";
 import { ComposerKeyboard } from "../composer/keyboard.ts";
 import { SidebarActionTooltip } from "../sidebar/action-tooltip.tsx";
+import { SidebarIcon } from "../sidebar/icon.tsx";
 import { PinConversationButton, PinConversationItem } from "../sidebar/pin-conversation.tsx";
 import type { PresentationSession } from "../sidebar/presentation-session.ts";
 import type { PreviewActions } from "../sidebar/preview-row.tsx";
 import { catalogLabels } from "./labels.ts";
 import type { CatalogSession } from "./session.ts";
 import "./rename.css";
+import "../sidebar/action-menu.css";
 
 const noPresentationSubscription = () => () => {};
 const noPresentationSnapshot = () => null;
@@ -101,8 +102,6 @@ export function ConversationActions({
 	conversation,
 	session,
 	guard,
-	previewContent,
-	menuPosition,
 	rowMenu,
 	onMenuOpen,
 	onOverlayChange,
@@ -248,35 +247,6 @@ export function ConversationActions({
 				className={inlineActions ? "conversation-hover-actions" : undefined}
 				data-preview-immediate={inlineActions ? "" : undefined}
 			>
-				{inlineActions && presentation && (
-					<PinConversationButton
-						conversation={conversation}
-						session={presentation}
-						open={active || menuOpen}
-						disabled={disabled}
-					/>
-				)}
-				{inlineActions && (
-					<SidebarActionTooltip label={l[conversation.archivedAt === null ? "archive" : "restore"]}>
-						<Button
-							className="conversation-quick-action"
-							data-action={
-								conversation.archivedAt === null ? "archive-conversation-direct" : "restore-conversation-direct"
-							}
-							size="icon-sm"
-							variant="ghost"
-							aria-label={l[conversation.archivedAt === null ? "archive" : "restore"]}
-							disabled={archiveDisabled}
-							onClick={archive}
-						>
-							{conversation.archivedAt === null ? (
-								<Archive size={15} aria-hidden="true" />
-							) : (
-								<ArchiveRestore size={15} aria-hidden="true" />
-							)}
-						</Button>
-					</SidebarActionTooltip>
-				)}
 				<ActionMenu
 					boundary={rowMenu}
 					open={menuOpen && !hidden}
@@ -295,16 +265,16 @@ export function ConversationActions({
 								variant="ghost"
 								aria-label={`${l.actions}: ${conversation.title}`}
 							>
-								<Ellipsis size={16} aria-hidden="true" />
+								<SidebarIcon name="more" />
 							</Button>
 						</ActionMenuTrigger>
 					</SidebarActionTooltip>
 					<ActionMenuContent
-						side={menuPosition ? "right" : "bottom"}
-						align={menuPosition ? "start" : "end"}
-						sideOffset={menuPosition?.sideOffset}
-						alignOffset={menuPosition?.alignOffset}
-						collisionPadding={12}
+						side="bottom"
+						align="start"
+						sideOffset={1}
+						alignOffset={0}
+						collisionPadding={6}
 						className="conversation-action-menu"
 						data-sidebar-row-portal={inlineActions ? "" : undefined}
 						onCloseAutoFocus={(event) => {
@@ -315,16 +285,6 @@ export function ConversationActions({
 							}
 						}}
 					>
-						<ActionMenuLabel className="sidebar-menu-preview">{previewContent ?? conversation.title}</ActionMenuLabel>
-						<ActionMenuSeparator />
-						{presentation && (
-							<PinConversationItem
-								conversation={conversation}
-								session={presentation}
-								open={menuOpen}
-								disabled={disabled}
-							/>
-						)}
 						<ActionMenuItem
 							disabled={renameDisabled}
 							onSelect={() => {
@@ -337,20 +297,36 @@ export function ConversationActions({
 								setRenaming(true);
 							}}
 						>
-							<Pencil size={15} aria-hidden="true" />
+							<Pencil size={16} aria-hidden="true" />
 							{l.rename}
 						</ActionMenuItem>
+						{presentation && (
+							<PinConversationItem
+								conversation={conversation}
+								session={presentation}
+								open={menuOpen}
+								disabled={disabled}
+							/>
+						)}
 						<ActionMenuSeparator />
 						<ActionMenuItem disabled={archiveDisabled} onSelect={archive}>
 							{conversation.archivedAt === null ? (
-								<Archive size={15} aria-hidden="true" />
+								<Archive size={16} aria-hidden="true" />
 							) : (
-								<ArchiveRestore size={15} aria-hidden="true" />
+								<ArchiveRestore size={16} aria-hidden="true" />
 							)}
 							{l[conversation.archivedAt === null ? "archive" : "restore"]}
 						</ActionMenuItem>
 					</ActionMenuContent>
 				</ActionMenu>
+				{inlineActions && presentation && (
+					<PinConversationButton
+						conversation={conversation}
+						session={presentation}
+						open={active || menuOpen}
+						disabled={disabled}
+					/>
+				)}
 			</div>
 			<DialogContent
 				onContextMenu={(event) => event.stopPropagation()}

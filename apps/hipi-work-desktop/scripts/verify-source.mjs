@@ -179,6 +179,7 @@ const uiTests = [
 	"workbench/sidebar/conversation-preview-card",
 	"workbench/sidebar/project-preview-card",
 	"workbench/sidebar/action-tooltip-mounted",
+	"workbench/sidebar/conversation-actions-mounted",
 	"workbench/sidebar/sidebar-surface-mounted",
 	"workbench/sidebar/recent-virtualizer-geometry-mounted",
 	"workbench/sidebar/sidebar-title",

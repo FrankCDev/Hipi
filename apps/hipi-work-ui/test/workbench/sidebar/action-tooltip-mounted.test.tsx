@@ -455,7 +455,7 @@ test.each(["ellipsis", "context"] as const)(
 				: '.sidebar-preview-row[data-state="open"]';
 		const railSelector =
 			entry === "ellipsis"
-				? '.sidebar-row-actions:has([data-state="open"])'
+				? '.sidebar-row-actions:has([aria-haspopup="menu"][aria-expanded="true"])'
 				: '.sidebar-preview-row[data-state="open"] .sidebar-row-actions';
 		assert.ok(sidebarCss.includes(rowSelector));
 		assert.ok(sidebarCss.includes(railSelector));

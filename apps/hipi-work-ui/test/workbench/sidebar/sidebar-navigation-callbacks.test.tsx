@@ -694,7 +694,7 @@ test("unknown Rename keeps its original request and input, disables Save, and Cl
 	ui.session.dispose();
 });
 
-test("sidebar action menus align to the full row's right edge and top, not the trailing button", () => {
+test("sidebar ellipsis menus anchor below their trigger independently of the row preview geometry", () => {
 	const ui = rowAndActions();
 	const row = element(ui.renderRow(), "div");
 	assert.ok(row.props.ref && typeof row.props.ref === "object");
@@ -712,11 +712,11 @@ test("sidebar action menus align to the full row's right edge and top, not the t
 	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(true);
 	ui.renderRow();
 	const content = element(ui.renderActions(), ActionMenuContent);
-	assert.equal(content.props.side, "right");
+	assert.equal(content.props.side, "bottom");
 	assert.equal(content.props.align, "start");
-	assert.equal(content.props.sideOffset, 14);
-	assert.equal(content.props.alignOffset, -4);
-	assert.equal(content.props.collisionPadding, 12);
+	assert.equal(content.props.sideOffset, 1);
+	assert.equal(content.props.alignOffset, 0);
+	assert.equal(content.props.collisionPadding, 6);
 	assert.equal(content.props.avoidCollisions, undefined, "Radix collision handling keeps its enabled default");
 });
 
@@ -750,15 +750,15 @@ test("production menu-to-dialog callbacks exclude previews until dialog closes a
 	assert.equal(element(ui.renderRow(), Popover).props.open, true, "deliberate later keyboard focus can still preview");
 });
 
-test("touch menu exposes the same read-only preview with no duplicate View details action", () => {
+test("touch menu contains actions only while the independent preview retains metadata", () => {
 	const ui = rowAndActions();
 	element(ui.renderActions(), ActionMenu).props.onOpenChange?.(true);
 	const menu = ui.renderActions();
-	assert.deepEqual(
-		element(menu, ActionMenuLabel).props.children,
-		element(ui.renderRow(), PopoverContent).props.children,
+	assert.equal(elements(menu, ActionMenuLabel).length, 0);
+	assert.match(
+		JSON.stringify(element(ui.renderRow(), PopoverContent).props.children),
+		/Actual title and project metadata/,
 	);
-	assert.match(JSON.stringify(element(menu, ActionMenuLabel).props.children), /Actual title and project metadata/);
 	const preview = elements(menu, ActionMenuItem).find((item) =>
 		JSON.stringify(item.props.children).includes("View details"),
 	);
@@ -1236,8 +1236,8 @@ test("an unresolved order blocks archive mutations but leaves rename and navigat
 	assert.equal(archive?.props.disabled, true);
 	assert.equal(rename?.props.disabled, false);
 	assert.equal(
-		elements(view, Button).find((item) => item.props["aria-label"] === "Archive conversation")?.props.disabled,
-		true,
+		elements(view, Button).find((item) => item.props["aria-label"] === "Archive conversation"),
+		undefined,
 	);
 	staleArchive?.props.onSelect?.(new Event("select"));
 	assert.deepEqual(calls, ["reorderPinnedConversation", "getPresentationCommandResult"]);
@@ -1246,7 +1246,7 @@ test("an unresolved order blocks archive mutations but leaves rename and navigat
 	presentation.dispose();
 });
 
-test("direct Archive follows the same immutable guard and unknown-request owner as the menu", async () => {
+test("inline rows retain Archive through the menu with its immutable guard and unknown-request owner", async () => {
 	const local = new LocalState();
 	const calls: { method: Method; params: unknown }[] = [];
 	const source = { ...conversation };
@@ -1274,9 +1274,11 @@ test("direct Archive follows the same immutable guard and unknown-request owner 
 				},
 			}),
 		);
-	const direct = elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation");
-	assert.ok(direct?.props.onClick);
-	invoke(direct.props.onClick, []);
+	const archive = elements(render(), ActionMenuItem).find((item) =>
+		JSON.stringify(item.props.children).includes("Archive conversation"),
+	);
+	assert.ok(archive?.props.onSelect);
+	archive.props.onSelect(new Event("select"));
 	assert.equal(calls.length, 0);
 	source.revision = 8;
 	const settled = catalogSettled(session);
@@ -1285,10 +1287,12 @@ test("direct Archive follows the same immutable guard and unknown-request owner 
 	assert.equal(session.getSnapshot().pending?.method, "archiveConversation");
 	assert.equal((calls[0]?.params as { expectedRevision: number }).expectedRevision, 1);
 	assert.equal(
-		elements(render(), Button).find((button) => button.props["aria-label"] === "Archive conversation")?.props.disabled,
+		elements(render(), ActionMenuItem).find((item) =>
+			JSON.stringify(item.props.children).includes("Archive conversation"),
+		)?.props.disabled,
 		true,
 	);
-	invoke(direct.props.onClick, []);
+	archive.props.onSelect(new Event("select"));
 	continueAction?.();
 	await Promise.resolve();
 	assert.deepEqual(
