@@ -28,6 +28,14 @@ export async function startDevHost(input: {
 	preload?: URL;
 }) {
 	const startedAt = performance.now();
+	const timing = {
+		spawnMs: null as number | null,
+		stdoutFirstMs: null as number | null,
+		stderrFirstMs: null as number | null,
+		exitMs: null as number | null,
+		stdoutBytes: 0,
+		stderrBytes: 0,
+	};
 	const child = spawn(
 		process.execPath,
 		[
@@ -43,8 +51,14 @@ export async function startDevHost(input: {
 		],
 		{ stdio: ["ignore", "pipe", "pipe", "ipc"], env: input.env ?? process.env },
 	);
+	child.once("spawn", () => {
+		timing.spawnMs = Math.round(performance.now() - startedAt);
+	});
 	const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-		child.once("exit", (code, signal) => resolve({ code, signal }));
+		child.once("exit", (code, signal) => {
+			timing.exitMs = Math.round(performance.now() - startedAt);
+			resolve({ code, signal });
+		});
 	});
 	const ready = Promise.withResolvers<{ url: string; token: string }>();
 	let output = "",
@@ -53,6 +67,8 @@ export async function startDevHost(input: {
 	assert.ok(child.stdout);
 	assert.ok(child.stderr);
 	child.stdout.on("data", (chunk: Buffer) => {
+		timing.stdoutFirstMs ??= Math.round(performance.now() - startedAt);
+		timing.stdoutBytes = Math.min(Number.MAX_SAFE_INTEGER, timing.stdoutBytes + chunk.length);
 		output = (output + chunk.toString("utf8")).slice(-65536);
 		const match = /API: (http:\/\/127\.0\.0\.1:\d+)\nToken: ([a-f0-9]+)\n/.exec(output);
 		if (match) {
@@ -61,6 +77,8 @@ export async function startDevHost(input: {
 		}
 	});
 	child.stderr.on("data", (chunk: Buffer) => {
+		timing.stderrFirstMs ??= Math.round(performance.now() - startedAt);
+		timing.stderrBytes = Math.min(Number.MAX_SAFE_INTEGER, timing.stderrBytes + chunk.length);
 		logs = (logs + chunk.toString("utf8")).slice(-65536);
 	});
 	child.once("error", () => ready.reject(new Error("Acceptance host failed to start")));
@@ -82,7 +100,7 @@ export async function startDevHost(input: {
 			// stdout contains a capability token; stderr can contain credentials or paths.
 			// Report only fixed lifecycle metadata, never captured child output.
 			throw new Error(
-				`Acceptance host did not become ready (elapsedMs=${elapsedMs}, readinessMarkerObserved=${readinessMarkerObserved}, exitCode=${child.exitCode}, signal=${child.signalCode})`,
+				`Acceptance host did not become ready (elapsedMs=${elapsedMs}, readinessMarkerObserved=${readinessMarkerObserved}, exitCode=${child.exitCode}, signal=${child.signalCode}) diagnostics=${JSON.stringify(timing)}`,
 				{ cause: error },
 			);
 		}

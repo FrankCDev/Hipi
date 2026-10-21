@@ -141,6 +141,15 @@ test("cold acceptance requires completed native evidence and exact local/data re
 		fixtureSetupOnly: true,
 		actions: Array.from({ length: 16 }, (_, n) => ({ name: `native-${n}` })),
 		warmHover: { frames: 20 },
+		projectHoverPublication: {
+			summaryReads: 1,
+			probesAfterSummary: 1,
+			framesAfterProbe: 2,
+			summary: { count: 2, coverage: { generation: 1 } },
+			probe: { coverage: { generation: 1 } },
+			failures: [],
+			rendererErrors: [],
+		},
 		autoscroll: { observed: true },
 		final: state(),
 	};

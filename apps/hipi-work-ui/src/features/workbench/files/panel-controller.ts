@@ -1,3 +1,4 @@
+import { createStore, type StoreApi } from "zustand/vanilla";
 import type { LocalState } from "../local-state.ts";
 
 export const FILE_PANEL = { min: 320, collapse: 160, initial: 640, conversationMin: 352, handle: 1 } as const;
@@ -19,59 +20,61 @@ export function panelLayout(available: number, preferred: number, ratio?: number
 		width: Math.round(Math.min(max, Math.max(FILE_PANEL.min, Number.isFinite(desired) ? desired : FILE_PANEL.initial))),
 	};
 }
-/** Presentation preferences only. Editor buffers and file operations belong to Workbench's EditorSession. */
+type PanelState = Readonly<{
+	open: boolean;
+	fullWidth: boolean;
+	width: number;
+	ratio?: number;
+	storageFailed: boolean;
+}>;
+
+/** One instance per connection-scoped LocalState. Editor buffers and file operations have separate owners. */
 export class FilePanelController {
-	private local: Pick<LocalState, "read" | "write">;
-	private state: { open: boolean; fullWidth: boolean; width: number; ratio?: number; storageFailed: boolean };
-	private resizeStart: typeof this.state | undefined;
-	private listeners = new Set<() => void>();
+	private readonly local: Pick<LocalState, "read" | "write">;
+	private readonly writableStore: StoreApi<PanelState>;
+	readonly store: Pick<StoreApi<PanelState>, "getState" | "getInitialState" | "subscribe">;
+	private resizeStart: PanelState | undefined;
 	constructor(local: Pick<LocalState, "read" | "write">) {
 		this.local = local;
 		const width = local.read("file-panel.width") ?? "";
 		const ratio = local.read("file-panel.ratio") ?? "";
-		this.state = {
+		this.writableStore = createStore<PanelState>(() => ({
 			open: local.read("file-panel.open") === "true",
 			fullWidth: false,
 			width: validPanelWidth(width) ? Number(width) : FILE_PANEL.initial,
 			...(validPanelRatio(ratio) ? { ratio: Number(ratio) } : {}),
 			storageFailed: false,
+		}));
+		this.store = {
+			getState: this.writableStore.getState,
+			getInitialState: this.writableStore.getInitialState,
+			subscribe: this.writableStore.subscribe,
 		};
 	}
-	snapshot = () => this.state;
-	subscribe = (listener: () => void) => {
-		this.listeners.add(listener);
-		return () => {
-			this.listeners.delete(listener);
-		};
-	};
 	setOpen(open: boolean) {
 		this.resizeStart = undefined;
-		this.state = {
-			...this.state,
+		this.writableStore.setState({
 			open,
 			fullWidth: false,
 			storageFailed: !this.local.write("file-panel.open", String(open)),
-		};
-		for (const listener of this.listeners) listener();
+		});
 	}
 	resize(width: number, available: number, persist = true) {
 		const next = panelLayout(available, width).width;
 		const ratio = Number.isFinite(available) && available > 0 ? Math.min(1, next / available) : undefined;
-		this.state = {
-			...this.state,
+		this.writableStore.setState({
 			fullWidth: false,
 			width: next,
 			ratio,
 			storageFailed:
 				persist && ratio !== undefined
 					? !this.local.write("file-panel.ratio", ratio.toFixed(6))
-					: this.state.storageFailed,
-		};
-		for (const listener of this.listeners) listener();
+					: this.writableStore.getState().storageFailed,
+		});
 	}
 	/** A gesture may preview sizes, but collapsed/full presentations retain its original split preference. */
 	beginResize() {
-		this.resizeStart ??= this.state;
+		this.resizeStart ??= this.writableStore.getState();
 	}
 	resizeFromSplitter(width: number, available: number, persist = true) {
 		if (!Number.isFinite(width) || !Number.isFinite(available) || available <= 0) return;
@@ -83,34 +86,33 @@ export class FilePanelController {
 			this.resize(width, available, persist);
 			return;
 		}
-		const preferred = this.resizeStart ?? this.state;
-		this.state = {
-			...this.state,
+		const preferred = this.resizeStart ?? this.writableStore.getState();
+		this.writableStore.setState({
 			open: !collapsed,
 			fullWidth,
 			width: preferred.width,
 			ratio: preferred.ratio,
-			storageFailed: persist ? !this.local.write("file-panel.open", String(!collapsed)) : this.state.storageFailed,
-		};
-		for (const listener of this.listeners) listener();
+			storageFailed: persist
+				? !this.local.write("file-panel.open", String(!collapsed))
+				: this.writableStore.getState().storageFailed,
+		});
 	}
 	finishResize(cancel = false) {
 		const start = this.resizeStart;
 		this.resizeStart = undefined;
 		if (!start) return;
-		if (cancel) this.state = start;
+		if (cancel) this.writableStore.setState(start, true);
 		else {
-			const openSaved = this.local.write("file-panel.open", String(this.state.open));
+			const state = this.writableStore.getState();
+			const openSaved = this.local.write("file-panel.open", String(state.open));
 			const ratioSaved =
-				!this.state.open || this.state.fullWidth || this.state.ratio === undefined
+				!state.open || state.fullWidth || state.ratio === undefined
 					? true
-					: this.local.write("file-panel.ratio", this.state.ratio.toFixed(6));
-			this.state = { ...this.state, storageFailed: !openSaved || !ratioSaved };
+					: this.local.write("file-panel.ratio", state.ratio.toFixed(6));
+			this.writableStore.setState({ storageFailed: !openSaved || !ratioSaved });
 		}
-		for (const listener of this.listeners) listener();
 	}
 	restoreSplit() {
-		this.state = { ...this.state, fullWidth: false };
-		for (const listener of this.listeners) listener();
+		this.writableStore.setState({ fullWidth: false });
 	}
 }

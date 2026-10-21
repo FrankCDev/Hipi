@@ -100,6 +100,26 @@ export function assertSidebarKeyboardRestored(value, baseline) {
 		assert.deepEqual(value[field], baseline[field], `Keyboard navigation lost ${field}`);
 }
 
+/** Read-only exact pinned source/trigger geometry; never reveals or selects a row itself. */
+export function sidebarKeyboardMenuPoint(document, scope, target) {
+	if (!["source", "trigger"].includes(target)) return null;
+	const links = [...document.querySelectorAll(".pinned-conversations .conversation-link")].filter(
+		(node) => node.dataset.workspaceId === scope.workspaceId && node.dataset.conversationId === scope.conversationId,
+	);
+	if (links.length !== 1) return null;
+	const row = links[0].closest(".sidebar-preview-row");
+	const triggers = row?.querySelectorAll(".conversation-actions-trigger");
+	if (!row || triggers?.length !== 1) return null;
+	const node = target === "source" ? links[0] : triggers[0];
+	if (!node.isConnected || node.closest('[hidden],[inert],[aria-hidden="true"]') || node.disabled) return null;
+	const style = document.defaultView.getComputedStyle(node);
+	if (style.visibility !== "visible" || style.display === "none" || Number(style.opacity) === 0) return null;
+	const rect = node.getBoundingClientRect();
+	const x = rect.x + rect.width / 2,
+		y = rect.y + rect.height / 2;
+	return rect.width > 0 && rect.height > 0 && node.contains(document.elementFromPoint(x, y)) ? { x, y } : null;
+}
+
 /** Setup only: scrolling a mounted row can mount later rows before the tested chord. */
 export async function prepareSidebarKeyboardBoundary({ read, select, boundary, limit }) {
 	assert.ok(boundary === "first" || boundary === "last");
@@ -293,12 +313,30 @@ export async function exerciseSidebarKeyboard({ cdp, seed, directory }) {
 		}
 		await restore();
 		const menuScope = seed.pins[1];
-		const menuTrigger = `.pinned-conversations .sidebar-preview-row:has(.conversation-link[data-workspace-id="${menuScope.workspaceId}"][data-conversation-id="${menuScope.conversationId}"]) .conversation-actions-trigger`;
-		await click(cdp, menuTrigger);
+		// Setup only: native hover reveals this noncurrent row's own action rail.
+		// No scrolling, selection, DOM input mutation or generic click repair is allowed here.
+		const menuPoint = (target) =>
+			until(
+				() =>
+					evaluate(
+						cdp,
+						`(${sidebarKeyboardMenuPoint.toString()})(document,${JSON.stringify(menuScope)},${JSON.stringify(target)})`,
+					),
+				`exact pinned keyboard menu ${target} is unobstructed`,
+			);
+		const sourcePoint = await menuPoint("source");
+		await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...sourcePoint });
+		const triggerPoint = await menuPoint("trigger");
+		assertSidebarKeyboardRestored(await read(), baseline);
+		await cdp.request("Input.dispatchMouseEvent", { type: "mouseMoved", ...triggerPoint });
+		const clickPoint = await menuPoint("trigger");
+		for (const type of ["mousePressed", "mouseReleased"])
+			await cdp.request("Input.dispatchMouseEvent", { type, ...clickPoint, button: "left", clickCount: 1 });
 		await until(async () => {
 			const state = await read();
 			return state.menuCount === 1 && state.focusInMenu;
 		}, "menu owns keyboard input");
+		assertSidebarKeyboardRestored(await read(), baseline);
 		const menuEvents = await chord("ArrowRight");
 		const blocked = await read();
 		assertSidebarKeyboardRestored(blocked, baseline);

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createNodeLogger, type OperationalLogger } from "@hipi/work-logging";
 import { AppearanceError } from "@hipi/work-runtime/appearance";
 import { AppError, parseRequest } from "@hipi/work-runtime/contracts";
 import { FileServiceError } from "@hipi/work-runtime/files";
@@ -35,6 +37,8 @@ import { WindowAppearanceService } from "./appearance/service.ts";
 import { type CredentialCryptoStage, createCredentialCrypto } from "./credentials/crypto.ts";
 import { CREDENTIAL_CHANNEL, credentialRequest } from "./credentials/protocol.ts";
 import { type CredentialStatusStage, CredentialStore } from "./credentials/store.ts";
+import { DevelopmentLifecycle, developmentControl } from "./development/control.ts";
+import { prepareDevelopment } from "./development/launch.ts";
 import { diagnosticMessages } from "./diagnostics/messages.ts";
 import {
 	DesktopDiagnostics,
@@ -59,13 +63,17 @@ import { hostMessages } from "./shell/messages.ts";
 import { createRendererAssetHandler } from "./shell/renderer-assets.ts";
 import { WindowLifecycle } from "./shell/window-lifecycle.ts";
 
-const PAGE = "hipi-work://app/index.html";
+declare const HIPI_DESKTOP_DEV: boolean;
+let PAGE = "hipi-work://app/index.html";
+let development: ReturnType<typeof prepareDevelopment> | undefined;
 const root = dirname(fileURLToPath(import.meta.url));
 protocol.registerSchemesAsPrivileged([
 	{ scheme: "hipi-work", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 const diagnostics = new DesktopDiagnostics();
 const exporter = new DiagnosticExporter();
+let logger: OperationalLogger | undefined;
+let runtimeGeneration: string | undefined;
 let supervisor: RuntimeSupervisor | undefined;
 let startupWindow: BrowserWindow | undefined;
 let recoveringStartup = false;
@@ -112,6 +120,7 @@ const exportDiagnostics = async (window?: BrowserWindow) => {
 		},
 		write: writeDiagnosticFile,
 	});
+	logger?.record("diagnostics.export", { outcome });
 	if (outcome === "failed") diagnostics.record("EXPORT_FAILED");
 	if (outcome === "write-unknown") diagnostics.record("EXPORT_WRITE_UNKNOWN");
 	if (
@@ -142,6 +151,10 @@ const exportDiagnostics = async (window?: BrowserWindow) => {
 
 let launch: ReturnType<typeof prepareDesktopLaunch> | undefined;
 try {
+	if (typeof HIPI_DESKTOP_DEV !== "undefined" && HIPI_DESKTOP_DEV) {
+		development = prepareDevelopment(app, process.argv, process.env.HIPI_WORK_DEV_TOKEN);
+		PAGE = development.page;
+	}
 	launch = prepareDesktopLaunch(app, process.argv);
 } catch {
 	// Invalid launch arguments must not acquire a lock or initialize a default session.
@@ -153,6 +166,7 @@ try {
 if (launch && !launch.hasLock) app.exit(0);
 else if (launch)
 	void start(launch.mode).catch(async () => {
+		logger?.record("app.failed", { stage: "host" });
 		diagnostics.record("HOST_STARTUP_FAILED");
 		recoveringStartup = true;
 		// The native recovery UI stays alive until actual utility exit; a failed close is not clean shutdown.
@@ -183,8 +197,9 @@ else if (launch)
 				});
 				if (choice.response === 0) await exportDiagnostics();
 			},
-			exit: () => {
+			exit: async () => {
 				exporter.close();
+				await logger?.close();
 				app.exit(1);
 			},
 		}).catch(() => {
@@ -193,7 +208,30 @@ else if (launch)
 	});
 
 async function start(mode: "production" | "deterministic") {
+	let developmentLifecycle: DevelopmentLifecycle | undefined;
+	let developmentPipe: ReturnType<typeof developmentControl> | undefined;
+	if (typeof HIPI_DESKTOP_DEV !== "undefined" && HIPI_DESKTOP_DEV) {
+		developmentLifecycle = new DevelopmentLifecycle(
+			() => supervisor?.close() ?? Promise.resolve(true),
+			async (clean) => {
+				logger?.record("app.stop", { outcome: clean ? "clean" : "unclean" });
+				await logger?.close();
+				app.exit(clean ? 0 : 1);
+			},
+		);
+		const lifecycle = developmentLifecycle;
+		developmentPipe = developmentControl(() => {
+			void lifecycle.quit().catch(() => {
+				// An unconfirmed runtime close must never report a clean exit or release its ownership.
+				logger?.record("app.failed", { stage: "runtime-close" });
+			});
+		});
+		app.once("will-quit", developmentPipe.dispose);
+	}
 	await app.whenReady();
+	if (developmentLifecycle?.cancelled) return;
+	logger = createNodeLogger({ role: "main", directory: app.getPath("logs"), console: Boolean(development) });
+	logger.record("app.start");
 	const text = hostMessages(app.getLocale());
 	diagnosticText = diagnosticMessages(app.getLocale());
 	// start is reached only after prepareDesktopLaunch validates the isolated smoke profile.
@@ -253,24 +291,44 @@ async function start(mode: "production" | "deterministic") {
 	session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 	session.defaultSession.setPermissionCheckHandler(() => false);
 	supervisor = new RuntimeSupervisor(
-		(generation) =>
-			utilityProcess.fork(
+		(generation) => {
+			runtimeGeneration = generation;
+			logger?.record("runtime.start", { generation });
+			return utilityProcess.fork(
 				runtimeResource(root),
 				smokeRuntimeArguments(join(app.getPath("userData"), `${mode}-store`), generation, mode, process.argv),
 				{
 					serviceName: "Hipi Work runtime",
 					stdio: "ignore",
 				},
-			),
+			);
+		},
 		(event) => {
+			logger?.record(event === "shutdown-timeout" ? "runtime.shutdown-timeout" : "runtime.unavailable", {
+				generation: runtimeGeneration,
+			});
 			diagnostics.record(event === "shutdown-timeout" ? "SHUTDOWN_TIMEOUT" : "RUNTIME_UNAVAILABLE");
 			if (event === "shutdown-timeout") dialog.showErrorBox("Hipi Work", text["host.shutdown.unknown"]);
 		},
 		credentials,
-		(diagnostic) => diagnostics.recordRuntime(diagnostic),
+		(diagnostic) => {
+			diagnostics.recordRuntime(diagnostic);
+			logger?.record("runtime.diagnostic", {
+				stage: diagnostic.phase,
+				category: diagnostic.category,
+				generation: runtimeGeneration,
+			});
+		},
 	);
 	const activeSupervisor = supervisor;
-	await activeSupervisor.start();
+	try {
+		await activeSupervisor.start();
+	} catch (error) {
+		if (developmentLifecycle?.cancelled) return;
+		throw error;
+	}
+	if (developmentLifecycle?.cancelled) return;
+	logger.record("runtime.ready", { generation: runtimeGeneration });
 	const window = new BrowserWindow({
 		icon: join(root, "branding/icon.png"),
 		width: 1400,
@@ -517,17 +575,32 @@ async function start(mode: "production" | "deterministic") {
 		if (!owner.isDestroyed() && owner.mainFrame.url === PAGE) owner.send(CHANNEL, encode({ id, ...value }));
 	};
 	ipcMain.handle(CHANNEL, async (event, raw: unknown) => {
+		const requestId = randomUUID();
+		const started = performance.now();
+		const generation = runtimeGeneration;
 		if (!trustedSender(event, owner, PAGE)) return { ok: false, error: "UNAUTHORIZED" };
 		if (calls.size >= MAX_ACTIVE) return { ok: false, error: "CAPACITY_EXCEEDED" };
 		try {
 			const pending = activeSupervisor.connection().call(parseRequest(decode(raw)));
 			calls.add(pending.cancel);
 			try {
-				return await pending.result;
+				const result = await pending.result;
+				logger?.record("ok" in result && result.ok === false ? "request.failed" : "request.completed", {
+					requestId,
+					generation,
+					durationMs: performance.now() - started,
+				});
+				return result;
 			} finally {
 				calls.delete(pending.cancel);
 			}
 		} catch (error) {
+			logger?.record("request.failed", {
+				requestId,
+				generation,
+				durationMs: performance.now() - started,
+				stage: "dispatch",
+			});
 			return { ok: false, error: error instanceof AppError ? error.code : "INTERNAL" };
 		}
 	});
@@ -576,6 +649,7 @@ async function start(mode: "production" | "deterministic") {
 	});
 	owner.on("render-process-gone", () => {
 		diagnostics.record("RENDERER_GONE");
+		logger?.record("renderer.gone");
 		clearRenderer();
 	});
 	owner.once("destroyed", clearRenderer);
@@ -617,14 +691,28 @@ async function start(mode: "production" | "deterministic") {
 	});
 	window.once("closed", () => {
 		observeLifecycle("window-closed");
-		void lifecycle.windowClosed().then((clean) => {
+		void lifecycle.windowClosed().then(async (clean) => {
 			if (!recoveringStartup) {
 				observeLifecycle("app-exit-enter");
+				logger?.record("app.stop", { outcome: clean ? "clean" : "unclean" });
+				await logger?.close();
 				app.exit(clean ? 0 : 1);
 			}
 		});
 	});
 	app.on("window-all-closed", () => {});
-	await window.loadURL(PAGE);
+	developmentLifecycle?.windowReady(() => app.quit());
+	try {
+		await window.loadURL(PAGE);
+	} catch (error) {
+		if (developmentLifecycle?.cancelled) return;
+		throw error;
+	}
+	if (developmentLifecycle?.cancelled) return;
+	logger.record("app.ready");
 	startupWindow = undefined;
+	if (typeof HIPI_DESKTOP_DEV !== "undefined" && HIPI_DESKTOP_DEV) {
+		developmentPipe?.ready();
+		owner.openDevTools({ mode: "detach" });
+	}
 }

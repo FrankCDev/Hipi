@@ -60,8 +60,9 @@ function render({
 } = {}) {
 	const cache = new QueryClient();
 	cache.setQueryData(["fileRoots", workspaceId], roots);
-	const controller = new FilePanelController(new LocalState());
-	controller.setOpen(true);
+	const preferences = new LocalState();
+	preferences.write("file-panel.open", "true");
+	const controller = new FilePanelController(preferences);
 	try {
 		return renderToStaticMarkup(
 			<QueryClientProvider client={cache}>

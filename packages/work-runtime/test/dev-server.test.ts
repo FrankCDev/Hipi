@@ -247,8 +247,22 @@ test("startup timeout reports safe lifecycle metadata only after child cleanup",
 				assert.ok(error instanceof Error);
 				assert.match(
 					error.message,
-					/^Acceptance host did not become ready \(elapsedMs=\d+, readinessMarkerObserved=false, exitCode=null, signal=SIGKILL\)$/,
+					/^Acceptance host did not become ready \(elapsedMs=\d+, readinessMarkerObserved=false, exitCode=null, signal=SIGKILL\) diagnostics=/,
 				);
+				const diagnostics = JSON.parse(error.message.split(" diagnostics=")[1]);
+				assert.deepEqual(Object.keys(diagnostics), [
+					"spawnMs",
+					"stdoutFirstMs",
+					"stderrFirstMs",
+					"exitMs",
+					"stdoutBytes",
+					"stderrBytes",
+				]);
+				for (const value of Object.values(diagnostics))
+					assert.ok(typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
+				assert.ok(diagnostics.stdoutBytes > 0 && diagnostics.stderrBytes > 0);
+				assert.ok(diagnostics.exitMs >= 5000);
+				assert.doesNotMatch(error.message, /synthetic|Token:|https?:\/\//);
 				assert.doesNotMatch(String(error.cause), /synthetic|Token:|https?:\/\//);
 				return true;
 			},

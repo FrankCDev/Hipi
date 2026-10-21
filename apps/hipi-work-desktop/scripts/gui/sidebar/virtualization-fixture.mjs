@@ -18,6 +18,35 @@ function runtimeOptions() {
 	return { models, model: { provider: "faux", modelId: "faux-1" } };
 }
 
+// Fixture diagnostics only: retain the exact work/time limits, never log opaque cursors.
+export async function publishVirtualizationProjection(runtime, now = () => performance.now()) {
+	const startedAt = now();
+	let restarts = 0,
+		cursorChanges = 0,
+		previousCursor,
+		state = "unobserved";
+	for (let pass = 0; ; pass++) {
+		const elapsedMs = now() - startedAt;
+		const passLimitReached = pass >= 4 * (virtualizationFixture.recentRows + 1);
+		const timeLimitReached = elapsedMs >= 30000;
+		assert.ok(
+			!passLimitReached && !timeLimitReached,
+			`Projection publication exceeded fixture bound ${JSON.stringify({ passLimitReached, timeLimitReached, pass, restarts, cursorChanges, state, elapsedMs: Math.round(elapsedMs) })}`,
+		);
+		let coverage;
+		try {
+			coverage = await runtime.call("refreshSidebarProjection", {});
+		} catch (error) {
+			if (error.code !== "CURSOR_STALE" || ++restarts > virtualizationWorkspaceIds.length * 2) throw error;
+			continue;
+		}
+		state = ["building", "refreshing", "ready"].includes(coverage.state) ? coverage.state : "unknown";
+		if (coverage.nextCursor !== previousCursor) cursorChanges++;
+		previousCursor = coverage.nextCursor;
+		if (coverage.state === "ready" && !coverage.nextCursor) return;
+	}
+}
+
 export async function virtualizationSnapshot(runtime) {
 	const workspaces = await runtime.call("listWorkspaces", {});
 	assert.equal(workspaces.nextCursor, null);
@@ -79,22 +108,7 @@ export async function seedSidebarVirtualization({ ownedProfileRoot, assertAllOwn
 			});
 		await runtime.close();
 		runtime = await openRuntime(directory, runtimeOptions());
-		let restarts = 0;
-		const publicationDeadline = Date.now() + 30000;
-		for (let pass = 0; ; pass++) {
-			assert.ok(
-				pass < 4 * (virtualizationFixture.recentRows + 1) && Date.now() < publicationDeadline,
-				"Projection publication exceeded fixture bound",
-			);
-			let coverage;
-			try {
-				coverage = await runtime.call("refreshSidebarProjection", {});
-			} catch (error) {
-				if (error.code !== "CURSOR_STALE" || ++restarts > virtualizationWorkspaceIds.length * 2) throw error;
-				continue;
-			}
-			if (coverage.state === "ready" && !coverage.nextCursor) break;
-		}
+		await publishVirtualizationProjection(runtime);
 		const recent = [];
 		let position = { kind: "head" };
 		for (let pageNumber = 0; ; pageNumber++) {

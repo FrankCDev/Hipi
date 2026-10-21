@@ -8,6 +8,7 @@ import { exerciseSidebarContextMenus } from "./context-menu.mjs";
 import { exerciseSidebarKeyboard } from "./item-navigation.mjs";
 import { nativeKeyEvents } from "./native-key.mjs";
 import { openRecentConversation } from "./new-chat-navigation.mjs";
+import { assertProjectPublication, exerciseProjectHoverPublication } from "./project-hover-publication.mjs";
 import { sidebarStartupDiagnostic } from "./startup-diagnostic.mjs";
 import { seedSidebarDocument } from "./startup-lifecycle.mjs";
 
@@ -146,6 +147,7 @@ export function assertSidebarAcceptance({ first, reopened }) {
 	assert.equal(first.fixtureSetupOnly, true);
 	assert.ok(first.actions.length >= 12, "Incomplete native sidebar journey");
 	assert.ok(first.warmHover.frames > 0);
+	assertProjectPublication(first.projectHoverPublication);
 	assert.equal(first.autoscroll.observed, true);
 	assert.deepEqual(
 		reopened.final,
@@ -608,6 +610,8 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 		await completed("release at exact six pixels remains click");
 		const warm = await warmHover(cdp, directory, seed);
 		await completed("three canonical pinned warm hover raw frames");
+		const projectHoverPublication = await exerciseProjectHoverPublication({ cdp, directory, seed });
+		await completed("project hover survives completed background publication probe");
 		// Collapse Recent for compact measured heading targets, without removing the section.
 		await click(cdp, heading("recent"));
 		await until(
@@ -804,6 +808,7 @@ export async function exerciseSidebar({ cdp, directory, reopened, seed, previous
 			fixtureSetupOnly: true,
 			actions,
 			warmHover: warm,
+			projectHoverPublication,
 			autoscroll: { observed: true, initialScroll, outside },
 			final: layout(finalState),
 		};

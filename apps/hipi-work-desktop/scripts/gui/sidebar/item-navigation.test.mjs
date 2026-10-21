@@ -7,6 +7,7 @@ import {
 	assertSidebarKeyboardSelection,
 	observeSidebarKeyboard,
 	prepareSidebarKeyboardBoundary,
+	sidebarKeyboardMenuPoint,
 	sidebarKeyboardState,
 } from "./item-navigation.mjs";
 
@@ -22,6 +23,59 @@ const baseline = () => ({
 	surface: "conversation",
 	draft: "Unsent 中文",
 	messages: [{ id: "message-one", text: "Persisted answer" }],
+});
+
+test("menu setup observes only the unique exact pinned source and an exposed hit-testable trigger", () => {
+	let hit,
+		opacity = "1",
+		duplicate = false,
+		triggerCount = 1;
+	const node = () => ({
+		isConnected: true,
+		closest: () => null,
+		getBoundingClientRect: () => ({ x: 10, y: 20, width: 80, height: 30 }),
+		contains: (value) => value === hit && value !== null,
+	});
+	const source = node(),
+		trigger = node();
+	source.dataset = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
+	source.closest = (selector) =>
+		selector === ".sidebar-preview-row" ? { querySelectorAll: () => Array(triggerCount).fill(trigger) } : null;
+	const document = {
+		querySelectorAll: () => (duplicate ? [source, source] : [source]),
+		defaultView: { getComputedStyle: () => ({ visibility: "visible", display: "block", opacity }) },
+		elementFromPoint: () => hit,
+	};
+	source.contains = (value) => value === source;
+	trigger.contains = (value) => value === trigger;
+	hit = source;
+	assert.deepEqual(sidebarKeyboardMenuPoint(document, scope, "source"), { x: 50, y: 35 });
+	assert.equal(sidebarKeyboardMenuPoint(document, scope, "trigger"), null);
+	hit = trigger;
+	assert.deepEqual(sidebarKeyboardMenuPoint(document, scope, "trigger"), { x: 50, y: 35 });
+	opacity = "0";
+	assert.equal(sidebarKeyboardMenuPoint(document, scope, "trigger"), null);
+	opacity = "1";
+	duplicate = true;
+	assert.equal(sidebarKeyboardMenuPoint(document, scope, "source"), null);
+	duplicate = false;
+	triggerCount = 2;
+	assert.equal(sidebarKeyboardMenuPoint(document, scope, "trigger"), null);
+	triggerCount = 1;
+	assert.equal(sidebarKeyboardMenuPoint(document, { ...scope, workspaceId: "foreign" }, "source"), null);
+	trigger.isConnected = false;
+	assert.equal(sidebarKeyboardMenuPoint(document, scope, "trigger"), null);
+});
+
+test("menu setup reveals with native motion before clicking and never repairs a tested shortcut", async () => {
+	const source = await readFile(new URL("./item-navigation.mjs", import.meta.url), "utf8");
+	const setup = source.slice(source.indexOf("const menuScope ="), source.indexOf("const menuEvents ="));
+	assert.doesNotMatch(setup, /await click\(|scrollIntoView|scrollTop\s*=|\.focus\(|dispatchEvent/);
+	assert.ok(setup.indexOf('menuPoint("source")') < setup.indexOf('menuPoint("trigger")'));
+	assert.ok(setup.indexOf('type: "mouseMoved"') < setup.indexOf('"mousePressed"'));
+	assert.equal(setup.split("assertSidebarKeyboardRestored(await read(), baseline)").length - 1, 2);
+	const measured = source.slice(source.indexOf("const menuEvents ="), source.indexOf('case: "menu owns shortcut'));
+	assert.doesNotMatch(measured, /menuPoint|mouseMoved|await restore\(|await click\(/);
 });
 
 test("independent row observation keeps project and alias identities in DOM order, excluding inaccessible rows", () => {

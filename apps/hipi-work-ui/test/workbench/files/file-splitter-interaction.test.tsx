@@ -18,8 +18,10 @@ vi.mock("react", async () => {
 	const actual = await vi.importActual<typeof React>("react");
 	const changed = (previous: React.DependencyList | undefined, next: React.DependencyList) =>
 		!previous || previous.length !== next.length || next.some((value, index) => !Object.is(value, previous[index]));
-	return {
+	const mock = {
 		...actual,
+		useCallback: <T,>(callback: T) => callback,
+		useDebugValue: () => {},
 		useState: <T,>(initial: T | (() => T)) => {
 			const index = hooks.cursor++;
 			const cell = hooks.cells[index] ?? { value: typeof initial === "function" ? (initial as () => T)() : initial };
@@ -51,6 +53,7 @@ vi.mock("react", async () => {
 				});
 		},
 	};
+	return { ...mock, default: mock };
 });
 vi.mock("../../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
 
@@ -156,9 +159,9 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	const handle = separator(view);
 	pointer(handle.onPointerDown, target, 560);
 	pointer(handle.onPointerMove, target, 160);
-	assert.equal(panel.snapshot().fullWidth, false); // Exactly 160px of conversation remains.
+	assert.equal(panel.store.getState().fullWidth, false); // Exactly 160px of conversation remains.
 	pointer(handle.onPointerMove, target, 159);
-	assert.equal(panel.snapshot().fullWidth, true);
+	assert.equal(panel.store.getState().fullWidth, true);
 	view = panelView(session);
 	assert.equal(elements(view, "section")[0]?.props.style?.width, 1200);
 	assert.equal(elements(view, FileWorkbench)[0]?.type, firstOwner?.type);
@@ -167,14 +170,14 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	pointer(separator(view).onPointerUp, target, 159);
 	assert.equal(target.hasPointerCapture(1), false);
 	key(panelView(session), "ArrowRight");
-	assert.equal(panel.snapshot().fullWidth, false);
-	assert.equal(panel.snapshot().width, 640);
+	assert.equal(panel.store.getState().fullWidth, false);
+	assert.equal(panel.store.getState().width, 640);
 	view = panelView(session);
 	pointer(separator(view).onPointerDown, target, 560);
 	pointer(separator(view).onPointerMove, target, 1040);
-	assert.equal(panel.snapshot().open, true); // Exactly 160px stays open.
+	assert.equal(panel.store.getState().open, true); // Exactly 160px stays open.
 	pointer(separator(view).onPointerMove, target, 1041);
-	assert.equal(panel.snapshot().open, false);
+	assert.equal(panel.store.getState().open, false);
 	assert.equal(target.hasPointerCapture(1), false);
 	assert.deepEqual(focus.mock.calls.at(-1), [{ preventScroll: true }]);
 	const hidden = panelView(session);
@@ -190,19 +193,19 @@ test("dock gesture enters and leaves full width without replacing the file owner
 	assert.equal(elements(reopened, "section")[0]?.props.inert, false);
 	assert.equal(elements(reopened, FileWorkbench)[0]?.props.visible, true);
 	assert.equal(elements(reopened, FileWorkbench)[0]?.props.session, session);
-	assert.equal(panel.snapshot().width, 640);
+	assert.equal(panel.store.getState().width, 640);
 });
 
 test.each(["cancel", "lost", "unmount", "narrow"] as const)(
 	"dock %s retires capture and rolls back preview without writing the ratio",
 	(reason) => {
-		const initial = panel.snapshot();
+		const initial = panel.store.getState();
 		const saved = local.read("file-panel.ratio");
 		const target = pointerTarget();
 		const handle = separator(panelView());
 		pointer(handle.onPointerDown, target, 560);
 		pointer(handle.onPointerMove, target, 400);
-		assert.equal(panel.snapshot().width, 800);
+		assert.equal(panel.store.getState().width, 800);
 		if (reason === "cancel") pointer(handle.onPointerCancel, target, 400);
 		if (reason === "lost") {
 			target.releasePointerCapture(1);
@@ -214,28 +217,28 @@ test.each(["cancel", "lost", "unmount", "narrow"] as const)(
 			panelView();
 		}
 		assert.equal(target.hasPointerCapture(1), false);
-		assert.deepEqual(panel.snapshot(), initial);
+		assert.deepEqual(panel.store.getState(), initial);
 		assert.equal(local.read("file-panel.ratio"), saved);
 		pointer(handle.onPointerMove, target, -10000);
-		assert.deepEqual(panel.snapshot(), initial);
+		assert.deepEqual(panel.store.getState(), initial);
 	},
 );
 
 test("dock keyboard retains steps and Home/End bounds with accessible edge transitions", () => {
 	key(panelView(), "ArrowLeft");
-	assert.equal(panel.snapshot().width, 664);
+	assert.equal(panel.store.getState().width, 664);
 	key(panelView(), "Home");
-	assert.equal(panel.snapshot().width, 320);
+	assert.equal(panel.store.getState().width, 320);
 	key(panelView(), "ArrowRight");
-	assert.equal(panel.snapshot().open, false);
+	assert.equal(panel.store.getState().open, false);
 	panel.setOpen(true);
 	key(panelView(), "End");
-	assert.equal(panel.snapshot().width, 847);
+	assert.equal(panel.store.getState().width, 847);
 	key(panelView(), "ArrowLeft");
-	assert.equal(panel.snapshot().fullWidth, true);
+	assert.equal(panel.store.getState().fullWidth, true);
 	key(panelView(), "ArrowRight");
-	assert.equal(panel.snapshot().fullWidth, false);
-	assert.equal(panel.snapshot().width, 847);
+	assert.equal(panel.store.getState().fullWidth, false);
+	assert.equal(panel.store.getState().width, 847);
 });
 
 test("tree uses the independent 100px collapse threshold and 60 percent maximum, restoring pre-gesture preference", () => {

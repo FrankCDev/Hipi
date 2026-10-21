@@ -42,25 +42,25 @@ class MemoryStorage implements BrowserStorage {
 test("closed by default; validated preferences restore only for the verified store", () => {
 	const storage = new MemoryStorage();
 	const panel = new FilePanelController(new LocalState("one", storage));
-	assert.equal(panel.snapshot().open, false);
+	assert.equal(panel.store.getState().open, false);
 	panel.setOpen(true);
 	panel.resize(550, 1200);
-	assert.deepEqual(new FilePanelController(new LocalState("one", storage)).snapshot(), {
+	assert.deepEqual(new FilePanelController(new LocalState("one", storage)).store.getState(), {
 		open: true,
 		fullWidth: false,
 		width: 640,
 		ratio: 0.458333,
 		storageFailed: false,
 	});
-	assert.equal(new FilePanelController(new LocalState("two", storage)).snapshot().open, false);
-	assert.equal(new FilePanelController(new LocalState(undefined, storage)).snapshot().open, false);
+	assert.equal(new FilePanelController(new LocalState("two", storage)).store.getState().open, false);
+	assert.equal(new FilePanelController(new LocalState(undefined, storage)).store.getState().open, false);
 	for (const width of ["NaN", "Infinity", "-1", "9999", "300", "420px", "420.5", " 420", "0420"]) {
 		assert.equal(validPanelWidth(width), false);
 		storage.setItem(
 			"hipi.work.local.v1.one.value.file-panel.width",
 			JSON.stringify({ version: 1, storeId: "one", kind: "value", key: "file-panel.width", value: width }),
 		);
-		assert.equal(new FilePanelController(new LocalState("one", storage)).snapshot().width, 640);
+		assert.equal(new FilePanelController(new LocalState("one", storage)).store.getState().width, 640);
 	}
 });
 test("resize bounds preserve conversation space and choose a dialog when there is not enough room", () => {
@@ -78,10 +78,10 @@ test("drag updates remain in memory until committed and subscriptions clean up",
 	const local = new LocalState();
 	const panel = new FilePanelController(local);
 	let changes = 0;
-	const unsubscribe = panel.subscribe(() => changes++);
+	const unsubscribe = panel.store.subscribe(() => changes++);
 	panel.resize(600, 1200, false);
 	assert.equal(local.read("file-panel.width"), null);
-	panel.resize(panel.snapshot().width, 1200);
+	panel.resize(panel.store.getState().width, 1200);
 	assert.equal(local.read("file-panel.ratio"), "0.500000");
 	unsubscribe();
 	panel.setOpen(true);
@@ -92,52 +92,52 @@ test("splitter thresholds collapse below 160px and fill only with less than 160p
 	const panel = new FilePanelController(local);
 	panel.setOpen(true);
 	panel.resize(550, 1200);
-	const ratio = panel.snapshot().ratio;
+	const ratio = panel.store.getState().ratio;
 	panel.resizeFromSplitter(160, 1200);
-	assert.equal(panel.snapshot().open, true);
-	assert.equal(panel.snapshot().width, 320);
+	assert.equal(panel.store.getState().open, true);
+	assert.equal(panel.store.getState().width, 320);
 	panel.resize(550, 1200);
 	panel.resizeFromSplitter(159.99, 1200);
-	assert.equal(panel.snapshot().open, false);
-	assert.equal(panel.snapshot().ratio, ratio);
+	assert.equal(panel.store.getState().open, false);
+	assert.equal(panel.store.getState().ratio, ratio);
 	panel.setOpen(true);
 	panel.resizeFromSplitter(1040, 1200);
-	assert.equal(panel.snapshot().fullWidth, false);
+	assert.equal(panel.store.getState().fullWidth, false);
 	panel.resize(550, 1200);
 	panel.resizeFromSplitter(1040.01, 1200);
-	assert.equal(panel.snapshot().fullWidth, true);
-	assert.equal(panel.snapshot().width, 550);
-	assert.equal(panel.snapshot().ratio, ratio);
+	assert.equal(panel.store.getState().fullWidth, true);
+	assert.equal(panel.store.getState().width, 550);
+	assert.equal(panel.store.getState().ratio, ratio);
 	assert.equal(local.read("file-panel.ratio"), "0.458333");
 	panel.setOpen(false);
 	panel.setOpen(true);
-	assert.equal(panel.snapshot().fullWidth, false);
-	assert.equal(panelLayout(1200, panel.snapshot().width, panel.snapshot().ratio).width, 550);
+	assert.equal(panel.store.getState().fullWidth, false);
+	assert.equal(panelLayout(1200, panel.store.getState().width, panel.store.getState().ratio).width, 550);
 });
 test("pointer overflow preserves the pre-gesture split; cancellation restores the complete presentation", () => {
 	const local = new LocalState();
 	const panel = new FilePanelController(local);
 	panel.setOpen(true);
 	panel.resize(560, 1200);
-	const original = panel.snapshot();
+	const original = panel.store.getState();
 	panel.beginResize();
 	panel.resizeFromSplitter(800, 1200, false);
 	panel.resizeFromSplitter(10000, 1200, false);
-	assert.equal(panel.snapshot().fullWidth, true);
-	assert.equal(panel.snapshot().ratio, original.ratio);
+	assert.equal(panel.store.getState().fullWidth, true);
+	assert.equal(panel.store.getState().ratio, original.ratio);
 	panel.finishResize();
 	assert.equal(local.read("file-panel.ratio"), "0.466667");
 	panel.restoreSplit();
 	panel.beginResize();
 	panel.resizeFromSplitter(400, 1200, false);
 	panel.resizeFromSplitter(-1000, 1200, false);
-	assert.equal(panel.snapshot().open, false);
-	assert.equal(panel.snapshot().ratio, original.ratio);
+	assert.equal(panel.store.getState().open, false);
+	assert.equal(panel.store.getState().ratio, original.ratio);
 	panel.finishResize(true);
-	assert.deepEqual(panel.snapshot(), original);
+	assert.deepEqual(panel.store.getState(), original);
 	for (const width of [NaN, Infinity, -Infinity]) panel.resizeFromSplitter(width, 1200);
 	for (const available of [0, 600, NaN, Infinity]) panel.resizeFromSplitter(0, available);
-	assert.deepEqual(panel.snapshot(), original);
+	assert.deepEqual(panel.store.getState(), original);
 });
 test("storage denial or revoked lease leaves panel usable and reports failed persistence", () => {
 	const storage = new MemoryStorage();
@@ -147,19 +147,25 @@ test("storage denial or revoked lease leaves panel usable and reports failed per
 	const local = new LocalState("store", storage);
 	const panel = new FilePanelController(local);
 	panel.setOpen(true);
-	assert.equal(panel.snapshot().open, true);
-	assert.equal(panel.snapshot().storageFailed, true);
+	assert.equal(panel.store.getState().open, true);
+	assert.equal(panel.store.getState().storageFailed, true);
 	local.deactivate();
 	panel.resize(500, 1200);
-	assert.equal(panel.snapshot().storageFailed, true);
+	assert.equal(panel.store.getState().storageFailed, true);
 });
 function render(panel: FilePanelController, session?: FileWorkspaceSession, available: number | null = 1200) {
 	const cache = new QueryClient();
+	const state = panel.store.getState();
+	const preferences = new LocalState();
+	preferences.write("file-panel.open", String(state.open));
+	preferences.write("file-panel.width", String(state.width));
+	if (state.ratio !== undefined) preferences.write("file-panel.ratio", state.ratio.toFixed(6));
+	const initialPanel = new FilePanelController(preferences);
 	const html = renderToStaticMarkup(
 		<QueryClientProvider client={cache}>
 			<PreferencesProvider>
 				<FilePanel
-					controller={panel}
+					controller={initialPanel}
 					available={available}
 					workspaceId="workspace"
 					session={session}
@@ -210,4 +216,47 @@ test("hiding and reopening presentation leaves dirty editor ownership and protec
 test("panel labels have matching English hierarchical keys in both languages", () => {
 	assert.deepEqual(Object.keys(filePanelLabels("en")), Object.keys(filePanelLabels("zh")));
 	for (const key of Object.keys(filePanelLabels("en"))) assert.match(key, /^filePanel\.[a-zA-Z]+$/);
+});
+
+test("replacement connections own independent stores and retired panel actions cannot overwrite restored preferences", () => {
+	const storage = new MemoryStorage();
+	const previousLocal = new LocalState("store", storage);
+	const previous = new FilePanelController(previousLocal);
+	previous.setOpen(true);
+	previous.resize(550, 1200);
+	previous.beginResize();
+	previous.resize(700, 1200, false);
+	previousLocal.deactivate();
+
+	const currentLocal = new LocalState("store", storage);
+	const current = new FilePanelController(currentLocal);
+	const restored = current.store.getState();
+	assert.equal(restored.open, true);
+	assert.equal(restored.ratio, 0.458333);
+	let notifications = 0;
+	const unsubscribe = current.store.subscribe(() => notifications++);
+	previous.finishResize();
+	previous.setOpen(false);
+	assert.equal(previous.store.getState().storageFailed, true);
+	assert.equal(current.store.getState(), restored);
+	assert.equal(notifications, 0);
+	assert.equal(new FilePanelController(new LocalState("store", storage)).store.getState().open, true);
+	assert.equal(new FilePanelController(new LocalState("store", storage)).store.getState().ratio, restored.ratio);
+	current.setOpen(false);
+	assert.equal(notifications, 1);
+	unsubscribe();
+	current.setOpen(true);
+	assert.equal(notifications, 1);
+});
+
+test("initial rendering snapshot remains stable while client actions publish immutable current snapshots", () => {
+	const local = new LocalState();
+	local.write("file-panel.open", "true");
+	const panel = new FilePanelController(local);
+	const initial = panel.store.getInitialState();
+	assert.equal(initial, panel.store.getState());
+	panel.resize(500, 1200, false);
+	assert.equal(panel.store.getInitialState(), initial);
+	assert.equal(initial.width, 640);
+	assert.equal(panel.store.getState().width, 500);
 });

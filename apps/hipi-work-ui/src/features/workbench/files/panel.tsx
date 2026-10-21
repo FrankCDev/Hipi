@@ -1,5 +1,6 @@
 import { FolderOpen, X } from "lucide-react";
-import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../../components/ui/dialog.tsx";
@@ -41,7 +42,7 @@ export function FilePanel({
 }) {
 	const { locale } = usePreferences();
 	const l = filePanelLabels(locale);
-	const state = useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot);
+	const state = useStore(controller.store);
 	const [retained, setRetained] = useState(state.open);
 	const layout = panelLayout(available ?? 0, state.width, state.ratio);
 	const width = state.fullWidth && !layout.overlay ? Math.max(0, (available ?? 0) - FILE_PANEL.handle) : layout.width;
@@ -180,7 +181,7 @@ export function FilePanel({
 					const current = drag.current;
 					if (current?.pointer !== event.pointerId) return;
 					controller.resizeFromSplitter(current.width + current.x - event.clientX, available, false);
-					if (!controller.snapshot().open) {
+					if (!controller.store.getState().open) {
 						finishDrag();
 						trigger.current?.focus({ preventScroll: true });
 					}

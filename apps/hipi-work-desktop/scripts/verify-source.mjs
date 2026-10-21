@@ -42,6 +42,14 @@ const nodeTests = groups.flatMap(([directory, names]) =>
 	names.split(" ").map((name) => `${directory}/${name}.test.ts`),
 );
 nodeTests.push("apps/hipi-work-desktop/scripts/boundary-graph.test.mjs");
+nodeTests.push("packages/work-logging/test/logging.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/test/logging.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/dev/process.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/dev/server.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/scripts/dev/bundle.test.mjs");
+nodeTests.push("apps/hipi-work-desktop/test/development/launch.test.ts");
+nodeTests.push("apps/hipi-work-desktop/test/development/control.test.ts");
+nodeTests.push("apps/hipi-work-desktop/scripts/gui/sidebar/project-hover-publication.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/production-policy.test.mjs");
 nodeTests.push("apps/hipi-work-desktop/scripts/release-artifacts.test.mjs");
@@ -234,6 +242,7 @@ uiTests.push("apps/hipi-work-ui/test/workbench/catalog/initial-context-send.test
 uiTests.push("apps/hipi-work-ui/test/workbench/catalog/logical-initial-send.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/projects/project-identity.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/command-recovery.test.ts");
+uiTests.push("apps/hipi-work-ui/test/workbench/navigation/state.test.ts");
 uiTests.push("apps/hipi-work-ui/test/tool-packs.test.ts");
 uiTests.push("apps/hipi-work-ui/test/workbench/files/artifact-navigation.test.ts");
 uiTests.push("apps/hipi-work-ui/test/file-tree-adapter.test.ts");
@@ -277,7 +286,17 @@ for (const tests of nodeTestGroups) {
 		...tests,
 	]);
 }
-run("node_modules/vitest/vitest.mjs", ["run", "--maxWorkers=2", "--config", "vitest.base.ts", ...uiTests]);
+run(
+	"node_modules/vitest/vitest.mjs",
+	[
+		"run",
+		"--maxWorkers=2",
+		"--config",
+		"vitest.config.ts",
+		...uiTests.map((file) => file.slice("apps/hipi-work-ui/".length)),
+	],
+	resolve(root, "apps/hipi-work-ui"),
+);
 // Durable's own config supplies source exports and current-only retention setup.
 // Do not replace it with the renderer-oriented root config.
 for (const workspace of ["packages/chord", "packages/durable"]) {

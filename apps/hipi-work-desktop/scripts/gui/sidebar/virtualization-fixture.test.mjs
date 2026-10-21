@@ -5,8 +5,87 @@ import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { openRuntime } from "@hipi/work-runtime/node";
 import { ownedHistoryDirectory } from "../../gui-long-history-fixture.mjs";
 import { createGuiProfile } from "../../smoke-packaged-gui.mjs";
-import { seedSidebarVirtualization, verifySidebarVirtualization } from "./virtualization-fixture.mjs";
+import {
+	publishVirtualizationProjection,
+	seedSidebarVirtualization,
+	verifySidebarVirtualization,
+} from "./virtualization-fixture.mjs";
 import { virtualizationRoleEntry, virtualizationWorkspaceIds } from "./virtualization-manifest.mjs";
+
+test("publication diagnostics distinguish unchanged pass and monotonic time bounds without exposing cursors", async () => {
+	for (const timed of [false, true]) {
+		let calls = 0;
+		await assert.rejects(
+			publishVirtualizationProjection(
+				{
+					async call(method, params) {
+						assert.equal(method, "refreshSidebarProjection");
+						assert.deepEqual(params, {});
+						calls++;
+						if (calls === 1) throw Object.assign(Error("stale"), { code: "CURSOR_STALE" });
+						return { state: "building", nextCursor: `private-cursor-${calls}` };
+					},
+				},
+				() => (timed && calls >= 3 ? 30000 : 0),
+			),
+			(error) => {
+				assert.doesNotMatch(error.message, /private-cursor/);
+				const diagnostics = JSON.parse(error.message.slice(error.message.indexOf("{")));
+				assert.deepEqual(diagnostics, {
+					passLimitReached: !timed,
+					timeLimitReached: timed,
+					pass: timed ? 3 : 2404,
+					restarts: 1,
+					cursorChanges: timed ? 2 : 2403,
+					state: "building",
+					elapsedMs: timed ? 30000 : 0,
+				});
+				return true;
+			},
+		);
+	}
+});
+
+test("publication still requires ready with no cursor and preserves restart/error bounds", async () => {
+	let calls = 0;
+	await publishVirtualizationProjection(
+		{
+			async call() {
+				calls++;
+				return { state: "ready", nextCursor: calls === 1 ? "private" : null };
+			},
+		},
+		() => 0,
+	);
+	assert.equal(calls, 2);
+	calls = 0;
+	const stale = Object.assign(Error("stale"), { code: "CURSOR_STALE" });
+	await assert.rejects(
+		publishVirtualizationProjection(
+			{
+				async call() {
+					calls++;
+					throw stale;
+				},
+			},
+			() => 0,
+		),
+		(error) => error === stale,
+	);
+	assert.equal(calls, 15);
+	const failure = Error("runtime failure");
+	await assert.rejects(
+		publishVirtualizationProjection(
+			{
+				async call() {
+					throw failure;
+				},
+			},
+			() => 0,
+		),
+		(error) => error === failure,
+	);
+});
 
 test("large fixture uses public deterministic runtime, persists 600 Recent scopes and no submitted turn", async () => {
 	const ownedProfileRoot = await createGuiProfile();

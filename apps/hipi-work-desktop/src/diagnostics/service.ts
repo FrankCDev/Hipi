@@ -82,7 +82,7 @@ export type ExportOutcome = "saved" | "cancelled" | "busy" | "closed" | "failed"
 export async function finishFailedStartup(ports: {
 	stop(): Promise<boolean>;
 	review(): Promise<void>;
-	exit(): void;
+	exit(): void | Promise<void>;
 }): Promise<void> {
 	const stopped = Promise.resolve()
 		.then(ports.stop)
@@ -96,7 +96,7 @@ export async function finishFailedStartup(ports: {
 		/* Native dialog failure must still wait for observed runtime exit. */
 	}
 	if (!(await stopped)) throw new Error("RUNTIME_EXIT_UNCONFIRMED");
-	ports.exit();
+	await ports.exit();
 }
 type ExportPorts = {
 	snapshot(): string;

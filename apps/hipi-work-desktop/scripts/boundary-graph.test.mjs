@@ -95,3 +95,16 @@ test("dynamic and require dependencies fail closed", async () => {
 		);
 	}
 });
+
+test("logging backend is confined to the main composition root", async () => {
+	await check({ "main.ts": 'import "@hipi/work-logging";' });
+	for (const dependency of ["pino", "rotating-file-stream", "electron-log", "electron-log/main", "electron-log/node"]) {
+		await assert.rejects(check({ "main.ts": `import "${dependency}";` }), /Privileged dependency/);
+		await assert.rejects(check({ "preload.ts": `import "${dependency}";` }, "preload"), /Privileged dependency/);
+	}
+	await assert.rejects(check({ "preload.ts": 'import "@hipi/work-logging";' }, "preload"), /main-only/);
+	await assert.rejects(
+		check({ "main.ts": 'import "./shell/indirect.ts";', "shell/indirect.ts": 'import "@hipi/work-logging";' }),
+		/Only composition root/,
+	);
+});

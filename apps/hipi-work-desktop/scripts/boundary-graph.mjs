@@ -82,6 +82,10 @@ export async function checkProcessGraph({
 					if (role === "main") assert.ok(!utilityLeaves.has(local), `Main reached utility implementation: ${local}`);
 				}
 				await visit(target);
+			} else if (specifier === "@hipi/work-logging") {
+				assert.equal(role, "main", "Logging backend is main-only");
+				assert.equal(file, start, "Only composition root may import logging backend");
+				// Exact Node-only workspace backend has separate dependency and relocation tests.
 			} else if (role === "utility") {
 				assert.notEqual(specifier, "electron", "Utility must not import Electron");
 			} else if (specifier === "electron" && file === start) {

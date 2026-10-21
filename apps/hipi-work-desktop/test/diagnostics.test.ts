@@ -583,3 +583,31 @@ test("subscription disposal failure is attributed to subscription close before r
 		[{ category: "close", phase: "subscriptions-close" }],
 	);
 });
+
+test("failed startup awaits asynchronous exit cleanup and propagates its rejection", async () => {
+	let release: () => void = () => {};
+	const flushed = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let completed = false;
+	const recovery = finishFailedStartup({ stop: async () => true, review: async () => {}, exit: () => flushed }).then(
+		() => {
+			completed = true;
+		},
+	);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(completed, false);
+	release();
+	await recovery;
+	assert.equal(completed, true);
+	await assert.rejects(
+		finishFailedStartup({
+			stop: async () => true,
+			review: async () => {},
+			exit: async () => {
+				throw new Error("FLUSH_FAILURE");
+			},
+		}),
+		/FLUSH_FAILURE/,
+	);
+});

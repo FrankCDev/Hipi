@@ -1,7 +1,6 @@
 import {
 	AppError,
 	type Conversation,
-	type ConversationSearchHit,
 	type ModelReference,
 	PROTOCOL_VERSION,
 	type Project,
@@ -12,6 +11,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings, SquarePen } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useStore } from "zustand";
 import { useAppClient, useFiles, useLocalState } from "../../app/client-provider.tsx";
 import type { ProjectFolderSelection } from "../../app/file-client.ts";
 import { type AppKeybindings, DEFAULT_APP_KEYBINDINGS, matchesBinding } from "../../app/keybindings.ts";
@@ -38,13 +38,14 @@ import { PreparedTaskEntry } from "./composer/prepared-entry.tsx";
 import { useHomeDraft } from "./composer/use-home-draft.ts";
 import { ConnectionActions } from "./connection-actions.tsx";
 import type { SearchHistoryAnchor } from "./conversation/history-controller.ts";
-import { prepareSearchNavigation } from "./conversation/history-reads.ts";
 import { ConversationPane } from "./conversation/pane.tsx";
 import { artifactNavigation } from "./files/artifact-navigation.ts";
 import { FilePanel, useWorkAreaWidth } from "./files/panel.tsx";
 import { FILE_PANEL, FilePanelController, panelLayout } from "./files/panel-controller.ts";
 import { filePanelLabels } from "./files/panel-labels.ts";
 import { ModelSettings } from "./model-settings.tsx";
+import { createNavigation } from "./navigation/state.ts";
+import { useNavigationActions } from "./navigation/use-actions.ts";
 import type { ProjectPinNotice } from "./projects/action-owner.ts";
 import { ProjectFolderDialog, ProjectFolderSummary } from "./projects/folder.tsx";
 import { canCreateProjectless, legacyAdoptionInput } from "./projects/identity.ts";
@@ -188,7 +189,7 @@ export function Workbench({
 		cache,
 	]);
 	const panel = useMemo(() => new FilePanelController(local), [local]);
-	const panelState = useSyncExternalStore(panel.subscribe, panel.snapshot, panel.snapshot);
+	const panelState = useStore(panel.store);
 	const panelTrigger = useRef<HTMLButtonElement>(null);
 	const panelId = useId();
 	const area = useRef<HTMLElement>(null);
@@ -203,26 +204,20 @@ export function Workbench({
 			? areaWidth - panelLayout(areaWidth, panelState.width, panelState.ratio).width - FILE_PANEL.handle
 			: undefined;
 	const { t, locale } = usePreferences();
-	const [selectedWorkspace, setSelectedWorkspace] = useState(() => local.read("workspace") ?? "");
-	const [selectedProjectId, setSelectedProjectId] = useState<string | null | undefined>(() => {
-		const saved = local.read("project");
-		return saved === null && local.read("workspace") ? undefined : saved || null;
-	});
-	const [selectedConversation, setSelectedConversation] = useState(() => local.read("conversation") ?? "");
-	const [sidebarSelection, setSidebarSelection] = useState<SidebarLocation | null>(null);
-	const currentScope = useRef({ workspaceId: selectedWorkspace, conversationId: selectedConversation });
-	const navigationRevision = useRef(0);
-	const [newChatLookup, setNewChatLookup] = useState<{ revision: number; failed: boolean } | null>(null);
+	const navigation = useMemo(() => createNavigation(local), [local]);
+	const navigationState = useStore(navigation.store);
+	const { workspaceId: selectedWorkspace, conversationId: selectedConversation } = navigationState.scope;
+	const { projectId: selectedProjectId, sidebarLocation: sidebarSelection, newChatLookup } = navigationState;
 	useEffect(() => {
 		let owner: { requestId: string; revision: number; current: boolean; admitted: boolean } | undefined;
 		return presentation.subscribePinLifecycle((event) => {
 			if (event.phase === "initiated")
 				owner = {
 					requestId: event.input.requestId,
-					revision: navigationRevision.current,
+					revision: navigation.store.getState().revision,
 					current:
-						currentScope.current.workspaceId === event.input.workspaceId &&
-						currentScope.current.conversationId === event.input.conversationId,
+						navigation.store.getState().scope.workspaceId === event.input.workspaceId &&
+						navigation.store.getState().scope.conversationId === event.input.conversationId,
 					admitted: false,
 				};
 			else if (event.phase === "admitted" && owner?.requestId === event.input.requestId) owner.admitted = true;
@@ -231,19 +226,18 @@ export function Workbench({
 				if (
 					owner.admitted &&
 					owner.current &&
-					owner.revision === navigationRevision.current &&
-					currentScope.current.workspaceId === event.result.workspaceId &&
-					currentScope.current.conversationId === event.result.conversationId
+					owner.revision === navigation.store.getState().revision &&
+					navigation.store.getState().scope.workspaceId === event.result.workspaceId &&
+					navigation.store.getState().scope.conversationId === event.result.conversationId
 				)
-					setSidebarSelection(null);
+					navigation.clearSidebarLocation();
 				owner = undefined;
 			}
 		});
-	}, [presentation]);
+	}, [presentation, navigation.clearSidebarLocation, navigation.store.getState]);
 	useEffect(() => {
-		currentScope.current = { workspaceId: selectedWorkspace, conversationId: selectedConversation };
 		session?.setWorkspace(selectedWorkspace);
-	}, [selectedWorkspace, selectedConversation, session]);
+	}, [selectedWorkspace, session]);
 	const [navigationOpen, setNavigationOpen] = useState(false);
 	const [navigationCollapsed, setNavigationCollapsed] = useState(false);
 	const [narrow, setNarrow] = useState(false);
@@ -485,9 +479,8 @@ export function Workbench({
 		if (selectedConversation || selectedProjectId || !selectedWorkspace) return;
 		const project = projects.items.find((item) => item.project.homeWorkspaceId === selectedWorkspace)?.project;
 		if (!project) return;
-		setSelectedProjectId(project.projectId);
-		local.write("project", project.projectId);
-	}, [selectedConversation, selectedProjectId, selectedWorkspace, projects.items, local]);
+		navigation.resolveProject(selectedWorkspace, project.projectId);
+	}, [selectedConversation, selectedProjectId, selectedWorkspace, projects.items, navigation]);
 	useEffect(() => {
 		const warn = (event: BeforeUnloadEvent) => {
 			if (local.hasUnsavedWork() || session?.protected) {
@@ -514,14 +507,14 @@ export function Workbench({
 				document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
 			)
 				return;
-			const origin = navigationRevision.current;
-			const scope = { ...currentScope.current };
+			const origin = navigation.store.getState().revision;
+			const scope = { ...navigation.store.getState().scope };
 			const current = () =>
 				connectionLease.active &&
 				currentConnection.current === connectionLease &&
-				navigationRevision.current === origin &&
-				currentScope.current.workspaceId === scope.workspaceId &&
-				currentScope.current.conversationId === scope.conversationId;
+				navigation.store.getState().revision === origin &&
+				navigation.store.getState().scope.workspaceId === scope.workspaceId &&
+				navigation.store.getState().scope.conversationId === scope.conversationId;
 			if (matchesBinding(event, keybindings.searchConversations)) {
 				event.preventDefault();
 				openSearch(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -590,132 +583,45 @@ export function Workbench({
 		leave,
 		keybindings,
 		openSearch,
+		navigation.store.getState,
 	]);
-	const selectWorkspace = (id: string) => {
-		setNewChatLookup(null);
-		homeDraft.cancel();
-		setComposerFocusRevision((value) => value + 1);
-		setSidebarSelection(null);
-		navigationRevision.current++;
-		session?.setWorkspace(id);
-		currentScope.current = { workspaceId: id, conversationId: "" };
-		setSelectedWorkspace(id);
-		if (id) setProjectExpanded(id, true);
-		setDetailsOpen(false);
-		setSelectedConversation("");
-		setNavigationOpen(false);
-		setSearchAnchor(undefined);
-		local.write("workspace", id);
-		local.write("conversation", "");
-		const projectId = projects.items.find((item) => item.project.homeWorkspaceId === id)?.project.projectId ?? null;
-		setSelectedProjectId(projectId);
-		local.write("project", projectId ?? "");
-	};
-	const selectKnownProject = (project: Project) => {
-		cache.setQueryData(["project", project.projectId], project);
-		selectWorkspace(project.homeWorkspaceId);
-		setSelectedProjectId(project.projectId);
-		setProjectExpanded(project.projectId, true);
-		local.write("project", project.projectId);
-	};
-	const selectProject = (id: string) => {
-		const project = projectById.get(id)?.project ?? (currentProject?.projectId === id ? currentProject : undefined);
-		if (project) selectKnownProject(project);
-	};
-	const selectConversation = (item: Conversation, onSelected?: () => void, location: SidebarLocation | null = null) => {
-		setNewChatLookup(null);
-		homeDraft.cancel();
-		if (
-			location &&
-			currentScope.current.workspaceId === item.workspaceId &&
-			currentScope.current.conversationId === item.conversationId
-		) {
-			// Another visible alias is a presentation choice, not a new route or execution owner.
-			navigationRevision.current++;
-			setSidebarSelection(location);
-			return;
-		}
-		const select = () => {
-			setSidebarSelection(location);
-			setSearchAnchor(undefined);
-			cache.setQueryData(["conversation", item.workspaceId, item.conversationId], item);
-			navigationRevision.current++;
-			session?.setWorkspace(item.workspaceId);
-			currentScope.current = { workspaceId: item.workspaceId, conversationId: item.conversationId };
+	const {
+		selectWorkspace,
+		selectKnownProject,
+		selectProject,
+		selectConversation,
+		openNewConversation,
+		activateSearch,
+	} = useNavigationActions({
+		navigation,
+		client,
+		cache,
+		isConnected: () => connectionLease.active && currentConnection.current === connectionLease,
+		cancelDraft: homeDraft.cancel,
+		session,
+		projects: projects.items,
+		currentProjectId,
+		currentProject,
+		onHome: (workspaceId, projectId) => {
+			setComposerFocusRevision((value) => value + 1);
+			if (workspaceId) setProjectExpanded(workspaceId, true);
+			if (projectId) setProjectExpanded(projectId, true);
 			setDetailsOpen(false);
-			setProjectExpanded(item.workspaceId, true);
-			setSelectedWorkspace(item.workspaceId);
-			setSelectedConversation(item.conversationId);
-			local.write("workspace", item.workspaceId);
-			local.write("conversation", item.conversationId);
-			setSelectedProjectId(null);
-			local.write("project", "");
 			setNavigationOpen(false);
-		};
-		select();
-		onSelected?.();
-	};
-	const openNewConversation = async (requestedProjectId?: string | null) => {
-		homeDraft.cancel();
-		const origin = ++navigationRevision.current;
-		const scope = { ...currentScope.current };
-		const current = () =>
-			connectionLease.active &&
-			currentConnection.current === connectionLease &&
-			navigationRevision.current === origin &&
-			currentScope.current.workspaceId === scope.workspaceId &&
-			currentScope.current.conversationId === scope.conversationId;
-		setNewChatLookup({ revision: origin, failed: false });
-		try {
-			let projectId = requestedProjectId !== undefined ? requestedProjectId : currentProjectId;
-			if (projectId === undefined) {
-				if (!scope.workspaceId || !scope.conversationId) throw new Error("PROJECT_DESTINATION_UNVERIFIED");
-				// Join the existing scoped query, but retain the click's navigation owner.
-				const membership = await cache.fetchQuery({
-					queryKey: ["conversation-membership", scope.workspaceId, scope.conversationId],
-					queryFn: ({ signal }) => client.call("getConversationMembership", scope, signal),
-					retry: false,
-				});
-				if (!current()) return;
-				if (membership.workspaceId !== scope.workspaceId || membership.conversationId !== scope.conversationId)
-					throw new Error("PROJECT_DESTINATION_UNVERIFIED");
-				projectId = membership.projectId;
-			}
-			if (projectId === null) {
-				selectWorkspace("");
-				return;
-			}
-			const project =
-				projectById.get(projectId)?.project ??
-				(currentProject?.projectId === projectId ? currentProject : undefined) ??
-				(await cache.fetchQuery({
-					queryKey: ["project", projectId],
-					queryFn: ({ signal }) => client.call("getProject", { projectId }, signal),
-					retry: false,
-				}));
-			if (!current()) return;
-			if (!project || project.projectId !== projectId) throw new Error("PROJECT_DESTINATION_UNVERIFIED");
-			selectKnownProject(project);
-		} catch {
-			if (current()) setNewChatLookup({ revision: origin, failed: true });
-		}
-	};
-	const activateSearch = async (hit: ConversationSearchHit, signal: AbortSignal) => {
-		const origin = navigationRevision.current;
-		const result = await prepareSearchNavigation(client, hit, signal);
-		if (
-			signal.aborted ||
-			!connectionLease.active ||
-			currentConnection.current !== connectionLease ||
-			navigationRevision.current !== origin
-		)
-			return false;
-		selectConversation(result.conversation);
-		setSearchAnchor(result.anchor);
-		panel.restoreSplit();
-		searchActivated.current = true;
-		return true;
-	};
+			setSearchAnchor(undefined);
+		},
+		onConversation: (workspaceId) => {
+			setSearchAnchor(undefined);
+			setDetailsOpen(false);
+			setProjectExpanded(workspaceId, true);
+			setNavigationOpen(false);
+		},
+		onSearch: (anchor) => {
+			setSearchAnchor(anchor);
+			panel.restoreSplit();
+			searchActivated.current = true;
+		},
+	});
 	const applyCatalogResult = (origin?: number) => {
 		if (!connectionLease.active || currentConnection.current !== connectionLease) return;
 		const state = catalog.getSnapshot();
@@ -734,10 +640,10 @@ export function Workbench({
 				initialSubmissionNavigation.current !== state.submission.requestId
 			) {
 				initialSubmissionNavigation.current = state.submission.requestId;
-				if (origin === undefined || navigationRevision.current === origin) void homeDraft.refresh();
+				if (origin === undefined || navigation.store.getState().revision === origin) void homeDraft.refresh();
 				void cache.invalidateQueries({ queryKey: ["workspaces"] });
 				void cache.invalidateQueries({ queryKey: ["conversations", result.workspaceId] });
-				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
+				if (origin === undefined || navigation.store.getState().revision === origin) selectConversation(result);
 			}
 			return;
 		}
@@ -745,11 +651,8 @@ export function Workbench({
 		if (state.projectResult?.method === "createProject") {
 			const project = state.projectResult.result;
 			cache.setQueryData(["project", project.projectId], project);
-			if (origin === undefined || navigationRevision.current === origin) {
-				selectWorkspace(project.homeWorkspaceId);
-				setSelectedProjectId(project.projectId);
-				setProjectExpanded(project.projectId, true);
-				local.write("project", project.projectId);
+			if (origin === undefined || navigation.store.getState().revision === origin) {
+				selectKnownProject(project);
 			}
 			return;
 		}
@@ -762,17 +665,17 @@ export function Workbench({
 			void cache.invalidateQueries({ queryKey: ["sidebar-pins"] });
 			void cache.invalidateQueries({ queryKey: presentationKey(result) });
 			if (state.resultMethod === "createConversation" || state.resultMethod === "createProjectConversation") {
-				if (origin === undefined || navigationRevision.current === origin) void homeDraft.refresh();
-				if (origin === undefined || navigationRevision.current === origin) selectConversation(result);
+				if (origin === undefined || navigation.store.getState().revision === origin) void homeDraft.refresh();
+				if (origin === undefined || navigation.store.getState().revision === origin) selectConversation(result);
 			}
 		} else {
 			cache.setQueryData(["workspace", result.workspaceId], result);
 			void cache.invalidateQueries({ queryKey: ["workspaces"] });
-			if (origin === undefined || navigationRevision.current === origin) selectWorkspace(result.workspaceId);
+			if (origin === undefined || navigation.store.getState().revision === origin) selectWorkspace(result.workspaceId);
 		}
 	};
 	const resolveCatalog = async (operation: () => Promise<void>) => {
-		const origin = navigationRevision.current;
+		const origin = navigation.store.getState().revision;
 		const initial = catalog.getSnapshot().initialSend;
 		await operation();
 		if (
@@ -781,7 +684,7 @@ export function Workbench({
 			connectionLease.active &&
 			currentConnection.current === connectionLease
 		) {
-			if (navigationRevision.current === origin) void homeDraft.refresh();
+			if (navigation.store.getState().revision === origin) void homeDraft.refresh();
 			if (initial.conversationId && initial.context && !initial.context.submitAttempted) {
 				const scope = `${initialWorkspaceId(initial)}.${initial.conversationId}`;
 				const revision = local.valueSnapshot(`draft.${scope}`)?.revision;
@@ -791,7 +694,7 @@ export function Workbench({
 		applyCatalogResult(origin);
 	};
 	const createWorkspace = async (name: string, folder?: ProjectFolderSelection) => {
-		const origin = navigationRevision.current;
+		const origin = navigation.store.getState().revision;
 		await catalog.execute({
 			version: PROTOCOL_VERSION,
 			method: "createProject",
@@ -799,13 +702,13 @@ export function Workbench({
 		});
 		if (catalog.getSnapshot().pending || catalog.getSnapshot().failed || catalog.getSnapshot().incompatible)
 			throw new Error("UNCONFIRMED");
-		const ownsNavigation = navigationRevision.current === origin;
+		const ownsNavigation = navigation.store.getState().revision === origin;
 		applyCatalogResult(origin);
 		const created = catalog.getSnapshot().projectResult;
 		if (created?.method !== "createProject") throw new Error("UNCONFIRMED");
 		const project = created.result;
 		cache.setQueryData(["project", project.projectId], project);
-		const bindingNavigation = ownsNavigation ? navigationRevision.current : undefined;
+		const bindingNavigation = ownsNavigation ? navigation.store.getState().revision : undefined;
 		const result = { workspaceId: project.homeWorkspaceId, name: project.name };
 		if (folder && fileAuthority?.attachProject) {
 			try {
@@ -820,7 +723,7 @@ export function Workbench({
 			} catch {
 				if (connectionLease.active && currentConnection.current === connectionLease) {
 					setFolderCreationFailures((current) => ({ ...current, [result.workspaceId]: true }));
-					if (bindingNavigation !== undefined && navigationRevision.current === bindingNavigation) {
+					if (bindingNavigation !== undefined && navigation.store.getState().revision === bindingNavigation) {
 						folderRestoreFocus.current = undefined;
 						setFolderCreationFailed(true);
 						setFolderProject(result);
@@ -830,7 +733,7 @@ export function Workbench({
 		}
 	};
 	const sendInitial = async (text: string, model: ModelReference, context?: StagedProjectConsent) => {
-		const origin = navigationRevision.current;
+		const origin = navigation.store.getState().revision;
 		const active = homeDraft.inventory?.active;
 		if (!active || homeDraft.busy || homeDraft.failed) throw new Error("INITIAL_SEND_SOURCE_UNAVAILABLE");
 		if (
@@ -988,14 +891,14 @@ export function Workbench({
 						<Button
 							variant="ghost"
 							className="new-conversation-trigger"
-							aria-busy={newChatLookup?.revision === navigationRevision.current && !newChatLookup.failed}
+							aria-busy={newChatLookup?.revision === navigation.store.getState().revision && !newChatLookup.failed}
 							onClick={() => void openNewConversation()}
 						>
 							<SquarePen size={16} aria-hidden="true" />
 							{t("nav.newConversation")}
 						</Button>
 					</div>
-					{newChatLookup?.revision === navigationRevision.current && newChatLookup.failed && (
+					{newChatLookup?.revision === navigation.store.getState().revision && newChatLookup.failed && (
 						<p className="nav-feedback" role="alert">
 							{cl.currentFailed}
 						</p>
@@ -1037,7 +940,7 @@ export function Workbench({
 															logicalProjectOrder={() => orderAction}
 														/>
 													)}
-													navigationRevision={navigationRevision.current}
+													navigationRevision={navigation.store.getState().revision}
 													onSelect={(item) => selectConversation(item, undefined, { kind: "pinned" })}
 													sectionAction={sectionAction(section)}
 													onVisibleChange={setPinnedVisible}
@@ -1375,7 +1278,9 @@ export function Workbench({
 									setSettingsOpen(true);
 								}}
 								onOpenArtifact={
-									session ? artifactNavigation(selected, () => currentScope.current, session, panel) : undefined
+									session
+										? artifactNavigation(selected, () => navigation.store.getState().scope, session, panel)
+										: undefined
 								}
 								detailsOpen={detailsOpen}
 								onDetailsClose={() => {

@@ -67,8 +67,9 @@ vi.mock("react", async () => {
 	}
 	const changed = (previous: React.DependencyList | undefined, next: React.DependencyList) =>
 		!previous || previous.length !== next.length || next.some((value, index) => !Object.is(value, previous[index]));
-	return {
+	const mock = {
 		...actual,
+		useDebugValue: () => {},
 		useState: <T,>(initial?: T | (() => T)) => {
 			const { index, previous } = cell();
 			const current = previous ?? { value: typeof initial === "function" ? (initial as () => T)() : initial };
@@ -111,6 +112,7 @@ vi.mock("react", async () => {
 				});
 		},
 	};
+	return { ...mock, default: mock };
 });
 vi.mock("@tanstack/react-query", async () => ({
 	...(await vi.importActual<typeof Query>("@tanstack/react-query")),
@@ -714,13 +716,13 @@ test("full-width file presentation retains conversation and protected file owner
 	const snapshot = initial.editor.snapshot();
 	const panel = initial.file.controller;
 	panel.setOpen(true);
-	const split = panel.snapshot();
+	const split = panel.store.getState();
 	panel.beginResize();
 	panel.resizeFromSplitter(950, measurement.width, false);
 	panel.finishResize();
-	assert.equal(panel.snapshot().fullWidth, true);
-	assert.equal(panel.snapshot().width, split.width);
-	assert.equal(panel.snapshot().ratio, split.ratio);
+	assert.equal(panel.store.getState().fullWidth, true);
+	assert.equal(panel.store.getState().width, split.width);
+	assert.equal(panel.store.getState().ratio, split.ratio);
 	const full = drive();
 	const frame = elements(full.content, "div").find((node) => node.props.className === "work-conversation-frame");
 	assert.ok(frame);
@@ -1768,7 +1770,7 @@ test("global Reopen works with the IDE hidden and no tabs, preserves the task an
 	assert.equal(initial.session.snapshot().tabs.length, 0);
 	const event = appKey();
 	assert.equal(event.defaultPrevented, true);
-	await vi.waitFor(() => assert.equal(initial.file.controller.snapshot().open, true));
+	await vi.waitFor(() => assert.equal(initial.file.controller.store.getState().open, true));
 	const current = drive();
 	assert.equal(current.tree.selectedConversation, "task");
 	assert.equal(current.pane?.key, initial.pane?.key);
@@ -1832,7 +1834,7 @@ test.each(["away", "away-back", "retired"] as const)(
 		pending.resolve({ id: "restored", request: 1 });
 		await Promise.resolve();
 		await Promise.resolve();
-		assert.equal(initial.file.controller.snapshot().open, false);
+		assert.equal(initial.file.controller.store.getState().open, false);
 	},
 );
 
@@ -1853,7 +1855,7 @@ test("hidden Reopen reports the real 16-tab capacity refusal and preserves the c
 	appKey();
 	await Promise.resolve();
 	await Promise.resolve();
-	assert.equal(initial.file.controller.snapshot().open, false);
+	assert.equal(initial.file.controller.store.getState().open, false);
 	assert.equal(initial.session.snapshot().limitReached, true);
 	assert.equal(initial.session.canReopen("current"), true);
 	assert.equal(fileFixture.calls.length, requests);
@@ -1950,7 +1952,7 @@ test("same-Scope sidebar aliases change only location and retain the active sear
 	assert.equal(before.tree.isExpanded("current"), false);
 	const anchor = before.pane?.props.searchAnchor;
 	assert.ok(anchor);
-	const panel = before.file.controller.snapshot();
+	const panel = before.file.controller.store.getState();
 	const stored = [...storage.values];
 	const workspace = vi.spyOn(initial.session, "setWorkspace");
 	cache.setQueryData.mockClear();
@@ -1974,7 +1976,7 @@ test("same-Scope sidebar aliases change only location and retain the active sear
 		assert.equal(after.session, initial.session);
 		assert.equal(after.editor, editor);
 		assert.equal(editor.snapshot(), document);
-		assert.equal(after.file.controller.snapshot(), panel);
+		assert.equal(after.file.controller.store.getState(), panel);
 		assert.deepEqual([...storage.values], stored);
 		assert.equal(workspace.mock.calls.length, 0);
 		assert.equal(cache.setQueryData.mock.calls.length, 0);
@@ -2131,7 +2133,7 @@ test.each(["success", "away", "away-back", "retired", "aborted", "failure"] as c
 		});
 		const request = new AbortController();
 		const activation = element(drive().content, ConversationSearch).props.onActivate(searchHit, request.signal);
-		assert.equal(panel.snapshot().fullWidth, true);
+		assert.equal(panel.store.getState().fullWidth, true);
 		assert.equal(drive().pane?.props.searchAnchor, undefined);
 		assert.equal(editor.snapshot(), editorState);
 		if (outcome === "retired") for (const cell of hooks.cells) cell?.cleanup?.();
@@ -2144,8 +2146,8 @@ test.each(["success", "away", "away-back", "retired", "aborted", "failure"] as c
 		else hydration.resolve(searchWindow);
 		if (outcome === "failure") await assert.rejects(activation);
 		else assert.equal(await activation, outcome === "success");
-		assert.equal(panel.snapshot().fullWidth, outcome !== "success");
-		assert.equal(panel.snapshot().open, true);
+		assert.equal(panel.store.getState().fullWidth, outcome !== "success");
+		assert.equal(panel.store.getState().open, true);
 		if (outcome !== "retired") assert.equal(editor.snapshot(), editorState);
 		assert.equal(local.read(`draft.${scope}`), draft);
 		assert.deepEqual(local.pending(scope), pending);

@@ -19,6 +19,7 @@ const options = {
 	logLevel: "info",
 	conditions: ["source"],
 	metafile: true,
+	define: { HIPI_DESKTOP_DEV: "false" },
 };
 const bundleInputs = new Set();
 async function bundle(options) {
@@ -51,6 +52,9 @@ await bundle({
 	...options,
 	entryPoints: ["src/main.ts"],
 	outfile: "dist/main.mjs",
+	banner: {
+		js: "import { createRequire as createNodeRequire } from 'node:module'; const require = createNodeRequire(import.meta.url);",
+	},
 	platform: "node",
 	format: "esm",
 	external: ["electron"],

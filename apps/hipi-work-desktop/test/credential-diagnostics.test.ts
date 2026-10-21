@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
+import type { OperationalLogger } from "@hipi/work-logging";
 import { WindowLifecycle } from "../src/shell/window-lifecycle.ts";
 
 test("main emits only bounded fixed status markers for an isolated deterministic smoke launch", () => {
@@ -81,45 +82,82 @@ test("main emits only bounded fixed status markers for an isolated deterministic
 	}
 });
 
-test("lifecycle diagnostics preserve window approval, pending runtime close and actual exit ordering", async () => {
+test("lifecycle diagnostics preserve approval, runtime ownership and awaited logging before exit", async () => {
 	const source = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 	const begin = source.indexOf("\tconst lifecycle = new WindowLifecycle(");
 	const end = source.indexOf('\n\tapp.on("window-all-closed"', begin);
 	assert.ok(begin > 0 && end > begin);
-	const events: string[] = [];
-	const closed = Promise.withResolvers<boolean>();
-	let beforeQuit: ((event: { preventDefault(): void }) => void) | undefined;
-	let windowClosed: (() => void) | undefined;
-	runInNewContext(stripTypeScriptTypes(source.slice(begin, end)), {
-		WindowLifecycle,
-		recoveringStartup: false,
-		clearRenderer: () => events.push("clear-renderer"),
-		observeLifecycle: (stage: string) => events.push(stage),
-		activeSupervisor: { close: () => closed.promise },
-		window: {
-			isDestroyed: () => false,
-			close: () => events.push("request-window-close"),
-			once: (event: string, callback: () => void) => {
-				assert.equal(event, "closed");
-				windowClosed = callback;
-			},
-		},
-		app: {
-			on: (event: string, callback: typeof beforeQuit) => {
-				assert.equal(event, "before-quit");
-				beforeQuit = callback;
-			},
-			exit: (code: number) => events.push(`exit:${code}`),
-		},
-	});
-	assert.ok(beforeQuit && windowClosed);
-	beforeQuit({ preventDefault: () => events.push("prevent-default") });
-	assert.deepEqual(events, ["quit-request", "prevent-default", "request-window-close"]);
-	windowClosed();
-	assert.deepEqual(events.slice(3), ["window-closed", "clear-renderer", "runtime-close-enter"]);
-	closed.resolve(true);
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	assert.deepEqual(events.slice(6), ["runtime-close-return", "app-exit-enter", "exit:0"]);
+	for (const clean of [true, false]) {
+		for (const flushStatus of ["flushed", "failed", "timeout"] as const) {
+			const events: string[] = [];
+			const closed = Promise.withResolvers<boolean>();
+			const flushed = Promise.withResolvers<Awaited<ReturnType<OperationalLogger["close"]>>>();
+			const logger: OperationalLogger = {
+				sessionId: "00000000-0000-0000-0000-000000000000",
+				droppedRecords: 0,
+				record(event, context) {
+					assert.equal(event, "app.stop");
+					assert.equal(context?.outcome, clean ? "clean" : "unclean");
+					events.push("log:app.stop");
+					return true;
+				},
+				close() {
+					events.push("logger-close-enter");
+					return flushed.promise.then((status) => {
+						events.push("logger-close-return");
+						return status;
+					});
+				},
+			};
+			let beforeQuit: ((event: { preventDefault(): void }) => void) | undefined;
+			let windowClosed: (() => void) | undefined;
+			runInNewContext(stripTypeScriptTypes(source.slice(begin, end)), {
+				WindowLifecycle,
+				logger,
+				recoveringStartup: false,
+				clearRenderer: () => events.push("clear-renderer"),
+				observeLifecycle: (stage: string) => events.push(stage),
+				activeSupervisor: { close: () => closed.promise },
+				window: {
+					isDestroyed: () => false,
+					close: () => events.push("request-window-close"),
+					once: (event: string, callback: () => void) => {
+						assert.equal(event, "closed");
+						windowClosed = callback;
+					},
+				},
+				app: {
+					on: (event: string, callback: typeof beforeQuit) => {
+						assert.equal(event, "before-quit");
+						beforeQuit = callback;
+					},
+					exit: (code: number) => events.push(`exit:${code}`),
+				},
+			});
+			assert.ok(beforeQuit && windowClosed);
+			beforeQuit({ preventDefault: () => events.push("prevent-default") });
+			assert.deepEqual(events, ["quit-request", "prevent-default", "request-window-close"]);
+			windowClosed();
+			assert.deepEqual(events.slice(3), ["window-closed", "clear-renderer", "runtime-close-enter"]);
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.equal(events.length, 6, "Pending runtime cannot start log shutdown or exit");
+			closed.resolve(clean);
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.deepEqual(events.slice(6), [
+				"runtime-close-return",
+				"app-exit-enter",
+				"log:app.stop",
+				"logger-close-enter",
+			]);
+			flushed.resolve(flushStatus);
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.deepEqual(
+				events.slice(10),
+				["logger-close-return", `exit:${clean ? 0 : 1}`],
+				"Logging status cannot overwrite runtime shutdown outcome",
+			);
+		}
+	}
 });
 
 test("a failed lifecycle diagnostic write is isolated and never retried", () => {

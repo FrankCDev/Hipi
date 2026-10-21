@@ -50,8 +50,10 @@ vi.mock("react", async () => {
 		if (changed(state.cells[index]?.deps, deps)) state.cells[index] = { value: create(), deps };
 		return state.cells[index]?.value;
 	};
-	return {
+	const mock = {
 		...actual,
+		useCallback: <T,>(callback: T) => callback,
+		useDebugValue: () => {},
 		useState: (initial: unknown) => {
 			const state = scope();
 			const index = state.cursor++;
@@ -78,6 +80,7 @@ vi.mock("react", async () => {
 		useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
 		useEffect: effect,
 	};
+	return { ...mock, default: mock };
 });
 vi.mock("../../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
 
@@ -179,7 +182,7 @@ function dispatchEscape(
 	if (options.retargeted) Object.defineProperty(event, "target", { value: outer.node });
 	Reflect.apply(outer.onEscapeKeyDown, undefined, [event]);
 	assert.equal(event.defaultPrevented, true);
-	assert.equal(outer.controller.snapshot().open, true);
+	assert.equal(outer.controller.store.getState().open, true);
 	const stopPropagation = vi.fn();
 	const innerEvent = {
 		key: event.key,

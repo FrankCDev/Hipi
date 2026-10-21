@@ -1,0 +1,26 @@
+{
+	"name": "@hipi/work-logging",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.d.mts",
+			"node": "./src/index.mjs"
+		}
+	},
+	"scripts": {
+		"check": "node ../../node_modules/@biomejs/biome/bin/biome check --error-on-warnings .",
+		"test:logging": "node --test test/*.test.mjs"
+	},
+	"dependencies": {
+		"pino": "10.4.0",
+		"rotating-file-stream": "3.2.10"
+	},
+	"devDependencies": {
+		"esbuild": "0.28.2"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}
