@@ -8,6 +8,74 @@ import { test, vi } from "vitest";
 import { ThemeProvider } from "../../src/app/theme/provider.tsx";
 import { ActivityDisclosure } from "../../src/features/tool-activities/turn-activity-presentation.tsx";
 
+test("a held plain summary keeps title, icon and count coherent until the active key's dwell ends", async () => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.stubGlobal(
+		"IntersectionObserver",
+		class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		},
+	);
+	vi.useFakeTimers();
+	vi.setSystemTime(0);
+	const host = document.createElement("div");
+	document.body.append(host);
+	const root = createRoot(host);
+	const render = (plain: boolean) =>
+		act(async () =>
+			root.render(
+				<ThemeProvider>
+					<ActivityDisclosure
+						title={plain ? "Worked" : "generic_tool"}
+						count={2}
+						expanded={false}
+						onToggle={() => {}}
+						plainSummary={plain}
+						active={!plain}
+						toolName={plain ? undefined : "generic_tool"}
+						status={plain ? undefined : "Running"}
+						summaryKey={plain ? "summary" : "active:1"}
+						summaryTransition={plain ? "immediate" : "deferred"}
+					>
+						<p>Result</p>
+					</ActivityDisclosure>
+				</ThemeProvider>,
+			),
+		);
+	const assertPlain = () => {
+		assert.equal(host.querySelector(".activity-disclosure-summary")?.textContent, "Worked");
+		assert.equal(host.querySelector(".activity-disclosure-heading svg"), null);
+		assert.equal(host.querySelector(".inline-activity-count"), null);
+		assert.equal(host.querySelector(".inline-activity-phase"), null);
+	};
+	try {
+		await render(true);
+		assertPlain();
+		await act(async () => vi.advanceTimersByTime(200));
+		await render(false);
+		assertPlain();
+		await act(async () => vi.advanceTimersByTime(799));
+		assertPlain();
+		await act(async () => vi.advanceTimersByTime(1));
+		assert.equal(
+			host.querySelector(".activity-disclosure-summary .cadenced-text")?.firstChild?.textContent,
+			"generic_tool",
+		);
+		assert.ok(host.querySelector(".activity-disclosure-heading svg.lucide-puzzle"));
+		assert.equal(host.querySelector(".inline-activity-count")?.textContent, "2");
+		assert.equal(host.querySelector(".inline-activity-phase")?.textContent, "Running");
+		await render(true);
+		assertPlain();
+	} finally {
+		await act(async () => root.unmount());
+		host.remove();
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	}
+});
+
 test("tool disclosure keeps a stable labelled body, inert collapse and separate summary/accessory geometry", async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal(
@@ -100,6 +168,9 @@ test("real Motion keeps opening and reversing tool content clipped beside a stab
 		const height = Number.parseFloat(this.style.height);
 		return new DOMRect(0, 0, 800, Number.isFinite(height) ? height : naturalHeight);
 	});
+	vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (this: HTMLElement) {
+		return [this.getBoundingClientRect()] as unknown as DOMRectList;
+	});
 	const host = document.createElement("div");
 	const style = document.createElement("style");
 	style.textContent =
@@ -179,6 +250,176 @@ test("real Motion keeps opening and reversing tool content clipped beside a stab
 		document.getSelection()?.removeAllRanges();
 		host.remove();
 		style.remove();
+		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
+	}
+});
+
+test("real Motion retargets async opening endpoints and releases settled groups to child-owned auto layout", async () => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	let reduced = false;
+	let naturalHeight = 28;
+	let visible = true;
+	vi.stubGlobal("matchMedia", () => ({ matches: reduced, addEventListener() {}, removeEventListener() {} }));
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+		const height = Number.parseFloat(this.style.height);
+		return new DOMRect(0, 0, 800, Number.isFinite(height) ? height : naturalHeight);
+	});
+	vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (this: HTMLElement) {
+		return (visible ? [this.getBoundingClientRect()] : []) as unknown as DOMRectList;
+	});
+	vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(999);
+	const observers = new Map<ResizeObserver, { callback: ResizeObserverCallback; node?: Element }>();
+	const retired: (() => void)[] = [];
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			constructor(callback: ResizeObserverCallback) {
+				observers.set(this as unknown as ResizeObserver, { callback });
+			}
+			observe(node: Element) {
+				const entry = observers.get(this as unknown as ResizeObserver);
+				if (entry) entry.node = node;
+			}
+			disconnect() {
+				const instance = this as unknown as ResizeObserver;
+				const entry = observers.get(instance);
+				if (entry?.node)
+					retired.push(() =>
+						entry.callback(
+							[{ target: entry.node, borderBoxSize: [{ blockSize: naturalHeight }] } as unknown as ResizeObserverEntry],
+							instance,
+						),
+					);
+				observers.delete(instance);
+			}
+		},
+	);
+	const resize = async (height: number) =>
+		act(async () => {
+			naturalHeight = height;
+			for (const [instance, { callback, node }] of observers) {
+				if (node)
+					callback(
+						[{ target: node, borderBoxSize: [{ blockSize: height }] } as unknown as ResizeObserverEntry],
+						instance,
+					);
+			}
+		});
+	const host = document.createElement("div");
+	document.body.append(host);
+	const root = createRoot(host);
+	let mounts = 0,
+		releases = 0;
+	function Reader() {
+		useEffect(() => {
+			mounts++;
+			return () => {
+				releases++;
+			};
+		}, []);
+		return <p>{naturalHeight === 28 ? "Loading" : "Several loaded metadata rows"}</p>;
+	}
+	const render = async (expanded: boolean) =>
+		act(async () =>
+			root.render(
+				<ThemeProvider>
+					<ActivityDisclosure title="Tools" count={6} expanded={expanded} onToggle={() => {}} bodyVariant="grouped">
+						<Reader />
+					</ActivityDisclosure>
+					<p data-answer="">Following answer</p>
+				</ThemeProvider>,
+			),
+		);
+	const wait = async (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)));
+	const heights: number[] = [];
+	try {
+		await render(false);
+		await render(true);
+		await wait(25);
+		await wait(60);
+		const body = host.querySelector<HTMLElement>(".activity-disclosure-body");
+		assert.ok(body);
+		await resize(208);
+		await render(true);
+		await wait(40);
+		await resize(96);
+		await wait(40);
+		await resize(208);
+		for (let index = 0; index < 18; index++) {
+			await wait(20);
+			heights.push(body.getBoundingClientRect().height);
+		}
+		assert.ok(
+			heights.some((height) => height > 28 && height < 207),
+			"loaded height is approached during opening, not installed as a terminal step",
+		);
+		assert.equal(body.style.height, "auto");
+		assert.equal(body.getBoundingClientRect().height, 208, "bounded border box wins over scrollHeight=999");
+		const lastNumeric = heights.findLast((height) => height < 208);
+		assert.ok(
+			lastNumeric !== undefined && 208 - lastNumeric < 2,
+			"the final numeric-to-auto boundary has no stale loading-height jump",
+		);
+		assert.equal(observers.size, 0, "settled parent stops retargeting descendant output animation");
+		await resize(220);
+		await render(true);
+		assert.equal(body.style.height, "auto");
+		assert.equal(body.getBoundingClientRect().height, 220);
+		await render(false);
+		await wait(65);
+		assert.equal(releases, 0, "close retains the sole details reader");
+		await resize(40);
+		await render(true);
+		await wait(60);
+		await resize(198);
+		await wait(250);
+		assert.equal(
+			host.querySelector(".activity-disclosure-body"),
+			body,
+			"stopped close completion cannot unmount a reversal",
+		);
+		await wait(120);
+		assert.equal(body.style.height, "auto");
+		assert.equal(mounts, 1);
+		await render(false);
+		await wait(400);
+		assert.equal(releases, 1);
+		assert.equal(host.querySelector(".activity-disclosure-body"), null);
+		visible = false;
+		await render(true);
+		await wait(25);
+		await resize(0);
+		await wait(60);
+		const hiddenBody = host.querySelector<HTMLElement>(".activity-disclosure-body");
+		assert.ok(hiddenBody);
+		assert.equal(hiddenBody.style.height, "0px", "hidden ancestor is not a settled zero-height endpoint");
+		visible = true;
+		await resize(180);
+		await wait(60);
+		assert.ok(Number.parseFloat(hiddenBody.style.height) > 0);
+		reduced = true;
+		await render(true);
+		assert.equal(
+			hiddenBody.style.height,
+			"auto",
+			"live reduced-motion change settles the current endpoint immediately",
+		);
+		assert.equal(observers.size, 0);
+		await act(async () => {
+			for (const callback of retired) callback();
+		});
+		assert.equal(
+			hiddenBody.style.height,
+			"auto",
+			"stale observer delivery cannot restart a settled or cancelled transition",
+		);
+	} finally {
+		await act(async () => root.unmount());
+		assert.equal(mounts, releases);
+		assert.equal(observers.size, 0);
+		host.remove();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	}

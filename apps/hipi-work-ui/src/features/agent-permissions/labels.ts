@@ -6,8 +6,8 @@ const en = {
 	"permissions.archived":
 		"This conversation is archived. New live-file and historical-context authorizations and write approvals are disabled. History and read-only checks remain available. Restore does not resume execution or grant permissions.",
 	"permissions.action.original": "Review original request before retrying",
-	"permissions.context.active": "Active context grants",
-	"permissions.context.history": "Context authorization history",
+	"permissions.context.active": "Additional active context grants",
+	"permissions.context.history": "Explicit context authorization history",
 	"permissions.approval.pending": "Pending writes",
 	"permissions.approval.history": "Write approval history",
 	"permissions.action.notFound":
@@ -30,12 +30,12 @@ const en = {
 	"permissions.retained.source": "Original authorization",
 	"permissions.retained.range": "Original root / path range",
 	"permissions.retained.restart":
-		"After a runtime restart, you can continue this conversation by explicitly authorizing its historical context. New file operations require a currently authorized folder and a separate current file context grant. Old root identities and approvals are not restored.",
+		"If previously authorized file context is unavailable after a runtime restart, authorize its saved context to continue. Project defaults do not restore old root identities, explicit grants or write approvals. External folders and writes still need current permissions.",
 
 	"permissions.title": "Agent file permissions",
-	"permissions.context.authorize": "Authorize model context",
+	"permissions.context.authorize": "Authorize additional file context",
 	"permissions.context.disclosure":
-		"Allow this conversation to list and read the selected scope. Folder names, file contents and derived summaries may be sent to the provider and model shown below. Manual folder access does not grant this permission. Each write needs separate approval.",
+		"Authorize an additional file scope or restore explicit access for an older conversation. New project chats already have default project read access. Folder names, file contents and derived summaries in the selected scope may be sent to the provider and model below. Each write needs separate approval.",
 	"permissions.context.revokeNote":
 		"Revocation blocks future use of this context; data already transmitted cannot be recalled. Continuing with old file context requires new explicit authorization, or a new conversation without that context.",
 	"permissions.context.root": "Previously authorized folder",
@@ -44,9 +44,11 @@ const en = {
 	"permissions.context.short": "15 minutes",
 	"permissions.context.long": "1 hour",
 	"permissions.context.revoke": "Revoke context permission",
-	"permissions.context.none": "No context grants. Choose an authorized folder to allow model disclosure.",
-	"permissions.context.noRoots": "No authorized folders available. Authorize a folder in Project files first.",
+	"permissions.context.none": "No additional explicit context grants.",
+	"permissions.context.noRoots":
+		"No folders available for additional access. Check folder connections in Project files.",
 	"permissions.context.scope": "Workspace / conversation",
+	"permissions.context.scopeNote": "Only this conversation and the selected model",
 	"permissions.context.model": "Provider / model",
 	"permissions.context.expires": "Expires",
 	"permissions.approval.title": "Proposed file replacement",
@@ -96,8 +98,8 @@ const zh: Record<keyof typeof en, string> = {
 	"permissions.archived":
 		"此会话已归档，不能新增文件上下文、历史上下文授权或批准写入。仍可查看历史及进行只读核对。恢复会话不会恢复执行或授予权限。",
 	"permissions.action.original": "重试前查看原始请求",
-	"permissions.context.active": "当前有效授权",
-	"permissions.context.history": "上下文授权历史",
+	"permissions.context.active": "额外生效的上下文授权",
+	"permissions.context.history": "明确授予的上下文权限历史",
 	"permissions.approval.pending": "待审批写入",
 	"permissions.approval.history": "写入审批历史",
 	"permissions.action.notFound": "尚未查到原请求结果，不能据此证明操作未发生。未自动重复任何命令。",
@@ -118,12 +120,12 @@ const zh: Record<keyof typeof en, string> = {
 	"permissions.retained.source": "原始授权",
 	"permissions.retained.range": "旧根标识 / 路径范围",
 	"permissions.retained.restart":
-		"运行时重启后，可明确授权历史上下文并继续原会话。新的文件操作仍需当前文件根许可与单独的当前文件上下文授权。旧根身份与旧审批不会恢复。",
+		"运行时重启后，若此前授权的文件上下文不可用，可明确授权其已保存的上下文以继续。项目默认访问不会恢复旧根身份、单独授权或写入审批；外部文件夹和写入仍需当前有效权限。",
 
 	"permissions.title": "Agent 文件权限",
-	"permissions.context.authorize": "授权模型上下文",
+	"permissions.context.authorize": "授权额外文件上下文",
 	"permissions.context.disclosure":
-		"允许此会话列举和读取所选范围。目录名称、文件内容及衍生摘要可能发送给下方提供商与模型。手动目录访问不包含此授权。每次写入仍需单独审批。",
+		"授权额外的文件范围，或为旧会话恢复明确的文件访问。新建项目聊天已默认可读取项目文件。所选范围的目录名称、文件内容及衍生摘要可能发送给下方提供商与模型，每次写入仍需单独审批。",
 	"permissions.context.revokeNote":
 		"撤权会阻止后续使用这些上下文，已发送的数据无法收回。继续使用旧文件上下文需要重新明确授权，或新建不含这些上下文的会话。",
 	"permissions.context.root": "已授权目录",
@@ -132,9 +134,10 @@ const zh: Record<keyof typeof en, string> = {
 	"permissions.context.short": "15 分钟",
 	"permissions.context.long": "1 小时",
 	"permissions.context.revoke": "撤销上下文授权",
-	"permissions.context.none": "尚无上下文授权。请选择已授权目录，明确允许向模型发送数据。",
-	"permissions.context.noRoots": "没有可用的已授权目录，请先在项目文件中授权目录。",
+	"permissions.context.none": "没有额外明确授予的上下文权限。",
+	"permissions.context.noRoots": "没有可用于额外访问的目录，请在项目文件中检查目录连接。",
 	"permissions.context.scope": "工作区 / 会话",
+	"permissions.context.scopeNote": "仅限此会话与所选模型",
 	"permissions.context.model": "提供商 / 模型",
 	"permissions.context.expires": "到期时间",
 	"permissions.approval.title": "拟替换文件内容",

@@ -1,7 +1,4 @@
-/* DOM and visual order agree: permission access leads, model is adjacent to Send. */
-.new-chat-controls .prepared-project-permissions {
-	flex-shrink: 0;
-}
+/* Keep the model adjacent to Send without a separate project-permission control. */
 .new-chat-controls .new-chat-model-trigger {
 	margin-inline-start: auto;
 }

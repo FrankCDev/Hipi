@@ -309,7 +309,7 @@ test("authorized roots are discoverable and UTF-8 read pages never flood the mod
 	}
 });
 
-test("a bound project is discovered only after explicit chat consent, without exposing host paths or another project", async () => {
+test("without the trusted current-project capability, binding alone never infers model access from file roots", async () => {
 	const f = await fixture();
 	const projects = createRuntimeProjectFolders(f.runtime, f.authority, "owner");
 	assert.ok(projects);
@@ -341,8 +341,8 @@ test("a bound project is discovered only after explicit chat consent, without ex
 				assert.ok(!transcript.includes(rootId));
 				assert.ok(!transcript.includes(otherRootId));
 				assert.ok(!transcript.includes(f.directory));
-				assert.ok(transcript.includes("Permissions (权限)"));
-				assert.ok(transcript.includes("Allow project access (允许访问项目)"));
+				assert.ok(transcript.includes("additional folders require explicit file-context permission"));
+				assert.ok(!transcript.includes("Allow project access"));
 				assert.ok(transcript.includes("never invent them or ask the user to type internal rootId"));
 				assert.ok(!transcript.includes("Authorized file roots and relative path prefixes:"));
 				return fauxAssistantMessage("Project access needs your permission.");

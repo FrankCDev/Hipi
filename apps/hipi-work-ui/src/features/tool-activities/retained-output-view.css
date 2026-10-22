@@ -10,6 +10,7 @@
 	line-height: 1.625;
 }
 .inline-tool-text-card {
+	position: relative;
 	border: 1px solid var(--line);
 	border-radius: var(--tool-output-radius);
 	background: var(--tool-output-surface);
@@ -17,9 +18,23 @@
 	contain: inline-size;
 }
 .inline-tool-text-header {
+	position: sticky;
+	top: 0;
+	/* Keep the pinned title above sibling output within the card's containing block. */
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
 	padding: calc(var(--tool-output-padding) / 2) var(--tool-output-padding);
-	font-size: 0.875em;
+	font-size: var(--font-ui-small-size);
+	line-height: var(--font-ui-small-line-height);
 	user-select: none;
+}
+.inline-tool-text-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .retained-output-viewport {
 	max-height: var(--tool-output-max-height);

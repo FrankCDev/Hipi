@@ -55,6 +55,7 @@ test("system theme and motion track their own media preferences, cleanup release
 	assert.equal(root.lang, "zh-CN");
 	assert.equal(root.dataset.messagesColors, "custom");
 	assert.equal(root.properties.get("--font-ui-size"), "14px");
+	assert.equal(root.properties.get("--font-ui-small-size"), "13px");
 	assert.equal(root.properties.get("--font-code-size"), "12px");
 	media.change(false);
 	motion.change(true);
@@ -108,6 +109,7 @@ test("cleanup restores prior inline values, datasets and language rather than de
 	const root = target();
 	root.properties.set("--surface", "#abcdef");
 	root.properties.set("--font-ui", "original font");
+	root.properties.set("--font-ui-small-size", "original small size");
 	root.properties.set("--unrelated", "keep me");
 	root.dataset.theme = "existing";
 	root.dataset.reducedMotion = "on";
@@ -117,6 +119,7 @@ test("cleanup restores prior inline values, datasets and language rather than de
 	assert.deepEqual(Object.fromEntries(root.properties), {
 		"--surface": "#abcdef",
 		"--font-ui": "original font",
+		"--font-ui-small-size": "original small size",
 		"--unrelated": "keep me",
 	});
 	assert.deepEqual(root.dataset, { theme: "existing", reducedMotion: "on", sidebarColors: "existing" });
@@ -138,7 +141,42 @@ test("global custom family inherits into regions unless an explicit region font 
 	assert.equal(variables["--editor-font"], `"JetBrains Mono", ${fonts.mono}`);
 	assert.equal(variables["--font-code-size"], "17.25px");
 	assert.equal(variables["--font-ui-size"], "15.5px");
+	assert.equal(variables["--font-ui-small-size"], "14px");
 	for (const value of Object.values(fonts)) assert.match(value, /(?:sans-serif|serif|monospace)$/);
+});
+test("small UI size follows integer and fractional configuration changes in either theme", () => {
+	const root = target();
+	for (const mode of ["light", "dark"] as const) {
+		for (const [uiFontSize, smallSize] of [
+			[11, 10],
+			[12, 11],
+			[13, 12],
+			[14, 13],
+			[15, 14],
+			[16, 15],
+			[11.25, 10],
+			// Preserve division before multiplication at a fractional rounding boundary.
+			[11.307692307692307, 10],
+			[11.307692307692308, 11],
+			[11.5, 11],
+			[13.25, 12],
+			[13.5, 13],
+			[14.5, 13],
+			[15.5, 14],
+			[15.75, 15],
+		] as const) {
+			const cleanup = applyTheme({ ...defaultConfig(), mode, uiFontSize }, root);
+			assert.equal(root.properties.get("--font-ui-size"), `${uiFontSize}px`);
+			assert.equal(root.properties.get("--font-ui-small-size"), `${smallSize}px`);
+			assert.equal(root.properties.get("--font-code-size"), "12px");
+			cleanup();
+			assert.equal(root.properties.size, 0);
+		}
+	}
+	const css = readFileSync(new URL("../src/theme.css", import.meta.url), "utf8");
+	const defaults = css.split(":root {")[1]?.split("}")[0] ?? "";
+	assert.match(defaults, /--font-ui-small-size: 13px;/);
+	assert.match(defaults, /--font-ui-small-line-height: calc\(10 \/ 7\);/);
 });
 test("content fonts inherit UI by default, select independently and yield to retained region overrides", () => {
 	const inherited = themeVariables({ ...defaultConfig(), uiFont: "serif", customUiFont: "Noto Serif SC" });

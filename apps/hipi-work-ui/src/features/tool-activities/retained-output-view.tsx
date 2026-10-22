@@ -180,7 +180,9 @@ export function RetainedOutputView({
 		<div ref={root} className="retained-output-view">
 			{chunks.length > 0 && (
 				<div className="inline-tool-text-card">
-					<div className="inline-tool-text-header">{inline["inline.plaintext"]}</div>
+					<div className="inline-tool-text-header">
+						<div className="inline-tool-text-title">{inline["inline.plaintext"]}</div>
+					</div>
 					<section
 						ref={viewport}
 						className="retained-output-viewport"

@@ -6,6 +6,8 @@ import {
 	type Method,
 	type Params,
 	parseResult,
+	type Snapshot,
+	type ToolActivity,
 	type ToolActivityPage,
 } from "@hipi/work-runtime/contracts";
 import { act, type ReactNode, useSyncExternalStore } from "react";
@@ -14,9 +16,16 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 import { ThemeProvider } from "../../src/app/theme/provider.tsx";
 import { ActivityHistoryWindow } from "../../src/features/tool-activities/activity-history-window.tsx";
 import { ActivitySession, INLINE_ACTIVITY_SCAN_PAGES } from "../../src/features/tool-activities/activity-session.ts";
+import {
+	ActivityTranscriptProvider,
+	InlineMessageToolBlock,
+	MessageActivitiesProvider,
+	useActivityTranscriptProjection,
+} from "../../src/features/tool-activities/activity-transcript.tsx";
 import { HistoricalTurnActivities, LiveTurnActivities } from "../../src/features/tool-activities/turn-activities.tsx";
 
 const calls: Params<"getToolActivities">[] = [];
+let locale = "en";
 let page: ToolActivityPage = { items: [], nextCursor: null, coverage: "tasks", membershipFence: "f" };
 let pages: ToolActivityPage[] | undefined;
 const client: AppClient = {
@@ -28,7 +37,7 @@ const client: AppClient = {
 	observe: async () => ({ dispose: async () => {} }),
 };
 vi.mock("../../src/app/client-provider.tsx", () => ({ useAppClient: () => client }));
-vi.mock("../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
+vi.mock("../../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale }) }));
 const intersections: (() => void)[] = [];
 let host: HTMLDivElement;
 let root: Root;
@@ -49,6 +58,7 @@ beforeEach(() => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	intersections.length = 0;
 	calls.length = 0;
+	locale = "en";
 	pages = undefined;
 	page = { items: [], nextCursor: null, coverage: "tasks", membershipFence: "f" };
 	host = document.createElement("div");
@@ -140,6 +150,283 @@ test("mixed groups use the capability fallback unless a proven active item suppl
 	await show(false, 3);
 	assert.equal(heading?.textContent, "Tool activity");
 	assert.equal(calls.length, 0);
+});
+
+test("proven settled groups use the supplied plain fallback rather than uniform-name heuristics", async () => {
+	for (const names of [
+		["hipi_files_read", "hipi_files_list"],
+		["generic_tool", "generic_tool"],
+		["hipi_files_read", "hipi_files_read"],
+		["generic_tool"],
+	]) {
+		for (const language of ["en", "zh-CN"]) {
+			locale = language;
+			await act(async () =>
+				render(
+					<HistoricalTurnActivities
+						scope={scope}
+						connected
+						messageId="5_0"
+						expanded={false}
+						onToggle={() => {}}
+						toolCalls={{
+							items: names.map((name, index) => ({ name, callId: String(index), contentIndex: index })),
+							total: names.length,
+						}}
+						presentation={{ kind: "summary", key: "summary", completed: true }}
+					/>,
+				),
+			);
+			assert.equal(
+				host.querySelector(".activity-disclosure-summary")?.textContent,
+				language === "en" ? "Worked" : "已完成",
+			);
+			assert.equal(host.querySelector(".activity-disclosure-heading svg"), null);
+			assert.equal(host.querySelector(".inline-activity-count"), null);
+			assert.equal(host.querySelector(".inline-activity-phase"), null);
+			assert.ok(host.querySelector(".activity-disclosure-chevron"));
+		}
+	}
+	assert.equal(calls.length, 0, "the ordinary summary does not fetch metadata to invent semantic categories");
+});
+
+test("the production transcript projection carries explicit turn settlement into ordinary message slices", async () => {
+	const toolCalls = {
+		items: [1, 2].map((contentIndex) => ({ name: `tool_${contentIndex}`, callId: String(contentIndex), contentIndex })),
+		total: 2,
+	};
+	const value: Snapshot = {
+		...scope,
+		messages: [
+			{
+				id: "5_0",
+				role: "assistant",
+				text: "",
+				textLength: 0,
+				truncated: false,
+				toolCalls,
+				publicBlocks: {
+					items: [
+						{ kind: "tool", contentIndex: 1 },
+						{ kind: "tool", contentIndex: 2 },
+					],
+					total: 2,
+					omitted: false,
+				},
+			},
+		],
+		partial: "",
+		partialLength: 0,
+		partialTruncated: false,
+		running: true,
+		historyCursor: null,
+	};
+	function Slices({ snapshot }: { snapshot: Snapshot }) {
+		useActivityTranscriptProjection(snapshot, snapshot.running);
+		return (
+			<MessageActivitiesProvider messageId="5_0" toolCalls={toolCalls}>
+				<InlineMessageToolBlock contentIndexes={[1, 2]} />
+			</MessageActivitiesProvider>
+		);
+	}
+	const show = (snapshot: Snapshot) =>
+		act(async () =>
+			render(
+				<ActivityTranscriptProvider scope={scope} connected running={snapshot.running}>
+					<Slices snapshot={snapshot} />
+				</ActivityTranscriptProvider>,
+			),
+		);
+	await show(value);
+	assert.equal(
+		host.querySelector(".activity-disclosure-summary")?.textContent,
+		"Tool activity",
+		"unknown live state is not completion proof",
+	);
+	assert.ok(host.querySelector(".activity-disclosure-heading svg.lucide-puzzle"));
+	const header = host.querySelector(".activity-disclosure-toggle");
+	await show({ ...value, running: false });
+	assert.equal(host.querySelector(".activity-disclosure-summary")?.textContent, "Worked");
+	assert.equal(host.querySelector(".activity-disclosure-heading svg"), null);
+	assert.equal(host.querySelector(".inline-activity-count"), null);
+	assert.ok(host.querySelector(".activity-disclosure-toggle") === header);
+});
+
+test("anchored live rows keep canonical order and sibling state as interspersed metadata arrives", async () => {
+	vi.stubGlobal(
+		"ResizeObserver",
+		class {
+			observe() {}
+			disconnect() {}
+		},
+	);
+	vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+	const records: ToolActivity[] = [1, 2, 3].map((index) => ({
+		activityId: `task:${index}`,
+		taskId: String(index),
+		callId: "same-call",
+		toolName: `tool_${index}`,
+		source: "task",
+		inherited: false,
+		anchor: { assistantEntryId: "5", modelIndex: 0, contentIndex: index },
+		phase: "terminal",
+		toolResult: "success",
+		abortRequested: false,
+		receiptIds: [],
+		textAvailable: false,
+		outputTruncated: false,
+	}));
+	const [first, second, third] = records;
+	assert.ok(first && second && third);
+	const session = new ActivitySession(client, scope, { kind: "tasks", taskIds: ["1", "2", "3"] });
+	session.activate();
+	const tools: ConversationExecution["tools"]["items"] = records.toReversed().map((record) => ({
+		taskId: record.taskId,
+		callId: record.callId,
+		name: record.toolName,
+		anchor: record.anchor,
+		status: "running",
+	}));
+	const show = (shown: ToolActivity[], connected = true, complete = true) =>
+		act(async () =>
+			render(
+				<HistoricalTurnActivities
+					scope={scope}
+					connected={connected}
+					messageId="5_0"
+					toolCalls={{
+						items: (complete ? records.toReversed() : [first]).map((record) => ({
+							callId: record.callId,
+							name: record.toolName,
+							contentIndex: record.anchor?.contentIndex ?? 0,
+						})),
+						total: 3,
+					}}
+					live={{
+						session,
+						state: { busy: false, failed: false, page: { ...page, items: shown, unavailableTaskIds: [] } },
+						active: connected,
+					}}
+					liveItems={shown}
+					liveTools={tools}
+					expanded
+					onToggle={() => {}}
+				/>,
+			),
+		);
+	const names = () =>
+		[...host.querySelectorAll(".inline-tool-result-name, .activity-live-slots li > span:first-child")].map(
+			(node) => node.textContent,
+		);
+	try {
+		await show([third, first]);
+		assert.deepEqual(names(), ["tool_1", "tool_2", "tool_3"]);
+		const cards = [...host.querySelectorAll(".inline-tool-result")];
+		const toggle = cards[0]?.querySelector<HTMLButtonElement>(".inline-tool-result-toggle");
+		const name = cards[0]?.querySelector(".inline-tool-result-name");
+		assert.ok(toggle && name);
+		await act(async () => toggle.click());
+		toggle.focus();
+		const range = document.createRange();
+		range.selectNodeContents(name);
+		document.getSelection()?.removeAllRanges();
+		document.getSelection()?.addRange(range);
+		assert.equal(document.getSelection()?.toString(), "tool_1");
+		await show([second, third, first]);
+		assert.deepEqual(names(), ["tool_1", "tool_2", "tool_3"]);
+		assert.equal(host.querySelectorAll(".inline-tool-result")[0], cards[0]);
+		assert.equal(host.querySelectorAll(".inline-tool-result")[2], cards[1]);
+		assert.equal(toggle.getAttribute("aria-expanded"), "true");
+		assert.equal(document.activeElement, toggle);
+		assert.equal(document.getSelection()?.toString(), "tool_1");
+		await show([third, first], false);
+		assert.deepEqual(names(), ["tool_1", "tool_2", "tool_3"]);
+		assert.equal(host.querySelectorAll(".inline-tool-result")[0], cards[0]);
+		assert.match(host.querySelector(".activity-live-slots")?.textContent ?? "", /Last read/);
+		await show([third, first], true, false);
+		assert.deepEqual(
+			names(),
+			["tool_1", "tool_2", "tool_3"],
+			"bounded summary omission retains proven runtime anchors",
+		);
+		assert.ok(host.querySelectorAll(".inline-tool-result")[0] === cards[0]);
+		assert.ok(host.querySelectorAll(".inline-tool-result")[1] === cards[1]);
+		assert.equal(calls.length, 0, "sorting and metadata-only expansion do not acquire any reader");
+	} finally {
+		document.getSelection()?.removeAllRanges();
+		await act(async () => render(null));
+		session.dispose();
+	}
+});
+
+test("canonical live rows require full occurrence identity rather than call ID, tool name or metadata readiness", async () => {
+	const original: ToolActivity = {
+		activityId: "task:9",
+		taskId: "9",
+		callId: "same",
+		toolName: "tool",
+		source: "task",
+		inherited: false,
+		anchor: { assistantEntryId: "5", modelIndex: 0, contentIndex: 2 },
+		phase: "terminal",
+		toolResult: "success",
+		abortRequested: false,
+		receiptIds: [],
+		textAvailable: false,
+		outputTruncated: false,
+	};
+	const session = new ActivitySession(client, scope, { kind: "tasks", taskIds: ["9"] });
+	session.activate();
+	const show = (record: ToolActivity, taskId: string | undefined) =>
+		act(async () =>
+			render(
+				<HistoricalTurnActivities
+					scope={scope}
+					connected
+					messageId="5_0"
+					toolCalls={{ items: [{ callId: "same", name: "tool", contentIndex: 2 }], total: 1 }}
+					contentIndexes={[2]}
+					expanded
+					onToggle={() => {}}
+					live={{ session, state: { busy: false, failed: false }, active: true }}
+					liveItems={[record]}
+					liveTools={[{ taskId, callId: "same", name: "tool", status: "pending", anchor: original.anchor }]}
+				/>,
+			),
+		);
+	try {
+		for (const record of [
+			{ ...original, anchor: { assistantEntryId: "5", modelIndex: 1, contentIndex: 2 } },
+			{ ...original, anchor: { assistantEntryId: "5", modelIndex: 0, contentIndex: 1 } },
+			{ ...original, toolName: "other" },
+			{ ...original, callId: "other" },
+			{ ...original, taskId: "other" },
+		]) {
+			await show(record, "9");
+			assert.equal(host.querySelector(".inline-tool-result"), null);
+			assert.equal(host.querySelectorAll(".activity-live-slots li").length, 1);
+		}
+		await show(original, undefined);
+		assert.equal(
+			host.querySelector(".inline-tool-result"),
+			null,
+			"an uninstantiated slot cannot inherit another task's result",
+		);
+		const pending = host.querySelector(".activity-live-slots li");
+		await show({ ...original, taskId: "other" }, "9");
+		assert.equal(
+			host.querySelector(".activity-live-slots li"),
+			pending,
+			"task instantiation does not change the slot key",
+		);
+		await show(original, "9");
+		assert.equal(host.querySelectorAll(".inline-tool-result").length, 1);
+		assert.equal(host.querySelector(".activity-live-slots"), null);
+		assert.equal(calls.length, 0);
+	} finally {
+		await act(async () => render(null));
+		session.dispose();
+	}
 });
 
 const matching: ToolActivityPage = {

@@ -5,8 +5,6 @@ import { usePreferences } from "../../app/preferences.tsx";
 import { ManagementList } from "../../components/management-list/management-list.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Dialog, DialogBody, DialogContent, DialogTitle, DialogTrigger } from "../../components/ui/dialog.tsx";
-import { projectFolderLabels } from "../workbench/projects/folder-labels.ts";
-import { useProjectFolder } from "../workbench/projects/use-folder.ts";
 import { ApprovalCard } from "./approval-card.tsx";
 import { ContextDialog } from "./context-dialog.tsx";
 import { permissionLabels } from "./labels.ts";
@@ -51,8 +49,6 @@ function PermissionManagementView({
 	const boundScope = { workspaceId: scope.workspaceId, conversationId: scope.conversationId };
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
-	const pl = projectFolderLabels(locale);
-	const project = useProjectFolder(scope.workspaceId, connected);
 	const [contextOpen, setContextOpen] = useState(false);
 	const contextTrigger = useRef<HTMLButtonElement | null>(null);
 	const contextId = useId();
@@ -73,19 +69,6 @@ function PermissionManagementView({
 		"aria-controls": contextId,
 	};
 	const pending = session.getPending();
-	const projectAuthorized =
-		project.data?.root &&
-		state.activeContexts.some(
-			(context) =>
-				context.purpose === "live-files" &&
-				context.workspaceId === scope.workspaceId &&
-				context.conversationId === scope.conversationId &&
-				context.rootId === project.data?.root?.rootId &&
-				context.status === "active" &&
-				context.expiresAt > now &&
-				context.model.provider === model?.provider &&
-				context.model.modelId === model?.modelId,
-		);
 	const approval = state.approval;
 	const review = state.review;
 	const date = (value: number) =>
@@ -150,27 +133,6 @@ function PermissionManagementView({
 	);
 	const content = (
 		<div className="permission-panel grid gap-4">
-			{/* Ordinary context availability belongs in management, not a permanent composer warning. */}
-			{project.data?.status === "available" &&
-				!project.isError &&
-				connected &&
-				state.loaded &&
-				!state.failed &&
-				!state.uncertain &&
-				!state.incompatible &&
-				!!model &&
-				!projectAuthorized &&
-				!archived && (
-					<div className="project-context-notice">
-						<span>
-							<ShieldCheck size={14} aria-hidden="true" />
-							{pl.currentChat}
-						</span>
-						<Button variant="ghost" size="sm" {...contextAction}>
-							{pl.authorize}
-						</Button>
-					</div>
-				)}
 			{state.unresolvedOperations.length > 0 && (
 				<section className="grid gap-3" aria-label={l["permissions.operation.attention"]}>
 					<h3>{l["permissions.operation.attention"]}</h3>

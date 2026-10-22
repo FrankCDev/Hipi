@@ -27,7 +27,6 @@ import { SettingsDialog } from "../settings/index.ts";
 import { ToolPacksDialog } from "../tool-packs/index.ts";
 import { CatalogRecovery, ConversationActions } from "./catalog/controls.tsx";
 import { CreateDialog } from "./catalog/create-dialog.tsx";
-import type { StagedProjectConsent } from "./catalog/initial-context.ts";
 import { initialWorkspaceId } from "./catalog/initial-send.ts";
 import { catalogLabels } from "./catalog/labels.ts";
 import { CatalogPagination } from "./catalog/pagination.tsx";
@@ -745,7 +744,7 @@ export function Workbench({
 			}
 		}
 	};
-	const sendInitial = async (text: string, model: ModelReference, context?: StagedProjectConsent) => {
+	const sendInitial = async (text: string, model: ModelReference) => {
 		const origin = navigation.store.getState().revision;
 		const active = homeDraft.inventory?.active;
 		if (!active || homeDraft.busy || homeDraft.failed) throw new Error("INITIAL_SEND_SOURCE_UNAVAILABLE");
@@ -764,7 +763,6 @@ export function Workbench({
 			model,
 			sourceKey: active.sourceKey,
 			sourceGeneration: active.generation,
-			...(context ? { context } : {}),
 		});
 		applyCatalogResult(origin);
 		if (
@@ -1385,7 +1383,6 @@ export function Workbench({
 									action={
 										<PreparedTaskEntry
 											key={homeDraft.inventory?.active?.generation ?? "loading-draft"}
-											workspaceId={currentProject?.homeWorkspaceId ?? ""}
 											draft={homeDraft.text}
 											onDraftChange={homeDraft.change}
 											readOnly={homeDraft.busy || !homeDraft.inventory?.active}

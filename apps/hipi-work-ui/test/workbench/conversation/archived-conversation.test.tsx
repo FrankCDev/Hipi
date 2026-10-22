@@ -163,17 +163,20 @@ test("archived permissions retain continuous audit evidence and read-only checks
 	const archived = render(true);
 	assert.match(archived, /此会话已归档/);
 	const restored = render(false);
-	for (const label of ["授权模型上下文", "允许再次发送历史文件上下文", "批准此次写入", "拒绝此次写入"]) {
+	for (const label of ["授权额外文件上下文", "允许再次发送历史文件上下文", "批准此次写入", "拒绝此次写入"]) {
 		assert.match(button(archived, label), /disabled=""/);
 		assert.doesNotMatch(button(restored, label), /disabled=""/);
 	}
-	for (const label of ["上下文授权历史", "写入审批历史", "只读核对结果"])
+	for (const label of ["明确授予的上下文权限历史", "写入审批历史", "只读核对结果"])
 		assert.doesNotMatch(button(archived, label), /disabled=""/);
 	assert.match(archived, /data-management-key="old-source"/);
 	assert.match(archived, /data-management-key="approval"/);
 	assert.match(archived, /old-root \/ src/);
 	assert.match(archived, /data-before="previous content" data-after="proposed replacement"/);
-	assert.equal([...archived.matchAll(/<section aria-label="(?:上下文授权历史|写入审批历史)" tabindex="0"/g)].length, 2);
+	assert.equal(
+		[...archived.matchAll(/<section aria-label="(?:明确授予的上下文权限历史|写入审批历史)" tabindex="0"/g)].length,
+		2,
+	);
 	assert.doesNotMatch(archived, /刷新本页|第一页|下一页|第一条请求|下一条请求|>刷新</);
 	assert.equal(call.mock.calls.length, 0);
 	call.mockRejectedValueOnce(new Error("offline"));

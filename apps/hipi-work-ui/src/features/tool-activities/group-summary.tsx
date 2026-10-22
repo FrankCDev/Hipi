@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 export const GROUP_SUMMARY_DWELL_MS = 1000;
-export type GroupSummaryContent = { title: string; toolName?: string; status?: string; active: boolean };
+export type GroupSummaryContent = {
+	title: string;
+	toolName?: string;
+	status?: string;
+	active: boolean;
+	plain?: boolean;
+};
 
 /** The reference summary change is a minimum dwell, not a crossfade. The complete
  * summary stays together so a deferred name never acquires another tool's status. */
@@ -17,7 +23,8 @@ export function useGroupSummary(value: GroupSummaryContent, key: string, transit
 				value.title !== settled.value.title ||
 				value.toolName !== settled.value.toolName ||
 				value.status !== settled.value.status ||
-				value.active !== settled.value.active
+				value.active !== settled.value.active ||
+				value.plain !== settled.value.plain
 			)
 				setSettled({ key, value });
 			return;

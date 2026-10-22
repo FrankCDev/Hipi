@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import type { ModelReference } from "@hipi/work-runtime/contracts";
-import type { ProjectFolder } from "@hipi/work-runtime/files";
 import type * as React from "react";
 import { isValidElement } from "react";
 import { afterEach, beforeEach, test, vi } from "vitest";
@@ -13,12 +12,8 @@ import {
 	DropdownMenuRadioItem,
 } from "../../../src/components/ui/dropdown-menu.tsx";
 import { Popover, PopoverContent } from "../../../src/components/ui/popover.tsx";
-import { Select } from "../../../src/components/ui/select.tsx";
-import { Textarea } from "../../../src/components/ui/textarea.tsx";
-import type { StagedProjectConsent } from "../../../src/features/workbench/catalog/initial-context.ts";
 import { ComposerEditor } from "../../../src/features/workbench/composer/editor.tsx";
 import { PreparedTaskEntry } from "../../../src/features/workbench/composer/prepared-entry.tsx";
-import { PreparedProjectConsent } from "../../../src/features/workbench/composer/project-consent.tsx";
 import {
 	ConversationModelAttention,
 	ConversationModelControls,
@@ -82,26 +77,21 @@ vi.mock("../../../src/app/preferences.tsx", () => ({
 vi.mock("../../../src/app/client-provider.tsx", () => ({
 	useLocalState: () => local,
 	useAppClient: () => activeClient,
-	useFiles: () => ({ fileAuthority: activeAuthority }),
 }));
 vi.mock("@tanstack/react-query", () => ({
-	useQuery: ({ queryKey }: { queryKey: string[] }) =>
-		queryKey[0] === "projectFolder"
-			? {
-					data: folder,
-					isError: false,
-					isFetching: false,
-				}
-			: {
-					data: {
-						models,
-						providers: [{ provider: "faux", name: "Faux", credentialState }],
-					},
-					isPending: false,
-					isError: catalogFailed,
-					isFetching: catalogFetching,
-					refetch,
-				},
+	useQuery: ({ queryKey }: { queryKey: string[] }) => {
+		assert.deepEqual(queryKey, ["models"], "The composer does not read or authorize project context");
+		return {
+			data: {
+				models,
+				providers: [{ provider: "faux", name: "Faux", credentialState }],
+			},
+			isPending: false,
+			isError: catalogFailed,
+			isFetching: catalogFetching,
+			refetch,
+		};
+	},
 }));
 let local = new LocalState();
 let credentialState = "configured";
@@ -109,11 +99,9 @@ let catalogFailed = false;
 let catalogFetching = false;
 let models = [{ provider: "faux", modelId: "one", name: "One" }];
 let draft = "";
-let folder: ProjectFolder;
 const runtimeCall = vi.fn();
 let activeClient = { call: runtimeCall };
-let activeAuthority = { getProject: runtimeCall };
-const sent = vi.fn(async (_text: string, _model: ModelReference, _context?: StagedProjectConsent) => {});
+const sent = vi.fn(async (_text: string, _model: ModelReference) => {});
 const manageModels = vi.fn();
 const refetch = vi.fn();
 function find<C extends React.ElementType>(
@@ -168,20 +156,12 @@ beforeEach(() => {
 	hooks.commits = [];
 	local = new LocalState();
 	activeClient = { call: runtimeCall };
-	activeAuthority = { getProject: runtimeCall };
 	draft = "";
 	credentialState = "configured";
 	catalogFailed = false;
 	catalogFetching = false;
 	models = [{ provider: "faux", modelId: "one", name: "One" }];
-	folder = {
-		workspaceId: "project",
-		bindingId: "binding",
-		revision: 1,
-		status: "available",
-		displayName: "Project source",
-		root: { workspaceId: "project", rootId: "opaque-root", writable: false, displayName: "Project source" },
-	};
+
 	sent.mockReset();
 	sent.mockResolvedValue(undefined);
 	runtimeCall.mockClear();
@@ -453,162 +433,52 @@ test.each(["connecting", "stale", "paused", "fetching", "pending", "storeMismatc
 	},
 );
 
-function consentIntent(): StagedProjectConsent {
-	assert.ok(folder.bindingId && folder.root);
-	return {
-		workspaceId: folder.workspaceId,
-		bindingId: folder.bindingId,
-		bindingRevision: folder.revision,
-		rootId: folder.root.rootId,
-		model: { provider: "faux", modelId: "one" },
-		pathPrefixes: [""],
-		expiresAt: Date.now() + 900000,
-		disclosureVersion: 1,
-	};
-}
-function permissions() {
-	const entry = find(render({ workspaceId: "project" }), Button).find(
-		(button) => button.props.className === "prepared-project-permissions",
-	);
-	assert.ok(entry?.props.onClick);
-	Reflect.apply(entry.props.onClick, undefined, []);
-	return only(render({ workspaceId: "project" }), PreparedProjectConsent).props;
-}
-
-test("project permissions are off initially; opening and Cancel never create a chat, grant access, or lose the prompt", () => {
-	change("Which files are in my project?");
-	const dialog = permissions();
-	assert.equal(dialog.value, undefined);
-	dialog.onClose();
-	const node = render({ workspaceId: "project" });
-	assert.equal(find(node, PreparedProjectConsent).length, 0);
-	assert.equal(only(node, ComposerEditor).props.value, "Which files are in my project?");
-	assert.equal(runtimeCall.mock.calls.length, 0);
-	assert.equal(sent.mock.calls.length, 0);
-	submit(node);
-	assert.deepEqual(sent.mock.calls, [["Which files are in my project?", { provider: "faux", modelId: "one" }]]);
-});
-
-test("one Send forwards only explicitly staged project consent; staging itself has no runtime side effect", () => {
+test("new-chat Send has no project consent control, staged payload or authorization call", () => {
 	change("Explain the project source.");
-	const dialog = permissions();
-	const intent = consentIntent();
-	dialog.onChange(intent);
-	dialog.onClose();
+	const node = render();
+	assert.ok(find(node, Button).every((button) => button.props["aria-haspopup"] !== "dialog"));
+	assert.ok(find(node, Button).every((button) => button.props.className !== "prepared-project-permissions"));
+	assert.ok(find(node, "p").every((item) => item.props.className !== "prepared-context-note"));
+	assert.ok(find(node, "output").every((item) => item.props.className !== "prepared-context-note"));
 	assert.equal(runtimeCall.mock.calls.length, 0);
 	assert.equal(sent.mock.calls.length, 0);
-	const node = render({ workspaceId: "project" });
-	assert.ok(find(node, Button).some((button) => button.props["data-staged"] === true));
 	submit(node);
 	submit(node);
-	assert.deepEqual(sent.mock.calls, [["Explain the project source.", { provider: "faux", modelId: "one" }, intent]]);
+	assert.deepEqual(sent.mock.calls, [["Explain the project source.", { provider: "faux", modelId: "one" }]]);
+	assert.equal(runtimeCall.mock.calls.length, 0, "The composer never creates a project grant before Send");
 	assert.equal(draft, "Explain the project source.");
 });
 
-test.each(["model", "binding", "root", "expiry", "workspace", "client", "authority"] as const)(
-	"%s changes invalidate staged consent without sending or changing the prompt",
-	(changeKind) => {
-		vi.useFakeTimers();
-		change("Retain this file question.");
-		permissions().onChange(consentIntent());
-		render({ workspaceId: "project" });
-		if (changeKind === "model") {
-			models.push({ provider: "faux", modelId: "two", name: "Two" });
-			only(render({ workspaceId: "project" }), DropdownMenuRadioGroup).props.onValueChange?.('["faux","two"]');
-		} else if (changeKind === "binding") {
-			folder = { ...folder, revision: 2 };
-		} else if (changeKind === "root") {
-			assert.ok(folder.root);
-			folder = { ...folder, root: { ...folder.root, rootId: "replacement-root" } };
-		} else if (changeKind === "expiry") vi.advanceTimersByTime(900001);
-		else if (changeKind === "client") activeClient = { call: runtimeCall };
-		else if (changeKind === "authority") activeAuthority = { getProject: runtimeCall };
-		const node = render({ workspaceId: changeKind === "workspace" ? "other" : "project" });
-		assert.ok(find(node, Button).every((button) => button.props["data-staged"] !== true));
-		assert.equal(only(node, ComposerEditor).props.value, "Retain this file question.");
-		assert.equal(runtimeCall.mock.calls.length, 0);
-		assert.equal(sent.mock.calls.length, 0);
-		assert.ok(find(node, "output").some((item) => item.props.className === "prepared-context-note"));
-	},
-);
-
-test("a fresh composer never restores staged consent from persisted prompt or selected model", () => {
-	change("Keep saved prompt.");
-	permissions().onChange(consentIntent());
-	render({ workspaceId: "project" });
+test("closing model selection and remounting retain the draft without sending or authorizing", () => {
+	change("Keep this project question.");
+	models.push({ provider: "faux", modelId: "two", name: "Two" });
+	only(render(), DropdownMenu).props.onOpenChange?.(true);
+	only(render(), DropdownMenuRadioGroup).props.onValueChange?.('["faux","two"]');
+	only(render(), DropdownMenu).props.onOpenChange?.(false);
+	assert.equal(only(render(), DropdownMenu).props.open, false);
 	for (const effect of hooks.effects.values()) effect.cleanup?.();
 	hooks.effects.clear();
 	hooks.cells = [];
-	const node = render({ workspaceId: "project" });
-	assert.ok(find(node, Button).every((button) => button.props["data-staged"] !== true));
-	assert.equal(only(node, ComposerEditor).props.value, "Keep saved prompt.");
+	activeClient = { call: runtimeCall };
+	const node = render();
+	assert.equal(only(node, ComposerEditor).props.value, "Keep this project question.");
+	assert.equal(only(node, DropdownMenuRadioGroup).props.value, '["faux","two"]');
 	assert.equal(sent.mock.calls.length, 0);
 	assert.equal(runtimeCall.mock.calls.length, 0);
+	submit(node);
+	assert.deepEqual(sent.mock.calls, [["Keep this project question.", { provider: "faux", modelId: "two" }]]);
 });
 
-test("prepared consent form captures friendly project/model/path/expiry values without calling a runtime", () => {
-	const onChange = vi.fn();
-	const onClose = vi.fn();
-	const draw = () => {
-		hooks.cursor = 0;
-		return PreparedProjectConsent({
-			folder,
-			model: { provider: "faux", modelId: "one" },
-			disabled: false,
-			onChange,
-			onClose,
-			onRestoreFocus() {},
-		});
-	};
-	let node = draw();
-	assert.ok(find(node, "strong").some((item) => item.props.children === "Project source"));
-	assert.equal(find(node, "input").length, 0, "Internal folder IDs are never editable fields");
-	find(node, Select)[0]?.props.onValueChange?.("paths");
-	node = draw();
-	only(node, Textarea).props.onChange?.({
-		target: { value: "src\nREADME.md" },
-	} as React.ChangeEvent<HTMLTextAreaElement>);
-	find(draw(), Select)[1]?.props.onValueChange?.("3600000");
-	const confirm = find(draw(), Button).find((item) => item.props.children === "Use these permissions on Send");
-	assert.ok(confirm && !confirm.props.disabled && confirm.props.onClick);
-	const before = Date.now();
-	Reflect.apply(confirm.props.onClick, undefined, []);
-	const staged = onChange.mock.calls[0]?.[0] as StagedProjectConsent;
-	assert.deepEqual(staged.pathPrefixes, ["src", "README.md"]);
-	assert.deepEqual(staged.model, { provider: "faux", modelId: "one" });
-	assert.equal(staged.rootId, "opaque-root");
-	assert.equal(staged.bindingRevision, 1);
-	assert.ok(staged.expiresAt >= before + 3600000 && staged.expiresAt <= Date.now() + 3600000);
-	assert.equal(onClose.mock.calls.length, 1);
+test("an unconfirmed first Send keeps the exact draft and reports failure without automatic retry", async () => {
+	change("Keep my original project request.");
+	sent.mockRejectedValueOnce(new Error("UNCONFIRMED"));
+	submit();
+	await Promise.resolve();
+	await Promise.resolve();
+	const node = render();
+	assert.ok(find(node, "p").some((item) => item.props.role === "alert" && item.props.className === "notice"));
+	assert.equal(only(node, ComposerEditor).props.value, "Keep my original project request.");
+	assert.equal(local.read("task-draft.project"), "Keep my original project request.");
+	assert.equal(sent.mock.calls.length, 1);
 	assert.equal(runtimeCall.mock.calls.length, 0);
-});
-
-test("invalid paths and stale prepared-consent callbacks cannot stage a wider or replaced folder", () => {
-	const onChange = vi.fn();
-	const draw = () => {
-		hooks.cursor = 0;
-		return PreparedProjectConsent({
-			folder,
-			model: { provider: "faux", modelId: "one" },
-			disabled: false,
-			onChange,
-			onClose() {},
-			onRestoreFocus() {},
-		});
-	};
-	const initial = draw();
-	const oldConfirm = find(initial, Button).find((item) => item.props.children === "Use these permissions on Send");
-	assert.ok(oldConfirm?.props.onClick);
-	folder = { ...folder, revision: 2 };
-	draw();
-	Reflect.apply(oldConfirm.props.onClick, undefined, []);
-	assert.equal(onChange.mock.calls.length, 0);
-	find(draw(), Select)[0]?.props.onValueChange?.("paths");
-	only(draw(), Textarea).props.onChange?.({
-		target: { value: "../private" },
-	} as React.ChangeEvent<HTMLTextAreaElement>);
-	const invalid = find(draw(), Button).find((item) => item.props.children === "Use these permissions on Send");
-	assert.ok(invalid?.props.disabled && invalid.props.onClick);
-	Reflect.apply(invalid.props.onClick, undefined, []);
-	assert.equal(onChange.mock.calls.length, 0);
 });

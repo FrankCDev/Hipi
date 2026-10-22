@@ -206,6 +206,8 @@ test("parsed partial-history facts reach the real turn header; conflicts survive
 		assert.ok(host.querySelector('[data-message-id="8_0"]'));
 		await act(async () => header.click());
 		assert.ok(host.querySelector('[data-message-id="2_0"]'));
+		assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), null);
+		assert.ok(host.querySelector('[data-message-id="8_0"] .message-copy'));
 		// This provider intentionally persists choices for the same client/scope.
 		// Restore collapsed before the following fixtures reuse that scope.
 		await act(async () => header.click());
@@ -221,6 +223,7 @@ test("parsed partial-history facts reach the real turn header; conflicts survive
 		assert.equal(host.querySelector(".run-activity-header"), null);
 		assert.ok(host.querySelector('[data-message-id="2_0"]'));
 		assert.ok(host.querySelector('[data-message-id="8_0"]'));
+		assert.ok(host.querySelector('[data-message-id="2_0"] .message-copy'));
 	} finally {
 		owner.dispose();
 	}
@@ -278,6 +281,7 @@ test("focused process action blocks automatic folding; manual disclosure keeps f
 	assert.equal(host.querySelector('[data-message-id="2_0"]') === null, true);
 	await act(async () => header.click());
 	assert.ok(host.querySelector('[data-message-id="2_0"]'));
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), null);
 	await render({ ...completed, messages: [...completed.messages] });
 	assert.ok(host.querySelector('[data-message-id="2_0"]'));
 	assert.ok(host.querySelector('[data-message-id="8_0"]'));

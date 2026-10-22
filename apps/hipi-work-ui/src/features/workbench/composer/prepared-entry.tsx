@@ -1,8 +1,8 @@
 import { LIMITS, type ModelReference } from "@hipi/work-runtime/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Settings2, ShieldCheck } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { useAppClient, useFiles, useLocalState } from "../../../app/client-provider.tsx";
+import { ChevronDown, Settings2 } from "lucide-react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useAppClient, useLocalState } from "../../../app/client-provider.tsx";
 import { usePreferences } from "../../../app/preferences.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
@@ -15,12 +15,8 @@ import {
 	DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu.tsx";
 import { Icon } from "../../../components/ui/icon.tsx";
-import type { StagedProjectConsent } from "../catalog/initial-context.ts";
-import { useProjectFolder } from "../projects/use-folder.ts";
 import { workbenchLabels } from "../workbench-labels.ts";
 import { ComposerEditor, type ComposerEditorHandle } from "./editor.tsx";
-import { PreparedProjectConsent, preparedContextCurrent } from "./project-consent.tsx";
-import { preparedProjectConsentLabels } from "./project-consent-labels.ts";
 import "./prepared-entry.css";
 
 /** Send alone starts work. Opening, editing and choosing a model never create a conversation. */
@@ -32,22 +28,19 @@ export function PreparedTaskEntry({
 	onDraftChange,
 	onManageModels,
 	focusRevision = 0,
-	workspaceId = "",
 	readOnly = false,
 }: {
 	disabled: boolean;
 	busy: boolean;
-	onSend: (text: string, model: ModelReference, context?: StagedProjectConsent) => Promise<void>;
+	onSend: (text: string, model: ModelReference) => Promise<void>;
 	draft: string;
 	onDraftChange: (value: string) => void;
 	onManageModels: (returnFocus: HTMLButtonElement | null) => void;
 	focusRevision?: number;
-	workspaceId?: string;
 	readOnly?: boolean;
 }) {
 	const client = useAppClient();
 	const local = useLocalState();
-	const { fileAuthority } = useFiles();
 	const { t, locale } = usePreferences();
 	const input = useRef<ComposerEditorHandle>(null);
 	const modelTrigger = useRef<HTMLButtonElement>(null);
@@ -56,20 +49,6 @@ export function PreparedTaskEntry({
 	const [modelOpen, setModelOpen] = useState(false);
 	const [modelKey, setModelKey] = useState(() => local.read("new-chat-model") ?? "");
 	const [failed, setFailed] = useState(false);
-	const [context, setContext] = useState<StagedProjectConsent>();
-	const contextRef = useRef(context);
-	const contextOwner = useRef({ client, local, fileAuthority });
-	const [consentOpen, setConsentOpen] = useState(false);
-	const [contextChanged, setContextChanged] = useState(false);
-	const consentTrigger = useRef<HTMLButtonElement>(null);
-	const project = useProjectFolder(workspaceId);
-	const consentLabels = preparedProjectConsentLabels(locale);
-	const changeContext = (value: StagedProjectConsent | undefined) => {
-		contextRef.current = value;
-		contextOwner.current = { client, local, fileAuthority };
-		setContext(value);
-		setContextChanged(false);
-	};
 	const inputId = useId();
 	const catalog = useQuery({
 		queryKey: ["models"],
@@ -84,53 +63,15 @@ export function PreparedTaskEntry({
 		? catalog.data?.models.find((model) => JSON.stringify([model.provider, model.modelId]) === modelKey)
 		: (catalog.data?.models.find((model) => configured(model.provider)) ?? catalog.data?.models[0]);
 	const ready = selected && configured(selected.provider) && !catalog.isError;
-	useEffect(() => {
-		if (!context) return;
-		const invalidate = () => {
-			if (contextRef.current !== context) return;
-			contextRef.current = undefined;
-			setContext(undefined);
-			setContextChanged(true);
-		};
-		if (
-			contextOwner.current.client !== client ||
-			contextOwner.current.local !== local ||
-			contextOwner.current.fileAuthority !== fileAuthority ||
-			context.workspaceId !== workspaceId ||
-			project.isError ||
-			!preparedContextCurrent(context, project.data, selected, Date.now())
-		) {
-			invalidate();
-			return;
-		}
-		const timeout = setTimeout(invalidate, Math.max(0, context.expiresAt - Date.now()));
-		return () => clearTimeout(timeout);
-	}, [context, workspaceId, project.data, project.isError, selected, client, local, fileAuthority]);
 	useLayoutEffect(() => {
 		if (focusRevision > 0) input.current?.focus();
 	}, [focusRevision]);
 	const send = () => {
 		if (!draft.trim() || !ready || !selected || disabled || busy || sending.current) return;
-		const consent = contextRef.current;
-		if (
-			consent &&
-			(contextOwner.current.client !== client ||
-				contextOwner.current.local !== local ||
-				contextOwner.current.fileAuthority !== fileAuthority ||
-				project.isFetching ||
-				project.isError ||
-				consent.workspaceId !== workspaceId ||
-				!preparedContextCurrent(consent, project.data, selected, Date.now()))
-		) {
-			changeContext(undefined);
-			setContextChanged(true);
-			return;
-		}
 		sending.current = true;
 		setFailed(false);
-		changeContext(undefined);
 		const model = { provider: selected.provider, modelId: selected.modelId };
-		void (consent ? onSend(draft, model, consent) : onSend(draft, model))
+		void onSend(draft, model)
 			.catch(() => setFailed(true))
 			.finally(() => {
 				sending.current = false;
@@ -162,23 +103,6 @@ export function PreparedTaskEntry({
 				</form>
 				<div className="composer-actions">
 					<div className="composer-controls new-chat-controls">
-						{workspaceId && (
-							<Button
-								ref={consentTrigger}
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="prepared-project-permissions"
-								data-staged={!!context}
-								aria-haspopup="dialog"
-								aria-expanded={consentOpen}
-								disabled={disabled || busy}
-								onClick={() => setConsentOpen(true)}
-							>
-								<ShieldCheck size={15} aria-hidden="true" />
-								{context ? consentLabels.staged : consentLabels.control}
-							</Button>
-						)}
 						{selected && !configured(selected.provider) && (
 							<output className="new-chat-model-warning">
 								{t(
@@ -226,10 +150,6 @@ export function PreparedTaskEntry({
 											!catalog.data?.models.some((model) => JSON.stringify([model.provider, model.modelId]) === key)
 										)
 											return;
-										if (key !== modelKey && contextRef.current) {
-											changeContext(undefined);
-											setContextChanged(true);
-										}
 										setModelKey(key);
 										local.write("new-chat-model", key);
 										setModelOpen(false);
@@ -313,22 +233,6 @@ export function PreparedTaskEntry({
 			<p className="sr-only" id={`${inputId}-hint`}>
 				{t("work.composer.shortcuts")}
 			</p>
-			{context && <p className="prepared-context-note">{consentLabels.onSend}</p>}
-			{contextChanged && <output className="prepared-context-note">{consentLabels.changed}</output>}
-			{consentOpen && (
-				<PreparedProjectConsent
-					folder={project.data}
-					model={selected}
-					value={context}
-					disabled={disabled || busy || project.isFetching || project.isError || !ready}
-					onChange={changeContext}
-					onClose={() => setConsentOpen(false)}
-					onRestoreFocus={() => {
-						if (consentTrigger.current?.isConnected) consentTrigger.current.focus({ preventScroll: true });
-						else input.current?.focus({ preventScroll: true });
-					}}
-				/>
-			)}
 			{failed && (
 				<p className="notice" role="alert">
 					{workbenchLabels(locale)["workbench.initialSendUnconfirmed"]}

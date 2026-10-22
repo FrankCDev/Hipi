@@ -147,3 +147,26 @@ test("settlement, all-done slots and disconnection suppress active decoration wi
 	assert.equal(project({ ...snapshot(), running: false }).kind, "summary");
 	assert.equal(projectToolGroupPresentation(snapshot(), "2_0", [1, 3], false).kind, "summary");
 });
+
+test("only an explicitly settled snapshot proves the ordinary completed summary", () => {
+	assert.deepEqual(project({ ...snapshot(), running: false }), { kind: "summary", key: "summary", completed: true });
+	const unknown: Array<ReturnType<typeof project>> = [
+		projectToolGroupPresentation(undefined, "2_0", undefined, false),
+		projectToolGroupPresentation(snapshot(), "2_0", undefined, false),
+		project({ ...snapshot(), partial: "a", partialLength: 1 }),
+	];
+	const done = snapshot();
+	assert.ok(done.execution);
+	done.execution.tools.items = done.execution.tools.items.map((tool) => ({ ...tool, status: "done" }));
+	done.execution.tools.active = 0;
+	unknown.push(project(done));
+	const incomplete = snapshot();
+	assert.ok(incomplete.execution);
+	incomplete.execution.tools.total++;
+	unknown.push(project(incomplete));
+	const missing = snapshot();
+	assert.ok(missing.messages[0]);
+	missing.messages[0].publicBlocks = undefined;
+	unknown.push(project(missing));
+	for (const value of unknown) assert.deepEqual(value, { kind: "summary", key: "summary" });
+});

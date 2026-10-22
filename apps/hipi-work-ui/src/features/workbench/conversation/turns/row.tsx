@@ -7,6 +7,8 @@ import { projectRunActivities } from "../activity/projection.ts";
 import type { TranscriptRow } from "../transcript.ts";
 import type { TurnRow } from "./contracts.ts";
 import "./row.css";
+/** Membership comes from the current exact settlement, not the live or retained body. */
+export type TurnMessageRenderOptions = { processMember: boolean };
 /** Reference Hk/Uk: one real height transition inside the measured turn, never per-message offsets. */
 export function ConversationTurnRow({
 	row,
@@ -23,7 +25,7 @@ export function ConversationTurnRow({
 	protectedKeys: ReadonlySet<string>;
 	active: boolean;
 	onToggle: (key: string, expanded: boolean) => void;
-	render: (row: TranscriptRow) => ReactNode;
+	render: (row: TranscriptRow, options?: TurnMessageRenderOptions) => ReactNode;
 }) {
 	const animateExpansion = useRef(false);
 	const priorProcessBody = useRef<boolean | undefined>(undefined);
@@ -102,7 +104,9 @@ export function ConversationTurnRow({
 										.filter((member) => members.has(member.key))
 										.map((member) => (
 											<div className="conversation-turn-block" key={member.key}>
-												{render(member)}
+												{render(member, {
+													processMember: proposedHeader?.activity.members.includes(member.key) ?? false,
+												})}
 											</div>
 										))}
 								</TurnActivityBody>

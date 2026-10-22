@@ -27,7 +27,20 @@ export async function createFileRuntime(
 	let closed = false;
 	return {
 		// Trusted utility composition only; never exposed through the public bridge.
-		agentFiles: authority.forAgent(generation),
+		agentFiles: {
+			...authority.forAgent(generation),
+			async currentProject(workspaceId: string) {
+				const folder = await projects?.get(workspaceId);
+				return folder?.status === "available"
+					? {
+							workspaceId: folder.workspaceId,
+							bindingId: folder.bindingId,
+							bindingRevision: folder.revision,
+							root: folder.root,
+						}
+					: null;
+			},
+		},
 		async receive(raw: unknown): Promise<boolean> {
 			if (await previews.receive(raw)) return true;
 			const value = decode(raw);

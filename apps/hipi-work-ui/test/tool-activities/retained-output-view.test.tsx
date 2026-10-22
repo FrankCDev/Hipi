@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { type AppClient, type Method, type Params, parseResult, type ToolActivity } from "@hipi/work-runtime/contracts";
 import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -27,6 +29,7 @@ let root: Root;
 let host: HTMLDivElement;
 let session: ActivityOutputSession;
 let failed = false;
+let emptyText = false;
 const calls: number[] = [];
 let notify: (slots: ReadonlyMap<string, ActivityOutputSlot>) => void = () => {};
 const client: AppClient = {
@@ -38,14 +41,14 @@ const client: AppClient = {
 		if (failed) throw new Error("read unavailable");
 		return parseResult(method, {
 			activityId: input.activityId,
-			text: `part-${index}`,
-			nextCursor: index === 5 ? null : String(index + 1),
+			text: emptyText ? "" : `part-${index}`,
+			nextCursor: emptyText || index === 5 ? null : String(index + 1),
 			retainedOutputOnly: true,
 		});
 	},
 	observe: async () => ({ dispose: async () => {} }),
 };
-function View({ disabled = false }: { disabled?: boolean }) {
+function View({ disabled = false, locale = "en" }: { disabled?: boolean; locale?: string }) {
 	const [slots, setSlots] = useState(session.snapshot());
 	useEffect(() => {
 		notify = setSlots;
@@ -60,7 +63,7 @@ function View({ disabled = false }: { disabled?: boolean }) {
 			session={session}
 			slot={slots.get("task:1")}
 			disabled={disabled}
-			locale="en"
+			locale={locale}
 		/>
 	);
 }
@@ -69,6 +72,7 @@ beforeEach(() => {
 	visible = true;
 	pageVisible = true;
 	failed = false;
+	emptyText = false;
 	calls.length = 0;
 	host = document.createElement("div");
 	host.className = "conversation-panel";
@@ -104,8 +108,8 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
-async function render(disabled = false) {
-	await act(async () => root.render(<View disabled={disabled} />));
+async function render(disabled = false, locale = "en") {
+	await act(async () => root.render(<View disabled={disabled} locale={locale} />));
 }
 async function scroll(top: number) {
 	const viewport = host.querySelector<HTMLElement>(".retained-output-viewport");
@@ -121,15 +125,74 @@ test("one initial chunk, no transport buttons, scroll appends exact text without
 	assert.deepEqual(calls, [0]);
 	const first = host.querySelector('[data-output-chunk="0"]');
 	assert.ok(first);
+	const viewport = host.querySelector(".retained-output-viewport");
+	const header = host.querySelector(".inline-tool-text-header");
 	assert.equal(host.querySelector("button"), null);
 	await scroll(900);
 	assert.deepEqual(calls, [0, 1]);
 	assert.equal(host.querySelector('[data-output-chunk="0"]'), first);
+	assert.equal(host.querySelector(".retained-output-viewport"), viewport);
+	assert.equal(host.querySelector(".inline-tool-text-header"), header);
 	assert.equal(host.querySelector("pre")?.textContent, "part-0part-1");
 	await act(async () => {
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	});
 	assert.deepEqual(calls, [0, 1], "successful output must not drain unseen history");
+});
+test("plaintext title stays outside the named scroller and retains truncation styles across locale changes", async () => {
+	const style = document.createElement("style");
+	style.textContent = readFileSync(
+		new NodeURL("../../src/features/tool-activities/retained-output-view.css", import.meta.url),
+		"utf8",
+	);
+	document.head.append(style);
+	try {
+		await render();
+		const card = host.querySelector<HTMLElement>(".inline-tool-text-card");
+		const header = host.querySelector<HTMLElement>(".inline-tool-text-header");
+		const title = host.querySelector<HTMLElement>(".inline-tool-text-title");
+		const viewport = host.querySelector<HTMLElement>(".retained-output-viewport");
+		const first = host.querySelector('[data-output-chunk="0"]');
+		assert.ok(card && header && title && viewport && first);
+		assert.deepEqual([...card.children], [header, viewport]);
+		assert.deepEqual([...header.children], [title]);
+		assert.equal(title.textContent, "plaintext");
+		assert.equal(viewport.getAttribute("aria-label"), "plaintext");
+		assert.equal(viewport.tabIndex, 0);
+		// Declaration and DOM checks only: JSDOM does not establish sticky or ellipsis geometry.
+		assert.equal(getComputedStyle(card).position, "relative");
+		assert.equal(getComputedStyle(header).position, "sticky");
+		assert.equal(getComputedStyle(header).top, "0px");
+		assert.equal(getComputedStyle(header).zIndex, "10");
+		assert.equal(getComputedStyle(header).fontSize, "var(--font-ui-small-size)");
+		assert.equal(getComputedStyle(header).lineHeight, "var(--font-ui-small-line-height)");
+		assert.equal(getComputedStyle(title).minWidth, "0px");
+		assert.equal(getComputedStyle(title).overflow, "hidden");
+		assert.equal(getComputedStyle(title).textOverflow, "ellipsis");
+		assert.equal(getComputedStyle(title).whiteSpace, "nowrap");
+		await render(false, "zh-CN");
+		assert.equal(host.querySelector(".inline-tool-text-header"), header);
+		assert.equal(host.querySelector(".inline-tool-text-title"), title);
+		assert.equal(host.querySelector(".retained-output-viewport"), viewport);
+		assert.equal(host.querySelector('[data-output-chunk="0"]'), first);
+		assert.equal(title.textContent, "纯文本");
+		assert.equal(viewport.getAttribute("aria-label"), "纯文本");
+		assert.deepEqual(calls, [0]);
+	} finally {
+		style.remove();
+	}
+});
+test("an available empty text chunk keeps the plaintext card without fabricating missing content", async () => {
+	emptyText = true;
+	await render();
+	assert.deepEqual(calls, [0]);
+	assert.equal(host.querySelector(".inline-tool-text-title")?.textContent, "plaintext");
+	assert.ok(host.querySelector('[data-output-chunk="0"]'));
+	assert.equal(host.querySelector("pre")?.textContent, "");
+	assert.equal(host.querySelector("button"), null);
+	assert.equal(host.querySelector('[role="alert"]'), null);
+	await scroll(900);
+	assert.deepEqual(calls, [0]);
 });
 test("forward eviction and backward prepend preserve the visible chunk anchor", async () => {
 	await render();

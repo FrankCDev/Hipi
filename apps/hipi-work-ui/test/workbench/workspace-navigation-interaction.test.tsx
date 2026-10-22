@@ -30,7 +30,12 @@ import { Dialog } from "../../src/components/ui/dialog.tsx";
 import { FileWorkspaceSession } from "../../src/features/files/file-workspace-session.ts";
 import { SettingsDialog } from "../../src/features/settings/index.ts";
 import { CreateDialog } from "../../src/features/workbench/catalog/create-dialog.tsx";
-import { admitInitialSend } from "../../src/features/workbench/catalog/initial-send.ts";
+import {
+	admitInitialSend,
+	advanceInitialContext,
+	finishInitialConversation,
+	type StagedProjectConsent,
+} from "../../src/features/workbench/catalog/initial-send.ts";
 import { PreparedTaskRecovery } from "../../src/features/workbench/catalog/prepared-task-recovery.tsx";
 import { CatalogSession } from "../../src/features/workbench/catalog/session.ts";
 import { type CatalogCommand, saveCommand } from "../../src/features/workbench/command-recovery.ts";
@@ -399,6 +404,27 @@ async function readyHome() {
 		assert.equal(entry.props.readOnly, false);
 	});
 	return element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry);
+}
+/** Seed a pre-existing journal, never the new composer's Send or a runtime command. */
+async function legacyConsentJournal(text: string, context: StagedProjectConsent, conversationId?: string) {
+	const signal = new AbortController().signal;
+	let saved = await admitInitialSend(
+		local,
+		{
+			workspaceId: context.workspaceId,
+			text,
+			title: text.trim().split("\n")[0] ?? "",
+			model: context.model,
+			sourceKey: `task-draft.${context.workspaceId}`,
+			context,
+		},
+		signal,
+	);
+	if (conversationId) {
+		saved = await advanceInitialContext(local, saved, "create", signal);
+		saved = await finishInitialConversation(local, saved, conversationId, signal);
+	}
+	return saved;
 }
 function assertPreserved(current: ReturnType<typeof drive>, initial: ReturnType<typeof drive>) {
 	assert.equal(current.tree.selectedWorkspace, "current");
@@ -851,6 +877,7 @@ test.each([
 			1,
 		);
 		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length, 1);
+		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "authorizeAgentContext").length, 0);
 		assert.equal(local.pending("current.created")?.text, goal);
 		assert.equal(local.isConfirmed(current.tree.catalog.getSnapshot().submission?.requestId ?? ""), !lostReceipt);
 		assert.equal(PreparedTaskRecovery({ session: current.tree.catalog, onResolve: async () => {} }), null);
@@ -1139,65 +1166,18 @@ test("default-only workspace inventory shows the Projects empty state without tr
 });
 
 test.each([false, true])(
-	"prepared project consent stays with its owner until confirmed submission, including unknown grant=%s",
+	"saved project consent stays recoverable without new authorization or Send, including unknown grant=%s",
 	async (unknownGrant) => {
 		saveCommand(local, "catalog", null);
 		vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
 		const goal = "Inspect the selected project";
 		const model = { provider: "faux", modelId: "one" };
 		const target = { ...conversation, conversationId: "consented", title: goal };
-		const folder: ProjectFolder = {
-			workspaceId: "current",
-			bindingId: "bound-project",
-			revision: 1,
-			displayName: "Project source",
-			status: "available",
-			root: { workspaceId: "current", rootId: "project-root", writable: false, displayName: "Project source" },
-		};
-		fileAuthority = {
-			chooseRoot: async () => {},
-			revokeRoot: async () => {},
-			getProject: async () => folder,
-		};
 		local.write("task-draft.current", goal);
 		local.write("conversation", "");
-		const waiting = Promise.withResolvers<void>();
-		let grant: AgentContext | undefined;
-		const logical = logicalCreation(target);
-		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M, params: unknown) => {
-			const result = logical(method, params);
-			if (result !== undefined) return parseResult(method, result);
-			const request = parseRequest({ version: PROTOCOL_VERSION, method, params });
-			if (request.method === "getWorkspace") return parseResult(method, workspaces[0]);
-			if (request.method === "getConversationModel")
-				return parseResult(method, { model, credentialState: "configured", executionState: "ready" });
-			if (request.method === "getConversationCommandResult")
-				return parseResult(method, { method: "createConversation", result: target });
-			if (request.method === "createConversation" || request.method === "getConversation")
-				return parseResult(method, target);
-			if (request.method === "authorizeAgentContext") {
-				await waiting.promise;
-				if (unknownGrant) throw new Error("Unknown grant outcome");
-				grant = { ...request.params, grantId: "grant", revision: 1, purpose: "live-files", status: "active" };
-				return parseResult(method, grant);
-			}
-			if (request.method === "getAgentCommandResult")
-				return parseResult(method, grant ? { method: "authorizeAgentContext", result: grant } : null);
-			if (request.method === "listActiveAgentContexts") return parseResult(method, grant ? [grant] : []);
-			if (request.method === "submit")
-				return parseResult(method, {
-					workspaceId: request.params.workspaceId,
-					conversationId: request.params.conversationId,
-					requestId: request.params.requestId,
-					receiptId: "receipt",
-					state: "accepted",
-				});
-			throw new Error(`Unexpected ${method}`);
-		});
-		const entry = await readyHome();
-		assert.equal(entry.props.workspaceId, "current");
-		const sending = entry.props
-			.onSend(goal, model, {
+		const saved = await legacyConsentJournal(
+			goal,
+			{
 				workspaceId: "current",
 				bindingId: "bound-project",
 				bindingRevision: 1,
@@ -1206,47 +1186,70 @@ test.each([false, true])(
 				pathPrefixes: ["src"],
 				expiresAt: Date.now() + 60000,
 				disclosureVersion: 1,
-			})
-			.then(
-				() => null,
-				(error: unknown) => error,
-			);
+			},
+			target.conversationId,
+		);
+		const attempted = await advanceInitialContext(local, saved, "authorize", new AbortController().signal);
+		const authorization = attempted.initialSend.context?.authorization;
+		assert.ok(authorization);
+		const originalJournal = local.read("command.catalog");
+		const grant: AgentContext = {
+			...authorization,
+			grantId: "grant",
+			revision: 1,
+			purpose: "live-files",
+			status: "active",
+		};
+		const waiting = Promise.withResolvers<void>();
+		vi.mocked(client.call).mockImplementation(async <M extends Method>(method: M) => {
+			if (method === "getConversationCommandResult")
+				return parseResult(method, { method: "createConversation", result: target });
+			if (method === "getConversation") return parseResult(method, target);
+			if (method === "getAgentCommandResult") {
+				await waiting.promise;
+				return parseResult(method, unknownGrant ? null : { method: "authorizeAgentContext", result: grant });
+			}
+			if (method === "listActiveAgentContexts") return parseResult(method, [grant]);
+			throw new Error(`Unexpected recovery command ${method}`);
+		});
+		const initial = drive();
+		const recovery = element(initial.content, PreparedTaskRecovery).props;
+		const checking = recovery.onResolve(initial.tree.catalog.check);
 		await vi.waitFor(() =>
-			assert.ok(vi.mocked(client.call).mock.calls.some(([method]) => method === "authorizeAgentContext")),
+			assert.ok(vi.mocked(client.call).mock.calls.some(([method]) => method === "getAgentCommandResult")),
 		);
 		const during = drive();
 		assert.equal(during.tree.selectedConversation, "");
 		assert.equal(during.pane, undefined);
 		assert.equal(local.pending("current.consented"), null);
-		assert.equal(vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length, 0);
 		assert.equal(
 			element(element(during.content, WorkbenchWelcome).props.action, PreparedTaskEntry).props.disabled,
 			true,
 		);
 		waiting.resolve();
-		const error = await sending;
-		assert.equal(error instanceof Error, unknownGrant);
+		await checking;
+		assert.equal(local.read("command.catalog"), originalJournal, "Outcome checks preserve the original journal");
+		assert.equal(initial.tree.catalog.getSnapshot().initialConsentCanRecoverDraft, !unknownGrant);
+		assert.equal(drive().tree.selectedConversation, "");
+		if (!unknownGrant) await recovery.onResolve(initial.tree.catalog.recoverInitialDraft);
 		const after = drive();
 		assert.equal(after.tree.selectedConversation, unknownGrant ? "" : "consented");
-		assert.equal(
-			vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProjectConversation").length,
-			1,
-		);
-		assert.equal(
-			vi.mocked(client.call).mock.calls.filter(([method]) => method === "submit").length,
-			unknownGrant ? 0 : 1,
-		);
 		assert.equal(Boolean(after.tree.catalog.getSnapshot().initialSend), unknownGrant);
-		assert.equal(local.pending("current.consented")?.text, unknownGrant ? undefined : goal);
-		assert.equal(local.read("task-draft.current"), unknownGrant ? goal : "");
+		assert.equal(local.pending("current.consented"), null);
+		assert.equal(local.read("task-draft.current"), goal, "Draft recovery never discards the original source");
+		assert.equal(local.read("draft.current.consented"), unknownGrant ? null : goal);
+		assert.ok(
+			vi.mocked(client.call).mock.calls.every(([method]) => method.startsWith("get") || method.startsWith("list")),
+		);
 	},
 );
 
-test("explicit conflict combine refreshes the project composer with both exact texts and never sends", async () => {
+test("explicit legacy conflict combine preserves both source texts and the independent composer without sending", async () => {
 	saveCommand(local, "catalog", null);
 	vi.stubGlobal("navigator", { locks: { request: async (_key: string, action: () => unknown) => action() } });
 	const original = "  Original unsent project question\n";
 	const later = "\nNewer project draft  ";
+	const independent = "Keep this independent new-chat draft";
 	const model = { provider: "faux", modelId: "one" };
 	local.write("task-draft.current", original);
 	local.write("conversation", "");
@@ -1266,30 +1269,28 @@ test("explicit conflict combine refreshes the project composer with both exact t
 		assert.equal(method, "getProject");
 		return parseResult(method, projectItems()[0]?.project);
 	});
+	await legacyConsentJournal(original, {
+		workspaceId: "current",
+		bindingId: "bound-project",
+		bindingRevision: 1,
+		rootId: "project-root",
+		model,
+		pathPrefixes: [""],
+		expiresAt: Date.now() + 60000,
+		disclosureVersion: 1,
+	});
 	const initial = drive();
 	const home = () => element(element(drive().content, WorkbenchWelcome).props.action, PreparedTaskEntry).props;
 	await readyHome();
-	await assert.rejects(
-		home().onSend(original, model, {
-			workspaceId: "current",
-			bindingId: "bound-project",
-			bindingRevision: 1,
-			rootId: "project-root",
-			model,
-			pathPrefixes: [""],
-			expiresAt: Date.now() + 60000,
-			disclosureVersion: 1,
-		}),
-		/UNCONFIRMED/,
-	);
 	assert.equal(initial.tree.catalog.getSnapshot().initialSend?.context?.createAttempted, false);
-	home().onDraftChange(later);
+	home().onDraftChange(independent);
+	local.write("task-draft.current", later);
 	const recovery = () => {
 		const props = element(drive().content, PreparedTaskRecovery).props;
 		return PreparedTaskRecovery(props);
 	};
 	const keep = elements(recovery(), Button).find(
-		(button) => button.props.children === "Keep message and review permissions",
+		(button) => button.props.children === "Keep the original message as a draft",
 	);
 	assert.ok(keep);
 	press(keep);
@@ -1310,12 +1311,12 @@ test("explicit conflict combine refreshes the project composer with both exact t
 	);
 	press(combine);
 	await vi.waitFor(() => assert.equal(initial.tree.catalog.getSnapshot().initialSend, null));
-	await vi.waitFor(() => assert.equal(home().draft, `${later}\n\n---\n\n${original}`));
-	assert.equal(local.read("task-draft.current"), home().draft);
+	assert.equal(local.read("task-draft.current"), `${later}\n\n---\n\n${original}`);
+	await vi.waitFor(() => assert.equal(home().draft, independent));
 	assert.equal(drive().tree.selectedConversation, "");
 	assert.deepEqual(
 		vi.mocked(client.call).mock.calls.map(([method]) => method),
-		["getProject"],
+		[],
 	);
 	assert.equal(local.pending("current.consented"), null);
 });
@@ -1352,10 +1353,9 @@ test("combining into the already selected created chat signals only its draft, w
 		assert.ok(method === "createConversation" || method === "getConversation");
 		return parseResult(method, conversation);
 	});
-	const initial = drive();
-	const home = await readyHome();
-	await assert.rejects(
-		home.props.onSend(original, model, {
+	await legacyConsentJournal(
+		original,
+		{
 			workspaceId: "current",
 			bindingId: "bound-project",
 			bindingRevision: 1,
@@ -1364,13 +1364,16 @@ test("combining into the already selected created chat signals only its draft, w
 			pathPrefixes: [""],
 			expiresAt: Date.now() + 60000,
 			disclosureVersion: 1,
-		}),
-		/UNCONFIRMED/,
+		},
+		conversation.conversationId,
 	);
+	const initial = drive();
+	await readyHome();
 	initial.tree.onSelect(conversation);
 	const selected = drive();
 	assert.ok(selected.pane);
 	local.write(`draft.${scope}`, "Newer selected chat draft");
+	await initial.tree.catalog.check();
 	await initial.tree.catalog.recoverInitialDraft();
 	assert.equal(initial.tree.catalog.getSnapshot().handoffConflict, true);
 	const recovery = element(drive().content, PreparedTaskRecovery);
@@ -1391,8 +1394,11 @@ test("combining into the already selected created chat signals only its draft, w
 		0,
 	);
 	assert.equal(
-		vi.mocked(client.call).mock.calls.filter(([method]) => method === "createProjectConversation").length,
-		1,
+		vi
+			.mocked(client.call)
+			.mock.calls.filter(([method]) => method === "createProjectConversation" || method === "createConversation")
+			.length,
+		0,
 	);
 });
 

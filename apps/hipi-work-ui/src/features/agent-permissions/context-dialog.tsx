@@ -8,8 +8,6 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { fileLabels } from "../files/file-labels.ts";
-import { projectFolderLabels } from "../workbench/projects/folder-labels.ts";
-import { useProjectFolder } from "../workbench/projects/use-folder.ts";
 import { contextPaths } from "./context-paths.ts";
 import { permissionLabels } from "./labels.ts";
 import type { PermissionSession } from "./permission-session.ts";
@@ -41,11 +39,9 @@ export function ContextDialog({
 	const { locale } = usePreferences();
 	const l = permissionLabels(locale);
 	const fl = fileLabels(locale);
-	const pl = projectFolderLabels(locale);
-	const project = useProjectFolder(scope.workspaceId, open);
 	const [rootId, setRootId] = useState("");
 	const [paths, setPaths] = useState("");
-	const [range, setRange] = useState<string>();
+	const [range, setRange] = useState("paths");
 	const [duration, setDuration] = useState("900000");
 	const pathsId = useId();
 	const roots = useQuery({
@@ -59,13 +55,8 @@ export function ContextDialog({
 		retry: false,
 		staleTime: 0,
 	});
-	const selectedRoot =
-		roots.data?.find((root) => root.rootId === rootId) ??
-		roots.data?.find((root) => root.rootId === project.data?.root?.rootId) ??
-		(roots.data?.length === 1 ? roots.data[0] : undefined);
-	const projectSelected = !!selectedRoot && selectedRoot.rootId === project.data?.root?.rootId;
-	const selectedRange = range ?? (projectSelected ? "whole" : "paths");
-	const pathPrefixes = contextPaths(paths, selectedRange === "whole");
+	const selectedRoot = roots.data?.find((root) => root.rootId === rootId);
+	const pathPrefixes = contextPaths(paths, range === "whole");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
@@ -78,16 +69,10 @@ export function ContextDialog({
 				<DialogDescription>{l["permissions.context.disclosure"]}</DialogDescription>
 				{status}
 				{disabledReason && <output>{disabledReason}</output>}
-				<p>{pl.consentScope}</p>
+				<p>{l["permissions.context.scopeNote"]}</p>
 				<p className="break-all">
 					{l["permissions.context.model"]}: {model?.provider} / {model?.modelId}
 				</p>
-				{projectSelected && (
-					<div className="context-project-folder">
-						<span>{pl.consentFolder}</span>
-						<strong>{selectedRoot.displayName ?? pl.title}</strong>
-					</div>
-				)}
 				<Select
 					value={selectedRoot?.rootId ?? ""}
 					onValueChange={setRootId}
@@ -109,19 +94,17 @@ export function ContextDialog({
 				{roots.isPending && <output>{l["permissions.action.loading"]}</output>}
 				{roots.isError && <p role="alert">{l["permissions.action.failed"]}</p>}
 				{roots.data?.length === 0 && <p>{l["permissions.context.noRoots"]}</p>}
-				<Select value={selectedRange} onValueChange={setRange}>
+				<Select value={range} onValueChange={setRange}>
 					<SelectTrigger aria-label={l["permissions.context.range"]}>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
 						<SelectItem value="paths">{l["permissions.context.selectedPaths"]}</SelectItem>
-						<SelectItem value="whole">
-							{projectSelected ? pl.consentWhole : l["permissions.context.wholeRoot"]}
-						</SelectItem>
+						<SelectItem value="whole">{l["permissions.context.wholeRoot"]}</SelectItem>
 					</SelectContent>
 				</Select>
-				{selectedRange === "paths" && <label htmlFor={pathsId}>{l["permissions.context.paths"]}</label>}
-				{selectedRange === "paths" && (
+				{range === "paths" && <label htmlFor={pathsId}>{l["permissions.context.paths"]}</label>}
+				{range === "paths" && (
 					<Textarea
 						aria-invalid={paths !== "" && !pathPrefixes}
 						id={pathsId}
@@ -131,7 +114,7 @@ export function ContextDialog({
 						className="rounded-md border border-input p-2 bg-background text-foreground"
 					/>
 				)}
-				{selectedRange === "paths" && paths !== "" && !pathPrefixes && (
+				{range === "paths" && paths !== "" && !pathPrefixes && (
 					<p role="alert">{l["permissions.context.invalidPaths"]}</p>
 				)}
 				<Select value={duration} onValueChange={setDuration}>

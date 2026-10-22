@@ -119,6 +119,7 @@ nodeTests.push("packages/work-runtime/test/store-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/custom-providers.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folder-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/project-folders.test.ts");
+nodeTests.push("packages/work-runtime/test/project-default-access.test.ts");
 nodeTests.push("packages/work-runtime/test/conversation-presentation.test.ts");
 nodeTests.push("packages/work-runtime/test/presentation-backup.test.ts");
 nodeTests.push("packages/work-runtime/test/pinned-reorder.test.ts");

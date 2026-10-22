@@ -250,7 +250,7 @@ test("a cancelled replacement leaves binding untouched; unknown unbind is never 
 	assert.equal(projectQuery.refetch.mock.calls.length, 1);
 	assert.equal(authority.unbindProject.mock.calls.length, 1);
 });
-test("project context is selected by trusted binding, not typed root identifiers, and view alone never authorizes", async () => {
+test("additional context requires explicit root and range selection without typed root identifiers", async () => {
 	const authorized: AgentContextRequest[] = [];
 	const session = {
 		authorize: async (input: AgentContextRequest) => {
@@ -275,9 +275,12 @@ test("project context is selected by trusted binding, not typed root identifiers
 		);
 	const content = draw();
 	assert.equal(authorized.length, 0);
-	assert.equal(elements(content, Select)[0]?.props.value, root.rootId);
-	assert.equal(elements(content, Select)[1]?.props.value, "whole");
-	click(button(content, "Authorize model context"));
+	assert.equal(elements(content, Select)[0]?.props.value, "");
+	assert.equal(elements(content, Select)[1]?.props.value, "paths");
+	assert.equal(button(content, "Authorize additional file context").props.disabled, true);
+	elements(content, Select)[0]?.props.onValueChange?.(root.rootId);
+	elements(draw(), Select)[1]?.props.onValueChange?.("whole");
+	click(button(draw(), "Authorize additional file context"));
 	await settle();
 	assert.equal(authorized[0]?.rootId, root.rootId);
 	assert.deepEqual(authorized[0]?.pathPrefixes, [""]);
@@ -286,7 +289,14 @@ test("project context is selected by trusted binding, not typed root identifiers
 	scope = { workspaceId: "other", conversationId: "other-chat" };
 	roots = [otherRoot];
 	projectQuery.data = { ...folder, workspaceId: "other", bindingId: "other-binding", root: otherRoot };
-	click(button(draw(), "Authorize model context"));
+	assert.equal(
+		elements(draw(), Select)[0]?.props.value,
+		"",
+		"A changed root never silently replaces the user's choice",
+	);
+	assert.equal(button(draw(), "Authorize additional file context").props.disabled, true);
+	elements(draw(), Select)[0]?.props.onValueChange?.(otherRoot.rootId);
+	click(button(draw(), "Authorize additional file context"));
 	await settle();
 	assert.equal(authorized[1]?.rootId, "other-root");
 	assert.equal(authorized[1]?.workspaceId, "other");

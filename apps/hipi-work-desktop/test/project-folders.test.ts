@@ -343,6 +343,32 @@ test("desktop project responses expose the verified current path without changin
 	}
 });
 
+test("trusted model context exposes only the verified current read-only binding and respects host revocation", async () => {
+	const app = await fixture();
+	try {
+		await app.runtime.call("createWorkspace", { workspaceId: "work", name: "Work" });
+		assert.equal(await app.files.agentFiles.currentProject("work"), null);
+		const folder = parseProjectFolder(
+			await app.manage({ operation: "project-pick", workspaceId: "work", expectedBindingId: null }),
+			"work",
+		);
+		assert.equal(folder.status, "available");
+		if (folder.status !== "available") assert.fail("Expected current project");
+		assert.deepEqual(await app.files.agentFiles.currentProject("work"), {
+			workspaceId: "work",
+			bindingId: folder.bindingId,
+			bindingRevision: folder.revision,
+			root: folder.root,
+		});
+		assert.equal(JSON.stringify(await app.files.agentFiles.currentProject("work")).includes(app.directory), false);
+		await assert.rejects(app.files.agentFiles.currentProject("missing"), { code: "UNAUTHORIZED" });
+		await app.manage({ operation: "revoke", workspaceId: "work", rootId: folder.root.rootId });
+		assert.equal(await app.files.agentFiles.currentProject("work"), null);
+	} finally {
+		await app.close();
+	}
+});
+
 test("renderer project requests cannot supply paths, identity, permissions, or another principal", () => {
 	const base = { version: 1, expectedStoreId: "store" };
 	for (const request of [

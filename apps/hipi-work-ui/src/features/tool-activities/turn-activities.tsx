@@ -6,7 +6,7 @@ import type {
 	ToolActivitySelector,
 } from "@hipi/work-runtime/contracts";
 import { usePageInView } from "framer-motion";
-import { type RefObject, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, type RefObject, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useAppClient } from "../../app/client-provider.tsx";
 import { usePreferences } from "../../app/preferences.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -17,6 +17,7 @@ import { ActivityHistoryWindow } from "./activity-history-window.tsx";
 import { ActivitySession, type ActivityState } from "./activity-session.ts";
 import { settledToolGroup, type ToolGroupPresentation } from "./group-presentation.ts";
 import { InlineActivityCard } from "./inline-activity-card.tsx";
+import { inlineActivityLabels } from "./inline-activity-labels.ts";
 import { activityLabels, toolLabel } from "./labels.ts";
 import type { LiveActivityRead, LiveTool } from "./live-activity.ts";
 import { useMessageActivityOwner } from "./message-activity-owner.tsx";
@@ -24,6 +25,66 @@ import { SingletonFileActivity } from "./singleton-file-activity.tsx";
 import { ActivityDisclosure, ActivitySummaryCoverage } from "./turn-activity-presentation.tsx";
 
 type Props = { scope: Scope; connected: boolean; onOpenArtifact?: (artifact: ToolActivityArtifact) => void };
+type LiveActivityOrder = {
+	messageId: string;
+	calls: MessageToolCalls["items"];
+	complete: boolean;
+	tools: readonly LiveTool[];
+	active: boolean;
+};
+
+/** Metadata readiness never changes a call's canonical position or row identity. */
+function orderedLiveRows(order: LiveActivityOrder, items: readonly ToolActivity[]) {
+	const calls = [...order.calls];
+	// Summary names are bounded. An omitted descriptor may still have an exact
+	// runtime round anchor; keep that row without reading metadata just to sort.
+	if (!order.complete) {
+		const anchored = order.tools.flatMap((tool) => {
+			const records = items.filter(
+				(item) =>
+					!!tool.taskId && item.taskId === tool.taskId && item.callId === tool.callId && item.toolName === tool.name,
+			);
+			const anchor = tool.anchor ?? (records.length === 1 ? records[0]?.anchor : undefined);
+			return anchor && `${anchor.assistantEntryId}_${anchor.modelIndex}` === order.messageId
+				? [{ callId: tool.callId, name: tool.name, contentIndex: anchor.contentIndex }]
+				: [];
+		});
+		for (const call of anchored) {
+			if (
+				!calls.some((other) => other.contentIndex === call.contentIndex) &&
+				!anchored.some(
+					(other) =>
+						other.contentIndex === call.contentIndex && (other.callId !== call.callId || other.name !== call.name),
+				)
+			)
+				calls.push(call);
+		}
+	}
+	return calls
+		.toSorted((a, b) => a.contentIndex - b.contentIndex)
+		.map((call) => {
+			const matchesAnchor = (anchor: ToolActivity["anchor"]) =>
+				anchor?.contentIndex === call.contentIndex &&
+				`${anchor.assistantEntryId}_${anchor.modelIndex}` === order.messageId;
+			const records = items.filter(
+				(item) => matchesAnchor(item.anchor) && item.callId === call.callId && item.toolName === call.name,
+			);
+			const tools = order.tools.filter(
+				(tool) =>
+					tool.callId === call.callId &&
+					tool.name === call.name &&
+					(tool.anchor
+						? matchesAnchor(tool.anchor)
+						: !!tool.taskId && records.length === 1 && records[0]?.taskId === tool.taskId),
+			);
+			const tool = tools.length === 1 ? tools[0] : undefined;
+			const activity =
+				records.length === 1 && tools.length <= 1 && (!tool || (!!tool.taskId && records[0]?.taskId === tool.taskId))
+					? records[0]
+					: undefined;
+			return { key: JSON.stringify([order.messageId, call.contentIndex, call.callId, call.name]), activity, tool };
+		});
+}
 export function HistoricalTurnActivities({
 	messageId,
 	toolCalls,
@@ -54,17 +115,21 @@ export function HistoricalTurnActivities({
 	const l = activityLabels(locale);
 	const owner = useMessageActivityOwner();
 	const Details =
-		owner?.live?.session === live?.session && owner?.live?.session ? ActivityDetailsContent : ActivityDetailsView;
+		owner?.messageId === messageId && owner.live?.session === live?.session
+			? ActivityDetailsContent
+			: ActivityDetailsView;
 	const selector = useMemo<ToolActivitySelector>(() => ({ kind: "message", messageId }), [messageId]);
 	const [manualExpanded, setManualExpanded] = useState<boolean>();
 	const liveActive = presentation.kind === "active";
+	const completedSummary = presentation.kind === "summary" && presentation.completed === true;
 	const shownExpanded = manualChoice ?? manualExpanded ?? expanded;
 	const uniformName =
 		toolCalls.items.length === toolCalls.total &&
 		toolCalls.items.every((item) => item.name === toolCalls.items[0]?.name)
 			? toolCalls.items[0]?.name
 			: undefined;
-	const summaryName = presentation.kind === "active" ? presentation.toolName : uniformName;
+	const summaryName =
+		presentation.kind === "active" ? presentation.toolName : completedSummary ? undefined : uniformName;
 	if (!toolCalls.total) return null;
 	return (
 		<SingletonFileActivity
@@ -82,7 +147,14 @@ export function HistoricalTurnActivities({
 			<ActivityDisclosure
 				bodyVariant="grouped"
 				toolName={summaryName}
-				title={summaryName ? toolLabel(summaryName, locale) : l["activity.title"]}
+				title={
+					completedSummary
+						? inlineActivityLabels(locale)["inline.worked"]
+						: summaryName
+							? toolLabel(summaryName, locale)
+							: l["activity.title"]
+				}
+				plainSummary={completedSummary}
 				summaryKey={presentation.key}
 				summaryTransition={presentation.kind === "active" ? "deferred" : "immediate"}
 				count={toolCalls.total}
@@ -104,20 +176,21 @@ export function HistoricalTurnActivities({
 				messageId={messageId}
 			>
 				<ActivitySummaryCoverage shown={toolCalls.items.length} total={toolCalls.total} />
-				<PendingSlots
-					tools={
-						liveTools?.filter(
-							(tool) => !liveItems?.some((item) => item.taskId === tool.taskId && item.callId === tool.callId),
-						) ?? []
-					}
-					active={live?.active ?? false}
-				/>
-				{liveTools?.length && !live?.session ? null : live?.session && (liveTools?.length || liveItems?.length) ? (
+				{live && (liveTools?.length || liveItems?.length) ? (
 					<Details
 						{...props}
-						state={owner?.live?.session === live.session ? owner.live.state : live.state}
+						state={owner?.live && owner.live.session === live.session ? owner.live.state : live.state}
 						session={live.session}
 						items={liveItems ?? []}
+						liveOrder={{
+							messageId,
+							complete: contentIndexes !== undefined || toolCalls.items.length === toolCalls.total,
+							calls: toolCalls.items.filter(
+								(call) => contentIndexes === undefined || contentIndexes.includes(call.contentIndex),
+							),
+							tools: liveTools ?? [],
+							active: live.active,
+						}}
 						showUnavailable={
 							!!liveTools?.some((tool) => !!tool.taskId && live.state.page?.unavailableTaskIds?.includes(tool.taskId))
 						}
@@ -376,12 +449,14 @@ function ActivityDetailsView({
 	session,
 	items = state.page?.items ?? [],
 	showUnavailable = true,
+	liveOrder,
 	onOpenArtifact,
 }: Props & {
 	state: ActivityState;
-	session: ActivitySession;
+	session?: ActivitySession;
 	items?: readonly ToolActivity[];
 	showUnavailable?: boolean;
+	liveOrder?: LiveActivityOrder;
 }) {
 	const root = useRef<HTMLDivElement>(null);
 	const [display, setDisplay] = useState({ session, outputs: state.outputs });
@@ -414,6 +489,7 @@ function ActivityDetailsView({
 			session={session}
 			items={items}
 			showUnavailable={showUnavailable}
+			liveOrder={liveOrder}
 			onOpenArtifact={onOpenArtifact}
 			rootRef={root}
 		/>
@@ -425,37 +501,48 @@ function ActivityDetailsContent({
 	session,
 	items = state.page?.items ?? [],
 	showUnavailable = true,
+	liveOrder,
 	onOpenArtifact,
 	rootRef,
 }: {
 	connected: boolean;
 	state: ActivityState;
-	session: ActivitySession;
+	session?: ActivitySession;
 	items?: readonly ToolActivity[];
 	showUnavailable?: boolean;
+	liveOrder?: LiveActivityOrder;
 	onOpenArtifact?: (artifact: ToolActivityArtifact) => void;
 	rootRef?: RefObject<HTMLDivElement | null>;
 }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
 	const disabled = state.busy || !connected;
+	const rows = liveOrder
+		? orderedLiveRows(liveOrder, items)
+		: items
+				.toSorted((a, b) => (a.anchor?.contentIndex ?? 0) - (b.anchor?.contentIndex ?? 0))
+				.map((activity) => ({ key: activity.activityId, activity, tool: undefined }));
 	return (
 		<div className="inline-activity-records" ref={rootRef}>
 			{!connected && <output>{l["activity.offline"]}</output>}
 			{state.busy && <output>{l["activity.loading"]}</output>}
-			{items
-				.toSorted((a, b) => (a.anchor?.contentIndex ?? 0) - (b.anchor?.contentIndex ?? 0))
-				.map((item) => (
-					<InlineActivityCard
-						key={item.activityId}
-						activity={item}
-						locale={locale}
-						state={state}
-						session={session}
-						disabled={disabled}
-						onOpenArtifact={onOpenArtifact}
-					/>
-				))}
+			{rows.map(({ key, activity, tool }) => (
+				<Fragment key={key}>
+					{activity && session ? (
+						<InlineActivityCard
+							key={activity.activityId}
+							activity={activity}
+							locale={locale}
+							state={state}
+							session={session}
+							disabled={disabled}
+							onOpenArtifact={onOpenArtifact}
+						/>
+					) : tool ? (
+						<PendingSlot tool={tool} active={liveOrder?.active ?? false} />
+					) : null}
+				</Fragment>
+			))}
 			{!state.busy && state.page?.items.length === 0 && !state.page.nextCursor && !state.page.unavailableTaskIds && (
 				<p>{l["activity.phase.unavailable"]}</p>
 			)}
@@ -463,38 +550,35 @@ function ActivityDetailsContent({
 			{state.failed && (
 				<>
 					<p role="alert">{l["activity.failed"]}</p>
-					<Button variant="ghost" size="sm" disabled={disabled} onClick={() => void session.retry()}>
+					<Button variant="ghost" size="sm" disabled={disabled || !session} onClick={() => void session?.retry()}>
 						{l["activity.retry"]}
 					</Button>
 				</>
 			)}
-			<ActivityContinuation session={session} state={state} enabled={connected} locale={locale} />
+			{session && <ActivityContinuation session={session} state={state} enabled={connected} locale={locale} />}
 		</div>
 	);
 }
 
-function PendingSlots({ tools, active }: { tools: readonly LiveTool[]; active: boolean }) {
+function PendingSlot({ tool, active }: { tool: LiveTool; active: boolean }) {
 	const { locale } = usePreferences();
 	const l = activityLabels(locale);
-	if (!tools.length) return null;
 	return (
 		<ul className="activity-live-slots">
-			{tools.map((tool, index) => (
-				<li key={JSON.stringify([tool.taskId, tool.callId, index])}>
-					<span>{toolLabel(tool.name, locale)}</span>
-					<span>
-						{!active
-							? l["activity.snapshot"]
-							: l[
-									tool.status === "done"
-										? "activity.phase.terminal"
-										: tool.status === "running"
-											? "activity.phase.running"
-											: "activity.phase.pending"
-								]}
-					</span>
-				</li>
-			))}
+			<li>
+				<span>{toolLabel(tool.name, locale)}</span>
+				<span>
+					{!active
+						? l["activity.snapshot"]
+						: l[
+								tool.status === "done"
+									? "activity.phase.terminal"
+									: tool.status === "running"
+										? "activity.phase.running"
+										: "activity.phase.pending"
+							]}
+				</span>
+			</li>
 		</ul>
 	);
 }

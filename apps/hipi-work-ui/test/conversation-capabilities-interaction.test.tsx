@@ -18,7 +18,12 @@ import { ToolPackSession } from "../src/features/tool-packs/session.ts";
 import { LocalState } from "../src/features/workbench/local-state.ts";
 
 const queries = vi.hoisted(() => new Map<string, boolean>());
-const projectFixture = vi.hoisted(() => ({ available: false, failed: false }));
+const projectFixture = vi.hoisted(() => ({
+	available: false,
+	failed: false,
+	onlyBoundRoot: false,
+	rootsFailed: false,
+}));
 vi.mock("@tanstack/react-query", () => ({
 	useQuery: ({ queryKey, enabled }: { queryKey: string[]; enabled: boolean }) => {
 		queries.set(queryKey[0] ?? "", enabled);
@@ -26,22 +31,26 @@ vi.mock("@tanstack/react-query", () => ({
 			data:
 				queryKey[0] === "agent-context-roots"
 					? [
-							{ rootId: "root", displayName: "Project files" },
-							{ rootId: "other", displayName: "Other files" },
+							{ rootId: "root", displayName: "Project files", writable: false },
+							...(projectFixture.onlyBoundRoot
+								? []
+								: [{ rootId: "other", displayName: "Other files", writable: true }]),
 						]
 					: queryKey[0] === "tool-pack-model"
 						? { model }
 						: queryKey[0] === "projectFolder" && projectFixture.available
 							? { status: "available", root: { rootId: "root" } }
 							: undefined,
-			isError: queryKey[0] === "projectFolder" && projectFixture.failed,
+			isError:
+				(queryKey[0] === "projectFolder" && projectFixture.failed) ||
+				(queryKey[0] === "agent-context-roots" && projectFixture.rootsFailed),
 			isFetching: false,
 			isPending: false,
 			refetch: async () => {},
 		};
 	},
 }));
-vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale: "en" }) }));
+vi.mock("../src/app/preferences.tsx", () => ({ usePreferences: () => ({ locale }) }));
 vi.mock("../src/app/client-provider.tsx", () => ({
 	useAppClient: () => client,
 	useLocalState: () => local,
@@ -57,6 +66,7 @@ const conversation: Conversation = {
 };
 const model = { provider: "faux", modelId: "fixed-model" };
 let local = new LocalState();
+let locale = "en";
 let contexts: AgentContext[] = [];
 let contextReadFailed = false;
 const calls: { method: Method; params: unknown }[] = [];
@@ -134,6 +144,9 @@ beforeEach(() => {
 	queries.clear();
 	projectFixture.available = false;
 	projectFixture.failed = false;
+	projectFixture.onlyBoundRoot = false;
+	projectFixture.rootsFailed = false;
+	locale = "en";
 	contexts = [];
 	contextReadFailed = false;
 	permissionActivation.mockClear();
@@ -284,6 +297,47 @@ test("direct file consent remains unavailable without a ready connection, model 
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });
 
+test.each([true, false])(
+	"additional context never preselects the bound project or its whole folder (sole root: %s)",
+	async (onlyBoundRoot) => {
+		projectFixture.available = true;
+		projectFixture.onlyBoundRoot = onlyBoundRoot;
+		await drive();
+		await openMenu();
+		await click(find(".capability-context-trigger"));
+		const consent = find<HTMLElement>(".context-consent-dialog");
+		const folderPicker = find('[role="combobox"]', consent);
+		assert.equal(folderPicker.textContent, permissionLabels("en")["permissions.context.root"]);
+		assert.equal(consent.querySelector(".context-project-folder"), null);
+		assert.ok(find("textarea", consent), "Path scope stays explicit rather than defaulting to the entire project");
+		const authorize = [...consent.querySelectorAll("button")].find(
+			(node) => node.textContent === permissionLabels("en")["permissions.context.authorize"],
+		);
+		assert.ok(authorize?.disabled);
+		assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+		await act(async () => folderPicker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+		const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((node) =>
+			node.textContent?.includes(onlyBoundRoot ? "Project files" : "Other files"),
+		);
+		assert.ok(option);
+		await click(option);
+		const textarea = find<HTMLTextAreaElement>("textarea", consent);
+		await act(async () => {
+			const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+			assert.ok(setter);
+			setter.call(textarea, "src");
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		assert.equal(authorize.disabled, false);
+		await click(authorize);
+		const pending = owners().session.getPending();
+		assert.ok(pending && pending.method === "authorizeAgentContext");
+		assert.equal(pending.params.rootId, onlyBoundRoot ? "root" : "other");
+		assert.deepEqual(pending.params.pathPrefixes, ["src"]);
+		assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 1);
+	},
+);
+
 test("stale project-folder data after a failed host read does not assert unshared project status", async () => {
 	projectFixture.available = true;
 	projectFixture.failed = true;
@@ -294,7 +348,8 @@ test("stale project-folder data after a failed host read does not assert unshare
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });
 
-test("ordinary unshared project stays out of the composer and retains explicit consent in management", async () => {
+test.each(["en", "zh"])("bound projects have no per-chat authorization notice in %s", async (language) => {
+	locale = language;
 	projectFixture.available = true;
 	await drive();
 	assert.equal(host.querySelector(".project-context-notice"), null);
@@ -305,14 +360,34 @@ test("ordinary unshared project stays out of the composer and retains explicit c
 	assert.equal(trigger.querySelectorAll("svg").length, 1, "Management retains its shield, not a fake mode chevron");
 	await click(find(".capabilities-trigger"));
 	const management = find<HTMLElement>(".conversation-options-dialog");
-	const notice = find<HTMLElement>(".project-context-notice", management);
-	assert.ok(notice.textContent?.includes("Project files are not shared with this chat"));
-	await click(find("button", notice));
+	assert.equal(management.querySelector(".project-context-notice"), null);
+	assert.equal(management.textContent?.includes("Project files are not shared with this chat"), false);
+	assert.equal(management.textContent?.includes("Allow project access"), false);
+	assert.equal(management.textContent?.includes("尚未向此聊天共享项目文件"), false);
+	assert.equal(management.textContent?.includes("允许访问项目"), false);
+	assert.ok(management.textContent?.includes(permissionLabels(locale)["permissions.context.none"]));
+	await click(find('button[aria-haspopup="dialog"]', management));
 	assert.ok(find(".context-consent-dialog"));
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });
 
-test("only an active unexpired grant for this model and root removes the unshared management state", async () => {
+test("failed additional-folder reads remain visible without an authorization attempt", async () => {
+	projectFixture.available = true;
+	projectFixture.rootsFailed = true;
+	await drive();
+	await openMenu();
+	await click(find(".capability-context-trigger"));
+	const consent = find<HTMLElement>(".context-consent-dialog");
+	assert.ok(
+		[...consent.querySelectorAll('[role="alert"]')].some(
+			(node) => node.textContent === permissionLabels("en")["permissions.action.failed"],
+		),
+	);
+	assert.equal(find('[role="combobox"]', consent).disabled, true);
+	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
+});
+
+test("explicit grant history stays reviewable without creating a bound-project authorization notice", async () => {
 	projectFixture.available = true;
 	const grant: AgentContext = {
 		workspaceId: conversation.workspaceId,
@@ -333,6 +408,11 @@ test("only an active unexpired grant for this model and root removes the unshare
 	const { session } = await drive();
 	await click(find(".capabilities-trigger"));
 	assert.equal(document.querySelector(".project-context-notice"), null);
+	assert.ok(
+		[...find(".conversation-options-dialog").querySelectorAll("button")].some(
+			(button) => button.textContent === permissionLabels("en")["permissions.context.revoke"] && !button.disabled,
+		),
+	);
 	for (const changed of [
 		{ ...grant, rootId: "other" },
 		{ ...grant, model: { ...model, modelId: "different-model" } },
@@ -340,13 +420,13 @@ test("only an active unexpired grant for this model and root removes the unshare
 	]) {
 		contexts = [changed];
 		await act(async () => session.refresh());
-		assert.ok(document.querySelector(".project-context-notice"));
+		assert.equal(document.querySelector(".project-context-notice"), null);
 		assert.equal(host.querySelector(".project-context-notice"), null);
 	}
 	// Revoked grants disappear from the active endpoint; non-active values are contract errors.
 	contexts = [];
 	await act(async () => session.refresh());
-	assert.ok(document.querySelector(".project-context-notice"));
+	assert.equal(document.querySelector(".project-context-notice"), null);
 	assert.equal(calls.filter(({ method }) => method === "authorizeAgentContext").length, 0);
 });
 

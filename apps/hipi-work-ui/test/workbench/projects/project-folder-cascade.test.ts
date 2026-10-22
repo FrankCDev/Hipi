@@ -15,10 +15,6 @@ async function compiledStyles() {
 		new URL("../../../src/features/workbench/projects/folder.css", import.meta.url),
 		"utf8",
 	);
-	const consent = await readFile(
-		new URL("../../../src/features/workbench/composer/project-consent.css", import.meta.url),
-		"utf8",
-	);
 	const failure = await readFile(
 		new URL("../../../src/features/workbench/conversation/turn-failure.css", import.meta.url),
 		"utf8",
@@ -27,7 +23,7 @@ async function compiledStyles() {
 		base: fileURLToPath(new URL(".", themeUrl)),
 		onDependency: () => {},
 	});
-	return { theme, folder: `${folder}\n${consent}\n${failure}`, compiled: compiler.build([]) };
+	return { theme, folder: `${folder}\n${failure}`, compiled: compiler.build([]) };
 }
 
 test("project context custom properties reference declared theme or component tokens", async () => {
@@ -62,10 +58,8 @@ test(
 <div class="welcome-action"><button class="project-folder-summary">
 <strong>Project folder</strong><span class="project-folder-secondary">Not connected</span>
 </button></div><div class="project-folder-identity"><span>Folder identity</span></div>
-<section class="prepared-project-consent"><div class="context-project-folder"><span>Consent detail</span></div></section>
-<button class="prepared-project-permissions" data-staged="true">Permission staged</button>
-<span class="prepared-context-note">Context note</span><div class="conversation-turn-failure">Failure detail</div>
-<div id="surface"></div><div id="canvas"></div><div id="text"></div><div id="muted"></div><div id="line"></div><div id="brand-soft"></div>
+<div class="conversation-turn-failure">Failure detail</div>
+<div id="surface"></div><div id="canvas"></div><div id="text"></div><div id="muted"></div><div id="line"></div>
 <pre id="result"></pre><script>
 const summary = document.querySelector(".project-folder-summary");
 const secondary = document.querySelector(".project-folder-secondary");
@@ -73,7 +67,7 @@ const identity = document.querySelector(".project-folder-identity");
 const failures = [];
 for (const theme of ["light", "dark"]) {
  document.documentElement.dataset.theme = theme;
- for (const name of ["surface", "canvas", "text", "muted", "line", "brand-soft"]) {
+ for (const name of ["surface", "canvas", "text", "muted", "line"]) {
   document.getElementById(name).style.color = "var(--" + name + ")";
  }
  const token = name => getComputedStyle(document.getElementById(name)).color;
@@ -88,11 +82,6 @@ for (const theme of ["light", "dark"]) {
  check("radius", getComputedStyle(summary).borderTopLeftRadius, "14px");
  check("identity surface", getComputedStyle(identity).backgroundColor, token("canvas"));
  const style = selector => getComputedStyle(document.querySelector(selector));
- check("consent border", style(".context-project-folder").borderTopColor, token("line"));
- check("consent detail", style(".context-project-folder > span").color, token("muted"));
- check("staged foreground", style(".prepared-project-permissions").color, token("text"));
- check("staged surface", style(".prepared-project-permissions").backgroundColor, token("brand-soft"));
- check("context note", style(".prepared-context-note").color, token("muted"));
  check("failure detail", style(".conversation-turn-failure").color, token("muted"));
  summary.setAttribute("data-css-hover", "");
  check("hover surface", getComputedStyle(summary).backgroundColor, token("canvas"));

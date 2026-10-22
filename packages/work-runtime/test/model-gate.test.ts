@@ -441,7 +441,7 @@ test(
 			const assertNoLiveContext = (prompt: string | undefined, rootIds: string[]) => {
 				assert.equal(
 					prompt,
-					"No live project file context is authorized for this chat and model. File root IDs come only from authorized app context: never invent them or ask the user to type internal rootId values or absolute host paths. If project files are needed, ask the user to use Permissions (权限) or Allow project access (允许访问项目) in the app. Choosing a folder alone does not authorize model access. Do not call file tools until authorized roots are supplied.",
+					"No live file roots are available for this chat and model. File root IDs come only from app context: never invent them or ask the user to type internal rootId values or absolute host paths. Project files require an available connected project folder; additional folders require explicit file-context permission in the app. Do not call file tools until roots are supplied.",
 				);
 				for (const privateValue of [...rootIds, directory, "note.txt", "private file content", grant.grantId])
 					assert.equal(prompt.includes(privateValue), false);

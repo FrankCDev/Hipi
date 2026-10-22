@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
-import type { AppClient, Snapshot } from "@hipi/work-runtime/contracts";
+import type { AppClient, SearchHistoryWindow, Snapshot } from "@hipi/work-runtime/contracts";
 import type * as VirtualModule from "@tanstack/react-virtual";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -90,7 +90,7 @@ let renderer: ReturnType<typeof createRoot>;
 let frameId = 0;
 const frames = new Set<number>();
 const nearTop = () => {};
-async function render(snapshot: Snapshot, active = false) {
+async function render(snapshot: Snapshot, active = false, searchAnchor?: SearchHistoryWindow) {
 	await act(async () =>
 		renderer.render(
 			<AppClientProvider client={client}>
@@ -103,6 +103,7 @@ async function render(snapshot: Snapshot, active = false) {
 								scope={scope}
 								error={false}
 								onNearTop={nearTop}
+								searchAnchor={searchAnchor}
 							/>
 						</ActivityTranscriptProvider>
 					</ThemeProvider>
@@ -194,10 +195,101 @@ test("same stream identity commits within same outer turn without losing the rea
 	assert.match(stream.textContent ?? "", /Live body/);
 });
 
+test("proved settled process omits the action footer while final, user and unknown messages retain copy", async () => {
+	const value = admitted(completed);
+	await render({
+		...value,
+		messages: [...value.messages, { ...process, id: "12_0", runId: undefined, text: "Unknown reply", textLength: 13 }],
+	});
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	assert.ok(header);
+	if (header.getAttribute("aria-expanded") === "false") await act(async () => header.click());
+	assert.ok(host.querySelector('[data-message-id="2_0"] .markdown-body'));
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), null);
+	for (const id of ["0_0", "8_0", "12_0"]) {
+		assert.ok(host.querySelector(`[data-message-id="${id}"] .message-actions .message-copy`), id);
+	}
+	await act(async () => header.click());
+});
+
+test("a projected process outside a measured turn uses the same settled action eligibility", async () => {
+	const value = admitted(completed);
+	await render(value, false, {
+		...scope,
+		messages: value.messages,
+		target: { ...scope, messageId: "8_0", text: "Final answer", offset: 0, nextOffset: null, textLength: 12 },
+		matchStart: 0,
+		matchEnd: 5,
+		olderCursor: null,
+		newerCursor: null,
+	});
+	assert.equal(host.querySelector('[data-transcript-kind="turn"]'), null);
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	assert.ok(header);
+	if (header.getAttribute("aria-expanded") === "false") await act(async () => header.click());
+	assert.ok(host.querySelector('[data-message-id="2_0"] .markdown-body'));
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), null);
+	assert.ok(host.querySelector('[data-message-id="0_0"] .message-copy'));
+	assert.ok(host.querySelector('[data-message-id="8_0"] .message-copy'));
+	await act(async () => header.click());
+});
+
+test.each(["missing", "off-page", "conflicting", "cancelled", "non-final-response"] as const)(
+	"%s settlement never suppresses ordinary message actions",
+	async (evidence) => {
+		const value = admitted(completed);
+		const result = value.runResults?.items[0];
+		assert.ok(result);
+		if (evidence === "missing") value.runResults = undefined;
+		else if (evidence === "off-page")
+			value.runResults = { items: [{ ...result, terminalEntryId: "100", responseMessageId: "99_0" }], omitted: true };
+		else if (evidence === "conflicting")
+			value.runResults = { items: [result, { ...result, terminalEntryId: "10" }], omitted: false };
+		else if (evidence === "cancelled")
+			value.runResults = {
+				items: [
+					{
+						...result,
+						terminalCause: "unanswered",
+						settlement: { status: "unanswered", reason: "aborted" },
+						responseMessageId: undefined,
+					},
+				],
+				omitted: false,
+			};
+		else value.runResults = { items: [{ ...result, responseMessageId: "2_0" }], omitted: false };
+		await render(value);
+		assert.equal(host.querySelector(".run-activity-header"), null);
+		for (const message of value.messages) {
+			assert.ok(host.querySelector(`[data-message-id="${message.id}"] .message-actions .message-copy`), message.id);
+		}
+	},
+);
+
+test("a focused live copy action survives exact settlement until focus leaves the process", async () => {
+	await render(admitted(initial), true);
+	const copy = host.querySelector<HTMLButtonElement>('[data-message-id="2_0"] .message-copy');
+	assert.ok(copy, "the current live body does not prove settled process membership");
+	await act(async () => copy.focus());
+	await render(admitted(completed));
+	assert.equal(document.activeElement, copy);
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-copy'), copy);
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	assert.ok(header);
+	await act(async () => header.focus());
+	if (header.getAttribute("aria-expanded") === "false") await act(async () => header.click());
+	assert.ok(host.querySelector('[data-message-id="2_0"] .markdown-body'));
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), null);
+	assert.ok(host.querySelector('[data-message-id="8_0"] .message-copy'));
+	await act(async () => header.click());
+});
+
 test("real selection freezes completion in the same admitted turn", async () => {
 	await render(admitted(initial), true);
 	const selected = host.querySelector('[data-message-id="2_0"] .markdown-body p');
+	const actions = host.querySelector('[data-message-id="2_0"] .message-actions');
 	assert.ok(selected);
+	assert.ok(actions);
 	await act(async () => {
 		const range = document.createRange();
 		range.selectNodeContents(selected);
@@ -209,6 +301,7 @@ test("real selection freezes completion in the same admitted turn", async () => 
 		host.querySelector('[data-message-id="2_0"] .markdown-body p') === selected,
 		"selected process node must retain identity",
 	);
+	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), actions);
 	assert.equal(host.querySelectorAll(".virtual-message-row").length, 1);
 });
 

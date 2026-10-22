@@ -7,7 +7,7 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import type { AppClient, Method, Params } from "@hipi/work-runtime/contracts";
 import { createFileAuthority } from "@hipi/work-runtime/files/node";
 import { createRuntimeProjectFolders, openRuntime } from "@hipi/work-runtime/node";
-import type { InitialSendInput } from "../../../src/features/workbench/catalog/initial-send.ts";
+import { admitInitialSend, type InitialSendInput } from "../../../src/features/workbench/catalog/initial-send.ts";
 import { CatalogSession } from "../../../src/features/workbench/catalog/session.ts";
 import { LocalState } from "../../../src/features/workbench/local-state.ts";
 
@@ -21,7 +21,7 @@ async function until<T>(read: () => Promise<T | undefined>): Promise<T> {
 	throw new Error("Condition timed out");
 }
 
-test("the first project Send reaches the real provider only after its exact grant, without host paths or inherited roots", async () => {
+test("old project-context journals stay explicit while new chats use their own default project root", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "hipi-initial-context-"));
 	await writeFile(join(directory, "note.txt"), "Project notes");
 	const authority = createFileAuthority({
@@ -37,12 +37,26 @@ test("the first project Send reaches the real provider only after its exact gran
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const model = { provider: "faux", modelId: "faux-1" };
+	let projects: ReturnType<typeof createRuntimeProjectFolders>;
 	const runtime = await openRuntime(join(directory, "store"), {
 		models,
 		model,
-		agentFiles: () => authority.forAgent("owner"),
+		agentFiles: () => ({
+			...authority.forAgent("owner"),
+			async currentProject(workspaceId: string) {
+				const folder = await projects?.get(workspaceId);
+				return folder?.status === "available"
+					? {
+							workspaceId: folder.workspaceId,
+							bindingId: folder.bindingId,
+							bindingRevision: folder.revision,
+							root: folder.root,
+						}
+					: null;
+			},
+		}),
 	});
-	const projects = createRuntimeProjectFolders(runtime, authority, "owner");
+	projects = createRuntimeProjectFolders(runtime, authority, "owner");
 	assert.ok(projects);
 	const entered = Promise.withResolvers<void>();
 	const allowGrant = Promise.withResolvers<void>();
@@ -90,19 +104,34 @@ test("the first project Send reaches the real provider only after its exact gran
 				disclosureVersion: 1,
 			},
 		};
+		// A saved narrow consent cannot restart creation or Send under the new project-default policy.
+		await admitInitialSend(local, input, new AbortController().signal);
+		const recovered = new CatalogSession(client, local, { getProject: projects.get });
+		try {
+			assert.equal(recovered.getSnapshot().initialConsentInvalidated, true);
+			await recovered.check();
+			await recovered.retry();
+			assert.deepEqual((await runtime.call("listConversations", { workspaceId: "project" })).items, []);
+			assert.ok(!calls.some((call) => ["createConversation", "authorizeAgentContext", "submit"].includes(call.method)));
+			assert.equal(faux.state.callCount, 0);
+			await recovered.recoverInitialDraft();
+			assert.equal(recovered.getSnapshot().initialSend, null);
+			assert.equal(local.read(input.sourceKey), text);
+		} finally {
+			recovered.dispose();
+		}
 		faux.setResponses([
 			async (context) => {
 				providerEntered.resolve();
 				const messages = JSON.stringify(context.messages);
 				const system = JSON.stringify(context.messages.filter((message) => message.role === "system"));
 				assert.ok(system.includes(rootId));
-				assert.ok(system.includes("note.txt"));
 				assert.ok(!messages.includes(otherRootId));
 				assert.ok(!messages.includes(directory), "host paths are not model context");
 				assert.ok(!messages.includes(folder.bindingId ?? ""), "binding identities are local UI provenance");
 				assert.ok(messages.includes(text.trim()), "the meaningful first question reaches the provider");
 				await allowAnswer.promise;
-				return fauxAssistantMessage("Only the permitted project notes are available.");
+				return fauxAssistantMessage("The connected project is available.");
 			},
 		]);
 		const run = session.sendInitial(input);
@@ -134,6 +163,10 @@ test("the first project Send reaches the real provider only after its exact gran
 		assert.equal(calls.filter((call) => call.method === "authorizeAgentContext").length, 1);
 		assert.equal(calls.filter((call) => call.method === "submit").length, 1);
 		assert.equal(faux.state.callCount, 1);
+		const grants = await runtime.call("listActiveAgentContexts", { workspaceId: "project", conversationId });
+		assert.equal(grants.length, 1, "the old explicit journal still commits exactly one scoped grant");
+		assert.equal(grants[0]?.rootId, rootId);
+		assert.deepEqual(grants[0]?.pathPrefixes, ["note.txt"]);
 		allowAnswer.resolve();
 		const submission = session.getSnapshot().submission;
 		assert.ok(submission);
@@ -145,16 +178,18 @@ test("the first project Send reaches the real provider only after its exact gran
 			assert.notEqual(result?.execution, "unanswered", JSON.stringify(result));
 			return result?.execution === "done" ? result : undefined;
 		});
-		assert.equal(receipt.answer, "Only the permitted project notes are available.");
+		assert.equal(receipt.answer, "The connected project is available.");
 		const second = new CatalogSession(client, local, { getProject: projects.get });
+		let secondTranscript = "";
+		let secondSystem = "";
 		faux.setResponses([
 			(context) => {
-				const transcript = JSON.stringify(context.messages);
-				assert.ok(!transcript.includes(rootId), "a later new chat does not inherit consent");
-				assert.ok(!transcript.includes(otherRootId));
-				assert.ok(!transcript.includes(directory));
-				assert.ok(transcript.includes("Permissions (权限)"));
-				return fauxAssistantMessage("Use the app permissions to share project files.");
+				secondTranscript = JSON.stringify(context.messages);
+				secondSystem = context.messages
+					.filter((message) => message.role === "system")
+					.map((message) => message.sections?.["hipi-authorized-files"] ?? "")
+					.join("\n");
+				return fauxAssistantMessage("The connected project is available without a new grant.");
 			},
 		]);
 		await second.sendInitial({ ...input, context: undefined, text: "A different question" });
@@ -162,13 +197,27 @@ test("the first project Send reaches the real provider only after its exact gran
 		const secondSubmission = second.getSnapshot().submission;
 		assert.ok(secondSubmission);
 		assert.notEqual(secondSubmission.conversationId, conversationId);
-		await until(async () => {
+		const secondReceipt = await until(async () => {
 			const result = await runtime.call("getReceipt", {
 				workspaceId: "project",
 				requestId: secondSubmission.requestId,
 			});
+			assert.notEqual(result?.execution, "unanswered", JSON.stringify(result));
 			return result?.execution === "done" ? result : undefined;
 		});
+		assert.equal(secondReceipt.answer, "The connected project is available without a new grant.");
+		assert.ok(secondSystem.includes(JSON.stringify([{ rootId, pathPrefixes: [""] }])), secondTranscript);
+		assert.ok(!secondTranscript.includes(otherRootId));
+		assert.ok(!secondTranscript.includes(directory));
+		assert.ok(!secondTranscript.includes(folder.bindingId ?? ""));
+		assert.ok(!secondSystem.includes("note.txt"), "a new chat does not inherit the earlier explicit grant");
+		assert.deepEqual(
+			await runtime.call("listActiveAgentContexts", {
+				workspaceId: "project",
+				conversationId: secondSubmission.conversationId,
+			}),
+			[],
+		);
 		assert.equal(faux.state.callCount, 2);
 		assert.equal(calls.filter((call) => call.method === "authorizeAgentContext").length, 1);
 		second.dispose();

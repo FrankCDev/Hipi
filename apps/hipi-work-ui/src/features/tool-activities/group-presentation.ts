@@ -1,7 +1,7 @@
 import { parseMessagePublicBlocks, type Snapshot, type ToolActivity } from "@hipi/work-runtime/contracts";
 
 export type ToolGroupPresentation =
-	| { kind: "summary"; key: "summary" }
+	| { kind: "summary"; key: "summary"; completed?: true }
 	| { kind: "active"; key: string; toolName: string; status: "pending" | "running" };
 export const settledToolGroup: ToolGroupPresentation = { kind: "summary", key: "summary" };
 
@@ -14,6 +14,9 @@ export function projectToolGroupPresentation(
 	active: boolean,
 	activities: readonly ToolActivity[] = [],
 ): ToolGroupPresentation {
+	// Suppressing an active header is not completion proof. A disconnected or
+	// incompletely observed live turn must retain its existing unknown fallback.
+	if (snapshot?.running === false) return { kind: "summary", key: "summary", completed: true };
 	const execution = snapshot?.execution;
 	if (
 		!active ||

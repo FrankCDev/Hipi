@@ -10,10 +10,11 @@ import {
 	type ToolActivityPage,
 	type ToolActivityTextPage,
 } from "@hipi/work-runtime/contracts";
-import { act } from "react";
+import { act, useSyncExternalStore } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, test, vi } from "vitest";
 import { ThemeProvider } from "../../src/app/theme/provider.tsx";
+import { ActivitySession } from "../../src/features/tool-activities/activity-session.ts";
 import {
 	ActivityTranscriptProvider,
 	InlineMessageToolBlock,
@@ -456,6 +457,106 @@ test("live interleaved slices reuse the exact task owner, not same-call IDs in a
 	await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 	assert.equal(host.querySelectorAll("pre.inline-tool-text").length, 1);
 	assert.equal(reads("getToolActivityText").length, 2);
+});
+
+test("hydrating an interspersed live slot preserves sibling output leases and an open details dialog", async () => {
+	const first = items[0];
+	const second = items[1];
+	assert.ok(first && second);
+	const third: ToolActivity = {
+		...second,
+		activityId: "task:3",
+		taskId: "3",
+		anchor: { assistantEntryId: "1", modelIndex: 0, contentIndex: 3 },
+	};
+	const records = [first, second, third];
+	const scope = { workspaceId: "w", conversationId: "c" };
+	const session = new ActivitySession(client, scope, { kind: "tasks", taskIds: ["1", "2", "3"] });
+	metadataPages = [
+		{ items: [third, first], nextCursor: null, coverage: "tasks", membershipFence: "f", unavailableTaskIds: ["2"] },
+		{
+			items: [second, third, first],
+			nextCursor: null,
+			coverage: "tasks",
+			membershipFence: "f",
+			unavailableTaskIds: [],
+		},
+	];
+	function Frame() {
+		const state = useSyncExternalStore(session.subscribe, session.snapshot, session.snapshot);
+		const live = { session, state, active: true };
+		return (
+			<ThemeProvider>
+				<MessageActivityOwner scope={scope} connected messageId="1_0" live={live}>
+					<HistoricalTurnActivities
+						scope={scope}
+						connected
+						messageId="1_0"
+						expanded
+						onToggle={() => {}}
+						toolCalls={{
+							items: records.map((record) => ({
+								callId: record.callId,
+								name: record.toolName,
+								contentIndex: record.anchor?.contentIndex ?? 0,
+							})),
+							total: 3,
+						}}
+						live={live}
+						liveItems={state.page?.items ?? []}
+						liveTools={records.map((record) => ({
+							taskId: record.taskId,
+							callId: record.callId,
+							name: record.toolName,
+							anchor: record.anchor,
+							status: "running",
+						}))}
+					/>
+				</MessageActivityOwner>
+			</ThemeProvider>
+		);
+	}
+	session.activate();
+	try {
+		await session.page();
+		await act(async () => root.render(<Frame />));
+		await openResults();
+		const cards = [...host.querySelectorAll(".inline-tool-result")];
+		const outputs = [...host.querySelectorAll("pre.inline-tool-text")];
+		assert.equal(outputs.length, 2);
+		const rows = [...host.querySelectorAll(".inline-activity-records > section, .inline-activity-records > ul")];
+		assert.ok(rows[0] === cards[0] && rows[1]?.matches(".activity-live-slots") && rows[2] === cards[1]);
+		const details = cards[0]?.querySelector<HTMLButtonElement>('[aria-label="Tool call details"]');
+		assert.ok(details);
+		await act(async () => details.click());
+		const dialog = document.querySelector('[role="dialog"]');
+		const dialogOutput = dialog?.querySelector("pre");
+		assert.ok(dialog && dialogOutput);
+		assert.equal(reads("getToolActivityText").length, 2);
+		await act(async () => session.page());
+		assert.ok(document.querySelector('[role="dialog"]') === dialog);
+		assert.ok(dialog.querySelector("pre") === dialogOutput);
+		const hydrated = [...host.querySelectorAll(".inline-tool-result")];
+		assert.ok(hydrated[0] === cards[0] && hydrated[2] === cards[1]);
+		assert.ok(host.querySelectorAll("pre.inline-tool-text")[0] === outputs[0]);
+		assert.ok(host.querySelectorAll("pre.inline-tool-text")[1] === outputs[1]);
+		assert.equal(hydrated[0]?.querySelector("button")?.getAttribute("aria-expanded"), "true");
+		assert.equal(hydrated[1]?.querySelector("button")?.getAttribute("aria-expanded"), "false");
+		assert.equal(hydrated[2]?.querySelector("button")?.getAttribute("aria-expanded"), "true");
+		assert.equal(
+			reads("getToolActivityText").length,
+			2,
+			"sibling hydration neither rereads outputs nor reads the newly closed result",
+		);
+		assert.equal(
+			reads("getToolActivities").length,
+			2,
+			"only the two explicit exact reads ran, with no historical reader",
+		);
+	} finally {
+		await act(async () => root.render(<ThemeProvider>{null}</ThemeProvider>));
+		session.dispose();
+	}
 });
 
 test("one message owner switches an omitted scrolling fallback back to complete canonical slices", async () => {

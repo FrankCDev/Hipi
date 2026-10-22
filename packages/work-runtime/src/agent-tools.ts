@@ -31,6 +31,9 @@ import {
 	CommandDoc,
 	ContextDoc,
 	commandKey,
+	type DefaultProjectAccess,
+	DefaultProjectDoc,
+	type Dependency,
 	GrantDoc,
 	LegacyContextDoc,
 	OperationDoc,
@@ -53,7 +56,7 @@ import {
 } from "./contracts.ts";
 import type { PackageDescriptor } from "./extensions/lifecycle-descriptors.ts";
 import { FileServiceError, validateRelativePath } from "./files/contracts.ts";
-import type { TrustedAgentFileService } from "./files/service.ts";
+import type { TrustedAgentFileService, TrustedProjectContext } from "./files/service.ts";
 
 export interface ExtensionAuthorizationPort {
 	register(tx: Tx, id: ConversationId, publicId: string): Promise<void>;
@@ -80,6 +83,9 @@ const argsHash = (args: SaveArgs) =>
 const sameModel = (a: ModelReference, b: ModelReference) => a.provider === b.provider && a.modelId === b.modelId;
 const covers = (prefix: string, path: string) => prefix === "" || prefix === path || path.startsWith(`${prefix}/`);
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const ROOT_METADATA_BYTES = 8192;
+// Default access may become available after grant admission. Reserve its largest host-validated descriptor.
+const PROJECT_METADATA_RESERVE = Buffer.byteLength(JSON.stringify({ rootId: "x".repeat(128), pathPrefixes: [""] })) + 1;
 
 /** One workspace-owned broker. Durable documents are authority; locks only order final local effects. */
 export class AgentToolBroker implements ModelDispatchAuthorization {
@@ -328,6 +334,114 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		if (!roots.some((root) => root.rootId === rootId && (!writable || root.writable)))
 			throw new AppError("UNAUTHORIZED");
 	}
+	/** Only the verified host binding can supply a default scope. listRoots is never a substitute. */
+	async #currentProject(): Promise<TrustedProjectContext | null> {
+		const project = (await this.#files?.()?.currentProject?.(this.#workspaceId)) ?? null;
+		if (!project) return null;
+		if (
+			project.workspaceId !== this.#workspaceId ||
+			typeof project.bindingId !== "string" ||
+			!/^[-\w]{1,128}$/.test(project.bindingId) ||
+			!Number.isSafeInteger(project.bindingRevision) ||
+			project.bindingRevision < 1 ||
+			!project.root ||
+			project.root.workspaceId !== this.#workspaceId ||
+			typeof project.root.rootId !== "string" ||
+			!/^[-\w]{1,128}$/.test(project.root.rootId) ||
+			project.root.writable !== false
+		)
+			throw new AppError("UNAUTHORIZED");
+		const roots = await this.files().listRoots(this.#workspaceId);
+		if (
+			!roots.some(
+				(root) => root.workspaceId === this.#workspaceId && root.rootId === project.root.rootId && !root.writable,
+			)
+		)
+			throw new AppError("UNAUTHORIZED");
+		this.files().assertRoot(this.#workspaceId, project.root.rootId);
+		return project;
+	}
+	async #projectPolicy(tx: Tx, id: ConversationId): Promise<DefaultProjectAccess> {
+		const policy = await tx.doc(DefaultProjectDoc, String(id), null);
+		if (
+			!["uninitialized", "default", "restricted"].includes(policy.mode) ||
+			(policy.blockedBindingId !== null &&
+				(typeof policy.blockedBindingId !== "string" || !/^[-\w]{1,128}$/.test(policy.blockedBindingId))) ||
+			Object.keys(policy).some((key) => key !== "mode" && key !== "blockedBindingId")
+		)
+			throw new AppError("UNAUTHORIZED");
+		return policy;
+	}
+	/** Called only in an actual new conversation's creation transaction, never registration/recovery. */
+	async initializeProjectAccess(tx: Tx, id: ConversationId): Promise<void> {
+		const policy = await this.#projectPolicy(tx, id);
+		if (policy.mode !== "uninitialized") throw new AppError("UNAUTHORIZED");
+		policy.mode = "default";
+	}
+	async #project(
+		tx: Tx,
+		id: ConversationId,
+		state: AuthorizationState,
+		current: TrustedProjectContext | null,
+		admission = false,
+	): Promise<TrustedProjectContext | null> {
+		const policy = await this.#projectPolicy(tx, id);
+		for (const dependency of state.dependencies) this.#provenance(dependency);
+		if (policy.mode === "uninitialized" && admission) {
+			// Empty active grants are not evidence of no history: revoked/expired grants remain counted.
+			policy.mode = state.dependencies.length === 0 && state.grantCount === 0 ? "default" : "restricted";
+		}
+		return policy.mode === "default" && current && policy.blockedBindingId !== current.bindingId ? current : null;
+	}
+	#provenance(dependency: Dependency): Dependency["project"] {
+		if (!("project" in dependency)) return undefined;
+		const project = dependency.project;
+		if (
+			!project ||
+			typeof project.bindingId !== "string" ||
+			!/^[-\w]{1,128}$/.test(project.bindingId) ||
+			!Number.isSafeInteger(project.bindingRevision) ||
+			project.bindingRevision < 1 ||
+			Object.keys(project).some((key) => key !== "bindingId" && key !== "bindingRevision")
+		)
+			throw new AppError("UNAUTHORIZED");
+		return project;
+	}
+	#dependency(
+		state: AuthorizationState,
+		grants: AgentContext[],
+		dependency: Dependency,
+		model: ModelReference,
+		project: TrustedProjectContext | null,
+		admission = false,
+	): { rootId: string | null; expiresAt: number } {
+		const provenance = this.#provenance(dependency);
+		if (
+			project &&
+			provenance?.bindingId === project.bindingId &&
+			provenance.bindingRevision === project.bindingRevision
+		)
+			return { rootId: project.root.rootId, expiresAt: Number.MAX_SAFE_INTEGER };
+		const grant = this.#grant(state, grants, dependency, model, true, admission);
+		return { rootId: grant.purpose === "live-files" ? grant.rootId : null, expiresAt: grant.expiresAt };
+	}
+	#recordDependency(state: AuthorizationState, args: ReadArgs, project: TrustedProjectContext | null = null): void {
+		const found = state.dependencies.some((item) => {
+			const provenance = this.#provenance(item);
+			return project
+				? provenance?.bindingId === project.bindingId &&
+						provenance.bindingRevision === project.bindingRevision &&
+						covers(item.path, args.path)
+				: !provenance && item.rootId === args.rootId && covers(item.path, args.path);
+		});
+		if (found) return;
+		if (state.dependencies.length >= 256) throw new AppError("CAPACITY_EXCEEDED");
+		state.dependencies.push({
+			rootId: args.rootId,
+			path: args.path,
+			...(project ? { project: { bindingId: project.bindingId, bindingRevision: project.bindingRevision } } : {}),
+		});
+	}
 	async #model(tx: Tx, id: ConversationId): Promise<ModelReference> {
 		const agent = await tx.doc(AgentDoc, id);
 		if (!agent.model) throw new AppError("MODEL_UNAVAILABLE");
@@ -415,7 +529,9 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 				const metadata = [...grants, grant]
 					.filter((item) => item.purpose === "live-files")
 					.map((item) => ({ rootId: item.rootId, pathPrefixes: item.pathPrefixes }));
-				if (Buffer.byteLength(JSON.stringify(metadata)) > 8192 || !fitsPayloadBudget([...grants, grant]))
+				const policy = await this.#projectPolicy(tx, id);
+				const budget = ROOT_METADATA_BYTES - (policy.mode === "default" ? PROJECT_METADATA_RESERVE : 0);
+				if (Buffer.byteLength(JSON.stringify(metadata)) > budget || !fitsPayloadBudget([...grants, grant]))
 					throw new AppError("CAPACITY_EXCEEDED");
 				const stored = await tx.doc(GrantDoc, grant.grantId, null);
 				stored.conversationId = id;
@@ -551,6 +667,11 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 	}
 	async revoke(id: ConversationId, input: Params<"revokeAgentContext">): Promise<AgentContext> {
 		const result = await this.locked(id, async () => {
+			// Revocation must still succeed when the host is unavailable. Never guess which old root was a project.
+			const project = await this.#currentProject().catch(() => null);
+			const liveRoots = await this.#files?.()
+				?.listRoots(this.#workspaceId)
+				.catch(() => []);
 			const result = await this.harness.commit(async (tx) => {
 				const state = await tx.doc(ContextDoc, String(id), null);
 				const record = await this.#command(tx, id, state, input.requestId);
@@ -565,6 +686,12 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 					if (grant.revision !== input.expectedRevision) throw new AppError("IDEMPOTENCY_CONFLICT");
 					grant.status = "revoked";
 					grant.revision++;
+				}
+				if (grant.purpose === "live-files") {
+					const policy = await this.#projectPolicy(tx, id);
+					if (project?.root.rootId === grant.rootId) policy.blockedBindingId = project.bindingId;
+					else if (!project || !liveRoots?.some((root) => root.rootId === grant.rootId))
+						policy.mode = "restricted";
 				}
 				record.conversationId = id;
 				record.publicId = state.publicId;
@@ -681,6 +808,7 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		descriptors?: readonly PackageDescriptor[],
 		dispatch = false,
 	): Promise<{ roots: string[]; expiresAt: number }> {
+		const current = await this.#currentProject();
 		const authority = await this.harness.commit(async (tx) => {
 			const state = await tx.doc(ContextDoc, String(id), null);
 			await this.#active(tx, state);
@@ -693,10 +821,11 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 			if (state.cancelled) throw new AppError("UNAUTHORIZED");
 			const roots = new Set<string>();
 			const grants = await this.#grants(tx, id, state);
+			const project = await this.#project(tx, id, state, current);
 			for (const dependency of state.dependencies) {
-				const grant = this.#grant(state, grants, dependency, model, true);
-				expiresAt = Math.min(expiresAt, grant.expiresAt);
-				if (grant.purpose === "live-files") roots.add(grant.rootId);
+				const authority = this.#dependency(state, grants, dependency, model, project);
+				expiresAt = Math.min(expiresAt, authority.expiresAt);
+				if (authority.rootId) roots.add(authority.rootId);
 			}
 			return { roots: [...roots], expiresAt };
 		}, background);
@@ -719,6 +848,7 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 	async assertContext(id: ConversationId): Promise<void> {
 		try {
 			await this.locked(id, async () => {
+				const current = await this.#currentProject();
 				const roots = await this.harness.commit(async (tx) => {
 					const state = await tx.doc(ContextDoc, String(id), null);
 					const model = await this.#model(tx, id);
@@ -727,9 +857,10 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 					await this.#active(tx, state);
 					const roots = new Set<string>();
 					const grants = await this.#grants(tx, id, state);
+					const project = await this.#project(tx, id, state, current, true);
 					for (const item of state.dependencies) {
-						const grant = this.#grant(state, grants, item, model, true, true);
-						if (grant.purpose === "live-files") roots.add(grant.rootId);
+						const authority = this.#dependency(state, grants, item, model, project, true);
+						if (authority.rootId) roots.add(authority.rootId);
 					}
 					return [...roots];
 				}, background);
@@ -740,13 +871,16 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		}
 	}
 	async promptContext(id: ConversationId): Promise<string | undefined> {
-		return this.locked(id, () =>
-			this.harness.commit(async (tx) => {
+		return this.locked(id, async () => {
+			const current = await this.#currentProject();
+			return this.harness.commit(async (tx) => {
 				const state = await tx.doc(ContextDoc, String(id), null);
 				const model = await this.#model(tx, id);
 				await this.#active(tx, state);
+				const project = await this.#project(tx, id, state, current);
 				const grants = (await this.#grants(tx, id, state)).filter((grant) => {
 					if (
+						grant.rootId === project?.root.rootId ||
 						grant.purpose !== "live-files" ||
 						grant.status !== "active" ||
 						grant.expiresAt <= Date.now() ||
@@ -762,25 +896,31 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 					}
 				});
 				if (state.cancelled) return undefined;
-				if (!grants.length)
-					return "No live project file context is authorized for this chat and model. File root IDs come only from authorized app context: never invent them or ask the user to type internal rootId values or absolute host paths. If project files are needed, ask the user to use Permissions (权限) or Allow project access (允许访问项目) in the app. Choosing a folder alone does not authorize model access. Do not call file tools until authorized roots are supplied.";
+				if (!grants.length && !project)
+					return "No live file roots are available for this chat and model. File root IDs come only from app context: never invent them or ask the user to type internal rootId values or absolute host paths. Project files require an available connected project folder; additional folders require explicit file-context permission in the app. Do not call file tools until roots are supplied.";
 				const roots = grants.map((grant) => ({ rootId: grant.rootId, pathPrefixes: grant.pathPrefixes }));
+				if (project) {
+					this.files().assertRoot(this.#workspaceId, project.root.rootId);
+					roots.unshift({ rootId: project.root.rootId, pathPrefixes: [""] });
+					this.#recordDependency(state, { rootId: project.root.rootId, path: "" }, project);
+				}
 				const prompt = JSON.stringify(roots);
-				if (Buffer.byteLength(prompt) > 8192) throw new AppError("CAPACITY_EXCEEDED");
+				if (Buffer.byteLength(prompt) > ROOT_METADATA_BYTES) throw new AppError("CAPACITY_EXCEEDED");
 				for (const grant of grants)
-					for (const path of grant.pathPrefixes) {
-						if (!state.dependencies.some((item) => item.rootId === grant.rootId && item.path === path)) {
-							if (state.dependencies.length >= 256) throw new AppError("CAPACITY_EXCEEDED");
-							state.dependencies.push({ rootId: grant.rootId, path });
-						}
-					}
+					for (const path of grant.pathPrefixes) this.#recordDependency(state, { rootId: grant.rootId, path });
 				return `Authorized file roots and relative path prefixes: ${prompt}. Only use the hipi_files tools. Read paginated content; saving requires explicit per-call approval.`;
-			}, background),
-		);
+			}, background);
+		});
 	}
-	async #access(call: Call, args: ReadArgs, recordDependency = false): Promise<AgentContext> {
+	async #access(
+		call: Call,
+		args: ReadArgs,
+		recordDependency = false,
+		projectRead = false,
+	): Promise<AgentContext | undefined> {
 		validateRelativePath(args.path, true);
 		await this.#root(args.rootId);
+		const current = projectRead ? await this.#currentProject() : null;
 		return this.harness.commit(async (tx) => {
 			await this.#call(tx, call);
 			await this.#extensions?.register(
@@ -796,25 +936,26 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 			);
 			const state = await tx.doc(ContextDoc, String(call.conversationId), null);
 			await this.#active(tx, state);
+			const project = await this.#project(tx, call.conversationId, state, current);
+			if (state.cancelled) throw new AppError("UNAUTHORIZED");
+			if (project && args.rootId === project.root.rootId) {
+				this.files().assertRoot(this.#workspaceId, args.rootId);
+				if (recordDependency) this.#recordDependency(state, args, project);
+				return undefined;
+			}
 			const grant = this.#grant(
 				state,
 				await this.#grants(tx, call.conversationId, state),
 				args,
 				await this.#model(tx, call.conversationId),
 			);
-			if (
-				recordDependency &&
-				!state.dependencies.some((item) => item.rootId === args.rootId && item.path === args.path)
-			) {
-				if (state.dependencies.length >= 256) throw new AppError("CAPACITY_EXCEEDED");
-				state.dependencies.push({ rootId: args.rootId, path: args.path });
-			}
+			if (recordDependency) this.#recordDependency(state, args);
 			return copy(grant);
 		}, background);
 	}
 	async read(call: Call, args: ReadArgs & { offset?: number; revision?: string }) {
 		validateRelativePath(args.path);
-		await this.#access(call, args);
+		await this.#access(call, args, false, true);
 		const value = await this.files().readText({
 			workspaceId: this.#workspaceId,
 			rootId: args.rootId,
@@ -834,7 +975,7 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 			text += char;
 			bytes += size;
 		}
-		await this.locked(call.conversationId, () => this.#access(call, args, true));
+		await this.locked(call.conversationId, () => this.#access(call, args, true, true));
 		const next = offset + text.length;
 		return {
 			text,
@@ -845,14 +986,14 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		};
 	}
 	async list(call: Call, args: ReadArgs & { cursor?: string }) {
-		await this.#access(call, args);
+		await this.#access(call, args, false, true);
 		const page = await this.files().list(
 			{ workspaceId: this.#workspaceId, rootId: args.rootId, path: args.path },
 			args.cursor,
 		);
 		// The file service's cursor binds directory/version; keep it intact rather than silently dropping entries.
 		if (Buffer.byteLength(JSON.stringify(page)) > 16384) throw new AppError("CAPACITY_EXCEEDED");
-		await this.locked(call.conversationId, () => this.#access(call, args, true));
+		await this.locked(call.conversationId, () => this.#access(call, args, true, true));
 		return page;
 	}
 	async prepare(call: Call, args: SaveArgs, context: Context): Promise<void> {
@@ -861,6 +1002,7 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 		if (Buffer.byteLength(args.text) > 65536) throw new AppError("CAPACITY_EXCEEDED");
 		await this.#root(args.rootId, true);
 		const grant = await this.#access(call, args);
+		if (!grant) throw new AppError("UNAUTHORIZED");
 		const before = await this.files().readText({
 			workspaceId: this.#workspaceId,
 			rootId: args.rootId,
@@ -1134,6 +1276,7 @@ export class AgentToolBroker implements ModelDispatchAuthorization {
 							const grant = await this.#access(call, args, true);
 							const approval = await this.#refresh(call.conversationId, key);
 							if (
+								!grant ||
 								approval.status !== "consumed" ||
 								approval.operationId !== operationId ||
 								approval.expiresAt <= Date.now() ||

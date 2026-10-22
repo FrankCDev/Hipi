@@ -70,8 +70,9 @@ test("retained consent shows selected destination, original immutable scope and 
 		"does not restore old directory read/write access or old approvals",
 		"cannot recall data previously transmitted",
 		"Authorization duration",
-		"continue this conversation",
-		"New file operations require",
+		"authorize its saved context to continue",
+		"Project defaults do not restore old root identities, explicit grants or write approvals",
+		"External folders and writes still need current permissions",
 	])
 		assert.ok(html.includes(text), text);
 	assert.doesNotMatch(html, /<textarea|<input/);
@@ -85,7 +86,9 @@ test("retained consent is bilingual and blocks wrong source role, wrong scope an
 		"不会复活旧审批",
 		"无法撤回",
 		"授权期限",
-		"继续原会话",
+		"可明确授权其已保存的上下文以继续",
+		"项目默认访问不会恢复旧根身份、单独授权或写入审批",
+		"外部文件夹和写入仍需当前有效权限",
 	])
 		assert.ok(zh.includes(text), text);
 	assert.match(render("en", { ...source, conversationId: "other" }), /disabled=""/);

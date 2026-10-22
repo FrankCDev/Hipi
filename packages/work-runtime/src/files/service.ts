@@ -20,7 +20,16 @@ export interface TrustedFileSnapshotSource {
  * lock until commit settles, invoking and awaiting commit exactly once. Calling the callback outside that lock is not an authorization gate.
  */
 export type FileCommitPermit = <T>(commit: () => Promise<T>) => Promise<T>;
+/** Verified host binding, never inferred from the other roots available to a principal. */
+export type TrustedProjectContext = {
+	workspaceId: string;
+	bindingId: string;
+	bindingRevision: number;
+	root: FileRoot;
+};
 export interface TrustedAgentFileService extends Pick<FileService, "listRoots" | "list" | "readText"> {
+	/** Host composition only. An unavailable, disconnected or revoked binding returns null. */
+	currentProject?(workspaceId: string): Promise<TrustedProjectContext | null>;
 	/** Synchronous grant-liveness check immediately before dispatch; not a workspace or filesystem authorization. */
 	assertRoot(workspaceId: string, rootId: string): void;
 	saveText(target: FileTarget, text: string, ifMatch: string, withCommitPermit: FileCommitPermit): Promise<FileText>;

@@ -94,7 +94,25 @@ export async function resolveAgentCommandResult(
 	return result;
 }
 
-export type Dependency = { rootId: string; path: string };
+export type Dependency = {
+	rootId: string;
+	path: string;
+	/** Historical default-project disclosure only; this never revives rootId for a file operation. */
+	project?: { bindingId: string; bindingRevision: number };
+};
+export type DefaultProjectAccess = {
+	mode: "uninitialized" | "default" | "restricted";
+	blockedBindingId: string | null;
+};
+/** Creation-owned policy, independent of expiring explicit grants and host root generations. */
+export const DefaultProjectDoc = defineDocFamily<DefaultProjectAccess, null>({
+	kind: "hipi.default-project-context",
+	scope: "session",
+	version: 1,
+	checkpointWhen,
+	family: true,
+	initial: () => ({ mode: "uninitialized", blockedBindingId: null }),
+});
 export type AuthorizationState = {
 	publicId: string;
 	sessionId: string;

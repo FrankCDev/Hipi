@@ -197,6 +197,111 @@ test("one exact live owner attaches only the current anchored row, then hands ov
 	assert.equal(host.querySelector('[data-activity-message-id="2_0"] .activity-disclosure-body'), null);
 	assert.equal(host.querySelectorAll(".inline-tool-result").length, 0);
 });
+
+test("uninstantiated canonical slots retain their nodes through exact-reader creation and hydrate in place", async () => {
+	const previous = client;
+	let release: (() => void) | undefined;
+	const records = [1, 2, 3].map(
+		(index): ToolActivity => ({
+			...item,
+			activityId: `task:${index}`,
+			taskId: String(index),
+			toolName: `tool_${index}`,
+			anchor: { assistantEntryId: "2", modelIndex: 0, contentIndex: index },
+			phase: "terminal",
+			toolResult: "success",
+		}),
+	);
+	const tools = records.toReversed().map((record) => ({
+		callId: record.callId,
+		name: record.toolName,
+		anchor: record.anchor,
+		status: "running" as const,
+	}));
+	assert.ok(snapshot.execution && snapshot.messages[1]);
+	const value: Snapshot = {
+		...snapshot,
+		messages: [
+			{
+				...snapshot.messages[1],
+				toolCalls: {
+					items: records.map((record) => ({
+						callId: record.callId,
+						name: record.toolName,
+						contentIndex: record.anchor?.contentIndex ?? 0,
+					})),
+					total: 3,
+				},
+				publicBlocks: {
+					items: records.map((record) => ({ kind: "tool", contentIndex: record.anchor?.contentIndex ?? 0 })),
+					total: 3,
+					omitted: false,
+				},
+			},
+		],
+		execution: { ...snapshot.execution, tools: { items: tools, total: 3, active: 3 } },
+	};
+	client = {
+		...client,
+		call: async <M extends Method>(method: M, params: Params<M>) => {
+			assert.equal(method, "getToolActivities");
+			const input = params as Params<"getToolActivities">;
+			assert.equal(input.selector?.kind, "tasks");
+			calls.push(input);
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return parseResult(method, {
+				items: [records[2], records[0]],
+				nextCursor: null,
+				coverage: "tasks",
+				membershipFence: "f",
+				unavailableTaskIds: ["2"],
+			});
+		},
+	};
+	try {
+		await render(value);
+		const toggle = host.querySelector<HTMLButtonElement>(".activity-disclosure-toggle");
+		assert.ok(toggle);
+		await act(async () => toggle.click());
+		const pending = [...host.querySelectorAll(".activity-live-slots li")];
+		assert.deepEqual(
+			pending.map((node) => node.firstChild?.textContent),
+			["tool_1", "tool_2", "tool_3"],
+		);
+		assert.equal(calls.length, 0);
+		assert.ok(value.execution);
+		await render({
+			...value,
+			execution: {
+				...value.execution,
+				tools: {
+					...value.execution.tools,
+					items: tools.map((tool) => ({
+						...tool,
+						taskId: records.find((record) => record.toolName === tool.name)?.taskId,
+					})),
+				},
+			},
+		});
+		assert.equal(calls.length, 1);
+		for (const [index, node] of pending.entries())
+			assert.ok(host.querySelectorAll(".activity-live-slots li")[index] === node);
+		await act(async () => release?.());
+		assert.deepEqual(
+			[...host.querySelectorAll(".inline-tool-result-name, .activity-live-slots li > span:first-child")].map(
+				(node) => node.textContent,
+			),
+			["tool_1", "tool_2", "tool_3"],
+		);
+		assert.ok(host.querySelector(".activity-live-slots li") === pending[1]);
+		assert.equal(calls.length, 1, "pending rows do not create speculative history or output readers");
+	} finally {
+		await act(async () => root.render(null));
+		client = previous;
+	}
+});
 test("off-page and unavailable exact records stay in the tail rather than matching an old same-callId row", async () => {
 	await render({ ...snapshot, messages: snapshot.messages.filter((message) => message.id !== "2_0") });
 	const tail = host.querySelector<HTMLButtonElement>(".inline-activity:not([data-activity-message-id]) > button");

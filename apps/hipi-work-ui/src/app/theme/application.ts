@@ -82,6 +82,8 @@ export function themeVariables(
 		"--font-code": codeFont,
 		"--font-mono": codeFont,
 		"--font-ui-size": `${config.uiFontSize}px`,
+		// Small UI text scales from 13px at the 14px default, rounded to whole pixels.
+		"--font-ui-small-size": `${Math.round(13 * (config.uiFontSize / 14))}px`,
 		"--font-code-size": `${config.codeFontSize}px`,
 		"--font-smoothing": config.fontSmoothing === "antialiased" ? "antialiased" : "auto",
 		"--action-cursor": config.pointerCursor ? "pointer" : "default",

@@ -61,7 +61,7 @@ import {
 } from "./turns/contracts.ts";
 import { projectAuthoritativeTurns } from "./turns/projection.ts";
 import { captureMessageViewport, messageViewportPixel } from "./turns/reading-anchor.ts";
-import { ConversationTurnRow } from "./turns/row.tsx";
+import { ConversationTurnRow, type TurnMessageRenderOptions } from "./turns/row.tsx";
 import { useMessageCopyText } from "./use-message-copy-text.ts";
 import { virtualMessageRange } from "./virtual-message-range.ts";
 import "./conversation-block-spacing.css";
@@ -178,6 +178,10 @@ export function ConversationMessages({
 			return members.has(row.key) || runKeys.has(row.key) ? [] : [row];
 		});
 	}, [baseRows, snapshot, groupChoices, protectedKeys, responseActive, searchAnchor]);
+	const processMembers = useMemo(
+		() => new Set(rows.flatMap((row) => (row.kind === "run-activity" ? row.activity.members : []))),
+		[rows],
+	);
 	useLayoutEffect(() => {
 		previousRows.current = rows;
 	}, [rows]);
@@ -641,7 +645,7 @@ export function ConversationMessages({
 							virtualizer.getVirtualItems().map((item) => {
 								const row = rows[item.index];
 								if (!row) return null;
-								const renderMessage = (child: TranscriptRow) =>
+								const renderMessage = (child: TranscriptRow, options?: TurnMessageRenderOptions) =>
 									child.kind === "request-failure" ? (
 										<ConversationTurnFailure failure={child.failure} onOpenModelSettings={onOpenModelSettings} />
 									) : child.kind === "run-activity" ? null : (
@@ -651,6 +655,8 @@ export function ConversationMessages({
 												scope={snapshot}
 												stream={child.message ? undefined : snapshot}
 												responseActive={responseActive}
+												processMember={options?.processMember}
+												protectActions={protectedKeys.has(child.key)}
 												offset={originalOffsets.get(child.key)}
 												onOffsetChange={setOriginalOffsets}
 												searchAnchor={child.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
@@ -698,6 +704,8 @@ export function ConversationMessages({
 												scope={snapshot}
 												stream={row.message ? undefined : snapshot}
 												responseActive={responseActive}
+												processMember={processMembers.has(row.key)}
+												protectActions={protectedKeys.has(row.key)}
 												offset={originalOffsets.get(row.key)}
 												onOffsetChange={setOriginalOffsets}
 												searchAnchor={row.message?.id === searchAnchor?.target.messageId ? searchAnchor : undefined}
@@ -741,6 +749,8 @@ const TranscriptMessage = memo(
 		scope,
 		stream,
 		responseActive,
+		processMember = false,
+		protectActions = false,
 		offset,
 		onOffsetChange,
 		searchAnchor,
@@ -749,12 +759,18 @@ const TranscriptMessage = memo(
 		scope: Scope;
 		stream?: Snapshot;
 		responseActive?: boolean;
+		processMember?: boolean;
+		protectActions?: boolean;
 		offset: number | undefined;
 		onOffsetChange: (update: (current: ReadonlyMap<string, number>) => ReadonlyMap<string, number>) => void;
 		searchAnchor?: SearchHistoryWindow;
 	}) {
 		const { t } = usePreferences();
 		const article = useRef<HTMLElement>(null);
+		// Settlement may prove process membership while its existing action owns focus.
+		// Keep that footprint until reading protection ends, without inventing run facts.
+		const [actionsSuppressed, setActionsSuppressed] = useState(processMember);
+		if (!protectActions && actionsSuppressed !== processMember) setActionsSuppressed(processMember);
 		const CopyAction = row.message?.role === "assistant" ? AssistantClipboardCopy : ClipboardCopy;
 		const message: Message = row.message ?? {
 			id: row.key,
@@ -824,7 +840,7 @@ const TranscriptMessage = memo(
 					{stream && <InlineLiveActivities snapshot={stream} active={active} />}
 					{stream && <InlineApproval snapshot={stream} active={active} />}
 					{message.interrupted && <span className="status-pill">{t("work.interrupted")}</span>}
-					{!stream && copySource.text && (
+					{!stream && (message.role !== "assistant" || !actionsSuppressed) && copySource.text && (
 						<div className="message-actions">
 							<CopyAction
 								article={article}
@@ -852,6 +868,8 @@ const TranscriptMessage = memo(
 		before.row === after.row &&
 		before.stream === after.stream &&
 		before.responseActive === after.responseActive &&
+		before.processMember === after.processMember &&
+		before.protectActions === after.protectActions &&
 		before.scope.workspaceId === after.scope.workspaceId &&
 		before.scope.conversationId === after.scope.conversationId &&
 		before.offset === after.offset &&

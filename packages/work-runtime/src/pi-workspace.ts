@@ -464,6 +464,7 @@ export class PiWorkspace implements WorkspacePort {
 						(await tx.doc(ConversationMetaDoc, publicId, null)).value = meta;
 						head.activeCount++;
 						await this.#agentTools.register(tx, id, publicId);
+						await this.#agentTools.initializeProjectAccess(tx, id);
 						await this.#toolPacks.register(tx, id, publicId);
 						await recordDirectoryChange(tx, meta);
 						const command = await tx.doc(DirectoryCommandDoc, key, null);
