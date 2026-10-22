@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import {
 	type AppClient,
 	type FilePresentation,
@@ -158,6 +160,36 @@ test("closed individual does not read; explicit output is escaped and bounded th
 	await act(async () => button("src/example.ts").click());
 	assert.deepEqual(opened, ["src/example.ts"]);
 });
+test("the generic title uses normal leading without changing notices, output or its sticky plaintext header", async () => {
+	const style = document.createElement("style");
+	style.textContent = ["inline-activity-card.css", "retained-output-view.css"]
+		.map((name) => readFileSync(new NodeURL(`../../src/features/tool-activities/${name}`, import.meta.url), "utf8"))
+		.join("\n");
+	document.head.append(style);
+	try {
+		await act(async () => root.render(<View />));
+		const card = host.querySelector(".inline-tool-generic");
+		const heading = host.querySelector(".inline-tool-generic > .inline-tool-result-heading");
+		const notice = host.querySelector(".inline-tool-notice");
+		assert.ok(card && heading && notice);
+		assert.equal(getComputedStyle(card).lineHeight, "1.625");
+		// jsdom exposes the matched token rather than resolving custom-property math.
+		assert.equal(getComputedStyle(heading).lineHeight, "var(--text-base--line-height)");
+		assert.equal(getComputedStyle(notice).lineHeight, "1.625");
+		await openResult();
+		const output = host.querySelector(".retained-output-view");
+		const plaintextHeader = host.querySelector(".inline-tool-text-header");
+		assert.ok(output && plaintextHeader);
+		assert.equal(getComputedStyle(output).lineHeight, "1.625");
+		assert.equal(getComputedStyle(plaintextHeader).position, "sticky");
+		assert.equal(getComputedStyle(plaintextHeader).fontSize, "var(--font-ui-small-size)");
+		assert.equal(getComputedStyle(plaintextHeader).lineHeight, "var(--font-ui-small-line-height)");
+		assert.equal(host.querySelector(".inline-tool-result-heading"), heading);
+	} finally {
+		style.remove();
+	}
+});
+
 test("technical detail dialog keeps identifiers off the primary body and closing does not clear retained text", async () => {
 	await act(async () => root.render(<View />));
 	await openResult();

@@ -23,6 +23,11 @@
 	color: var(--muted);
 	font-size: var(--font-ui-size);
 }
+.inline-activity[data-disclosure-phase] {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
 .inline-activity-toggle {
 	max-width: 100%;
 	justify-content: flex-start;
@@ -69,6 +74,9 @@
 	font: inherit;
 	text-align: start;
 	cursor: pointer;
+}
+.inline-activity[data-disclosure-phase] > .activity-disclosure-toggle {
+	align-self: flex-start;
 }
 .activity-disclosure-heading {
 	display: inline-flex;

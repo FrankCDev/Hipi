@@ -78,6 +78,9 @@
 	--tool-result-chevron-size: calc(var(--spacing) * 3.5);
 	gap: 0;
 }
+.inline-tool-generic > .inline-tool-result-heading {
+	line-height: var(--text-base--line-height);
+}
 .inline-tool-result-toggle {
 	display: inline-flex;
 	align-items: center;

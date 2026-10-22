@@ -31,14 +31,7 @@ vi.mock("@tanstack/react-virtual", async () => {
 			}),
 	};
 });
-const client: AppClient = {
-	call: vi.fn(async () => {
-		throw new Error("No reads while disconnected");
-	}),
-	observe: vi.fn(async () => {
-		throw new Error("No observer");
-	}),
-};
+let client: AppClient;
 const scope = { workspaceId: "w", conversationId: "c" };
 const process = {
 	id: "2_0",
@@ -113,6 +106,15 @@ async function render(snapshot: Snapshot, active = false, searchAnchor?: SearchH
 	);
 }
 beforeEach(() => {
+	// Disclosure choices persist per client; each test owns an independent session.
+	client = {
+		call: vi.fn(async () => {
+			throw new Error("No reads while disconnected");
+		}),
+		observe: vi.fn(async () => {
+			throw new Error("No observer");
+		}),
+	};
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
 	vi.stubGlobal(
@@ -169,6 +171,19 @@ function admitted(value: Snapshot): Snapshot {
 				}
 			: undefined,
 	};
+}
+async function select(range: Range | null, backwards = false) {
+	await act(async () => {
+		const selection = document.getSelection();
+		assert.ok(selection);
+		selection.removeAllRanges();
+		if (range) {
+			if (backwards)
+				selection.setBaseAndExtent(range.endContainer, range.endOffset, range.startContainer, range.startOffset);
+			else selection.addRange(range);
+		}
+		document.dispatchEvent(new Event("selectionchange"));
+	});
 }
 test("actual TanStack renders one measured turn containing user, process and persistent partial", async () => {
 	await render(admitted({ ...initial, partial: "Live body", partialLength: 9 }), true);
@@ -303,6 +318,213 @@ test("real selection freezes completion in the same admitted turn", async () => 
 	);
 	assert.equal(host.querySelector('[data-message-id="2_0"] .message-actions'), actions);
 	assert.equal(host.querySelectorAll(".virtual-message-row").length, 1);
+});
+
+test.each(["8_0", "0_0"])("selecting visible message %s never opens collapsed process history", async (id) => {
+	await render(admitted(completed));
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	const selected = host.querySelector(`[data-message-id="${id}"] .markdown-body p`);
+	assert.ok(header);
+	assert.ok(selected);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+	const range = document.createRange();
+	range.selectNodeContents(selected);
+	await select(range);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+	assert.equal(host.querySelector(`[data-message-id="${id}"] .markdown-body p`), selected);
+	assert.equal(document.getSelection()?.toString(), selected.textContent);
+	await act(async () => {
+		for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"])
+			selected.dispatchEvent(new MouseEvent(type, { bubbles: true }));
+	});
+	assert.equal(header.getAttribute("aria-expanded"), "false", "bubbled final-body events are not disclosure intent");
+	const copy = new Event("copy", { bubbles: true, cancelable: true });
+	selected.dispatchEvent(copy);
+	assert.equal(copy.defaultPrevented, false, "ordinary selected prose retains native copy behavior");
+	assert.equal(document.getSelection()?.toString(), selected.textContent);
+});
+
+test.each([false, true])(
+	"a cross-message range never reveals unmounted process content (backwards=%s)",
+	async (backwards) => {
+		await render(admitted(completed));
+		const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+		const input = host.querySelector('[data-message-id="0_0"] .markdown-body p')?.firstChild;
+		const final = host.querySelector('[data-message-id="8_0"] .markdown-body p')?.firstChild;
+		assert.ok(header && input && final);
+		const range = document.createRange();
+		range.setStart(input, 0);
+		range.setEnd(final, final.textContent?.length ?? 0);
+		await select(range, backwards);
+		assert.equal(document.getSelection()?.anchorNode, backwards ? final : input);
+		assert.equal(document.getSelection()?.focusNode, backwards ? input : final);
+		assert.equal(header.getAttribute("aria-expanded"), "false");
+		assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+		assert.match(document.getSelection()?.toString() ?? "", /Input/);
+		assert.match(document.getSelection()?.toString() ?? "", /Final answer/);
+	},
+);
+
+test("selection, clearing and reselecting preserve explicit disclosure choices", async () => {
+	await render(admitted(completed));
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	const final = host.querySelector('[data-message-id="8_0"] .markdown-body p');
+	assert.ok(header && final);
+	const range = document.createRange();
+	range.selectNodeContents(final);
+	await act(async () => {
+		header.focus();
+		header.click();
+	});
+	const body = host.querySelector(".conversation-turn-body");
+	assert.ok(body);
+	await select(range);
+	await select(null);
+	await select(range, true);
+	assert.equal(header.getAttribute("aria-expanded"), "true");
+	assert.equal(host.querySelector(".conversation-turn-body"), body);
+	await select(null);
+	await act(async () => header.click());
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(body.getAttribute("aria-hidden"), "true");
+	await select(range);
+	await select(null);
+	await select(range);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(body.getAttribute("aria-hidden"), "true");
+	await select(null);
+	await act(async () => header.click());
+	assert.equal(header.getAttribute("aria-expanded"), "true", "intentional reopening still works");
+	assert.equal(host.querySelector('[data-message-id="8_0"] .markdown-body p'), final);
+});
+
+test("ranges ending on a turn wrapper and keyboard-extended final selections do not protect hidden members", async () => {
+	await render(admitted(completed));
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	const final = host.querySelector('[data-message-id="8_0"] .markdown-body p')?.firstChild;
+	const turn = host.querySelector(".conversation-turn");
+	assert.ok(header && final && turn);
+	const range = document.createRange();
+	range.setStart(final, 0);
+	range.setEnd(turn, turn.childNodes.length);
+	await select(range);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	await select(null);
+	await act(async () => {
+		const selection = document.getSelection();
+		assert.ok(selection);
+		selection.collapse(final, final.textContent?.length ?? 0);
+		final.parentElement?.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }),
+		);
+		// JSDOM has no native keyboard editing; apply its resulting Selection API range.
+		selection.extend(final, 0);
+		document.dispatchEvent(new Event("selectionchange"));
+	});
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(document.getSelection()?.toString(), "Final answer");
+});
+
+test("selected process content stays mounted without opening another collapsed run", async () => {
+	const value = admitted(completed);
+	const result = value.runResults?.items[0];
+	assert.ok(result);
+	await render({
+		...value,
+		messages: [
+			...value.messages,
+			{ ...process, id: "12_0", runId: "10", text: "Other process", textLength: 13 },
+			{ ...process, id: "18_0", runId: "10", text: "Other final", textLength: 11 },
+		],
+		runResults: {
+			omitted: false,
+			items: [result, { ...result, id: "10", terminalEntryId: "19", responseMessageId: "18_0" }],
+		},
+	});
+	const header = host.querySelector<HTMLButtonElement>('[data-run-id="1"] .run-activity-toggle');
+	const other = host.querySelector<HTMLButtonElement>('[data-run-id="10"] .run-activity-toggle');
+	assert.ok(header && other);
+	await act(async () => header.click());
+	const processBody = host.querySelector('[data-message-id="2_0"] .markdown-body p');
+	const final = host.querySelector('[data-message-id="18_0"] .markdown-body p');
+	assert.ok(processBody && final);
+	const range = document.createRange();
+	range.setStartBefore(processBody);
+	range.setEndAfter(final);
+	await select(range);
+	await act(async () => header.click());
+	assert.equal(header.getAttribute("aria-expanded"), "true", "selected process cannot be unmounted by a toggle");
+	assert.equal(host.querySelector('[data-message-id="2_0"] .markdown-body p'), processBody);
+	assert.equal(other.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelector('[data-message-id="12_0"]'), null);
+	await select(null);
+	assert.equal(header.getAttribute("aria-expanded"), "true", "selection protection does not overwrite user intent");
+});
+
+test("deactivation retains selected process nodes until selection releases", async () => {
+	const value = admitted(initial);
+	await render(value, true);
+	const processBody = host.querySelector('[data-message-id="2_0"] .markdown-body p');
+	assert.ok(processBody);
+	const range = document.createRange();
+	range.selectNodeContents(processBody);
+	await select(range);
+	// Response activity can change independently of the selection-frozen snapshot.
+	await render(value, false);
+	assert.equal(host.querySelector('[data-message-id="2_0"] .markdown-body p'), processBody);
+	assert.ok(processBody.closest(".conversation-turn-body"));
+	assert.equal(processBody.closest("[inert]"), null);
+	assert.equal(document.getSelection()?.toString(), "Process text");
+	await select(null);
+	assert.equal(host.querySelector(".conversation-turn-body"), null);
+	assert.match(host.querySelector('[data-message-id="2_0"]')?.textContent ?? "", /Process text/);
+});
+
+test("stale ranges inside an exiting process and detached ranges do not reopen it", async () => {
+	await render(admitted(completed));
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	assert.ok(header);
+	await act(async () => header.click());
+	const processBody = host.querySelector('[data-message-id="2_0"] .markdown-body p');
+	assert.ok(processBody);
+	const stale = document.createRange();
+	stale.selectNodeContents(processBody);
+	await act(async () => header.click());
+	assert.ok(processBody.closest("[inert]"));
+	await select(stale);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	const detached = document.createElement("p");
+	detached.textContent = "Detached previous content";
+	const range = document.createRange();
+	range.selectNodeContents(detached);
+	await select(range);
+	assert.equal(document.getSelection()?.rangeCount, 0);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+});
+
+test("flat search history has the same final selection boundary", async () => {
+	const value = admitted(completed);
+	await render(value, false, {
+		...scope,
+		messages: value.messages,
+		target: { ...scope, messageId: "8_0", text: "Final answer", offset: 0, nextOffset: null, textLength: 12 },
+		matchStart: 0,
+		matchEnd: 5,
+		olderCursor: null,
+		newerCursor: null,
+	});
+	const header = host.querySelector<HTMLButtonElement>(".run-activity-toggle");
+	const final = host.querySelector('[data-message-id="8_0"] .markdown-body p');
+	assert.ok(header && final);
+	assert.equal(host.querySelector('[data-transcript-kind="turn"]'), null);
+	const range = document.createRange();
+	range.selectNodeContents(final);
+	await select(range);
+	assert.equal(header.getAttribute("aria-expanded"), "false");
+	assert.equal(host.querySelector('[data-message-id="2_0"]'), null);
+	assert.equal(document.getSelection()?.toString(), "Final answer");
 });
 
 test("long turn keeps its measured outer DOM when admission pages in and metadata becomes omitted", async () => {

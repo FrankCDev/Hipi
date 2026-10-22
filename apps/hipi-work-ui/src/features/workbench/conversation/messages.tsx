@@ -133,6 +133,7 @@ export function ConversationMessages({
 	const [displayPaused, setDisplayPaused] = useState(false);
 	const [selectionRange, setSelectionRange] = useState<number[] | null>(null);
 	const [selectionEndpoints, setSelectionEndpoints] = useState<number[]>([]);
+	const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
 	const [focusedKey, setFocusedKey] = useState<string>();
 	// Only small reading positions survive row eviction; full text chunks belong to mounted readers.
 	const [originalOffsets, setOriginalOffsets] = useState<ReadonlyMap<string, number>>(new Map());
@@ -146,11 +147,10 @@ export function ConversationMessages({
 	);
 	const groupChoices = activityContext?.groupChoices;
 	const protectedKeys = useMemo(() => {
-		const keys = new Set<string>();
+		const keys = new Set(selectedKeys);
 		if (focusedKey) keys.add(focusedKey);
-		if (selectionRange) for (const row of baseRows) keys.add(row.key);
 		return keys;
-	}, [baseRows, focusedKey, selectionRange]);
+	}, [focusedKey, selectedKeys]);
 	const rows = useMemo<ConversationRow[]>(() => {
 		const fallback = groupChoices
 			? projectRunActivities(baseRows, snapshot, groupChoices, protectedKeys, responseActive !== false)
@@ -461,6 +461,20 @@ export function ConversationMessages({
 			const selection = document.getSelection();
 			const selected = selectionIntersects(messages.current, selection);
 			setSelectionRange((current) => (selected ? (current ?? renderedIndexes.current) : null));
+			// Pin the virtual window broadly, but protect disclosure content only
+			// where the native range intersects a mounted message, not its whole turn.
+			setSelectedKeys(
+				selected
+					? Array.from(
+							messages.current?.querySelectorAll<HTMLElement>(
+								'[data-message-key]:not([data-transcript-kind="turn"])',
+							) ?? [],
+						).flatMap((row) => {
+							const key = row.dataset.messageKey;
+							return key && !row.closest("[inert]") && selectionIntersects(row, selection) ? [key] : [];
+						})
+					: [],
+			);
 			const endpoints =
 				selected && selection
 					? [selection.anchorNode, selection.focusNode].flatMap((node) => {

@@ -121,6 +121,14 @@ test("tool disclosure keeps a stable labelled body, inert collapse and separate 
 		await render(true, true);
 		const button = host.querySelector<HTMLButtonElement>(".activity-disclosure-toggle");
 		assert.ok(button);
+		const disclosure = button.parentElement;
+		assert.ok(disclosure);
+		assert.equal(getComputedStyle(disclosure).display, "flex");
+		assert.equal(getComputedStyle(disclosure).flexDirection, "column");
+		assert.equal(Number.parseFloat(getComputedStyle(disclosure).minWidth), 0);
+		assert.equal(getComputedStyle(button).alignSelf, "flex-start");
+		assert.equal(getComputedStyle(button).maxWidth, "100%");
+		assert.equal(Number.parseFloat(getComputedStyle(button).padding), 0);
 		const body = document.getElementById(button.getAttribute("aria-controls") ?? "");
 		assert.ok(body);
 		const heading = host.querySelector<HTMLElement>(".activity-disclosure-heading");
@@ -150,6 +158,18 @@ test("tool disclosure keeps a stable labelled body, inert collapse and separate 
 			"var(--ui-conversation-grouped-gap)",
 		);
 		assert.equal(body.hasAttribute("inert"), false);
+		const legacy = document.createElement("div");
+		legacy.className = "inline-activity";
+		const legacyToggle = document.createElement("button");
+		legacyToggle.className = "inline-activity-toggle";
+		legacy.append(legacyToggle);
+		host.append(legacy);
+		assert.notEqual(getComputedStyle(legacy).display, "flex", "metadata-only wrappers keep their existing layout");
+		assert.notEqual(
+			getComputedStyle(legacyToggle).alignSelf,
+			"flex-start",
+			"the shared elapsed/metadata toggle does not receive the tool-only alignment",
+		);
 	} finally {
 		await act(async () => root.unmount());
 		host.remove();
